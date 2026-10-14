@@ -22,6 +22,16 @@ type LifecycleServiceHarness = GatewayService & {
 
 export const lifecycleTestRuntime: LifecycleRuntimeHarness = lifecycleRuntimeCapture.defaultRuntime;
 
+export function createGatewayServiceRunArgs(checkTokenDrift?: boolean) {
+  return {
+    serviceNoun: "Gateway",
+    service,
+    renderStartHints: () => [],
+    opts: { json: true as const },
+    ...(checkTokenDrift ? { checkTokenDrift } : {}),
+  };
+}
+
 export const service: LifecycleServiceHarness = {
   label: "TestService",
   loadedText: "loaded",

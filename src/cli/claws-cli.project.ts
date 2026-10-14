@@ -1,6 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
@@ -16,10 +14,17 @@ import {
   validateClawProject,
 } from "../claws/project.js";
 import { readClawManifestFile } from "../claws/reader.js";
-import { CLAW_OUTPUT_STABILITY, type ClawAddPlan, type ClawDiagnostic } from "../claws/types.js";
+import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "../claws/types.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import {
+  emitClawFailure,
+  formatClawDiagnostics,
+  logClawAgentConfiguration,
+  logClawExperimentalWarning,
+} from "./claws-cli-output.js";
 import type {
   ClawsBuildOptions,
   ClawsCreateOptions,
@@ -27,22 +32,7 @@ import type {
   ClawsValidateOptions,
 } from "./claws-cli.js";
 
-type PreparedDev = {
-  build: Awaited<ReturnType<typeof buildClawProject>>;
-  plan: ClawAddPlan;
-};
-
 const CLAW_DEV_RESULT_SCHEMA_VERSION = "openclaw.clawDev.v1" as const;
-
-function formatDiagnostics(diagnostics: ClawDiagnostic[]): string {
-  return diagnostics
-    .map((item) => `${item.level.toUpperCase()} ${item.code} ${item.path}: ${item.message}`)
-    .join("\n");
-}
-
-function logExperimentalWarning(runtime: RuntimeEnv): void {
-  runtime.log("Experimental: Claws contracts may change while RFC 0016 is under review.");
-}
 
 function reportProjectError(
   error: unknown,
@@ -56,83 +46,75 @@ function reportProjectError(
 ): void {
   const code = error instanceof ClawProjectError ? error.code : fallbackCode;
   const message = error instanceof Error ? error.message : String(error);
-  if (json) {
-    writeRuntimeJson(runtime, {
-      schemaVersion,
-      stability: CLAW_OUTPUT_STABILITY,
-      ok: false,
-      error: { code, message },
-    });
-  } else {
-    runtime.error(message);
-  }
-  runtime.exit(1);
+  emitClawFailure(runtime, json, message, {
+    schemaVersion,
+    stability: CLAW_OUTPUT_STABILITY,
+    ok: false,
+    error: { code, message },
+  });
 }
 
 function logDevPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
   runtime.log(`Workspace: ${plan.agent.workspace}`);
+  logClawAgentConfiguration(plan, runtime);
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Capability escalations: ${plan.capabilityChanges.length}`);
   runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
 }
 
-async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<PreparedDev> {
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), "openclaw-claw-dev-"));
-  try {
-    const build = await buildClawProject(projectPath, join(temporaryDirectory, "claw.tgz"));
-    const extracted = await extractBuiltClawArtifact(build.artifact);
-    try {
-      const result = await readClawManifestFile(extracted.packageRoot);
-      if (!result.ok) {
-        throw new ClawProjectError(
-          "artifact_verification_failed",
-          formatDiagnostics(result.diagnostics),
-        );
-      }
-      const configSnapshot = await readConfigFileSnapshot({
-        observe: false,
-        skipPluginValidation: true,
-      });
-      if (!configSnapshot.valid) {
-        throw new ClawProjectError(
-          "config_unavailable",
-          "OpenClaw config is invalid; fix it before previewing a Claw project.",
-        );
-      }
-      const config = configSnapshot.resolved;
-      const existingMcpServers = normalizeConfiguredMcpServers(config.mcp?.servers);
-      const existingAgentIds = listAgentIds(config);
-      const plan = await buildClawAddPlan({
-        manifest: result.manifest,
-        clawMarkdownBody: result.clawMarkdownBody,
-        packageBootstrap: result.packageBootstrap,
-        openClawProfile: result.openClawProfile,
-        source: {
-          ...result.source,
-          integrityKind: "artifact",
-          integrity: build.integrity,
-          byteLength: build.byteLength,
-        },
-        diagnostics: result.diagnostics,
-        context: {
-          ...(opts.agentId ? { agentId: opts.agentId } : {}),
-          ...(opts.workspace ? { workspace: opts.workspace } : {}),
-          existingAgentIds,
-          existingWorkspacePaths: existingAgentIds.map((agentId) =>
-            resolveAgentWorkspaceDir(config, agentId),
-          ),
-          existingMcpServers,
-          sourceReferenceRoot: `claw-artifact:${build.integrity}`,
-        },
-      });
-      return { build, plan };
-    } finally {
-      await extracted.dispose();
-    }
-  } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true });
+async function prepareDev(projectPath: string, opts: ClawsDevOptions) {
+  await using workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-claw-dev-",
+  });
+  const build = await buildClawProject(projectPath, workspace.path("claw.tgz"));
+  await using extracted = await extractBuiltClawArtifact(build.artifact);
+  const result = await readClawManifestFile(extracted.packageRoot);
+  if (!result.ok) {
+    throw new ClawProjectError(
+      "artifact_verification_failed",
+      formatClawDiagnostics(result.diagnostics),
+    );
   }
+  const configSnapshot = await readConfigFileSnapshot({
+    observe: false,
+    skipPluginValidation: true,
+  });
+  if (!configSnapshot.valid) {
+    throw new ClawProjectError(
+      "config_unavailable",
+      "OpenClaw config is invalid; fix it before previewing a Claw project.",
+    );
+  }
+  const config = configSnapshot.resolved;
+  const existingMcpServers = normalizeConfiguredMcpServers(config.mcp?.servers);
+  const existingAgentIds = listAgentIds(config);
+  const plan = await buildClawAddPlan({
+    manifest: result.manifest,
+    clawMarkdownBody: result.clawMarkdownBody,
+    packageBootstrap: result.packageBootstrap,
+    openClawProfile: result.openClawProfile,
+    source: {
+      ...result.source,
+      integrityKind: "artifact",
+      integrity: build.integrity,
+      byteLength: build.byteLength,
+    },
+    diagnostics: result.diagnostics,
+    context: {
+      config,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      ...(opts.workspace ? { workspace: opts.workspace } : {}),
+      existingAgentIds,
+      existingWorkspacePaths: existingAgentIds.map((agentId) =>
+        resolveAgentWorkspaceDir(config, agentId),
+      ),
+      existingMcpServers,
+      sourceReferenceRoot: `claw-artifact:${build.integrity}`,
+    },
+  });
+  return { build, plan };
 }
 
 export async function runClawsCreateCommand(
@@ -155,7 +137,7 @@ export async function runClawsCreateCommand(
       });
       return;
     }
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
     runtime.log(`Created Claw project: ${result.root}`);
     runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
   } catch (error) {
@@ -177,18 +159,13 @@ export async function runClawsValidateCommand(
   assertExperimentalClawsEnabled();
   const result = await validateClawProject(projectPath);
   if (!result.ok) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_PROJECT_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        ok: false,
-        root: result.root,
-        diagnostics: result.diagnostics,
-      });
-    } else {
-      runtime.error(formatDiagnostics(result.diagnostics));
-    }
-    runtime.exit(1);
+    emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
+      schemaVersion: CLAW_PROJECT_RESULT_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      ok: false,
+      root: result.root,
+      diagnostics: result.diagnostics,
+    });
     return;
   }
   if (opts.json) {
@@ -205,7 +182,7 @@ export async function runClawsValidateCommand(
     });
     return;
   }
-  logExperimentalWarning(runtime);
+  logClawExperimentalWarning(runtime);
   runtime.log(`Valid Claw project: ${result.root}`);
   runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
   for (const path of result.excludedPaths) {
@@ -225,7 +202,7 @@ export async function runClawsBuildCommand(
       writeRuntimeJson(runtime, { ...result, stability: CLAW_OUTPUT_STABILITY, ok: true });
       return;
     }
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
     runtime.log(`Built Claw: ${result.claw.name}@${result.claw.version}`);
     runtime.log(`Artifact: ${result.artifact}`);
     runtime.log(`Integrity: ${result.integrity}`);
@@ -247,7 +224,7 @@ export async function runClawsDevCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  let prepared: PreparedDev;
+  let prepared: Awaited<ReturnType<typeof prepareDev>>;
   try {
     prepared = await prepareDev(projectPath, opts);
   } catch (error) {
@@ -277,12 +254,12 @@ export async function runClawsDevCommand(
       plan,
     });
   } else {
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
     runtime.log(`Claw dev preview: ${build.claw.name}@${build.claw.version}`);
     runtime.log(`Artifact integrity: ${build.integrity}`);
     logDevPlanSummary(plan, runtime);
     if (plan.blockers.length > 0) {
-      runtime.error(formatDiagnostics(plan.blockers));
+      runtime.error(formatClawDiagnostics(plan.blockers));
     }
   }
   if (plan.blockers.length > 0) {

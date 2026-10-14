@@ -1,8 +1,6 @@
-// Child process bridge adapts child process events into typed lifecycle callbacks.
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
 
-/** Signal forwarding options for a child process bridge. */
 type ChildProcessBridgeOptions = {
   signals?: NodeJS.Signals[];
   onSignal?: (signal: NodeJS.Signals) => void;
@@ -13,20 +11,22 @@ const defaultSignals: NodeJS.Signals[] =
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 
-/** Forwards process termination signals to a child and detaches on child exit/error. */
+/** Forwards process termination signals to a child and detaches on terminal lifecycle events. */
 export function attachChildProcessBridge(
   child: ChildProcess,
   { signals = defaultSignals, onSignal }: ChildProcessBridgeOptions = {},
 ): { detach: () => void } {
   const listeners = new Map<NodeJS.Signals, () => void>();
+  let childExited = false;
   for (const signal of signals) {
     const listener = (): void => {
+      if (childExited) {
+        return;
+      }
       onSignal?.(signal);
       try {
         child.kill(signal);
-      } catch {
-        // ignore
-      }
+      } catch {}
     };
     try {
       process.on(signal, listener);
@@ -43,8 +43,13 @@ export function attachChildProcessBridge(
     listeners.clear();
   };
 
-  child.once("exit", detach);
-  child.once("error", detach);
+  // Child errors can report failed signal/IPC operations while the PID stays live.
+  // Stop forwarding at exit, but retain the handlers while final pipes drain so
+  // a second signal cannot terminate the parent before its close boundary.
+  child.once("exit", () => {
+    childExited = true;
+  });
+  child.once("close", detach);
 
   return { detach };
 }

@@ -7,37 +7,41 @@ scenario:
   coverage:
     secondary:
       - agent-runtime.tool-fs-list
-  objective: Verify directory inspection behavior is tracked through read while Codex owns file inspection natively.
+  objective: Verify directory inspection uses the existing OpenClaw ls tool across runtimes.
   successCriteria:
-    - OpenClaw may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
-    - Mock provider read plans are reported as fixture intent, not as actual runtime tool calls.
-    - The row stays report-only until directory fault injection proves native Codex read behavior directly.
+    - The ls tool lists the workspace directory and returns a linked successful result.
+    - A valid ls request for a missing directory returns a linked failure result.
+    - Provider plans alone do not count as execution evidence.
   docsRefs:
     - qa/scenarios/index.yaml
   codeRefs:
-    - src/agents/agent-tools.read.ts
+    - src/agents/sessions/tools/ls.ts
+    - extensions/codex/src/app-server/dynamic-tool-profile.ts
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow
-    summary: Exercise fs.list coverage through the current read tool surface.
+    summary: Exercise directory listing through the existing ls tool, including a missing-directory failure.
     config:
-      toolName: read
+      toolName: ls
       toolCoverage:
         family: fs.list
-        actualTool: read
-        bucket: codex-native-workspace
-        expectedLayer: codex-native-workspace
-        required: false
-        tracking: "#80312"
+        actualTool: ls
+        bucket: openclaw-dynamic-integration
+        expectedLayer: openclaw-dynamic
+        required: true
         codexDefaultImpact: P4
         qaImpact: P2
-        action: model native read/list behavior separately from provider-plan capture
-        reason: Codex app-server intentionally owns read natively; current OpenClaw coding surface has no separate list tool.
-      knownHarnessGap:
-        issue: "#80312"
-        reason: QA mock failure-path capture currently reports provider-plan args, not proven Codex native read/list behavior.
-      promptSnippet: "target=read"
-      failurePromptSnippet: "failure target=read"
+        action: require linked directory listing and missing-directory failure results
+        reason: OpenClaw exposes ls in the coding profile and Codex retains it as a dynamic tool.
+      happyPrompt: >-
+        tool search qa check target=ls. Call ls exactly once with path="."
+        to list the workspace directory, then summarize the actual tool result.
+      failurePrompt: >-
+        tool search qa failure target=ls. Call ls exactly once with
+        path="runtime-tool-fixture-missing-directory" to exercise the
+        missing-directory failure. Do not create the directory or retry.
+      promptSnippet: "target=ls"
+      failurePromptSnippet: "failure target=ls"
 
 flow:
   steps:

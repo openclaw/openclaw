@@ -2,9 +2,11 @@
 import { fork, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
 import {
+  formatReliabilityStderr,
   STRESS_TABLE_SQL,
   type ReliabilityReport,
 } from "../../scripts/lib/sqlite-reliability-contract.js";
@@ -13,14 +15,24 @@ import {
   canonicalPathWithExistingParent,
   isPendingPathInRepository,
 } from "../../scripts/lib/sqlite-reliability-worker-paths.js";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
+import {
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const nodeExecutable = resolveTestNodeExecPath();
+const nodeArgs = resolveVitestNodeArgs();
 // Windows repeats ACL checks and crash/restore copies throughout the full proof.
 const RELIABILITY_PROOF_TIMEOUT_MS = process.platform === "win32" ? 480_000 : 240_000;
 const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = process.platform === "win32" ? 1_200_000 : 300_000;
@@ -33,12 +45,13 @@ function reliabilitySmokeTest(name: string, test: () => void): void {
   it(name, test, RELIABILITY_SMOKE_TEST_TIMEOUT_MS);
 }
 
-function runProof(args: string[]) {
+function runProof(args: string[], env: NodeJS.ProcessEnv = {}) {
   const result = spawnSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/bench-sqlite-reliability.ts", ...args],
+    nodeExecutable,
+    [...nodeArgs, "--import", "tsx", "scripts/bench-sqlite-reliability.ts", ...args],
     {
       cwd: process.cwd(),
+      env: { ...process.env, ...env },
       encoding: "utf8",
       timeout: RELIABILITY_PROOF_TIMEOUT_MS,
     },
@@ -51,16 +64,8 @@ function runProof(args: string[]) {
 
 async function waitForChildReady(child: ChildProcess): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("writer child did not become ready"));
-    }, 10_000);
     const onMessage = (message: unknown) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        (message as { kind?: unknown }).kind === "ready"
-      ) {
+      if (message && typeof message === "object" && "kind" in message && message.kind === "ready") {
         cleanup();
         resolve();
       }
@@ -74,7 +79,6 @@ async function waitForChildReady(child: ChildProcess): Promise<void> {
       reject(new Error("writer child exited before ready"));
     };
     const cleanup = () => {
-      clearTimeout(timeout);
       child.off("message", onMessage);
       child.off("error", onError);
       child.off("exit", onExit);
@@ -90,10 +94,6 @@ async function waitForChildExit(child: ChildProcess): Promise<{
   signal: NodeJS.Signals | null;
 }> {
   return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("writer child did not exit after IPC disconnect"));
-    }, 10_000);
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
       resolve({ code, signal });
@@ -103,7 +103,6 @@ async function waitForChildExit(child: ChildProcess): Promise<{
       reject(error);
     };
     const cleanup = () => {
-      clearTimeout(timeout);
       child.off("exit", onExit);
       child.off("error", onError);
     };
@@ -113,6 +112,17 @@ async function waitForChildExit(child: ChildProcess): Promise<{
 }
 
 describe("scripts/bench-sqlite-reliability", () => {
+  it.each([
+    ["whitespace-only stderr", " \n\t ", ""],
+    [
+      "multiline quoted stderr",
+      ' first line\n"quoted"\\path ',
+      ' stderr="first line\\n\\"quoted\\"\\\\path"',
+    ],
+  ])("formats %s", (_name, stderr, expected) => {
+    expect(formatReliabilityStderr(stderr)).toBe(expected);
+  });
+
   it("detects a transient WAL overrun before the file shrinks", async () => {
     const walPath = path.join(
       tempDirs.make("openclaw-sqlite-reliability-test-"),
@@ -185,7 +195,23 @@ describe("scripts/bench-sqlite-reliability", () => {
     }
 
     const output = path.join(stateDir, "report.json");
-    const result = runProof(["--profile", "smoke", "--state-dir", stateDir, "--output", output]);
+    const compilerPolicyProbe = path.join(stateDir, "compiler-policy-probe.mjs");
+    fs.writeFileSync(
+      compilerPolicyProbe,
+      `import { isMainThread } from "node:worker_threads";
+if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
+  throw new Error("SQLite proof subprocess discarded the selected Node compiler policy");
+}
+`,
+    );
+    const result = runProof(["--profile", "smoke", "--state-dir", stateDir, "--output", output], {
+      NODE_OPTIONS: [
+        process.env.NODE_OPTIONS,
+        `--import=${pathToFileURL(compilerPolicyProbe).href}`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    });
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
@@ -454,30 +480,35 @@ describe("scripts/bench-sqlite-reliability", () => {
     );
   });
 
-  it("stops the writer when its parent IPC channel disconnects", async () => {
+  it("stops the writer when its parent IPC channel disconnects", async ({ signal }) => {
     const databasePath = path.join(
       tempDirs.make("openclaw-sqlite-reliability-test-"),
       "writer.sqlite",
     );
+    const writerUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.sqliteReliabilityWriter);
     const child = fork(
-      path.resolve("scripts/lib/sqlite-reliability-writer.ts"),
+      fileURLToPath(writerUrl),
       [databasePath, "8", "64", "4", "256", String(64 * 1024 * 1024), "1"],
       {
         cwd: process.cwd(),
-        execArgv: ["--import", "tsx"],
+        execPath: nodeExecutable,
+        execArgv: [...nodeArgs, ...resolveRuntimeWorkerThreadExecArgv(writerUrl, nodeExecutable)],
         serialization: "json",
         stdio: ["ignore", "ignore", "pipe", "ipc"],
       },
     );
+    const exitPromise = waitForChildExit(child);
+    // Readiness and exit are both owned by this child; the test signal owns the deadline.
+    void exitPromise.catch(() => {});
     try {
-      await waitForChildReady(child);
-      const exitPromise = waitForChildExit(child);
+      await withinTest(waitForChildReady(child), signal);
       child.disconnect();
-      await expect(exitPromise).resolves.toEqual({ code: 0, signal: null });
+      await expect(withinTest(exitPromise, signal)).resolves.toEqual({ code: 0, signal: null });
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
-        child.kill();
+        child.kill("SIGKILL");
       }
+      await exitPromise;
     }
   });
 });

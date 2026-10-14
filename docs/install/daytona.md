@@ -87,12 +87,15 @@ Running `openclaw onboard` without flags starts a conversational setup
 assistant instead and requires an interactive terminal;
 `openclaw onboard --classic` runs the older step-by-step wizard.
 
-Onboarding configures a gateway auth token. Print it any time from the
-sandbox:
+Onboarding configures a gateway auth token. Print it any time from an
+interactive terminal on the sandbox:
 
 ```bash
-node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.token"
+openclaw gateway auth-token --show
 ```
+
+The command refuses to print the token when stdout is not an interactive
+terminal, so it cannot be captured through a pipe or command substitution.
 
 `openclaw config get gateway.auth.token` returns `__OPENCLAW_REDACTED__`
 rather than the value, because the CLI masks secrets in its output.
@@ -213,7 +216,7 @@ Pairing codes expire after 1 hour. Full reference: [Telegram](/channels/telegram
 WhatsApp ships as a separate plugin, so install and enable it first:
 
 ```bash
-openclaw plugins install clawhub:@openclaw/whatsapp --acknowledge-clawhub-risk
+openclaw plugins install clawhub:@openclaw/whatsapp
 openclaw plugins enable whatsapp
 ```
 

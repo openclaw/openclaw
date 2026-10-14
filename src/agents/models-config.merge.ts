@@ -1,13 +1,23 @@
+import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 /**
  * Merges generated model-provider config with explicit user config and
  * preserved secret fields. Setup and doctor flows use this boundary to update
  * model catalogs without discarding existing credentials.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { mergeModelCost } from "../config/model-cost.js";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig as ProviderConfig,
+} from "../config/types.models.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
-import type { ProviderConfig } from "./models-config.providers.secrets.js";
+import {
+  modelTransportRoutesMatch,
+  resolveCatalogOwnedModelCompat,
+} from "./model-compat-catalog.js";
 
 export function normalizeProviderMapKeys<T>(
   providers: Record<string, T> | null | undefined,
@@ -39,26 +49,50 @@ export function normalizeProviderMapKeys<T>(
 /** Existing provider config shape that may carry persisted secret/base URL fields. */
 export type ExistingProviderConfig = ProviderConfig & {
   apiKey?: string;
-  baseUrl?: string;
-  api?: string;
 };
 
-function isPositiveFiniteTokenLimit(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
+/** Authored fields keyed by exact provider/model tuples, independent of display ref syntax. */
+export type SourceModelFields = ReadonlyMap<
+  string,
+  { inputOmitted: boolean; cost: ProviderConfig["models"][number]["cost"] | undefined }
+>;
 
-function resolvePreferredTokenLimit(params: {
-  explicitPresent: boolean;
-  explicitValue: unknown;
-  implicitValue: unknown;
-}): number | undefined {
-  if (params.explicitPresent && isPositiveFiniteTokenLimit(params.explicitValue)) {
-    return params.explicitValue;
-  }
-  if (isPositiveFiniteTokenLimit(params.implicitValue)) {
-    return params.implicitValue;
-  }
-  return isPositiveFiniteTokenLimit(params.explicitValue) ? params.explicitValue : undefined;
+export type ProviderModelCatalog = {
+  api?: string;
+  baseUrl?: string;
+  headers?: ProviderConfig["headers"];
+  compat?: ModelDefinitionConfig["compat"];
+  models?: Array<
+    Omit<Partial<ModelDefinitionConfig>, "id" | "api"> & {
+      id: string;
+      api?: string;
+      maxTokensSource?: "configured" | "discovered";
+      contextWindows?: ModelCatalogContextWindowOption[];
+      contextWindowDefault?: string;
+    }
+  >;
+};
+
+type ProviderModelMergeOptions = {
+  providerId: string;
+  modelIdMatching?: "exact";
+  sourceModelFields?: SourceModelFields;
+};
+
+export function buildSourceModelFields(
+  sourceProviders: Record<string, ProviderConfig> | undefined,
+): SourceModelFields {
+  return new Map(
+    Object.entries(normalizeProviderMapKeys(sourceProviders)).flatMap(([providerId, provider]) =>
+      (provider.models ?? []).map(
+        (model) =>
+          [
+            JSON.stringify([providerId, model.id.trim()]),
+            { inputOmitted: !Object.hasOwn(model, "input"), cost: model.cost },
+          ] as const,
+      ),
+    ),
+  );
 }
 
 function getProviderModelId(model: unknown): string {
@@ -70,44 +104,42 @@ function getProviderModelId(model: unknown): string {
 }
 
 /** Merges implicit provider models with explicit config while preserving explicit fields. */
+export function mergeProviderModels<TProvider extends ProviderModelCatalog>(
+  implicit: TProvider,
+  explicit: TProvider,
+  options?: ProviderModelMergeOptions,
+): TProvider;
 export function mergeProviderModels(
-  implicit: ProviderConfig,
-  explicit: ProviderConfig,
-): ProviderConfig {
+  implicit: ProviderModelCatalog,
+  explicit: ProviderModelCatalog,
+  options?: ProviderModelMergeOptions,
+): ProviderModelCatalog {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
-  const implicitHeaders =
-    implicit.headers && typeof implicit.headers === "object" && !Array.isArray(implicit.headers)
-      ? implicit.headers
-      : undefined;
-  const explicitHeaders =
-    explicit.headers && typeof explicit.headers === "object" && !Array.isArray(explicit.headers)
-      ? explicit.headers
-      : undefined;
+  const implicitHeaders = isRecord(implicit.headers) ? implicit.headers : undefined;
+  const explicitHeaders = isRecord(explicit.headers) ? explicit.headers : undefined;
+  const mergedProvider = {
+    ...implicit,
+    ...explicit,
+    ...(implicitHeaders || explicitHeaders
+      ? { headers: { ...implicitHeaders, ...explicitHeaders } }
+      : {}),
+  };
   if (implicitModels.length === 0) {
-    return {
-      ...implicit,
-      ...explicit,
-      ...(implicitHeaders || explicitHeaders
-        ? {
-            headers: {
-              ...implicitHeaders,
-              ...explicitHeaders,
-            },
-          }
-        : {}),
-    };
+    return mergedProvider;
   }
 
+  const getModelId = (model: { id: string }) =>
+    options?.modelIdMatching === "exact" ? model.id : getProviderModelId(model);
   const implicitById = new Map(
     implicitModels
-      .map((model) => [getProviderModelId(model), model] as const)
+      .map((model) => [getModelId(model), model] as const)
       .filter(([id]) => Boolean(id)),
   );
   const seen = new Set<string>();
 
   const mergedModels = explicitModels.map((explicitModel) => {
-    const id = getProviderModelId(explicitModel);
+    const id = getModelId(explicitModel);
     if (!id) {
       return explicitModel;
     }
@@ -116,52 +148,84 @@ export function mergeProviderModels(
     if (!implicitModel) {
       return explicitModel;
     }
+    const sourceFields = options?.sourceModelFields?.get(
+      JSON.stringify([normalizeProviderId(options.providerId), id]),
+    );
+    // Materialized defaults are not authored pins. Reuse raw source cost in both
+    // merge passes so the final pass cannot restore an older catalog schedule.
+    const cost = mergeModelCost(
+      implicitModel.cost,
+      sourceFields ? sourceFields.cost : explicitModel.cost,
+    );
+    const input =
+      sourceFields?.inputOmitted && implicitModel.input !== undefined
+        ? implicitModel.input
+        : "input" in explicitModel
+          ? explicitModel.input
+          : implicitModel.input;
 
-    const contextWindow = resolvePreferredTokenLimit({
-      explicitPresent: "contextWindow" in explicitModel,
-      explicitValue: explicitModel.contextWindow,
-      implicitValue: implicitModel.contextWindow,
-    });
-    const contextTokens = resolvePreferredTokenLimit({
-      explicitPresent: "contextTokens" in explicitModel,
-      explicitValue: explicitModel.contextTokens,
-      implicitValue: implicitModel.contextTokens,
-    });
-    const maxTokens = resolvePreferredTokenLimit({
-      explicitPresent: "maxTokens" in explicitModel,
-      explicitValue: explicitModel.maxTokens,
-      implicitValue: implicitModel.maxTokens,
-    });
+    const contextWindow =
+      asPositiveFiniteNumber(explicitModel.contextWindow) ??
+      asPositiveFiniteNumber(implicitModel.contextWindow);
+    const contextTokens =
+      asPositiveFiniteNumber(explicitModel.contextTokens) ??
+      asPositiveFiniteNumber(implicitModel.contextTokens);
+    const explicitMaxTokens = asPositiveFiniteNumber(explicitModel.maxTokens);
+    const maxTokens = explicitMaxTokens ?? asPositiveFiniteNumber(implicitModel.maxTokens);
+    const maxTokensSource =
+      explicitMaxTokens === undefined
+        ? implicitModel.maxTokensSource
+        : explicitModel.maxTokensSource;
+    const catalogRoute = {
+      api: implicitModel.api ?? implicit.api,
+      baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
+    };
+    const configuredRoute = {
+      api: explicitModel.api ?? explicit.api ?? catalogRoute.api,
+      baseUrl: explicitModel.baseUrl ?? explicit.baseUrl ?? catalogRoute.baseUrl,
+    };
     const compat = resolveCatalogOwnedModelCompat({
-      catalogRoute: {
-        api: implicitModel.api ?? implicit.api,
-        baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
-      },
+      catalogRoute,
       catalogCompat: implicitModel.compat,
-      configuredRoute: {
-        api: explicitModel.api ?? explicit.api ?? implicitModel.api ?? implicit.api,
-        baseUrl:
-          explicitModel.baseUrl ?? explicit.baseUrl ?? implicitModel.baseUrl ?? implicit.baseUrl,
-      },
+      configuredRoute,
       configuredCompat: explicitModel.compat,
     });
+    const contextSelection = explicitModel.contextWindows
+      ? explicitModel
+      : modelTransportRoutesMatch(catalogRoute, configuredRoute)
+        ? implicitModel
+        : undefined;
 
+    const {
+      api: _api,
+      baseUrl: _baseUrl,
+      headers: _headers,
+      maxTokensSource: _maxTokensSource,
+      ...implicitMetadata
+    } = implicitModel;
     return Object.assign(
       {},
+      implicitMetadata,
       explicitModel,
       {
-        input: "input" in explicitModel ? explicitModel.input : implicitModel.input,
+        input,
+        cost,
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
       contextTokens === undefined ? {} : { contextTokens },
       maxTokens === undefined ? {} : { maxTokens },
+      maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },
+      {
+        contextWindows: contextSelection?.contextWindows,
+        contextWindowDefault: contextSelection?.contextWindowDefault,
+      },
     );
   });
 
   for (const implicitModel of implicitModels) {
-    const id = getProviderModelId(implicitModel);
+    const id = getModelId(implicitModel);
     if (!id || seen.has(id)) {
       continue;
     }
@@ -170,16 +234,7 @@ export function mergeProviderModels(
   }
 
   return {
-    ...implicit,
-    ...explicit,
-    ...(implicitHeaders || explicitHeaders
-      ? {
-          headers: {
-            ...implicitHeaders,
-            ...explicitHeaders,
-          },
-        }
-      : {}),
+    ...mergedProvider,
     models: mergedModels,
   };
 }
@@ -188,17 +243,19 @@ export function mergeProviderModels(
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
+  sourceModelFields?: SourceModelFields;
 }): Record<string, ProviderConfig> {
   const out = normalizeProviderMapKeys(params.implicit);
   for (const [providerKey, explicit] of Object.entries(normalizeProviderMapKeys(params.explicit))) {
     const implicit = out[providerKey];
-    out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
+    out[providerKey] = implicit
+      ? mergeProviderModels(implicit, explicit, {
+          providerId: providerKey,
+          sourceModelFields: params.sourceModelFields,
+        })
+      : explicit;
   }
   return out;
-}
-
-function resolveProviderApi(entry: { api?: unknown } | undefined): string | undefined {
-  return normalizeOptionalString(entry?.api);
 }
 
 function resolveModelApiSurface(entry: { models?: unknown } | undefined): string | undefined {
@@ -223,7 +280,7 @@ function resolveModelApiSurface(entry: { models?: unknown } | undefined): string
 function resolveProviderApiSurface(
   entry: ExistingProviderConfig | ProviderConfig | undefined,
 ): string | undefined {
-  return resolveProviderApi(entry) ?? resolveModelApiSurface(entry);
+  return normalizeOptionalString(entry?.api) ?? resolveModelApiSurface(entry);
 }
 
 function shouldPreserveExistingApiKey(params: {
@@ -259,11 +316,12 @@ function shouldPreserveExistingBaseUrl(params: {
   return !existingApi || !nextApi || existingApi === nextApi;
 }
 
-function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean {
+export function isWritableProviderConfig(entry: ProviderConfig): boolean {
   if (!Array.isArray(entry.models) || entry.models.length === 0) {
     return true;
   }
-  return Boolean(entry.baseUrl?.trim() && entry.apiKey);
+  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
+  return Boolean(entry.baseUrl?.trim() && (entry.apiKey === undefined || entry.apiKey));
 }
 
 /** Merges generated provider config with existing secrets safe to preserve. */
@@ -278,7 +336,7 @@ export function mergeWithExistingProviderSecrets(params: {
 
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
-    if (!isExistingProviderSelfContained(entry)) {
+    if (!isWritableProviderConfig(entry)) {
       continue;
     }
     mergedProviders[key] = entry;

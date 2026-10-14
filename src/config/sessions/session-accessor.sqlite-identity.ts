@@ -1,72 +1,88 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
+import {
+  emitSessionIdentityMutation,
+  type SessionIdentityMutation,
+} from "../../sessions/session-lifecycle-events.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  bindPreparedSessionEntryPublication,
+  type PreparedSessionEntryChanges,
+} from "./session-accessor.sqlite-entry-cache-publication.js";
+import type {
+  ProjectedLifecycleMutation,
+  SessionEntryRemovalPlan,
+} from "./session-accessor.sqlite-lifecycle-types.js";
 import type { SessionEntry } from "./types.js";
 
-type SqliteSessionEntryRemovalIdentity = {
-  expectedEntry?: SessionEntry;
-  sessionKey: string;
-};
+type SessionIdentityDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
 
-type SqliteProjectedLifecycleIdentityMutation = {
-  removals: Array<{
-    expectedEntry: SessionEntry;
-    sessionKey: string;
-  }>;
-  upsertedEntries: Array<{
-    entry: SessionEntry;
-    expectedEntry: SessionEntry | undefined;
-    sessionKey: string;
-  }>;
-};
-
-function toSessionIdentityTarget(entry: SessionEntry | undefined, sessionKeys: readonly string[]) {
+function toSessionIdentityTarget(
+  entry: Pick<SessionEntry, "sessionId"> | undefined,
+  sessionKeys: readonly string[],
+) {
   const sessionId = normalizeOptionalString(entry?.sessionId);
   return { ...(sessionId ? { sessionId } : {}), sessionKeys };
 }
 
-function emitCommittedSessionEntryRemoval(sessionKey: string, entry?: SessionEntry): void {
+export function publishCommittedSessionEntryRemoval(
+  agentId: string,
+  databaseIdentity: string | symbol,
+  sessionId: string | undefined,
+  sessionKeys: readonly string[],
+): void {
   emitSessionIdentityMutation({
+    agentId,
+    databaseIdentity,
     kind: "delete",
-    previous: toSessionIdentityTarget(entry, [sessionKey]),
+    previous: { ...(sessionId ? { sessionId } : {}), sessionKeys },
   });
 }
 
-export function emitCommittedSessionEntryRemovals(
-  removals: readonly SqliteSessionEntryRemovalIdentity[],
-): void {
-  const emittedKeys = new Set<string>();
+export function prepareCommittedSessionEntryRemovals(
+  agentId: string,
+  databaseIdentity: string | symbol,
+  removals: readonly SessionEntryRemovalPlan[],
+): () => void {
+  const previousByKey = new Map<string, ReturnType<typeof toSessionIdentityTarget>>();
   for (const removal of removals) {
-    if (emittedKeys.has(removal.sessionKey)) {
-      continue;
+    if (!previousByKey.has(removal.sessionKey)) {
+      previousByKey.set(
+        removal.sessionKey,
+        toSessionIdentityTarget(removal.expectedEntry, [removal.sessionKey]),
+      );
     }
-    emittedKeys.add(removal.sessionKey);
-    emitCommittedSessionEntryRemoval(removal.sessionKey, removal.expectedEntry);
   }
+  return () => {
+    for (const previous of previousByKey.values()) {
+      publishCommittedSessionEntryRemoval(
+        agentId,
+        databaseIdentity,
+        previous.sessionId,
+        previous.sessionKeys,
+      );
+    }
+  };
 }
 
-function emitCommittedSessionEntryChange(params: {
-  currentKey: string;
-  currentEntry: SessionEntry;
-  previousKey: string;
-  previousEntry: SessionEntry;
-}): void {
-  const previous = toSessionIdentityTarget(params.previousEntry, [params.previousKey]);
-  const current = toSessionIdentityTarget(params.currentEntry, [params.currentKey]);
-  const moved = params.previousKey !== params.currentKey;
-  if (!moved && previous.sessionId === current.sessionId) {
-    return;
-  }
-  emitSessionIdentityMutation({
-    kind: moved ? "move" : "replace",
-    previous,
-    current,
-  });
-}
-
-export function emitCommittedSessionIdentityDiff(
-  previous: ReadonlyMap<string, SessionEntry>,
-  current: ReadonlyMap<string, SessionEntry>,
+export function publishCommittedSessionIdentity(
+  agentId: string,
+  databaseIdentity: string | symbol,
+  previous: ReadonlyMap<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>,
+  current: ReadonlyMap<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>,
+  prepared?: PreparedSessionEntryChanges,
 ): void {
+  const emit = (mutation: SessionIdentityMutation) => {
+    if (prepared) {
+      bindPreparedSessionEntryPublication(mutation, {
+        kind: "metadata",
+        sharingChange: "changed",
+        prepared,
+      });
+    }
+    emitSessionIdentityMutation(mutation);
+  };
   const currentKeysBySessionId = new Map<string, string[]>();
   for (const [sessionKey, entry] of current) {
     const sessionId = normalizeOptionalString(entry.sessionId);
@@ -80,7 +96,6 @@ export function emitCommittedSessionIdentityDiff(
 
   const movedKeysByCurrentKey = new Map<string, string[]>();
   const handledPreviousKeys = new Set<string>();
-  const handledCurrentKeys = new Set<string>();
   for (const [sessionKey, entry] of previous) {
     if (current.has(sessionKey)) {
       continue;
@@ -99,12 +114,13 @@ export function emitCommittedSessionIdentityDiff(
       sessionKey,
     ]);
     handledPreviousKeys.add(sessionKey);
-    handledCurrentKeys.add(currentKey);
   }
   for (const [currentKey, previousKeys] of movedKeysByCurrentKey) {
     const currentEntry = current.get(currentKey);
     if (currentEntry) {
-      emitSessionIdentityMutation({
+      emit({
+        agentId,
+        databaseIdentity,
         kind: "move",
         previous: toSessionIdentityTarget(currentEntry, previousKeys),
         current: toSessionIdentityTarget(currentEntry, [currentKey]),
@@ -114,24 +130,37 @@ export function emitCommittedSessionIdentityDiff(
 
   for (const [sessionKey, previousEntry] of previous) {
     const currentEntry = current.get(sessionKey);
+    const previousTarget = toSessionIdentityTarget(previousEntry, [sessionKey]);
     if (currentEntry) {
-      handledCurrentKeys.add(sessionKey);
-      emitCommittedSessionEntryChange({
-        currentEntry,
-        currentKey: sessionKey,
-        previousEntry,
-        previousKey: sessionKey,
-      });
+      const currentTarget = toSessionIdentityTarget(currentEntry, [sessionKey]);
+      // Same-ID resets replace lifecycle ownership while retaining transcript identity.
+      const kind =
+        previousTarget.sessionId !== currentTarget.sessionId
+          ? "replace"
+          : previousEntry.lifecycleRevision !== currentEntry.lifecycleRevision
+            ? "reset"
+            : undefined;
+      if (kind) {
+        emit({
+          agentId,
+          databaseIdentity,
+          kind,
+          previous: previousTarget,
+          current: currentTarget,
+        });
+      }
     } else if (!handledPreviousKeys.has(sessionKey)) {
-      emitCommittedSessionEntryRemoval(sessionKey, previousEntry);
+      emit({ agentId, databaseIdentity, kind: "delete", previous: previousTarget });
     }
   }
 
   for (const [sessionKey, currentEntry] of current) {
-    if (handledCurrentKeys.has(sessionKey)) {
+    if (previous.has(sessionKey) || movedKeysByCurrentKey.has(sessionKey)) {
       continue;
     }
-    emitSessionIdentityMutation({
+    emit({
+      agentId,
+      databaseIdentity,
       kind: "create",
       previous: { sessionKeys: [] },
       current: toSessionIdentityTarget(currentEntry, [sessionKey]),
@@ -139,22 +168,51 @@ export function emitCommittedSessionIdentityDiff(
   }
 }
 
-export function emitCommittedLifecycleIdentityMutations(params: {
-  projected: SqliteProjectedLifecycleIdentityMutation;
+export function prepareSessionIdentityPublication(
+  database: SessionIdentityDatabase,
+  agentId: string,
+  previous: ReadonlyMap<string, SessionEntry>,
+  current: ReadonlyMap<string, SessionEntry>,
+): () => void {
+  const { identity } = readOpenClawAgentDatabaseIdentity(database);
+  const publish = () => publishCommittedSessionIdentity(agentId, identity, previous, current);
+  // Savepoint success is not COMMIT; identity observers can cancel live work.
+  return () => {
+    if (!deferSqlitePostCommitPublication(database.db, publish)) {
+      publish();
+    }
+  };
+}
+
+export function prepareLifecycleIdentityPublication(params: {
+  database: SessionIdentityDatabase;
+  agentId: string;
+  projected: ProjectedLifecycleMutation;
   removedSessionKeys: readonly string[];
-}): void {
-  const removedKeys = new Set(params.removedSessionKeys);
+}): () => void {
+  const { previous, current } = collectLifecycleIdentityChanges(
+    params.projected,
+    params.removedSessionKeys,
+  );
+  return prepareSessionIdentityPublication(params.database, params.agentId, previous, current);
+}
+
+export function collectLifecycleIdentityChanges(
+  projected: ProjectedLifecycleMutation,
+  removedSessionKeys: readonly string[],
+) {
+  const removedKeys = new Set(removedSessionKeys);
   const previous = new Map(
-    params.projected.removals
+    projected.removals
       .filter((removal) => removedKeys.has(removal.sessionKey))
       .map((removal) => [removal.sessionKey, removal.expectedEntry]),
   );
   const current = new Map<string, SessionEntry>();
-  for (const upsert of params.projected.upsertedEntries) {
+  for (const upsert of projected.upsertedEntries) {
     if (!current.has(upsert.sessionKey) && upsert.expectedEntry) {
       previous.set(upsert.sessionKey, upsert.expectedEntry);
     }
     current.set(upsert.sessionKey, upsert.entry);
   }
-  emitCommittedSessionIdentityDiff(previous, current);
+  return { previous, current };
 }

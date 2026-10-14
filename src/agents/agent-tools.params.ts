@@ -5,8 +5,9 @@
  */
 import { asOptionalObjectRecord as getToolParamsRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { preserveAtPrefixedRelativePath } from "./path-policy.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
 
-/** Return a record view of model-supplied tool params when possible. */
 export { getToolParamsRecord };
 
 export type RequiredParamGroup = {
@@ -18,7 +19,6 @@ export type RequiredParamGroup = {
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>+$/;
-const FILE_TOOL_PATH_PARAM_KEYS = new Set(["path"]);
 const HALLUCINATED_OFFICE_PATH_EXTENSION_RE = /\.(doc|ppt|xls)(?:odex|codex|xodex|xcodex)$/i;
 const OFFICE_EXTENSION_BY_FAMILY: Record<string, string> = {
   doc: ".docx",
@@ -52,14 +52,7 @@ function formatReceivedParamHint(
 ): string {
   // Include only present fields so errors can distinguish missing parameters
   // from wrong-shaped or empty values without echoing full content.
-  const allowEmptyKeys = new Set<string>();
-  for (const group of groups) {
-    if (group.allowEmpty) {
-      for (const key of group.keys) {
-        allowEmptyKeys.add(key);
-      }
-    }
-  }
+  const allowEmptyKeys = new Set(groups.flatMap((group) => (group.allowEmpty ? group.keys : [])));
   const received: string[] = [];
   for (const key of Object.keys(record)) {
     const detail = describeReceivedParamValue(record[key], allowEmptyKeys.has(key));
@@ -71,12 +64,7 @@ function formatReceivedParamHint(
   return received.length > 0 ? ` (received: ${received.join(", ")})` : "";
 }
 
-type EditReplacement = {
-  oldText: string;
-  newText: string;
-};
-
-function isValidEditReplacement(value: unknown): value is EditReplacement {
+function isValidEditReplacement(value: unknown): boolean {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -90,19 +78,14 @@ function isValidEditReplacement(value: unknown): value is EditReplacement {
 
 function hasValidEditReplacements(record: Record<string, unknown>): boolean {
   const edits = record.edits;
-  return (
-    Array.isArray(edits) &&
-    edits.length > 0 &&
-    edits.every((entry) => isValidEditReplacement(entry))
-  );
+  return Array.isArray(edits) && edits.length > 0 && edits.every(isValidEditReplacement);
 }
 
-/** Required parameter groups for file-style tools that need retry guidance. */
 export const REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path"], label: "path" }],
   write: [
     { keys: ["path"], label: "path" },
-    { keys: ["content"], label: "content" },
+    { keys: ["content"], label: "content", allowEmpty: true },
   ],
   edit: [
     { keys: ["path"], label: "path" },
@@ -110,21 +93,27 @@ export const REQUIRED_PARAM_GROUPS = {
   ],
 } as const;
 
-/** Strip extra closing markers sometimes produced in XML arg_value path params. */
 function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
-/** Normalize known model-hallucinated Office/codex path extensions. */
-function normalizeHallucinatedOfficePathExtension(value: string): string {
-  return value.replace(HALLUCINATED_OFFICE_PATH_EXTENSION_RE, (_match, family: string) => {
-    return OFFICE_EXTENSION_BY_FAMILY[family.toLowerCase()] ?? _match;
-  });
-}
-
 /** Normalize model-supplied file-tool path params without touching payload text. */
-export function normalizeFileToolPathParam(value: string): string {
-  return normalizeHallucinatedOfficePathExtension(stripMalformedXmlArgValueSuffix(value));
+export function normalizeFileToolPathParam(value: string): string;
+export function normalizeFileToolPathParam(
+  value: string,
+  cwd: string,
+  bridge?: SandboxFsBridge,
+): Promise<string>;
+export function normalizeFileToolPathParam(
+  value: string,
+  cwd?: string,
+  bridge?: SandboxFsBridge,
+): string | Promise<string> {
+  const repaired = stripMalformedXmlArgValueSuffix(value).replace(
+    HALLUCINATED_OFFICE_PATH_EXTENSION_RE,
+    (match, family: string) => OFFICE_EXTENSION_BY_FAMILY[family.toLowerCase()] ?? match,
+  );
+  return cwd ? Promise.resolve(preserveAtPrefixedRelativePath(repaired, cwd, bridge)) : repaired;
 }
 
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
@@ -148,17 +137,21 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
 }
 
 /** Normalize selected file-tool path fields without mutating input. */
-export function normalizeFileToolPathParamsFromKeys<T extends Record<string, unknown>>(
+export async function normalizeFileToolPathParamsFromKeys<T extends Record<string, unknown>>(
   record: T,
   keys: readonly string[],
-): T {
+  cwd?: string,
+  bridge?: SandboxFsBridge,
+): Promise<T> {
   let normalized: T | undefined;
   for (const key of keys) {
     const value = record[key];
     if (typeof value !== "string") {
       continue;
     }
-    const normalizedValue = normalizeFileToolPathParam(value);
+    const normalizedValue = cwd
+      ? await normalizeFileToolPathParam(value, cwd, bridge)
+      : normalizeFileToolPathParam(value);
     if (normalizedValue !== value) {
       normalized ??= { ...record };
       normalized[key as keyof T] = normalizedValue as T[keyof T];
@@ -167,19 +160,28 @@ export function normalizeFileToolPathParamsFromKeys<T extends Record<string, unk
   return normalized ?? record;
 }
 
-function resolveFileToolPathParamKeys(groups: readonly RequiredParamGroup[] | undefined): string[] {
-  const keys = new Set<string>();
-  for (const group of groups ?? []) {
-    for (const key of group.keys) {
-      if (FILE_TOOL_PATH_PARAM_KEYS.has(key)) {
-        keys.add(key);
-      }
-    }
-  }
-  return [...keys];
+export function missingRequiredParamLabels(
+  record: Record<string, unknown> | undefined,
+  groups: readonly RequiredParamGroup[],
+): string[] {
+  return groups
+    .filter(
+      (group) =>
+        !record ||
+        !(
+          group.validator?.(record) ??
+          group.keys.some((key) => {
+            if (!(key in record)) {
+              return false;
+            }
+            const value = record[key];
+            return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
+          })
+        ),
+    )
+    .map((group) => group.label ?? group.keys.join(" or "));
 }
 
-/** Throw actionable retry guidance when required tool params are missing. */
 export function assertRequiredParams(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],
@@ -189,29 +191,7 @@ export function assertRequiredParams(
     throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
-  const missingLabels: string[] = [];
-  for (const group of groups) {
-    const satisfied =
-      group.validator?.(record) ??
-      group.keys.some((key) => {
-        if (!(key in record)) {
-          return false;
-        }
-        const value = record[key];
-        if (typeof value !== "string") {
-          return false;
-        }
-        if (group.allowEmpty) {
-          return true;
-        }
-        return value.trim().length > 0;
-      });
-
-    if (!satisfied) {
-      const label = group.label ?? group.keys.join(" or ");
-      missingLabels.push(label);
-    }
-  }
+  const missingLabels = missingRequiredParamLabels(record, groups);
 
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
@@ -221,19 +201,22 @@ export function assertRequiredParams(
   }
 }
 
-/** Wrap a tool execute function with required-parameter validation. */
 export function wrapToolParamValidation(
   tool: AnyAgentTool,
   requiredParamGroups?: readonly RequiredParamGroup[],
+  cwd?: string,
+  bridge?: SandboxFsBridge,
 ): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
-      const pathKeys = resolveFileToolPathParamKeys(requiredParamGroups);
+      const pathKeys = requiredParamGroups?.some((group) => group.keys.includes("path"))
+        ? ["path"]
+        : [];
       const normalizedParams =
         record && pathKeys.length > 0
-          ? normalizeFileToolPathParamsFromKeys(record, pathKeys)
+          ? await normalizeFileToolPathParamsFromKeys(record, pathKeys, cwd, bridge)
           : params;
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);

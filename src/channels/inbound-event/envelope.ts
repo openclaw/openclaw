@@ -5,6 +5,7 @@ import {
 } from "../../auto-reply/envelope.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionUpdatedAtCore } from "../../config/sessions/session-accessor.js";
+import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAgentRoute,
@@ -16,20 +17,45 @@ export type ChannelInboundEnvelopeInput = Omit<AgentEnvelopeParams, "previousTim
   previousTimestamp?: AgentEnvelopeParams["previousTimestamp"] | null;
 };
 
-export function createChannelInboundEnvelopeBuilder(params: {
+type ChannelInboundEnvelopeBuilderParams = {
   cfg: OpenClawConfig;
   route: Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
-}) {
+};
+
+/** @deprecated Use createChannelInboundEnvelopeBuilderAsync. Retained until the next Plugin SDK major. */
+export function createChannelInboundEnvelopeBuilder(params: ChannelInboundEnvelopeBuilderParams) {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.route.agentId,
   });
-  const envelope = resolveEnvelopeFormatOptions(params.cfg);
+  return createEnvelopeFormatter(params.cfg, () =>
+    readSessionUpdatedAtCore({ storePath, sessionKey: params.route.sessionKey }),
+  );
+}
+
+/** Prepare once per inbound message; history formatting remains synchronous and SQL-free. */
+export async function createChannelInboundEnvelopeBuilderAsync(
+  params: ChannelInboundEnvelopeBuilderParams,
+) {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.route.agentId,
+  });
+  const previousTimestamp = await readSessionUpdatedAtInWorker({
+    storePath,
+    sessionKey: params.route.sessionKey,
+  });
+  return createEnvelopeFormatter(params.cfg, () => previousTimestamp);
+}
+
+function createEnvelopeFormatter(
+  cfg: OpenClawConfig,
+  readPreviousTimestamp: () => number | undefined,
+) {
+  const envelope = resolveEnvelopeFormatOptions(cfg);
   return (input: ChannelInboundEnvelopeInput): string => {
     const previousTimestamp =
       input.previousTimestamp === null
         ? undefined
-        : (input.previousTimestamp ??
-          readSessionUpdatedAtCore({ storePath, sessionKey: params.route.sessionKey }));
+        : (input.previousTimestamp ?? readPreviousTimestamp());
     return formatAgentEnvelope({
       ...input,
       previousTimestamp,
@@ -38,6 +64,7 @@ export function createChannelInboundEnvelopeBuilder(params: {
   };
 }
 
+/** @deprecated Use resolveAgentRoute and createChannelInboundEnvelopeBuilderAsync. Retained until the next Plugin SDK major. */
 export function resolveChannelInboundRouteEnvelope(params: ResolveAgentRouteInput) {
   const route = resolveAgentRoute(params);
   return {
@@ -46,10 +73,7 @@ export function resolveChannelInboundRouteEnvelope(params: ResolveAgentRouteInpu
   };
 }
 
-type RouteLike = {
-  agentId: string;
-  sessionKey: string;
-};
+type RouteLike = Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
 
 type RoutePeerLike = {
   kind: "direct" | "group" | "channel";
@@ -72,16 +96,21 @@ type InboundRouteResolveParams<TConfig, TPeer extends RoutePeerLike> = {
   peer: TPeer;
 };
 
-export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
+type InboundEnvelopeBuilderParams<TConfig, TEnvelope> = {
   cfg: TConfig;
   route: RouteLike;
   sessionStore?: string;
-  resolveSessionStorePathCore: (store: string | undefined, opts: { agentId: string }) => string;
+  resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
   readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
   resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
   formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
-}) {
-  const storePath = params.resolveSessionStorePathCore(params.sessionStore, {
+};
+
+/** @deprecated Use createChannelInboundEnvelopeBuilderAsync. Retained for released SDK callbacks until the next major. */
+export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(
+  params: InboundEnvelopeBuilderParams<TConfig, TEnvelope>,
+) {
+  const storePath = params.resolveStorePath(params.sessionStore, {
     agentId: params.route.agentId,
   });
   const envelopeOptions = params.resolveEnvelopeFormatOptions(params.cfg);
@@ -102,23 +131,18 @@ export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
   };
 }
 
+/** @deprecated Use resolveAgentRoute and createChannelInboundEnvelopeBuilderAsync. Retained for released SDK callbacks until the next major. */
 export function resolveInboundRouteEnvelopeBuilder<
   TConfig,
   TEnvelope,
   TRoute extends RouteLike,
   TPeer extends RoutePeerLike,
->(params: {
-  cfg: TConfig;
-  channel: string;
-  accountId: string;
-  peer: TPeer;
-  resolveAgentRoute: (params: InboundRouteResolveParams<TConfig, TPeer>) => TRoute;
-  sessionStore?: string;
-  resolveSessionStorePathCore: (store: string | undefined, opts: { agentId: string }) => string;
-  readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
-  resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
-  formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
-}): {
+>(
+  params: Omit<InboundEnvelopeBuilderParams<TConfig, TEnvelope>, "route"> &
+    InboundRouteResolveParams<TConfig, TPeer> & {
+      resolveAgentRoute: (params: InboundRouteResolveParams<TConfig, TPeer>) => TRoute;
+    },
+): {
   route: TRoute;
   buildEnvelope: ReturnType<typeof createInboundEnvelopeBuilder<TConfig, TEnvelope>>;
 } {
@@ -128,16 +152,7 @@ export function resolveInboundRouteEnvelopeBuilder<
     accountId: params.accountId,
     peer: params.peer,
   });
-  const buildEnvelope = createInboundEnvelopeBuilder({
-    cfg: params.cfg,
-    route,
-    sessionStore: params.sessionStore,
-    resolveSessionStorePathCore: params.resolveSessionStorePathCore,
-    readSessionUpdatedAt: params.readSessionUpdatedAt,
-    resolveEnvelopeFormatOptions: params.resolveEnvelopeFormatOptions,
-    formatAgentEnvelope: params.formatAgentEnvelope,
-  });
-  return { route, buildEnvelope };
+  return { route, buildEnvelope: createInboundEnvelopeBuilder({ ...params, route }) };
 }
 
 type InboundRouteEnvelopeRuntime<
@@ -149,30 +164,28 @@ type InboundRouteEnvelopeRuntime<
   routing: {
     resolveAgentRoute: (params: InboundRouteResolveParams<TConfig, TPeer>) => TRoute;
   };
-  session: {
-    resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
-    readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
-  };
-  reply: {
-    resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
-    formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
-  };
+  session: Pick<
+    InboundEnvelopeBuilderParams<TConfig, TEnvelope>,
+    "resolveStorePath" | "readSessionUpdatedAt"
+  >;
+  reply: Pick<
+    InboundEnvelopeBuilderParams<TConfig, TEnvelope>,
+    "resolveEnvelopeFormatOptions" | "formatAgentEnvelope"
+  >;
 };
 
-/** Runtime-driven compatibility variant for shipped plugin SDK callers. */
+/** @deprecated Use resolveAgentRoute and createChannelInboundEnvelopeBuilderAsync. Retained for released SDK callbacks until the next major. */
 export function resolveInboundRouteEnvelopeBuilderWithRuntime<
   TConfig,
   TEnvelope,
   TRoute extends RouteLike,
   TPeer extends RoutePeerLike,
->(params: {
-  cfg: TConfig;
-  channel: string;
-  accountId: string;
-  peer: TPeer;
-  runtime: InboundRouteEnvelopeRuntime<TConfig, TEnvelope, TRoute, TPeer>;
-  sessionStore?: string;
-}): {
+>(
+  params: InboundRouteResolveParams<TConfig, TPeer> & {
+    runtime: InboundRouteEnvelopeRuntime<TConfig, TEnvelope, TRoute, TPeer>;
+    sessionStore?: string;
+  },
+): {
   route: TRoute;
   buildEnvelope: ReturnType<typeof createInboundEnvelopeBuilder<TConfig, TEnvelope>>;
 } {
@@ -183,7 +196,7 @@ export function resolveInboundRouteEnvelopeBuilderWithRuntime<
     peer: params.peer,
     resolveAgentRoute: (routeParams) => params.runtime.routing.resolveAgentRoute(routeParams),
     sessionStore: params.sessionStore,
-    resolveSessionStorePathCore: params.runtime.session.resolveStorePath,
+    resolveStorePath: params.runtime.session.resolveStorePath,
     readSessionUpdatedAt: params.runtime.session.readSessionUpdatedAt,
     resolveEnvelopeFormatOptions: params.runtime.reply.resolveEnvelopeFormatOptions,
     formatAgentEnvelope: params.runtime.reply.formatAgentEnvelope,

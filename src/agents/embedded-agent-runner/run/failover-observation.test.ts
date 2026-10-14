@@ -4,11 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../logger.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 
-function observeDecision(overrides: Partial<Parameters<typeof createFailoverDecisionLogger>[0]>) {
-  // Keep the base case boring so each test only states the failure dimension
-  // whose log metadata should change.
-  const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-  const logDecision = createFailoverDecisionLogger({
+type DecisionBase = Parameters<typeof createFailoverDecisionLogger>[0];
+type LogCall = Parameters<typeof log.warn>;
+type LogSpy = { mock: { calls: LogCall[] } };
+
+function createDecisionLogger(overrides: Partial<DecisionBase> = {}) {
+  return createFailoverDecisionLogger({
     stage: "assistant",
     runId: "run:base",
     rawError: "",
@@ -22,44 +23,28 @@ function observeDecision(overrides: Partial<Parameters<typeof createFailoverDeci
     aborted: false,
     ...overrides,
   });
-  logDecision("surface_error");
+}
+
+function observeDecision(overrides: Partial<DecisionBase>) {
+  const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+  createDecisionLogger(overrides)("surface_error");
   return firstWarnDetails(warnSpy);
 }
 
-function firstWarnCall(warnSpy: { mock: { calls: unknown[][] } }): unknown[] {
-  const call = warnSpy.mock.calls[0];
+function firstWarnCall(logSpy: LogSpy): LogCall {
+  const call = logSpy.mock.calls[0];
   if (!call) {
-    throw new Error("Expected warning log");
+    throw new Error("Expected failover decision log");
   }
   return call;
 }
 
-function firstWarnDetails(warnSpy: { mock: { calls: unknown[][] } }): {
-  consoleMessage?: string;
-  failoverReason?: string | null;
-  model?: string;
-  profileFailureReason?: string | null;
-  provider?: string;
-  providerRuntimeFailureKind?: string;
-  rawErrorPreview?: string;
-  sourceModel?: string;
-  sourceProvider?: string;
-  timedOut?: boolean;
-} {
-  // The logger intentionally records structured details separate from the
-  // console message, so assertions can cover both machine and human evidence.
-  return firstWarnCall(warnSpy)[1] as {
-    consoleMessage?: string;
-    failoverReason?: string | null;
-    model?: string;
-    profileFailureReason?: string | null;
-    provider?: string;
-    providerRuntimeFailureKind?: string;
-    rawErrorPreview?: string;
-    sourceModel?: string;
-    sourceProvider?: string;
-    timedOut?: boolean;
-  };
+function firstWarnDetails(logSpy: LogSpy) {
+  const details = firstWarnCall(logSpy)[1];
+  if (!details) {
+    throw new Error("Expected structured failover details");
+  }
+  return details;
 }
 
 afterEach(() => {
@@ -92,23 +77,53 @@ describe("createFailoverDecisionLogger timeout normalization", () => {
   });
 });
 
+describe("createFailoverDecisionLogger counters", () => {
+  it("keeps current retry and carried rotation counts identical in structured and console details", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    createDecisionLogger({
+      failoverReason: "overloaded",
+      retryCount: 3,
+      profileRotationCount: 2,
+    })("retry_same_model", { retryCount: 1 });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const details = firstWarnDetails(warnSpy);
+    expect(details).toMatchObject({
+      decision: "retry_same_model",
+      retryCount: 1,
+      profileRotationCount: 2,
+    });
+    expect(details.consoleMessage).toContain("retry=1 rotations=2 ");
+  });
+});
+
 describe("createFailoverDecisionLogger", () => {
+  it("omits normal continuation logs when debug is disabled", () => {
+    vi.spyOn(log, "isEnabled").mockReturnValue(false);
+    const debugSpy = vi.spyOn(log, "debug").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    createDecisionLogger()("continue_normal");
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(debugSpy).not.toHaveBeenCalled();
+  });
+
   it("includes from and to model refs when the source differs from the selected target", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const logDecision = createFailoverDecisionLogger({
-      stage: "assistant",
+    const logDecision = createDecisionLogger({
       runId: "run:failover",
       rawError: "timeout",
       failoverReason: "timeout",
       profileFailureReason: "timeout",
-      provider: "openai",
       model: "gpt-5.4",
       sourceProvider: "github-copilot",
       sourceModel: "gpt-5.4-mini",
-      profileId: "openai:p1",
       fallbackConfigured: true,
       timedOut: true,
-      aborted: false,
+      attemptCount: 4,
+      retryCount: 2,
+      profileRotationCount: 1,
     });
 
     logDecision("fallback_model");
@@ -116,6 +131,12 @@ describe("createFailoverDecisionLogger", () => {
     const [message] = firstWarnCall(warnSpy);
     expect(message).toBe("embedded run failover decision");
     const observation = firstWarnDetails(warnSpy);
+    expect(observation).toMatchObject({
+      decision: "fallback_model",
+      attemptCount: 4,
+      retryCount: 2,
+      profileRotationCount: 1,
+    });
     expect(observation.sourceProvider).toBe("github-copilot");
     expect(observation.sourceModel).toBe("gpt-5.4-mini");
     expect(observation.provider).toBe("openai");
@@ -124,46 +145,17 @@ describe("createFailoverDecisionLogger", () => {
     expect(observation.consoleMessage).toContain("to=openai/gpt-5.4");
   });
 
-  it("omits to model refs when the source matches the selected target", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const logDecision = createFailoverDecisionLogger({
-      stage: "assistant",
-      runId: "run:same-model",
-      rawError: "timeout",
-      failoverReason: "timeout",
-      profileFailureReason: "timeout",
-      provider: "openai",
-      model: "gpt-5.4",
-      sourceProvider: "openai",
-      sourceModel: "gpt-5.4",
-      profileId: "openai:p1",
-      fallbackConfigured: true,
-      timedOut: true,
-      aborted: false,
-    });
-
-    logDecision("surface_error");
-
-    expect(firstWarnDetails(warnSpy).consoleMessage).toContain("from=openai/gpt-5.4");
-    expect(firstWarnDetails(warnSpy).consoleMessage).not.toContain("to=openai/gpt-5.4");
-  });
-
   it("omits raw HTML auth bodies from consoleMessage for HTML 401 auth failures", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const logDecision = createFailoverDecisionLogger({
-      stage: "assistant",
+    const logDecision = createDecisionLogger({
       runId: "run:auth-html",
       rawError: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
       failoverReason: "auth",
       profileFailureReason: "auth",
-      provider: "openai",
       model: "gpt-5.4",
       sourceProvider: "openai",
       sourceModel: "gpt-5.4",
-      profileId: "openai:p1",
       fallbackConfigured: true,
-      timedOut: false,
-      aborted: false,
     });
 
     logDecision("rotate_profile");
@@ -185,20 +177,15 @@ describe("createFailoverDecisionLogger", () => {
       "403 <!DOCTYPE html><html><head><title>403 Forbidden</title></head>" +
       "<body>Enable JavaScript and cookies to continue." +
       "<p>Please stand by, while we are checking your browser...</p></body></html>";
-    const logDecision = createFailoverDecisionLogger({
-      stage: "assistant",
+    const logDecision = createDecisionLogger({
       runId: "run:cf-challenge",
       rawError: cfChallengeHtml,
       failoverReason: "auth",
       profileFailureReason: "auth",
-      provider: "openai",
       model: "gpt-5.4",
       sourceProvider: "openai",
       sourceModel: "gpt-5.4",
-      profileId: "openai:p1",
       fallbackConfigured: true,
-      timedOut: false,
-      aborted: false,
     });
 
     logDecision("rotate_profile");

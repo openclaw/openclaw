@@ -13,6 +13,7 @@ const PortalSummaryMetadataFields = {
   publicUrl: NonEmptyString,
   path: Type.Optional(Type.String({ pattern: "^/" })),
   description: Type.Optional(Type.String()),
+  origin: Type.Optional(Type.String()),
   createdAtMs: Type.Integer({ minimum: 0 }),
 };
 
@@ -23,12 +24,15 @@ export const PortalSummarySchema = closedObject({
   ...PortalSummaryMetadataFields,
 });
 
-export const PortalListParamsSchema = closedObject({});
+const PortalEnvironmentFields = { environmentId: Type.Optional(NonEmptyString) };
+
+export const PortalListParamsSchema = closedObject({ ...PortalEnvironmentFields });
 export const PortalListResultSchema = closedObject({
   portals: Type.Array(PortalSummarySchema),
 });
 
 export const PortalOpenParamsSchema = closedObject({
+  ...PortalEnvironmentFields,
   port: Type.Integer({ minimum: 1, maximum: 65_535 }),
   title: Type.Optional(NonEmptyString),
   description: Type.Optional(Type.String()),
@@ -41,8 +45,27 @@ export const PortalOpenResultSchema = closedObject({
   ...PortalSummaryMetadataFields,
 });
 
-export const PortalCloseParamsSchema = closedObject({ id: NonEmptyString });
+export const PortalCloseParamsSchema = closedObject({
+  id: NonEmptyString,
+  ...PortalEnvironmentFields,
+});
 export const PortalCloseResultSchema = closedObject({ closed: Type.Boolean() });
+
+const SessionPortalFields = {
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  environmentId: NonEmptyString,
+};
+
+export const SessionPortalListParamsSchema = closedObject(SessionPortalFields);
+export const SessionPortalOpenParamsSchema = closedObject({
+  ...PortalOpenParamsSchema.properties,
+  ...SessionPortalFields,
+});
+export const SessionPortalCloseParamsSchema = closedObject({
+  ...PortalCloseParamsSchema.properties,
+  ...SessionPortalFields,
+});
 
 export const PortalChangedEventSchema = closedObject({
   portals: Type.Array(PortalSummarySchema),

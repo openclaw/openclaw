@@ -4,18 +4,18 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
   type PackageManifest,
+  type PluginInstallArtifactConsentHandler,
   type PluginInstallErrorCode,
   type PluginInstallFailureResult,
   type PluginInstallLogger,
@@ -30,10 +30,8 @@ import {
   type PluginSecuritySourceFamily,
 } from "./security-events.js";
 
-const pluginInstallRuntimeLoader = createLazyImportLoader(() => import("./install.runtime.js"));
-
 export async function loadPluginInstallRuntime() {
-  return await pluginInstallRuntimeLoader.load();
+  return await import("./install.runtime.js");
 }
 
 export type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
@@ -50,31 +48,6 @@ export function formatUnresolvedOpenClawPeerLinkError(packageName: string): stri
 
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
-function validateOpenClawPackageCompatibility(params: {
-  pluginId: string;
-  currentHostVersion: string;
-  packageMetadata?: OpenClawPackageManifest;
-}): PluginInstallFailureResult | null {
-  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
-  if (!pluginApiRangeCheck.ok) {
-    return {
-      ok: false,
-      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
-    };
-  }
-  const pluginApiRange = pluginApiRangeCheck.range;
-  if (pluginApiRange && !satisfiesPluginApiRange(params.currentHostVersion, pluginApiRange)) {
-    return {
-      ok: false,
-      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${params.currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
-    };
-  }
-
-  return null;
-}
-
 export function validateOpenClawPackageInstallCompatibility(params: {
   runtime: PluginCompatibilityRuntime;
   pluginId: string;
@@ -107,11 +80,23 @@ export function validateOpenClawPackageInstallCompatibility(params: {
     };
   }
 
-  return validateOpenClawPackageCompatibility({
-    pluginId: params.pluginId,
-    currentHostVersion,
-    packageMetadata: params.packageMetadata,
-  });
+  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
+  if (!pluginApiRangeCheck.ok) {
+    return {
+      ok: false,
+      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
+    };
+  }
+  const pluginApiRange = pluginApiRangeCheck.range;
+  if (pluginApiRange && !satisfiesPluginApiRange(currentHostVersion, pluginApiRange)) {
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+    };
+  }
+  return null;
 }
 
 export async function readOptionalPackageManifest(params: {
@@ -171,14 +156,12 @@ export function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   };
 }
 
-export function buildDirectoryInstallResult(params: {
-  pluginId: string;
-  targetDir: string;
-  manifestName?: string;
-  version?: string;
-  extensions: string[];
-  setup?: import("./manifest.js").PluginManifestSetup;
-}): InstallPluginResult {
+export function buildDirectoryInstallResult(
+  params: Pick<
+    Extract<InstallPluginResult, { ok: true }>,
+    "pluginId" | "targetDir" | "manifestName" | "version" | "extensions" | "setup"
+  >,
+): InstallPluginResult {
   return {
     ok: true,
     pluginId: params.pluginId,
@@ -212,13 +195,6 @@ export function emitSuccessfulPluginInstallSecurityEvent(
   });
 }
 
-export function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
-  return (
-    Object.keys(manifest.dependencies ?? {}).length > 0 ||
-    Object.keys(manifest.optionalDependencies ?? {}).length > 0
-  );
-}
-
 function buildBlockedInstallResult(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
 }): Extract<InstallPluginResult, { ok: false }> {
@@ -249,10 +225,9 @@ export function sourceFamilyForInstallPolicyKind(
       return "git";
     case "plugin-npm":
       return "npm";
-    case undefined:
+    default:
       return fallback;
   }
-  return fallback;
 }
 
 export function sourceFamilyForInstallPolicySource(
@@ -261,23 +236,13 @@ export function sourceFamilyForInstallPolicySource(
 ): PluginSecuritySourceFamily {
   switch (source?.kind) {
     case "archive":
-      return "archive";
     case "file":
-      return "file";
     case "git":
-      return "git";
     case "npm":
-      return "npm";
-    case "bundled":
-    case "clawhub":
-    case "local-path":
-    case "managed":
-    case "upload":
-    case "workspace":
-    case undefined:
+      return source.kind;
+    default:
       return fallback;
   }
-  return fallback;
 }
 
 export type PreparedInstallTarget = {
@@ -286,7 +251,7 @@ export type PreparedInstallTarget = {
 };
 
 export async function ensureInstallTargetAvailableForMode(params: {
-  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  runtime: PluginInstallRuntime;
   targetPath: string;
   mode: "install" | "update";
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -298,16 +263,20 @@ export async function ensureInstallTargetAvailableForMode(params: {
 }
 
 export async function resolvePreparedDirectoryInstallTarget(params: {
-  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  runtime: PluginInstallRuntime;
   pluginId: string;
   extensionsDir?: string;
   requestedMode: "install" | "update";
   nameEncoder?: (pluginId: string) => string;
 }): Promise<{ ok: true; target: PreparedInstallTarget } | { ok: false; error: string }> {
-  const targetDirResult = await resolvePluginInstallTarget({
-    runtime: params.runtime,
-    pluginId: params.pluginId,
-    extensionsDir: params.extensionsDir,
+  const extensionsDir = params.extensionsDir
+    ? resolveUserPath(params.extensionsDir)
+    : resolveDefaultPluginExtensionsDir();
+  const targetDirResult = await params.runtime.resolveCanonicalInstallTarget({
+    baseDir: extensionsDir,
+    id: params.pluginId,
+    invalidNameMessage: "invalid plugin name: path traversal detected",
+    boundaryLabel: "extensions directory",
     nameEncoder: params.nameEncoder,
   });
   if (!targetDirResult.ok) {
@@ -366,43 +335,27 @@ export async function runInstallSourceScan(params: {
   }
 }
 
-export async function installPluginDirectoryIntoExtensions(params: {
-  sourceDir: string;
-  pluginId: string;
-  manifestName?: string;
-  version?: string;
-  extensions: string[];
-  setup?: import("./manifest.js").PluginManifestSetup;
-  targetDir?: string;
-  extensionsDir?: string;
-  logger: PluginInstallLogger;
-  timeoutMs: number;
-  mode: "install" | "update";
-  dryRun: boolean;
-  copyErrorPrefix: string;
-  hasDeps: boolean;
-  sourceHardlinks?: "package-manager" | "reject";
-  depsLogMessage: string;
-  afterCopy?: (installedDir: string) => Promise<void>;
-  afterInstall?: (
-    installedDir: string,
-  ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
-  nameEncoder?: (pluginId: string) => string;
-}): Promise<InstallPluginResult> {
+export async function installPluginDirectoryIntoExtensions(
+  params: Parameters<typeof buildDirectoryInstallResult>[0] & {
+    sourceDir: string;
+    logger: PluginInstallLogger;
+    timeoutMs: number;
+    workTimeoutMs?: number | null;
+    mode: "install" | "update";
+    dryRun: boolean;
+    copyErrorPrefix: string;
+    hasDeps: boolean;
+    sourceHardlinks?: "package-manager" | "reject";
+    depsLogMessage: string;
+    afterInstall?: (
+      installedDir: string,
+    ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
+  },
+): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  let targetDir = params.targetDir;
-  if (!targetDir) {
-    const targetDirResult = await resolvePluginInstallTarget({
-      runtime,
-      pluginId: params.pluginId,
-      extensionsDir: params.extensionsDir,
-      nameEncoder: params.nameEncoder,
-    });
-    if (!targetDirResult.ok) {
-      return { ok: false, error: targetDirResult.error };
-    }
-    targetDir = targetDirResult.targetDir;
-  }
+  const targetDir = params.targetDir;
   const availability = await ensureInstallTargetAvailableForMode({
     runtime,
     targetPath: targetDir,
@@ -413,78 +366,64 @@ export async function installPluginDirectoryIntoExtensions(params: {
   }
 
   if (params.dryRun) {
-    return buildDirectoryInstallResult({
-      pluginId: params.pluginId,
-      targetDir,
-      manifestName: params.manifestName,
-      version: params.version,
-      extensions: params.extensions,
-      setup: params.setup,
-    });
+    return buildDirectoryInstallResult({ ...params, targetDir });
   }
 
+  let artifactConsentFailure: { error: unknown } | undefined;
   const packageInstallParams = {
     sourceDir: params.sourceDir,
     targetDir,
     mode: params.mode,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
-    afterCopy: params.afterCopy,
+    beforePersistentApply: params.beforePersistentApply,
     afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
-      if (!postInstallResult) {
-        return { ok: true as const };
+      if (postInstallResult) {
+        return postInstallResult;
       }
-      return postInstallResult;
+      try {
+        // Consent must bind to the final staged bytes, never their mutable source tree.
+        await params.onBeforePluginArtifactCommit?.({
+          pluginId: params.pluginId,
+          ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
+          stagedArtifactDir: installedDir,
+          mode: params.mode,
+        });
+      } catch (error) {
+        // installPackageDir converts hook failures into results; retain the typed rejection.
+        artifactConsentFailure = { error };
+        throw error;
+      }
+      return { ok: true as const };
     },
   };
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
   const installRes = await runtime.installPackageDir(
-    isPluginInstallCommitDeferred(params)
-      ? requestDeferredPackageDirInstall(packageInstallParams)
+    transactionRequest
+      ? requestDeferredPackageDirInstall(packageInstallParams, transactionRequest.assertOwned)
       : packageInstallParams,
   );
   if (!installRes.ok) {
+    if (artifactConsentFailure) {
+      throw artifactConsentFailure.error;
+    }
     return installRes;
   }
 
-  const result = {
-    ...buildDirectoryInstallResult({
-      pluginId: params.pluginId,
-      targetDir,
-      manifestName: params.manifestName,
-      version: params.version,
-      extensions: params.extensions,
-      setup: params.setup,
-    }),
-  };
+  const result = buildDirectoryInstallResult({ ...params, targetDir });
   const transaction = resolvePackageDirInstallTransaction(installRes);
   return transaction ? attachPluginInstallTransaction(result, transaction) : result;
 }
 
-async function resolvePluginInstallTarget(params: {
-  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
-  pluginId: string;
-  extensionsDir?: string;
-  nameEncoder?: (pluginId: string) => string;
-}): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
-  const extensionsDir = params.extensionsDir
-    ? resolveUserPath(params.extensionsDir)
-    : resolveDefaultPluginExtensionsDir();
-  return await params.runtime.resolveCanonicalInstallTarget({
-    baseDir: extensionsDir,
-    id: params.pluginId,
-    invalidNameMessage: "invalid plugin name: path traversal detected",
-    boundaryLabel: "extensions directory",
-    nameEncoder: params.nameEncoder,
-  });
-}
-
 export async function resolveEffectiveInstallMode(params: {
-  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  runtime: PluginInstallRuntime;
   requestedMode: "install" | "update";
   targetPath: string;
 }): Promise<"install" | "update"> {

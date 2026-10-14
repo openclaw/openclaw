@@ -1,4 +1,5 @@
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@openclaw/llm-core";
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   processResponsesStream as processTransportStream,
   type OpenAIResponsesStreamEvent,
@@ -56,14 +57,7 @@ function createOutput(): AssistantMessage {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 0,
   };
@@ -121,13 +115,12 @@ function projectBlock(block: AssistantMessage["content"][number]): ProjectedBloc
   if (block.type === "text") {
     return { type: "text", text: block.text };
   }
-  const toolCall = block as typeof block & { partialJson?: string };
   return {
     type: "toolCall",
-    id: toolCall.id.replace(/^call_[a-f0-9]{24}/, "call_<generated>"),
-    name: toolCall.name,
-    arguments: toolCall.arguments,
-    partialJson: "partialJson" in toolCall,
+    id: block.id.replace(/^call_[a-f0-9]{24}/, "call_<generated>"),
+    name: block.name,
+    arguments: block.arguments,
+    partialJson: "partialJson" in block,
   };
 }
 

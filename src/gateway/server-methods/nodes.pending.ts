@@ -20,9 +20,10 @@ import {
   type PendingNodeAction,
 } from "../node-runtime-state.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { respondPairingChanged } from "./nodes.shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { respondUnavailableOnThrow } from "./response.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function resolveAllowedPendingNodeActions(params: {
   nodeId: string;
@@ -41,7 +42,7 @@ function resolveAllowedPendingNodeActions(params: {
   // Re-filter queued actions against the node's current declared commands and
   // allowlist; app upgrades or permission changes can make old actions unsafe.
   const connect = params.client?.connect;
-  const declaredCommands = Array.isArray(connect?.commands) ? connect.commands : [];
+  const declaredCommands = connect?.commands ?? [];
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
     platform: connect?.client?.platform,
     deviceFamily: connect?.client?.deviceFamily,
@@ -67,30 +68,7 @@ function resolveAllowedPendingNodeActions(params: {
   return allowed;
 }
 
-function ackPendingNodeActions(
-  nodeId: string,
-  ids: string[],
-  pairingGeneration: string,
-): PendingNodeAction[] {
-  if (ids.length === 0) {
-    return listPendingNodeActions({
-      nodeId,
-      pairingGeneration,
-      ttlMs: nodeInvokePolicy.pendingActionTtlMs,
-    });
-  }
-  return acknowledgePendingNodeActions({
-    nodeId,
-    pairingGeneration,
-    ids,
-    ttlMs: nodeInvokePolicy.pendingActionTtlMs,
-  });
-}
-
 export function toPendingParamsJSON(params: unknown): string | undefined {
-  if (params === undefined) {
-    return undefined;
-  }
   try {
     return JSON.stringify(params);
   } catch {
@@ -98,100 +76,75 @@ export function toPendingParamsJSON(params: unknown): string | undefined {
   }
 }
 
-export const nodePendingActionHandlers: GatewayRequestHandlers = {
-  "node.pending.pull": async ({ params, respond, client, context }) => {
-    if (!validateNodeListParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pending.pull",
-        validator: validateNodeListParams,
-      });
+async function withPendingNodeActions(
+  options: GatewayRequestHandlerOptions,
+  operation: (nodeId: string, pairingGeneration: string) => () => unknown,
+): Promise<void> {
+  const { respond, client, context } = options;
+  const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+  const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
+  if (!trimmedNodeId) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+    return;
+  }
+  await respondUnavailableOnThrow(respond, async () => {
+    const generation = await captureNodePairingGeneration(trimmedNodeId);
+    if (!generation) {
+      respondPairingChanged(respond);
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
-    if (!trimmedNodeId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+    const session = context.nodeRegistry.getForPairingGeneration(trimmedNodeId, generation.key);
+    if (!session || session.connId !== client?.connId) {
+      respondPairingChanged(respond);
       return;
     }
+    const readResult = operation(trimmedNodeId, generation.key);
+    if (!(await isNodePairingGenerationCurrent(generation))) {
+      respondPairingChanged(respond);
+      return;
+    }
+    respond(true, readResult(), undefined);
+  });
+}
 
-    await respondUnavailableOnThrow(respond, async () => {
-      const generation = await captureNodePairingGeneration(trimmedNodeId);
-      if (!generation) {
-        respondPairingChanged(respond);
-        return;
-      }
-      const session = context.nodeRegistry.getForPairingGeneration(trimmedNodeId, generation.key);
-      if (!session || session.connId !== client?.connId) {
-        respondPairingChanged(respond);
-        return;
-      }
+export const nodePendingActionHandlers: GatewayRequestHandlers = {
+  "node.pending.pull": async (options) => {
+    const { params, respond, client, context } = options;
+    if (!assertValidParams(params, validateNodeListParams, "node.pending.pull", respond)) {
+      return;
+    }
+    await withPendingNodeActions(options, (nodeId, pairingGeneration) => {
       const pending = resolveAllowedPendingNodeActions({
-        nodeId: trimmedNodeId,
-        pairingGeneration: generation.key,
+        nodeId,
+        pairingGeneration,
         client,
         cfg: context.getRuntimeConfig(),
       });
-      if (!(await isNodePairingGenerationCurrent(generation))) {
-        respondPairingChanged(respond);
-        return;
-      }
-      respond(
-        true,
-        {
-          nodeId: trimmedNodeId,
-          actions: pending.map((entry) => ({
-            id: entry.id,
-            command: entry.command,
-            paramsJSON: entry.paramsJSON ?? null,
-            enqueuedAtMs: entry.enqueuedAtMs,
-          })),
-        },
-        undefined,
-      );
+      return () => ({
+        nodeId,
+        actions: pending.map((entry) => ({
+          id: entry.id,
+          command: entry.command,
+          paramsJSON: entry.paramsJSON ?? null,
+          enqueuedAtMs: entry.enqueuedAtMs,
+        })),
+      });
     });
   },
-  "node.pending.ack": async ({ params, respond, client, context }) => {
-    if (!validateNodePendingAckParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pending.ack",
-        validator: validateNodePendingAckParams,
-      });
+  "node.pending.ack": async (options) => {
+    const { params, respond } = options;
+    if (!assertValidParams(params, validateNodePendingAckParams, "node.pending.ack", respond)) {
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
-    if (!trimmedNodeId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
-      return;
-    }
-    await respondUnavailableOnThrow(respond, async () => {
-      const generation = await captureNodePairingGeneration(trimmedNodeId);
-      if (!generation) {
-        respondPairingChanged(respond);
-        return;
-      }
-      const session = context.nodeRegistry.getForPairingGeneration(trimmedNodeId, generation.key);
-      if (!session || session.connId !== client?.connId) {
-        respondPairingChanged(respond);
-        return;
-      }
+    await withPendingNodeActions(options, (nodeId, pairingGeneration) => {
       const ackIds = normalizeUniqueTrimmedStringList(params.ids);
-      const remaining = ackPendingNodeActions(trimmedNodeId, ackIds, generation.key);
-      if (!(await isNodePairingGenerationCurrent(generation))) {
-        respondPairingChanged(respond);
-        return;
-      }
-      respond(
-        true,
-        {
-          nodeId: trimmedNodeId,
-          ackedIds: ackIds,
-          remainingCount: remaining.length,
-        },
-        undefined,
-      );
+      const remaining = acknowledgePendingNodeActions({
+        nodeId,
+        pairingGeneration,
+        ids: ackIds,
+        ttlMs: nodeInvokePolicy.pendingActionTtlMs,
+      });
+      return () => ({ nodeId, ackedIds: ackIds, remainingCount: remaining.length });
     });
   },
 };

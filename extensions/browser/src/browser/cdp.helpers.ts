@@ -1,20 +1,13 @@
-/**
- * Chrome DevTools Protocol URL, fetch, and socket helpers.
- *
- * Handles CDP URL normalization, SSRF-guarded HTTP discovery, credential
- * redaction/headers, and request/response correlation over WebSocket.
- */
 import { createHash } from "node:crypto";
-import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
+import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isLoopbackHost } from "../gateway/net.js";
 import {
   SsrFBlockedError,
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
-} from "../infra/net/ssrf.js";
-import { redactToolPayloadText } from "../logging/redact.js";
+} from "openclaw/plugin-sdk/security-runtime";
+import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -35,20 +28,11 @@ export { isLoopbackHost };
 export { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
 export { openCdpWebSocket, withCdpSocket } from "./cdp-websocket.js";
 export type { CdpSendFn } from "./cdp-websocket.js";
-export { parseBrowserHttpUrl, redactCdpUrl };
+export { redactCdpUrl };
 
-/**
- * Returns true when the URL uses a WebSocket protocol (ws: or wss:).
- * Used to distinguish direct-WebSocket CDP endpoints
- * from HTTP(S) endpoints that require /json/version discovery.
- */
 export function isWebSocketUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "ws:" || parsed.protocol === "wss:";
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return parsed?.protocol === "ws:" || parsed?.protocol === "wss:";
 }
 
 /**
@@ -64,22 +48,29 @@ export function isWebSocketUrl(url: string): boolean {
  * Chrome will reject with HTTP 400.
  */
 export function isDirectCdpWebSocketEndpoint(url: string): boolean {
-  if (!isWebSocketUrl(url)) {
-    return false;
+  const parsed = URL.parse(url);
+  return (
+    (parsed?.protocol === "ws:" || parsed?.protocol === "wss:") &&
+    /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(parsed.pathname)
+  );
+}
+
+export async function resolveCdpWebSocketDiscovery(
+  cdpUrl: string,
+  readWebSocketUrl: (discoveryUrl: string) => Promise<string | undefined>,
+): Promise<{ url: string; discovered: boolean } | null> {
+  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+    return { url: cdpUrl, discovered: false };
   }
-  try {
-    const parsed = new URL(url);
-    return /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
-      parsed.pathname,
-    );
-    // isWebSocketUrl above already parsed the same URL successfully, so
-    // new URL(url) cannot throw here. Kept for structural symmetry with
-    // the other try/catch URL helpers.
-    /* c8 ignore start */
-  } catch {
-    return false;
+  const discoveryUrl = isWebSocketUrl(cdpUrl)
+    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+    : cdpUrl;
+  const advertisedUrl = await readWebSocketUrl(discoveryUrl);
+  if (advertisedUrl) {
+    return { url: normalizeCdpWsUrl(advertisedUrl, discoveryUrl), discovered: true };
   }
-  /* c8 ignore stop */
+  // Bare WebSocket endpoints can be directly usable without HTTP discovery.
+  return isWebSocketUrl(cdpUrl) ? { url: cdpUrl, discovered: false } : null;
 }
 
 /** Restrict a trusted CDP endpoint to its configured control-plane host. */
@@ -101,7 +92,7 @@ export function scopeCdpPolicyToConfiguredEndpoint(
 type CdpEndpointSource =
   | { source?: "configured" }
   | { source: "discovered"; configuredUrl: string };
-type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
+export type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
 
 function cdpEndpointAuthority(url: string): string {
   const parsed = new URL(url);
@@ -163,7 +154,6 @@ export function redactCdpErrorText(text: string): string {
   return redactToolPayloadText(redactedUrls);
 }
 
-/** Append a JSON endpoint path to a CDP HTTP base URL. */
 export function appendCdpPath(cdpUrl: string, path: string): string {
   const url = new URL(cdpUrl);
   const basePath = url.pathname.replace(/\/$/, "");
@@ -172,10 +162,43 @@ export function appendCdpPath(cdpUrl: string, path: string): string {
   return url.toString();
 }
 
+export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
+  const ws = new URL(wsUrl);
+  const cdp = new URL(cdpUrl);
+  // Treat 0.0.0.0 and :: as wildcard bind addresses that need rewriting.
+  // Containerized browsers (e.g. browserless) report ws://0.0.0.0:<internal-port>
+  // in /json/version — these must be rewritten to the external cdpUrl host:port.
+  const isWildcardBind = ws.hostname === "0.0.0.0" || ws.hostname === "[::]";
+  if ((isLoopbackHost(ws.hostname) || isWildcardBind) && !isLoopbackHost(cdp.hostname)) {
+    ws.hostname = cdp.hostname;
+    const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
+    ws.port = cdpPort;
+    ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
+  } else if (isLoopbackHost(ws.hostname) && isLoopbackHost(cdp.hostname)) {
+    ws.hostname = cdp.hostname;
+    if (!ws.port && cdp.port) {
+      ws.port = cdp.port;
+    }
+  }
+  if (cdp.protocol === "https:" && ws.protocol === "ws:") {
+    ws.protocol = "wss:";
+  }
+  if (!ws.username && !ws.password && (cdp.username || cdp.password)) {
+    ws.username = cdp.username;
+    ws.password = cdp.password;
+  }
+  for (const [key, value] of cdp.searchParams.entries()) {
+    if (!ws.searchParams.has(key)) {
+      ws.searchParams.append(key, value);
+    }
+  }
+  return ws.toString();
+}
+
 /** Normalize ws/wss and direct devtools URLs back to the HTTP JSON endpoint base. */
 export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
-  try {
-    const url = new URL(cdpUrl);
+  const url = URL.parse(cdpUrl);
+  if (url) {
     if (url.protocol === "ws:") {
       url.protocol = "http:";
     } else if (url.protocol === "wss:") {
@@ -184,15 +207,14 @@ export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
     url.pathname = url.pathname.replace(/\/devtools\/browser\/.*$/, "");
     url.pathname = url.pathname.replace(/\/cdp$/, "");
     return url.toString().replace(/\/$/, "");
-  } catch {
-    // Best-effort fallback for non-URL-ish inputs.
-    return cdpUrl
-      .replace(/^ws:/, "http:")
-      .replace(/^wss:/, "https:")
-      .replace(/\/devtools\/browser\/.*$/, "")
-      .replace(/\/cdp$/, "")
-      .replace(/\/$/, "");
   }
+  // Best-effort fallback for non-URL-ish inputs.
+  return cdpUrl
+    .replace(/^ws:/, "http:")
+    .replace(/^wss:/, "https:")
+    .replace(/\/devtools\/browser\/.*$/, "")
+    .replace(/\/cdp$/, "")
+    .replace(/\/$/, "");
 }
 
 function fingerprintCdpIdentity(value: string): string {
@@ -290,12 +312,13 @@ async function resolveCdpTabOwnershipContext(params: CdpTabOwnershipParams): Pro
     };
   }
   params.signal?.throwIfAborted();
-  const browserWebSocketUrl =
+  const advertisedWebSocketUrl =
     typeof version.webSocketDebuggerUrl === "string" ? version.webSocketDebuggerUrl.trim() : "";
-  if (!browserWebSocketUrl) {
+  if (!advertisedWebSocketUrl) {
     return { ownership: { status: "non-durable", reason: "browser-identity-unavailable" } };
   }
   try {
+    const browserWebSocketUrl = normalizeCdpWsUrl(advertisedWebSocketUrl, cdpHttpBase);
     const pinned = await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
       source: "discovered",
       configuredUrl: params.cdpUrl,
@@ -307,7 +330,7 @@ async function resolveCdpTabOwnershipContext(params: CdpTabOwnershipParams): Pro
         ...createCdpOwnershipFingerprints({
           profileName: params.profileName,
           cdpUrl: params.cdpUrl,
-          browserWebSocketUrl,
+          browserWebSocketUrl: advertisedWebSocketUrl,
         }),
       },
       browserWebSocketUrl,
@@ -342,7 +365,9 @@ export async function closeTrackedCdpTarget(
   params: CdpTabOwnershipParams & {
     expectedProfileFingerprint: string;
     expectedBrowserInstanceFingerprint: string;
-    shouldClose?: () => boolean;
+    closeIfCurrent?: (
+      dispatch: () => Promise<CloseTrackedCdpTargetResult>,
+    ) => Promise<CloseTrackedCdpTargetResult>;
   },
 ): Promise<CloseTrackedCdpTargetResult> {
   const resolved = await resolveCdpTabOwnershipContext(params);
@@ -385,31 +410,29 @@ export async function closeTrackedCdpTarget(
         if (!exists) {
           return { status: "missing" } as const;
         }
-        // The SQLite cleanup generation can be revoked while browser identity
-        // is being resolved. Recheck on this same socket immediately before
-        // the irreversible close so fresh activity cancels an idle sweep.
-        if (params.shouldClose && !params.shouldClose()) {
-          return { status: "cancelled" } as const;
-        }
-        try {
-          params.signal?.throwIfAborted();
-          const closeResponse = await send("Target.closeTarget", {
-            targetId: params.nativeTargetId,
-          });
-          params.signal?.throwIfAborted();
-          return closeResponse &&
-            typeof closeResponse === "object" &&
-            (closeResponse as { success?: unknown }).success === true
-            ? ({ status: "closed" } as const)
-            : ({ status: "unavailable", reason: "target-close-failed" } as const);
-        } catch (error) {
-          // Chromium can destroy the page between getTargets and closeTarget.
-          // Its protocol implementation uses this exact InvalidParams message.
-          if (String(error).includes("No target with given id found")) {
-            return { status: "missing" } as const;
+        const dispatch = async (): Promise<CloseTrackedCdpTargetResult> => {
+          try {
+            params.signal?.throwIfAborted();
+            const closeResponse = await send("Target.closeTarget", {
+              targetId: params.nativeTargetId,
+            });
+            params.signal?.throwIfAborted();
+            return closeResponse &&
+              typeof closeResponse === "object" &&
+              (closeResponse as { success?: unknown }).success === true
+              ? ({ status: "closed" } as const)
+              : ({ status: "unavailable", reason: "target-close-failed" } as const);
+          } catch (error) {
+            // Chromium can destroy the page between getTargets and closeTarget.
+            // Its protocol implementation uses this exact InvalidParams message.
+            if (String(error).includes("No target with given id found")) {
+              return { status: "missing" } as const;
+            }
+            throw error;
           }
-          throw error;
-        }
+        };
+        // Fresh-row admission includes synchronous send, not the network response.
+        return params.closeIfCurrent ? await params.closeIfCurrent(dispatch) : await dispatch();
       },
       {
         commandTimeoutMs: params.timeoutMs,
@@ -484,7 +507,13 @@ export async function fetchCdpChecked(
     }
   };
   try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    const requestHeaders = init?.headers;
+    const headers = getHeadersWithAuth(
+      url,
+      requestHeaders instanceof Headers || Array.isArray(requestHeaders)
+        ? Object.fromEntries(new Headers(requestHeaders))
+        : requestHeaders,
+    );
     const fetchUrl = stripCdpUrlCredentials(url);
     const res = await withManagedProxyForCdpUrl(fetchUrl, () =>
       withNoProxyForCdpUrl(fetchUrl, async () => {
@@ -523,7 +552,6 @@ export async function fetchCdpChecked(
   }
 }
 
-/** Probe that a CDP endpoint responds with an OK HTTP status. */
 export async function fetchOk(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,

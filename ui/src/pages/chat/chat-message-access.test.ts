@@ -1,52 +1,47 @@
+/* @vitest-environment jsdom */
+
 import { describe, expect, it, vi } from "vitest";
-import { resolveChatMessageAccess } from "./chat-message-access.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
+import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 
 describe("chat message access", () => {
-  it("loads full messages with the session-scoped agent", async () => {
-    const request = vi.fn().mockResolvedValue({ ok: true, message: { role: "assistant" } });
-    const access = resolveChatMessageAccess({
-      assistantAgentId: "alpha",
-      agentsList: null,
-      client: { request } as unknown as ChatPageHost["client"],
-      connected: true,
-      hello: null,
-      sessionKey: "agent:alpha:main",
-    });
+  it.each([
+    ["agent:alpha:main", undefined],
+    ["global", "alpha"],
+  ])(
+    "loads full messages for %s with only necessary agent routing",
+    async (sessionKey, agentId) => {
+      const request = vi.fn().mockResolvedValue({ ok: true, message: { role: "assistant" } });
+      const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture({ request }));
+      Object.assign(state, {
+        assistantAgentId: "alpha",
+        agentsList: null,
+        hello: null,
+        sessionKey,
+      });
+      pane.render();
 
-    expect(access.catalogKey).toBeNull();
-    expect(access.chatProps.fullMessageAgentId).toBe("alpha");
-    expect(access.chatProps.loadFullAssistantMessage).toBe(access.fullMessageLoader);
-    await access.fullMessageLoader?.({
-      sessionKey: "agent:alpha:main",
-      agentId: "alpha",
-      messageId: "message-1",
-      kind: "assistant_message",
-    });
-    expect(request).toHaveBeenCalledWith("chat.message.get", {
-      sessionKey: "agent:alpha:main",
-      agentId: "alpha",
-      messageId: "message-1",
-      maxChars: 500_000,
-    });
-  });
+      expect(pane.chatProps?.fullMessageAgentId).toBe(agentId);
+      expect(pane.chatProps?.loadFullAssistantMessage).toBeTypeOf("function");
+      await pane.chatProps?.loadFullAssistantMessage?.({
+        sessionKey,
+        agentId: pane.chatProps.fullMessageAgentId,
+        messageId: "message-1",
+      });
+      expect(request).toHaveBeenCalledWith("chat.message.get", {
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        messageId: "message-1",
+        maxChars: 500_000,
+      });
+    },
+  );
 
   it("disables full-message loading for catalog sessions", () => {
-    const access = resolveChatMessageAccess({
-      assistantAgentId: "alpha",
-      agentsList: null,
-      client: { request: vi.fn() } as unknown as ChatPageHost["client"],
-      connected: true,
-      hello: null,
-      sessionKey: "catalog:catalog-1:host-1:thread-1",
-    });
+    const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture());
+    state.sessionKey = "catalog:catalog-1:host-1:thread-1";
+    pane.render();
 
-    expect(access.catalogKey).toEqual({
-      catalogId: "catalog-1",
-      hostId: "host-1",
-      threadId: "thread-1",
-    });
-    expect(access.fullMessageLoader).toBeNull();
-    expect(access.chatProps.loadFullAssistantMessage).toBeNull();
+    expect(pane.chatProps?.loadFullAssistantMessage).toBeNull();
   });
 });

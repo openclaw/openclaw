@@ -1,9 +1,14 @@
 // Control UI tests cover shared Settings control styling through the mocked Gateway.
 import { Buffer } from "node:buffer";
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,12 +20,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "settings-controls",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("settings-controls");
+  }
+});
 
 async function resolvedBackground(page: Page, value: string): Promise<string> {
   return page.evaluate((background) => {
@@ -95,19 +100,230 @@ async function captureBrowserSettingProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
-  });
+  if (page.video()) {
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-desktop.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
+    });
+  }
   await page.setViewportSize({ height: 844, width: 390 });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
-  });
+  if (page.video()) {
+    await waitForControlUiProofSurface(page.locator(".shell.shell--mobile-nav"), [
+      section.locator(".settings-row").first(),
+    ]);
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-narrow.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
+    });
+  }
 }
 
 suite.define(() => {
+  it.each(["light", "dark"] as const)(
+    "keeps selected Usage accents at rest and on hover in %s mode",
+    async (colorScheme) => {
+      await suite.withPage(
+        { colorScheme, locale: "en-US", viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          const totals = {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            totalCost: 0,
+            inputCost: 0,
+            outputCost: 0,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            missingCostEntries: 0,
+          };
+          const gateway = await installMockGateway(page, {
+            methodResponses: {
+              "sessions.usage": {
+                updatedAt: Date.now(),
+                startDate: "2026-09-01",
+                endDate: "2026-09-07",
+                sessions: [],
+                totals,
+                aggregates: {
+                  messages: {
+                    total: 0,
+                    user: 0,
+                    assistant: 0,
+                    toolCalls: 0,
+                    toolResults: 0,
+                    errors: 0,
+                  },
+                  tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+                  byModel: [],
+                  byProvider: [],
+                  byAgent: [],
+                  byChannel: [],
+                  daily: [],
+                  costDaily: [],
+                },
+              },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}usage`);
+          await gateway.waitForRequest("sessions.usage");
+          await expect
+            .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+            .toBe(colorScheme);
+          const expected = await resolvedBackground(page, "var(--accent-subtle)");
+          const filters = page.locator(".usage-view-options");
+          for (const label of ["Cost", "Tokens"]) {
+            const selected = filters.getByRole("button", { name: label, exact: true });
+            await selected.click();
+            await page.mouse.move(0, 0);
+            for (const state of ["rest", "hover"]) {
+              if (state === "hover") {
+                await selected.hover();
+              }
+              if (captureUiProofEnabled) {
+                await filters.screenshot({
+                  animations: "disabled",
+                  path: path.join(uiProofArtifactDir, `usage-${colorScheme}-${label}-${state}.png`),
+                });
+              }
+              await expect
+                .poll(() =>
+                  selected.evaluate((element) => getComputedStyle(element).backgroundColor),
+                )
+                .toBe(expected);
+            }
+          }
+        },
+      );
+    },
+  );
+
+  it("keeps selected segmented options distinct in forced colors", async () => {
+    const cases = [
+      {
+        colorScheme: "dark" as const,
+        config: { ui: { prefs: { themeMode: "dark" } } },
+        featureMethods: undefined,
+        route: "settings/appearance",
+        selected: "Dark",
+        unselected: "Light",
+      },
+      {
+        colorScheme: "light" as const,
+        config: { update: { auto: { enabled: true }, channel: "beta" } },
+        featureMethods: ["config.get", "config.set", "config.apply", "update.run"],
+        route: "settings/updates",
+        selected: "Beta",
+        unselected: "Stable",
+      },
+    ];
+
+    for (const scenario of cases) {
+      await suite.withPage(
+        {
+          colorScheme: scenario.colorScheme,
+          forcedColors: "active",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1280 },
+        },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            featureMethods: scenario.featureMethods,
+            methodResponses: {
+              "config.get": {
+                config: scenario.config,
+                hash: `forced-colors-${scenario.route}`,
+                issues: [],
+                raw: JSON.stringify(scenario.config),
+                runtimeConfig: scenario.config,
+                valid: true,
+              },
+            },
+            operatorScopes: ["operator.read", "operator.admin"],
+          });
+
+          const response = await page.goto(`${suite.server.baseUrl}${scenario.route}`);
+          expect(response?.status()).toBe(200);
+          expect(await page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(
+            true,
+          );
+
+          const selected = page.getByRole("radio", { name: scenario.selected, exact: true });
+          const unselected = page.getByRole("radio", { name: scenario.unselected, exact: true });
+          await selected.waitFor();
+          expect(await selected.isChecked()).toBe(true);
+          expect(await unselected.isChecked()).toBe(false);
+          const selectedLabel = selected.locator("..");
+          const unselectedLabel = unselected.locator("..");
+          if (captureUiProofEnabled) {
+            await selected
+              .locator(
+                "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' settings-row ')][1]",
+              )
+              .screenshot({
+                animations: "disabled",
+                path: path.join(
+                  uiProofArtifactDir,
+                  `segmented-forced-colors-${scenario.colorScheme}.png`,
+                ),
+              });
+          }
+          expect(
+            await selectedLabel.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                textDecorationLine: style.textDecorationLine,
+                textDecorationThickness: style.textDecorationThickness,
+              };
+            }),
+          ).toEqual({ textDecorationLine: "underline", textDecorationThickness: "2px" });
+          expect(
+            await unselectedLabel.evaluate(
+              (element) => getComputedStyle(element).textDecorationLine,
+            ),
+          ).toBe("none");
+
+          await selected.focus();
+          expect(await selected.evaluate((element) => element.matches(":focus-visible"))).toBe(
+            true,
+          );
+          expect(
+            await selectedLabel.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                outlineOffset: style.outlineOffset,
+                outlineStyle: style.outlineStyle,
+                outlineWidth: style.outlineWidth,
+                textDecorationLine: style.textDecorationLine,
+              };
+            }),
+          ).toEqual({
+            outlineOffset: "2px",
+            outlineStyle: "solid",
+            outlineWidth: "2px",
+            textDecorationLine: "underline",
+          });
+        },
+      );
+    }
+  });
+
   it("keeps checked switches on the scene accent on the security page", async () => {
     await suite.withPage(
       {
@@ -139,17 +355,15 @@ suite.define(() => {
           exact: true,
         });
         await browserSwitchRole.waitFor();
-        expect(await browserSwitchRole.getAttribute("aria-checked")).toBe("true");
-        const browserSwitch = overview.locator("wa-switch.settings-toggle").first();
+        expect(await browserSwitchRole.isChecked()).toBe(true);
+        const browserSwitchControl = browserSwitchRole.locator("+ .settings-toggle__control");
         expect(
-          await browserSwitch.evaluate((element) => {
-            const control = element.shadowRoot?.querySelector<HTMLElement>('[part="control"]');
-            return control ? getComputedStyle(control).backgroundColor : null;
-          }),
+          await browserSwitchControl.evaluate(
+            (element) => getComputedStyle(element).backgroundColor,
+          ),
         ).toBe(await resolvedBackground(page, "var(--accent)"));
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.locator(".content-header").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-settings-view.png"),
@@ -163,8 +377,8 @@ suite.define(() => {
             });
         }
 
-        await browserSwitch.click();
-        await expect.poll(() => browserSwitchRole.getAttribute("aria-checked")).toBe("false");
+        await browserSwitchRole.click();
+        await expect.poll(() => browserSwitchRole.isChecked()).toBe(false);
       },
     );
   });
@@ -198,9 +412,6 @@ suite.define(() => {
 
   for (const host of ["browser", "app"] as const) {
     it(`routes links to the Control UI browser in a ${host}-hosted UI`, async () => {
-      if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
-      }
       await suite.withPage(
         {
           colorScheme: "dark",
@@ -218,7 +429,11 @@ suite.define(() => {
               const messages: unknown[] = [];
               const appWindow = window as Window & {
                 openclawNativeLinkMessages?: unknown[];
-                webkit?: unknown;
+                webkit?: {
+                  messageHandlers?: {
+                    openclawLink?: { postMessage: (message: unknown) => void };
+                  };
+                };
               };
               appWindow.openclawNativeLinkMessages = messages;
               appWindow.webkit = {
@@ -235,6 +450,7 @@ suite.define(() => {
               "chat.startup",
               "config.apply",
               "config.patch",
+              "config.schema",
               "config.set",
             ],
             methodResponses: {
@@ -303,20 +519,17 @@ suite.define(() => {
             name: "Open links in Control UI browser",
             exact: true,
           });
-          const preferenceHost = section
-            .locator(".settings-row", { hasText: "Open links in Control UI browser" })
-            .locator("wa-switch");
           await preference.waitFor();
-          expect(await preference.getAttribute("aria-checked")).toBe("false");
-          await preferenceHost.click();
-          await expect.poll(() => preference.getAttribute("aria-checked")).toBe("true");
+          expect(await preference.isChecked()).toBe(false);
+          await preference.click();
+          await expect.poll(() => preference.isChecked()).toBe(true);
           await page.reload();
           const persistedPreference = page.getByRole("switch", {
             name: "Open links in Control UI browser",
             exact: true,
           });
           await persistedPreference.waitFor();
-          expect(await persistedPreference.getAttribute("aria-checked")).toBe("true");
+          expect(await persistedPreference.isChecked()).toBe(true);
 
           if (host === "browser") {
             await captureBrowserSettingProof(
@@ -378,6 +591,7 @@ suite.define(() => {
             body: { url: "https://example.com/control-ui-proof" },
             method: "POST",
             path: "/tabs/open",
+            tabScope: { sessionKey: "agent:main:main" },
           });
           const browserPanel = page.locator("openclaw-browser-panel[embedded]");
           await browserPanel.waitFor();
@@ -386,12 +600,17 @@ suite.define(() => {
               (panel) => (panel as HTMLElement & { available?: boolean }).available,
             ),
           ).toBe(true);
-          await browserPanel.getByText("Example", { exact: true }).first().waitFor();
+          await page
+            .locator('[data-region-header="side"] .tabstrip-tab__label')
+            .getByText("Example", { exact: true })
+            .waitFor();
           await expect
-            .poll(
-              async () => (await browserPanel.textContent())?.includes("Loading page...") ?? true,
+            .poll(() =>
+              browserPanel
+                .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="browser"]')
+                .count(),
             )
-            .toBe(false);
+            .toBe(0);
           expect(await browserPanel.textContent()).not.toContain("Browser request failed");
 
           if (host === "app") {

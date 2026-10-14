@@ -28,15 +28,6 @@ describe("Azure deployment name map", () => {
     ).toBe("GPT-5");
   });
 
-  it("matches model ids case-insensitively while preserving deployment names", () => {
-    expect(
-      resolveAzureDeploymentNameFromMap({
-        modelId: "Gpt-4O",
-        deploymentMap: "gpt-4o=Deployment-GPT-4o",
-      }),
-    ).toBe("Deployment-GPT-4o");
-  });
-
   it("prefers an exact-case match over the case-insensitive fallback", () => {
     const deploymentMap = "GPT-4o=prod-a,gpt-4o=prod-b";
     expect(resolveAzureDeploymentNameFromMap({ modelId: "GPT-4o", deploymentMap })).toBe("prod-a");

@@ -12,6 +12,19 @@ export type ChannelProgressDraftDiffStat = Readonly<{
   removed: number;
 }>;
 
+export function formatChannelProgressDraftDiffStat(
+  diffStat: ChannelProgressDraftDiffStat | undefined,
+): string | undefined {
+  if (!diffStat || (diffStat.files === 0 && diffStat.added === 0 && diffStat.removed === 0)) {
+    return undefined;
+  }
+  return [
+    `📝 ${diffStat.files} files`,
+    ...(diffStat.added > 0 ? [`+${diffStat.added}`] : []),
+    ...(diffStat.removed > 0 ? [`−${diffStat.removed}`] : []),
+  ].join(" ");
+}
+
 export function createProgressDraftDiffStatTracker(params: { canStage: () => boolean }) {
   let hasCommittedDiff = false;
   let mutationFiles = new Set<string>();
@@ -67,7 +80,7 @@ export function createProgressDraftDiffStatTracker(params: { canStage: () => boo
     }
     pendingMutationDiffs.delete(toolCallId);
     const status = payload.status?.trim().toLowerCase();
-    if (status === "failed" || status === "error") {
+    if (status !== "completed") {
       return;
     }
     hasCommittedDiff = true;

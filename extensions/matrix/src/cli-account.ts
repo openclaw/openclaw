@@ -7,7 +7,9 @@ import { listMatrixOwnDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
+import type { MatrixProfileSyncResult } from "./matrix/profile.js";
 import { getMatrixRuntime } from "./runtime.js";
+import type { maybeBootstrapNewEncryptedMatrixAccount } from "./setup-bootstrap.js";
 import type { MatrixSetupInput } from "./setup-config.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
@@ -22,19 +24,9 @@ type MatrixCliAccountAddResult = {
     staleOpenClawDeviceIds: string[];
     error?: string;
   };
-  verificationBootstrap: {
+  verificationBootstrap: Awaited<ReturnType<typeof maybeBootstrapNewEncryptedMatrixAccount>>;
+  profile: Omit<MatrixProfileSyncResult, "skipped" | "uploadedAvatarSource"> & {
     attempted: boolean;
-    success: boolean;
-    recoveryKeyCreatedAt: string | null;
-    backupVersion: string | null;
-    error?: string;
-  };
-  profile: {
-    attempted: boolean;
-    displayNameUpdated: boolean;
-    avatarUpdated: boolean;
-    resolvedAvatarUrl: string | null;
-    convertedAvatarFromHttp: boolean;
     error?: string;
   };
 };
@@ -90,110 +82,108 @@ async function addMatrixAccount(params: {
   if (validationError) {
     throw new Error(validationError);
   }
+  const publishConfig = cli.createMatrixCliAccountConfigPublisher({ accountId, previousCfg: cfg });
 
-  let updated = matrixSetupAdapter.applyAccountConfig({
-    cfg,
-    accountId,
-    input,
-  }) as CoreConfig;
-  if (params.enableEncryption === true) {
-    updated = updateMatrixAccountConfig(updated, accountId, { encryption: true });
-  }
-  await runtime.config.replaceConfigFile({
-    nextConfig: updated as never,
-    afterWrite: { mode: "auto" },
-  });
+  const applyAccountConfig = (current: CoreConfig): CoreConfig => {
+    const next = matrixSetupAdapter.applyAccountConfig({ cfg: current, accountId, input });
+    return params.enableEncryption === true
+      ? updateMatrixAccountConfig(next, accountId, { encryption: true })
+      : next;
+  };
+  let updated = applyAccountConfig(cfg);
+  let convertedAvatarUrl: string | undefined;
   const accountConfig = resolveMatrixAccountConfig({ cfg: updated, accountId });
 
-  let verificationBootstrap: MatrixCliAccountAddResult["verificationBootstrap"] = {
-    attempted: false,
-    success: false,
-    recoveryKeyCreatedAt: null,
-    backupVersion: null,
-  };
-  if (accountConfig.encryption === true) {
-    const { maybeBootstrapNewEncryptedMatrixAccount } = await import("./setup-bootstrap.js");
-    verificationBootstrap = await maybeBootstrapNewEncryptedMatrixAccount({
-      previousCfg: cfg,
-      cfg: updated,
-      accountId,
-    });
-  }
-
-  const desiredDisplayName = input.name?.trim();
-  const desiredAvatarUrl = input.avatarUrl?.trim();
-  let profile: MatrixCliAccountAddResult["profile"] = {
-    attempted: false,
-    displayNameUpdated: false,
-    avatarUpdated: false,
-    resolvedAvatarUrl: null,
-    convertedAvatarFromHttp: false,
-  };
-  if (desiredDisplayName || desiredAvatarUrl) {
-    try {
-      const synced = await updateMatrixOwnProfile({
+  try {
+    let verificationBootstrap: MatrixCliAccountAddResult["verificationBootstrap"] = {
+      attempted: false,
+      success: false,
+      recoveryKeyCreatedAt: null,
+      backupVersion: null,
+    };
+    if (accountConfig.encryption === true) {
+      const { maybeBootstrapNewEncryptedMatrixAccount } = await import("./setup-bootstrap.js");
+      verificationBootstrap = await maybeBootstrapNewEncryptedMatrixAccount({
+        previousCfg: cfg,
         cfg: updated,
         accountId,
-        displayName: desiredDisplayName,
-        avatarUrl: desiredAvatarUrl,
       });
-      let resolvedAvatarUrl = synced.resolvedAvatarUrl;
-      if (synced.convertedAvatarFromHttp && synced.resolvedAvatarUrl) {
-        const latestCfg = runtime.config.current() as CoreConfig;
-        const withAvatar = updateMatrixAccountConfig(latestCfg, accountId, {
-          avatarUrl: synced.resolvedAvatarUrl,
+    }
+
+    const desiredDisplayName = input.name?.trim();
+    const desiredAvatarUrl = input.avatarUrl?.trim();
+    let profile: MatrixCliAccountAddResult["profile"] = {
+      attempted: false,
+      displayNameUpdated: false,
+      avatarUpdated: false,
+      resolvedAvatarUrl: null,
+      convertedAvatarFromHttp: false,
+    };
+    if (desiredDisplayName || desiredAvatarUrl) {
+      try {
+        const synced = await updateMatrixOwnProfile({
+          cfg: updated,
+          accountId,
+          displayName: desiredDisplayName,
+          avatarUrl: desiredAvatarUrl,
         });
-        await runtime.config.replaceConfigFile({
-          nextConfig: withAvatar as never,
-          afterWrite: { mode: "auto" },
-        });
-        resolvedAvatarUrl = synced.resolvedAvatarUrl;
+        if (synced.convertedAvatarFromHttp && synced.resolvedAvatarUrl) {
+          convertedAvatarUrl = synced.resolvedAvatarUrl;
+          updated = updateMatrixAccountConfig(updated, accountId, {
+            avatarUrl: synced.resolvedAvatarUrl,
+          });
+        }
+        profile = {
+          attempted: true,
+          displayNameUpdated: synced.displayNameUpdated,
+          avatarUpdated: synced.avatarUpdated,
+          resolvedAvatarUrl: synced.resolvedAvatarUrl,
+          convertedAvatarFromHttp: synced.convertedAvatarFromHttp,
+        };
+      } catch (err) {
+        profile = {
+          ...profile,
+          attempted: true,
+          error: formatErrorMessage(err),
+        };
       }
-      profile = {
-        attempted: true,
-        displayNameUpdated: synced.displayNameUpdated,
-        avatarUpdated: synced.avatarUpdated,
-        resolvedAvatarUrl,
-        convertedAvatarFromHttp: synced.convertedAvatarFromHttp,
+    }
+
+    let deviceHealth: MatrixCliAccountAddResult["deviceHealth"];
+    try {
+      const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
+      deviceHealth = {
+        currentDeviceId: addedDevices.find((device) => device.current)?.deviceId ?? null,
+        staleOpenClawDeviceIds: addedDevices
+          .filter((device) => !device.current && isOpenClawManagedMatrixDevice(device.displayName))
+          .map((device) => device.deviceId),
       };
     } catch (err) {
-      profile = {
-        attempted: true,
-        displayNameUpdated: false,
-        avatarUpdated: false,
-        resolvedAvatarUrl: null,
-        convertedAvatarFromHttp: false,
+      deviceHealth = {
+        currentDeviceId: null,
+        staleOpenClawDeviceIds: [],
         error: formatErrorMessage(err),
       };
     }
-  }
 
-  let deviceHealth: MatrixCliAccountAddResult["deviceHealth"];
-  try {
-    const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
-    deviceHealth = {
-      currentDeviceId: addedDevices.find((device) => device.current)?.deviceId ?? null,
-      staleOpenClawDeviceIds: addedDevices
-        .filter((device) => !device.current && isOpenClawManagedMatrixDevice(device.displayName))
-        .map((device) => device.deviceId),
+    return {
+      accountId,
+      configPath: resolveMatrixConfigPath(updated, accountId),
+      useEnv: input.useEnv === true,
+      encryptionEnabled: accountConfig.encryption === true,
+      deviceHealth,
+      verificationBootstrap,
+      profile,
     };
-  } catch (err) {
-    deviceHealth = {
-      currentDeviceId: null,
-      staleOpenClawDeviceIds: [],
-      error: formatErrorMessage(err),
-    };
+  } finally {
+    // Gateway reload must not start a competing crypto client before setup retires.
+    await publishConfig((current) => {
+      const next = applyAccountConfig(current);
+      return convertedAvatarUrl
+        ? updateMatrixAccountConfig(next, accountId, { avatarUrl: convertedAvatarUrl })
+        : next;
+    });
   }
-
-  return {
-    accountId,
-    configPath: resolveMatrixConfigPath(updated, accountId),
-    useEnv: input.useEnv === true,
-    encryptionEnabled: accountConfig.encryption === true,
-    deviceHealth,
-    verificationBootstrap,
-    profile,
-  };
 }
 
 export function registerMatrixAccountCommands(root: Command): void {
@@ -225,27 +215,14 @@ export function registerMatrixAccountCommands(root: Command): void {
     .option("--verbose", "Show setup details")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        name?: string;
-        avatarUrl?: string;
-        homeserver?: string;
-        proxy?: string;
-        allowPrivateNetwork?: boolean;
-        userId?: string;
-        accessToken?: string;
-        password?: string;
-        deviceName?: string;
-        initialSyncLimit?: string;
-        enableE2ee?: boolean;
-        encryption?: boolean;
-        useEnv?: boolean;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+      async (
+        options: cli.MatrixCliOptions &
+          Omit<Parameters<typeof addMatrixAccount>[0], "enableEncryption"> & {
+            enableE2ee?: boolean;
+            encryption?: boolean;
+          },
+      ) => {
+        await cli.runMatrixCliCommand(options, {
           run: async () =>
             await addMatrixAccount({
               account: options.account,
@@ -315,8 +292,9 @@ export function registerMatrixAccountCommands(root: Command): void {
                 }
               }
             }
-            const bindHint = `openclaw agents bind --agent <id> --bind matrix:${result.accountId}`;
-            console.log(`Bind this account to an agent: ${bindHint}`);
+            console.log(
+              `Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:${result.accountId}`,
+            );
           },
           errorPrefix: "Account setup failed",
         });

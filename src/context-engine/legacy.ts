@@ -1,6 +1,6 @@
 // Legacy context engine wraps pre-plugin context behavior behind the pluggable interface.
 import { delegateCompactionToRuntime } from "./delegate.js";
-import { CONTEXT_ENGINE_HOST_PARAMS } from "./registry.js";
+import { CONTEXT_ENGINE_HOST_PARAMS } from "./registry-contract.js";
 import type { AssembleResult, ContextEngine, ContextEngineInfo } from "./types.js";
 
 /**
@@ -34,15 +34,5 @@ export class LegacyContextEngine implements ContextEngine {
     };
   }
 
-  async afterTurn(_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]): Promise<void> {
-    // No-op: legacy flow persists context directly in SessionManager.
-  }
-
-  compact(params: Parameters<ContextEngine["compact"]>[0]) {
-    return delegateCompactionToRuntime(params);
-  }
-
-  async dispose(): Promise<void> {
-    // Nothing to clean up for legacy engine
-  }
+  readonly compact = delegateCompactionToRuntime;
 }

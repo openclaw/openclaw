@@ -56,6 +56,19 @@ describe("parseLogLine", () => {
     expect(parseLogLine(JSON.stringify({ 0: "worker", 1: "ready" }))?.subsystem).toBeUndefined();
   });
 
+  it("retains the exact plugin identity from logger binding metadata", () => {
+    const parsed = parseLogLine(
+      JSON.stringify({
+        0: '{"subsystem":"gateway/channels/external-chat"}',
+        1: "sent",
+        _meta: { name: '{"plugin":"vendor-external-chat","feature":"delivery"}' },
+      }),
+    );
+
+    expect(parsed?.plugin).toBe("vendor-external-chat");
+    expect(parsed?.subsystem).toBe("gateway/channels/external-chat");
+  });
+
   it("falls back to meta timestamp when top-level time is missing", () => {
     const line = JSON.stringify({
       0: "hello",
@@ -70,6 +83,22 @@ describe("parseLogLine", () => {
 
     expect(parsed?.time).toBe("2026-01-09T02:10:00.000Z");
     expect(parsed?.level).toBe("warn");
+  });
+
+  it("preserves JSON console fields without overriding tslog metadata", () => {
+    const record = { level: "warn", subsystem: "gateway", message: "console warning" };
+    expect(parseLogLine(JSON.stringify(record))).toMatchObject(record);
+    expect(
+      parseLogLine(
+        JSON.stringify({
+          ...record,
+          _meta: { logLevelName: "ERROR", name: '{"subsystem":"worker"}' },
+        }),
+      ),
+    ).toMatchObject({ level: "error", subsystem: "worker" });
+    expect(
+      parseLogLine(JSON.stringify({ level: 4, subsystem: false, message: "control" })),
+    ).toMatchObject({ level: undefined, subsystem: undefined, message: "control" });
   });
 
   it("returns null for invalid JSON", () => {

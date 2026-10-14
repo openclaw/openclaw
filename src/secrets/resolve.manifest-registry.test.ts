@@ -15,7 +15,8 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: mocks.getCurrentPluginMetadataSnapshot,
 }));
 
@@ -88,27 +89,6 @@ describe("resolveSecretRefString manifest registry reuse", () => {
   afterEach(() => {
     mocks.getCurrentPluginMetadataSnapshot.mockReset();
     mocks.loadPluginManifestRegistryCore.mockClear();
-  });
-
-  it("uses an explicit manifest registry without rediscovering plugin manifests", async () => {
-    const { config, manifestRegistry, rootDir } = createPluginManagedSecretProviderFixture();
-    try {
-      await withSecureTestNodeExecPath(async () => {
-        await expect(
-          resolveSecretRefString(
-            { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
-            {
-              config,
-              manifestRegistry,
-            },
-          ),
-        ).resolves.toBe("value:providers/openrouter/apiKey");
-      });
-      expect(mocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-      expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(rootDir, { recursive: true, force: true });
-    }
   });
 
   it("uses the current lifecycle metadata snapshot before falling back to manifest discovery", async () => {

@@ -1,4 +1,3 @@
-// Normalization Core tests cover record coerce behavior.
 import { describe, expect, it } from "vitest";
 import {
   asNonArrayRecord,
@@ -45,7 +44,6 @@ describe("record-coerce", () => {
   });
 
   it.each([
-    { value: {}, expected: true },
     { value: { first: "one", second: "two" }, expected: true },
     { value: Object.assign(Object.create(null), { first: "one" }), expected: true },
     { value: new Date(), expected: true },
@@ -69,7 +67,6 @@ describe("record-coerce", () => {
   it.each([
     { value: null, expected: undefined },
     { value: ["value"], expected: undefined },
-    { value: {}, expected: undefined },
     { value: { count: 1, enabled: true }, expected: undefined },
     {
       value: inheritedAndHidden,

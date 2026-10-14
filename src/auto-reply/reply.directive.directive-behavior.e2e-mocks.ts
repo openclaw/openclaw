@@ -6,7 +6,7 @@ export const compactEmbeddedAgentSessionMock: Mock = vi.fn();
 export const loadModelCatalogMock: Mock = vi.fn();
 export const resolveCommandSecretRefsViaGatewayMock: Mock = vi.fn();
 export const clearSessionAuthProfileOverrideMock: Mock = vi.fn();
-export const resolveSessionAuthProfileOverrideMock: Mock = vi.fn();
+export const resolveSessionAuthSelectionMock: Mock = vi.fn();
 
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
@@ -106,7 +106,7 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: loadModelCatalogMock,
+  readPreparedModelCatalog: loadModelCatalogMock,
 }));
 
 vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
@@ -115,6 +115,7 @@ vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
     ...actual,
     // These tests cover directive acknowledgements and persistence, not harness selection.
     // Keep each directive from loading unrelated provider-route metadata through auto selection.
+    resolveCandidateAgentRuntime: () => "openclaw",
     resolveEffectiveAgentRuntime: () => "openclaw",
   };
 });
@@ -127,8 +128,7 @@ vi.mock("../cli/command-secret-gateway.js", () => ({
 vi.mock("../agents/auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: (...args: unknown[]) =>
     clearSessionAuthProfileOverrideMock(...args),
-  resolveSessionAuthProfileOverride: (...args: unknown[]) =>
-    resolveSessionAuthProfileOverrideMock(...args),
+  resolveSessionAuthSelection: (...args: unknown[]) => resolveSessionAuthSelectionMock(...args),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
@@ -141,7 +141,8 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./reply/agent-runner.runtime.js", () => ({
+vi.mock("./reply/agent-runner-run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/agent-runner-run.js")>()),
   runReplyAgent: (...args: unknown[]) => runReplyAgentMock(...args),
 }));
 

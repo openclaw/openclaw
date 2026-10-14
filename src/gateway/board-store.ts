@@ -1,24 +1,67 @@
+import { BoardValidationError } from "../boards/board-layout.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
-export function resolveGatewaySessionDatabase(sessionKey: string): {
+export function captureGatewaySessionStoreScope(sessionKey: string, explicitAgentId?: string) {
+  const cfg = getRuntimeConfig();
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity({
+    cfg,
+    sessionKey,
+    agentId: explicitAgentId,
+  });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  return { agentId, storePath, sessionKey: canonicalKey };
+}
+
+function resolveGatewaySessionDatabase(
+  sessionKey: string,
+  explicitAgentId?: string,
+): {
   agentId: string;
   path?: string;
   sessionKey: string;
 } {
-  const cfg = getRuntimeConfig();
-  const canonicalSessionKey = resolveSessionStoreKey({ cfg, sessionKey });
-  const agentId = resolveSessionStoreAgentId(cfg, canonicalSessionKey);
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
-  return {
+  const {
     agentId,
-    ...(databasePath ? { path: databasePath } : {}),
-    sessionKey: canonicalSessionKey,
+    storePath,
+    sessionKey: canonicalKey,
+  } = captureGatewaySessionStoreScope(sessionKey, explicitAgentId);
+  const databaseTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
+  // Shared stores keep logical session keys under their persisted database owner.
+  return {
+    agentId: databaseTarget.agentId ?? agentId,
+    path: databaseTarget.path,
+    sessionKey: canonicalKey,
   };
 }
 
-export const boardStore = new SqliteBoardStore({ resolveSession: resolveGatewaySessionDatabase });
+export const boardStore = new SqliteBoardStore({
+  resolveSession: ({ sessionKey, agentId }) => {
+    const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
+    const assertCurrent = () => {
+      const current = captureGatewaySessionStoreScope(sessionKey, agentId);
+      if (
+        current.agentId !== scope.agentId ||
+        current.storePath !== scope.storePath ||
+        current.sessionKey !== scope.sessionKey
+      ) {
+        throw new BoardValidationError("invalid_operation", "board session changed; retry");
+      }
+    };
+    const memory = captureSessionActorStorageOwner(scope, {
+      assertCurrent,
+      authorize: assertCurrent,
+    });
+    const database = memory
+      ? { agentId: memory.agentId, path: memory.path, sessionKey: scope.sessionKey }
+      : resolveGatewaySessionDatabase(sessionKey, agentId);
+    return {
+      ...database,
+      assertCurrent,
+    };
+  },
+});

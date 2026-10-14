@@ -171,7 +171,7 @@ function assertLoopbackObjectSchemasHaveProperties(params: {
     !Object.hasOwn(schema, "properties") ||
     !asLoopbackSchemaRecord(schema.properties)
   ) {
-    throw new Error(`mcp loopback schema probe ${expectedToolName} was not normalized`);
+    throw new Error(`mcp loopback schema check ${expectedToolName} was not normalized`);
   }
 }
 
@@ -243,17 +243,13 @@ async function callLoopbackJsonRpc(params: {
 
 export async function verifyCliCronMcpLoopbackPreflight(params: {
   sessionKey: string;
-  port: number;
-  token: string;
   env: NodeJS.ProcessEnv;
   messageProvider?: string;
   accountId?: string;
   expectedSchemaProbeToolName?: string;
 }): Promise<void> {
-  const cronProbe = createLiveCronProbeSpec();
   logCliCronProbe("loopback-preflight:start", {
     sessionKey: params.sessionKey,
-    jobName: cronProbe.name,
   });
 
   await callLoopbackJsonRpc({
@@ -300,62 +296,9 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     throw new Error(`mcp loopback tools/list did not expose ${AUTOMATIONS_TOOL_NAME}`);
   }
 
-  const toolCall = await callLoopbackJsonRpc({
-    sessionKey: params.sessionKey,
-    messageProvider: params.messageProvider,
-    accountId: params.accountId,
-    env: params.env,
-    body: {
-      jsonrpc: "2.0",
-      id: "cron-add",
-      method: "tools/call",
-      params: {
-        name: AUTOMATIONS_TOOL_NAME,
-        arguments: JSON.parse(cronProbe.argsJson) as Record<string, unknown>,
-      },
-    },
-  });
-  const toolCallError =
-    (toolCall.result as { isError?: unknown } | undefined)?.isError === true ||
-    !(toolCall.result as { content?: unknown } | undefined);
-  logCliCronProbe("loopback-preflight:call", {
-    isError: toolCallError,
-    jobName: cronProbe.name,
-  });
-  if (toolCallError) {
-    throw new Error(`mcp loopback cron tools/call returned isError for job ${cronProbe.name}`);
-  }
-
-  const { job: createdJob, pollsUsed } = await pollCliCronJobVisible({
-    port: params.port,
-    token: params.token,
-    env: params.env,
-    expectedName: cronProbe.name,
-    expectedMessage: cronProbe.message,
-  });
-  logCliCronProbe("loopback-preflight:verify", {
-    jobName: cronProbe.name,
-    pollsUsed,
-    createdJob: Boolean(createdJob),
-  });
-  if (!createdJob) {
-    throw new Error(`mcp loopback cron tools/call did not create job ${cronProbe.name}`);
-  }
-  assertCronJobMatches({
-    job: createdJob,
-    expectedName: cronProbe.name,
-    expectedMessage: cronProbe.message,
-    expectedSessionKey: params.sessionKey,
-  });
-  if (createdJob.id) {
-    await removeCliCronJobBestEffort({
-      id: createdJob.id,
-      port: params.port,
-      token: params.token,
-      env: params.env,
-    });
-  }
-  logCliCronProbe("loopback-preflight:done", { jobName: cronProbe.name });
+  // The owner token permits discovery but carries no admitted agent turn.
+  // verifyCliCronMcpProbe proves mutations through the real agent's live MCP grant.
+  logCliCronProbe("loopback-preflight:done");
 }
 
 function getCliBackendProbeThinking(providerId: string): "low" | undefined {
@@ -395,7 +338,7 @@ export async function verifyCliBackendImageProbe(params: {
     { expectFinal: true },
   );
   if (imageProbe?.status !== "ok") {
-    throw new Error(`image probe failed: status=${String(imageProbe?.status)}`);
+    throw new Error(`image check failed: status=${String(imageProbe?.status)}`);
   }
   assertLiveImageProbeReply(extractPayloadText(imageProbe?.result));
 }
@@ -479,6 +422,7 @@ export async function verifyCliCronMcpProbe(params: {
     expectedName: cronProbe.name,
     expectedMessage: cronProbe.message,
     expectedSessionKey: params.sessionKey,
+    expectedSessionTarget: "current",
   });
   if (createdJob?.id) {
     await removeCliCronJobBestEffort({

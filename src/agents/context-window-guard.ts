@@ -1,12 +1,6 @@
-/**
- * Resolves effective model context windows and formats guard warnings/blocks.
- *
- * Configured model values can cap provider metadata, and local endpoints get
- * more actionable remediation text.
- */
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveProviderEndpoint } from "./provider-attribution.js";
+import { resolveConfiguredContextTokenLimits } from "./context-resolution.js";
+import { isLocalProviderEndpoint } from "./provider-attribution.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
 const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
@@ -29,27 +23,6 @@ function normalizePositiveInt(value: unknown): number | null {
   return int > 0 ? int : null;
 }
 
-function modelIdMatchesProviderScope(params: {
-  configuredId?: string;
-  provider: string;
-  modelId: string;
-}): boolean {
-  const configuredId = params.configuredId?.trim();
-  if (!configuredId) {
-    return false;
-  }
-  if (configuredId === params.modelId) {
-    return true;
-  }
-  const providerPrefix = params.provider ? `${params.provider}/` : "";
-  if (!providerPrefix) {
-    return false;
-  }
-  const stripProvider = (id: string) =>
-    id.startsWith(providerPrefix) ? id.slice(providerPrefix.length) : id;
-  return stripProvider(configuredId) === stripProvider(params.modelId);
-}
-
 /** Resolve the effective context window and source for one provider/model. */
 export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
@@ -57,36 +30,36 @@ export function resolveContextWindowInfo(params: {
   modelId: string;
   modelContextTokens?: number;
   modelContextWindow?: number;
+  modelContextWindowSource?: "synthetic";
   defaultTokens: number;
 }): ContextWindowInfo {
-  const fromModelsConfig = (() => {
-    const providers = params.cfg?.models?.providers as
-      | Record<
-          string,
-          { models?: Array<{ id?: string; contextTokens?: number; contextWindow?: number }> }
-        >
-      | undefined;
-    const providerEntry = findNormalizedProviderValue(providers, params.provider);
-    const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
-    const match = models.find((model) =>
-      modelIdMatchesProviderScope({
-        configuredId: model?.id,
-        provider: params.provider,
-        modelId: params.modelId,
-      }),
-    );
-    return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
-  })();
+  const configured = resolveConfiguredContextTokenLimits(
+    { cfg: params.cfg, provider: params.provider, model: params.modelId },
+    normalizePositiveInt,
+  );
+  const fromModelsConfig =
+    configured.effectiveConfiguredTokens ?? configured.configuredContextWindow;
+  const reportedTokens = normalizePositiveInt(params.modelContextTokens);
+  const nativeWindow =
+    normalizePositiveInt(configured.fixedContextWindow) ??
+    (params.modelContextWindowSource === "synthetic"
+      ? null
+      : normalizePositiveInt(params.modelContextWindow));
   const fromModel =
-    normalizePositiveInt(params.modelContextTokens) ??
-    normalizePositiveInt(params.modelContextWindow);
+    reportedTokens && nativeWindow
+      ? Math.min(reportedTokens, nativeWindow)
+      : (reportedTokens ?? nativeWindow);
+  const estimate =
+    params.modelContextWindowSource === "synthetic"
+      ? normalizePositiveInt(params.modelContextWindow)
+      : null;
   const defaultTokens =
     normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
   return fromModelsConfig
-    ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
+    ? { tokens: fromModelsConfig, source: "modelsConfig" }
     : fromModel
-      ? { tokens: fromModel, source: "model" as const }
-      : { tokens: defaultTokens, source: "default" as const };
+      ? { tokens: fromModel, source: "model" }
+      : { tokens: estimate ?? defaultTokens, source: "default" };
 }
 
 type ContextWindowGuardResult = ContextWindowInfo & {
@@ -96,30 +69,8 @@ type ContextWindowGuardResult = ContextWindowInfo & {
   shouldBlock: boolean;
 };
 
-type ContextWindowGuardThresholds = {
-  hardMinTokens: number;
-  warnBelowTokens: number;
-};
-
-type ContextWindowGuardHint = {
-  endpointClass: ReturnType<typeof resolveProviderEndpoint>["endpointClass"];
-  likelySelfHosted: boolean;
-};
-
-function resolveContextWindowGuardHint(params: {
-  runtimeBaseUrl?: string | null;
-}): ContextWindowGuardHint {
-  const endpoint = resolveProviderEndpoint(params.runtimeBaseUrl ?? undefined);
-  return {
-    endpointClass: endpoint.endpointClass,
-    likelySelfHosted: endpoint.endpointClass === "local",
-  };
-}
-
 /** Derive warning/block floors from the resolved model context window. */
-function resolveContextWindowGuardThresholds(
-  contextWindowTokens: number,
-): ContextWindowGuardThresholds {
+function resolveContextWindowGuardThresholds(contextWindowTokens: number) {
   const tokens = normalizePositiveInt(contextWindowTokens) ?? 0;
   return {
     hardMinTokens: Math.max(
@@ -141,8 +92,7 @@ export function formatContextWindowWarningMessage(params: {
   runtimeBaseUrl?: string | null;
 }): string {
   const base = `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} (warn<${params.guard.warnBelowTokens}) source=${params.guard.source}`;
-  const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
-  if (!hint.likelySelfHosted) {
+  if (!isLocalProviderEndpoint(params.runtimeBaseUrl)) {
     return base;
   }
   if (params.guard.source === "modelsConfig") {
@@ -165,8 +115,7 @@ export function formatContextWindowBlockMessage(params: {
   const base =
     `Model context window too small (${params.guard.tokens} tokens; ` +
     `source=${params.guard.source}). Minimum is ${params.guard.hardMinTokens}.`;
-  const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
-  if (!hint.likelySelfHosted) {
+  if (!isLocalProviderEndpoint(params.runtimeBaseUrl)) {
     return base;
   }
   if (params.guard.source === "modelsConfig") {

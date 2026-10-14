@@ -1,9 +1,24 @@
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
 const STREAMABLE_RESPONSE_BODY_MARKER = "Error POSTing to endpoint:";
 const LEGACY_RESPONSE_BODY_RE = /Error POSTing to endpoint \(HTTP \d+\):/;
+
+/** MCP lifecycle errors use the protocol code, including serialized SDK errors. */
+export function isMcpRequestTimeoutError(error: unknown): boolean {
+  return isRecord(error) && error.code === ErrorCode.RequestTimeout;
+}
+
+export function isMcpMethodNotFoundError(error: unknown): boolean {
+  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
+    return true;
+  }
+  const message = String(error);
+  return message.includes("-32601") || /\b(?:method not found|unknown method)\b/i.test(message);
+}
 
 /** Redacts MCP diagnostics, including response bodies the SDK includes in thrown errors. */
 export function redactMcpDiagnosticError(error: unknown): string {

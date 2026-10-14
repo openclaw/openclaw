@@ -46,10 +46,14 @@ export function parseBrowserTabToolBinding(value: unknown): BindingResult {
   };
 }
 
-const TAB_BOUND_ACTIONS = new Set([
+export const BROWSER_TAB_BOUND_ACTIONS = [
   "act",
   "close",
   "console",
+  "requests",
+  "errors",
+  "text",
+  "emulate",
   "dialog",
   "download",
   "focus",
@@ -60,7 +64,7 @@ const TAB_BOUND_ACTIONS = new Set([
   "tabs",
   "upload",
   "waitfordownload",
-]);
+] as const;
 
 function bindTargetId(record: Record<string, unknown>, targetId: string): Record<string, unknown> {
   const requestedTargetId = normalizeOptionalString(record.targetId);
@@ -82,21 +86,15 @@ export function applyBrowserTabToolBinding(
   input: Record<string, unknown>,
   binding: BrowserTabToolBinding,
 ): Record<string, unknown> {
-  const action = normalizeOptionalString(input.action);
-  if (!action || !TAB_BOUND_ACTIONS.has(action)) {
-    throw new Error(`browser action ${JSON.stringify(action)} is unavailable in a tab-bound run`);
-  }
-  const requestedTarget = normalizeOptionalString(input.target);
-  const requestedNode = normalizeOptionalString(input.node);
-  const requestedProfile = normalizeOptionalString(input.profile);
-  if (requestedTarget && requestedTarget !== binding.target) {
-    throw new Error("browser action cannot override its run-bound target");
-  }
-  if (requestedNode && requestedNode !== binding.node) {
-    throw new Error("browser action cannot override its run-bound node");
-  }
-  if (requestedProfile && requestedProfile !== binding.profile) {
-    throw new Error("browser action cannot override its run-bound profile");
+  const requested = {
+    target: normalizeOptionalString(input.target),
+    node: normalizeOptionalString(input.node),
+    profile: normalizeOptionalString(input.profile),
+  };
+  for (const field of ["target", "node", "profile"] as const) {
+    if (requested[field] && requested[field] !== binding[field]) {
+      throw new Error(`browser action cannot override its run-bound ${field}`);
+    }
   }
   const bound = bindTargetId(input, binding.targetId);
   const request =

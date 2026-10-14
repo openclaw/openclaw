@@ -1,4 +1,3 @@
-// Zalo helper module supports config schema behavior.
 import {
   AllowFromListSchema,
   buildMultiAccountChannelSchema,
@@ -6,10 +5,10 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
-import { buildSecretInputSchema } from "./secret-input.js";
 
-const zaloAccountSchema = z.object({
+export const ZaloAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
@@ -28,6 +27,7 @@ const zaloAccountSchema = z.object({
   responsePrefix: z.string().optional(),
 });
 
-export const ZaloConfigSchema = buildMultiAccountChannelSchema(zaloAccountSchema, {
-  accountsMode: "catchall",
-});
+export const ZaloConfigSchema = buildMultiAccountChannelSchema(
+  ZaloAccountSchema.extend({ historyLimit: z.number().int().min(0).optional() }),
+  { accountSchema: ZaloAccountSchema, accountsMode: "catchall" },
+);

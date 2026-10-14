@@ -22,44 +22,27 @@ export function formatToolAggregateParts(
   const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
   const display = resolveToolDisplay({ name: toolName });
   const compactCommandSummary = filtered.length > 0 && isShellToolDisplayName(toolName);
-  const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;
   if (!filtered.length) {
-    return { text: `${display.emoji} ${display.label}` };
+    return { text: display.label };
   }
 
   const rawSegments: string[] = [];
   // Group by directory and brace-collapse filenames to keep progress text short.
   const grouped: Record<string, string[]> = {};
   for (const m of filtered) {
-    if (!isPathLike(m)) {
+    if (!isPathLike(m) || m.includes("→")) {
       rawSegments.push(m);
       continue;
     }
-    if (m.includes("→")) {
-      rawSegments.push(m);
-      continue;
-    }
-    const parts = m.split("/");
-    if (parts.length > 1) {
-      const dir = parts.slice(0, -1).join("/");
-      const base = parts.at(-1) ?? m;
-      if (!grouped[dir]) {
-        grouped[dir] = [];
-      }
-      grouped[dir].push(base);
-    } else {
-      if (!grouped["."]) {
-        grouped["."] = [];
-      }
-      grouped["."].push(m);
-    }
+    const slash = m.lastIndexOf("/");
+    const dir = m.slice(0, slash);
+    const base = m.slice(slash + 1);
+    grouped[dir] ??= [];
+    grouped[dir].push(base);
   }
 
   const segments = Object.entries(grouped).map(([dir, files]) => {
     const brace = files.length > 1 ? `{${files.join(", ")}}` : files[0];
-    if (dir === ".") {
-      return brace;
-    }
     return `${dir}/${brace}`;
   });
 
@@ -67,7 +50,7 @@ export function formatToolAggregateParts(
   const meta = allSegments.join("; ");
   const detail = formatMetaForDisplay(toolName, meta, options?.markdown);
   return {
-    text: compactCommandSummary ? `${prefix} ${detail}` : `${prefix}: ${detail}`,
+    text: compactCommandSummary ? detail : `${display.label}: ${detail}`,
     detail,
   };
 }
@@ -88,56 +71,31 @@ function formatMetaForDisplay(
 ): string {
   const normalized = normalizeLowercaseStringOrEmpty(toolName);
   if (normalized === "exec" || normalized === "bash") {
-    const { flags, body } = splitExecFlags(meta);
+    const flags: string[] = [];
+    const bodyParts: string[] = [];
+    for (const part of meta
+      .split(" · ")
+      .map((segment) => segment.trim())
+      .filter(Boolean)) {
+      (part === "elevated" || part === "pty" ? flags : bodyParts).push(part);
+    }
     if (flags.length > 0) {
+      const body = bodyParts.join(" · ");
       if (!body) {
         return flags.join(" · ");
       }
-      return `${flags.join(" · ")} · ${maybeWrapMarkdown(body, markdown)}`;
+      return `${flags.join(" · ")} · ${markdown ? formatInlineCodeSpan(body) : body}`;
     }
   }
-  return maybeWrapMarkdown(meta, markdown);
-}
-
-function splitExecFlags(meta: string): { flags: string[]; body: string } {
-  const parts = meta
-    .split(" · ")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length === 0) {
-    return { flags: [], body: "" };
-  }
-  const flags: string[] = [];
-  const bodyParts: string[] = [];
-  for (const part of parts) {
-    if (part === "elevated" || part === "pty") {
-      flags.push(part);
-      continue;
-    }
-    bodyParts.push(part);
-  }
-  return { flags, body: bodyParts.join(" · ") };
+  return markdown ? formatInlineCodeSpan(meta) : meta;
 }
 
 function isPathLike(value: string): boolean {
-  if (!value) {
-    return false;
-  }
-  if (value.includes(" ")) {
-    return false;
-  }
-  if (value.includes("://")) {
-    return false;
-  }
-  if (value.includes("·")) {
-    return false;
-  }
-  if (value.includes("&&") || value.includes("||")) {
-    return false;
-  }
-  return /^~?(\/[^\s]+)+$/.test(value);
-}
-
-function maybeWrapMarkdown(value: string, markdown?: boolean): string {
-  return markdown ? formatInlineCodeSpan(value) : value;
+  return (
+    !value.includes("://") &&
+    !value.includes("·") &&
+    !value.includes("&&") &&
+    !value.includes("||") &&
+    /^~?(\/[^\s]+)+$/.test(value)
+  );
 }

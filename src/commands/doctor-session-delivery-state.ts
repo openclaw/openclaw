@@ -1,145 +1,284 @@
-import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
-import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
-import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
+import { note } from "../../packages/terminal-core/src/note.js";
+import { scanDoctorSessionEntriesTolerant } from "../config/sessions/session-accessor.js";
+import {
+  hasLegacySessionEntryState,
+  hasLegacySessionProviderState,
+} from "../config/sessions/session-entry-state-format.js";
+import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  listExistingAgentDatabaseTargets,
+  type ExistingAgentDatabaseTarget,
+} from "../infra/session-sqlite-migration-readers.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import {
+  createLegacyStateMigrationStepReceipt,
+  DoctorStateMigrationRefusalError,
+} from "../infra/state-migrations.messages.js";
+import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../state/openclaw-agent-db-migration-required.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
-  type OpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import {
-  deliveryContextFromSession,
-  sessionDeliveryChannel,
-} from "../utils/delivery-context.shared.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { backupDoctorSqliteDatabases } from "./doctor-migration-backup.js";
+import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 import {
-  type DoctorSessionEntryRow,
-  writeValidatedDoctorSessionEntryJson,
-} from "./doctor-session-entry-rewrite.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+  rewriteDoctorSessionEntries,
+  scanDoctorSessionEntryRecords,
+} from "./doctor/shared/session-entry-rewrite.js";
+import { migrateLegacySessionEntryState } from "./doctor/shared/session-entry-shape.js";
 
-export type SessionDeliveryStateRepairReport = {
-  found: number;
-  repaired: number;
-  scannedStores: number;
-};
+export type SessionDeliveryStateRepairReport = ReturnType<typeof repairCanonicalSessionEntries>;
 
-type DeliveryRewrite = {
-  accountId: string | null;
-  channel: string | null;
-  currentSessionId: string;
-  entryJson: string;
-  row: DoctorSessionEntryRow;
-};
+type CanonicalSessionRepairOptions = Omit<
+  Parameters<typeof repairCanonicalSessionEntries>[0],
+  "transform" | "updateDeliveryProjection"
+>;
 
 /** Scan or rewrite legacy delivery fields inside existing session row JSON. */
-export function repairCanonicalSessionDeliveryStates(params: {
+export function repairCanonicalSessionDeliveryStates(params: CanonicalSessionRepairOptions) {
+  return repairCanonicalSessionEntries({
+    ...params,
+    transform: normalizeLegacySessionEntryDelivery,
+    updateDeliveryProjection: true,
+  });
+}
+
+export function repairCanonicalSessionResolvedSkills(params: CanonicalSessionRepairOptions) {
+  return repairCanonicalSessionEntries({
+    ...params,
+    transform: stripRuntimeOnlySessionSkillsFields,
+    updateDeliveryProjection: false,
+  });
+}
+
+type SessionEntryRepairParams = {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  targets?: readonly ExistingAgentDatabaseTarget[];
+  transform: (entry: SessionEntry, sessionKey: string, phase: "scan" | "repair") => SessionEntry;
+  updateDeliveryProjection: boolean;
+};
+
+type PreparedSessionEntryRepairParams =
+  | (SessionEntryRepairParams & { source: "canonical" })
+  | (Omit<SessionEntryRepairParams, "transform"> & {
+      source: "raw";
+      rawNeedsRepair: (entry: Record<string, unknown>) => boolean;
+      rawTransform: (
+        entry: Record<string, unknown>,
+        sessionKey: string,
+        updatedAt: number,
+      ) => Record<string, unknown>;
+      deferSchemaRepair?: boolean;
+    });
+
+function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
+  const targets = params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env);
+  const pending = targets.flatMap((target) => {
+    const sessionKeys: string[] = [];
+    const scope = { agentId: target.agentId, env: params.env, storePath: target.sqlitePath };
+    const scan = () => {
+      const identity = readDatabasePathIdentitySync(target.sqlitePath);
+      if (params.source === "raw") {
+        scanDoctorSessionEntryRecords(
+          scope,
+          ({ entry, sessionKey }) => {
+            if (params.rawNeedsRepair(entry)) {
+              sessionKeys.push(sessionKey);
+            }
+          },
+          identity,
+        );
+      } else {
+        scanDoctorSessionEntriesTolerant(
+          scope,
+          ({ entry, recoveredFromProjections, sessionKey }) => {
+            if (
+              !recoveredFromProjections &&
+              params.transform(entry, sessionKey, "scan") !== entry
+            ) {
+              sessionKeys.push(sessionKey);
+            }
+          },
+        );
+      }
+      assertExistingDatabaseIdentity(target.sqlitePath, identity.key, identity.birthtime);
+      return { target, scope, sessionKeys, identity };
+    };
+    try {
+      const operation =
+        params.source === "raw"
+          ? { ok: true, value: scan() }
+          : runDoctorAgentDatabaseOperation({
+              agentId: target.agentId,
+              path: target.sqlitePath,
+              run: scan,
+            });
+      return operation.ok && sessionKeys.length > 0 ? [operation.value] : [];
+    } catch (error) {
+      if (
+        params.source === "raw" &&
+        params.deferSchemaRepair &&
+        (error instanceof SqliteSchemaMismatchError ||
+          error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError)
+      ) {
+        note(
+          `- Session entry inspection awaits its database schema repair: ${formatErrorMessage(error)}`,
+          "Session SQLite",
+        );
+        return [];
+      }
+      throw error;
+    }
+  });
+  return {
+    targets,
+    pending,
+    found: pending.reduce((count, item) => count + item.sessionKeys.length, 0),
+    scannedStores: targets.length,
+    apply(assertCurrent?: (target: ExistingAgentDatabaseTarget) => void): number {
+      let repaired = 0;
+      for (const { target, scope, sessionKeys, identity } of pending) {
+        const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);
+        try {
+          repaired += rewriteDoctorSessionEntries({
+            scope,
+            sessionKeys,
+            ...(params.source === "raw"
+              ? { rawTransform: params.rawTransform }
+              : {
+                  transform: (entry: SessionEntry, sessionKey: string) =>
+                    params.transform(entry, sessionKey, "repair"),
+                }),
+            expectedIdentity: identity,
+            updateDeliveryProjection: params.updateDeliveryProjection,
+            ...(assertCurrent ? { assertCurrent: () => assertCurrent(target) } : {}),
+          });
+        } finally {
+          if (!wasOpen) {
+            closeOpenClawAgentDatabaseByPath(target.sqlitePath);
+          }
+        }
+      }
+      return repaired;
+    },
+  };
+}
+
+export function repairCanonicalSessionEntries(
+  params: SessionEntryRepairParams & { apply: boolean },
+) {
+  const plan = prepareSessionEntryRepairs({ ...params, source: "canonical" });
+  return {
+    found: plan.found,
+    repaired: params.apply ? plan.apply() : 0,
+    scannedStores: plan.scannedStores,
+  };
+}
+
+/** Raw repair and its backup precede all canonical session readers. */
+export async function repairLegacySessionEntryStates(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): SessionDeliveryStateRepairReport {
-  const targets = listExistingAgentDatabaseTargets(params.cfg, params.env);
-  let found = 0;
-  let repaired = 0;
-  for (const target of targets) {
-    const operation = runDoctorAgentDatabaseOperation({
-      agentId: target.agentId,
-      path: target.sqlitePath,
-      run: () =>
-        withOpenClawAgentDatabaseReadOnly((database) => collectDeliveryRewrites(database.db), {
-          agentId: target.agentId,
-          env: params.env,
-          path: target.sqlitePath,
-        }),
+  authority?: DoctorSqliteMaintenanceAuthority;
+  targets?: readonly ExistingAgentDatabaseTarget[];
+  deferSchemaRepair?: boolean;
+}): Promise<SessionDeliveryStateRepairReport> {
+  try {
+    const plan = prepareSessionEntryRepairs({
+      ...params,
+      source: "raw",
+      rawNeedsRepair: hasLegacySessionEntryState,
+      rawTransform: (entry, sessionKey, updatedAt) => {
+        if (!hasLegacySessionEntryState(entry)) {
+          return entry;
+        }
+        const next = migrateLegacySessionEntryState(entry, updatedAt, sessionKey);
+        return hasLegacySessionProviderState(entry)
+          ? normalizeLegacySessionEntryDelivery(next)
+          : next;
+      },
+      updateDeliveryProjection: true,
     });
-    if (!operation.ok || !operation.value.found) {
-      continue;
+    const report = { found: plan.found, repaired: 0, scannedStores: plan.scannedStores };
+    if (!params.apply || plan.found === 0) {
+      return report;
     }
-    found += operation.value.value.length;
-    if (!params.apply || operation.value.value.length === 0) {
-      continue;
+    const maintenance = getOpenClawDatabaseMaintenanceScope();
+    const authority =
+      params.authority ??
+      (maintenance?.ownsSchemaMaintenance
+        ? { assertCurrent: () => maintenance.assertAdmission() }
+        : undefined);
+    if (!authority) {
+      throw new Error("Session entry state repair requires Doctor maintenance ownership.");
     }
-    const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);
-    try {
-      repaired += runOpenClawAgentWriteTransaction(
-        (database) => applyDeliveryRewrites(database),
-        { agentId: target.agentId, env: params.env, path: target.sqlitePath },
-        { operationLabel: "doctor.canonicalize-session-delivery-state" },
-      );
-    } finally {
-      if (!wasOpen) {
-        closeOpenClawAgentDatabaseByPath(target.sqlitePath);
+    const identities = new Map(plan.pending.map(({ target, identity }) => [target, identity]));
+    const assertTargetCurrent = (target: ExistingAgentDatabaseTarget) => {
+      authority.assertCurrent();
+      const identity = identities.get(target)!;
+      assertExistingDatabaseIdentity(target.sqlitePath, identity.key, identity.birthtime);
+    };
+    const assertCurrent = () => {
+      for (const target of identities.keys()) {
+        assertTargetCurrent(target);
       }
+    };
+    assertCurrent();
+    const backup = await backupDoctorSqliteDatabases({
+      env: params.env,
+      pendingDatabasePaths: plan.pending.map(({ target }) => target.sqlitePath),
+      databasePaths: plan.targets.map((target) => target.sqlitePath),
+      authority: { assertCurrent },
+    });
+    assertCurrent();
+    note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
+    report.repaired = plan.apply(assertTargetCurrent);
+    for (const { target, scope, identity } of plan.pending) {
+      assertTargetCurrent(target);
+      scanDoctorSessionEntryRecords(
+        scope,
+        ({ entry, sessionKey }) => {
+          if (hasLegacySessionEntryState(entry)) {
+            throw new Error(
+              `Legacy session state remains in ${sessionKey}; original rows are backed up. Resolve the remaining row repair before retrying Doctor.`,
+            );
+          }
+        },
+        identity,
+      );
+      assertTargetCurrent(target);
     }
-  }
-  return { found, repaired, scannedStores: targets.length };
-}
-
-function listExistingAgentDatabaseTargets(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Array<{ agentId: string; sqlitePath: string }> {
-  const seenPaths = new Set<string>();
-  return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
-    const sqlitePath = resolveTargetSqlitePath(target);
-    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
-      return [];
-    }
-    seenPaths.add(sqlitePath);
-    return [{ agentId: target.agentId, sqlitePath }];
-  });
-}
-
-function collectDeliveryRewrites(database: DatabaseSync): DeliveryRewrite[] {
-  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
-  const rows = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("session_nodes")
-      .select(["session_key", "current_session_id", "entry_json", "updated_at"]),
-  ).rows;
-  return rows.flatMap((row) => {
-    const parsed = parseSqliteSessionEntryRecord(row);
-    if (!parsed) {
-      return [];
-    }
-    const entry = parsed as SessionEntry;
-    const normalizedEntry = normalizeLegacySessionEntryDelivery(entry);
-    const entryJson = JSON.stringify(normalizedEntry);
-    return entryJson === row.entry_json ||
-      !parseSqliteSessionEntryRecord({ ...row, entry_json: entryJson })
-      ? []
-      : [
-          {
-            accountId: deliveryContextFromSession(normalizedEntry)?.accountId ?? null,
-            channel: sessionDeliveryChannel(normalizedEntry) ?? null,
-            currentSessionId: row.current_session_id,
-            entryJson,
-            row,
-          },
-        ];
-  });
-}
-
-function applyDeliveryRewrites(database: OpenClawAgentDatabase): number {
-  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-  const rewrites = collectDeliveryRewrites(database.db);
-  for (const rewrite of rewrites) {
-    writeValidatedDoctorSessionEntryJson(database, rewrite.row, rewrite.entryJson);
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("session_windows")
-        .set({ account_id: rewrite.accountId, channel: rewrite.channel })
-        .where("session_id", "=", rewrite.currentSessionId),
+    note(
+      `- Canonicalized entry state for ${report.repaired} durable session row(s).`,
+      "Session SQLite",
     );
+    return report;
+  } catch (error) {
+    const endpoints = [{ kind: "owner" as const, id: "session-entry-state" }];
+    throw new DoctorStateMigrationRefusalError([
+      createLegacyStateMigrationStepReceipt(
+        {
+          id: "session-entry-state",
+          phase: "final",
+          source: endpoints,
+          target: endpoints,
+          requiredness: "required",
+          reversibility: "checkpoint-required",
+        },
+        { changes: [], warnings: [formatErrorMessage(error)] },
+      ),
+    ]);
   }
-  return rewrites.length;
 }

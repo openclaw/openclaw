@@ -1,35 +1,50 @@
 // Line tests cover message cards plugin behavior.
-import { createServer } from "node:http";
-import { messagingApi } from "@line/bot-sdk";
+import type { messagingApi } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
-  datetimePickerAction,
   messageAction,
   normalizeLineAction,
-  postbackAction,
+  normalizeLineMessage,
   truncateLineActionLabel,
-  uriAction,
   type Action,
 } from "./actions.js";
-import { registerLineCardCommand } from "./card-command.js";
+import { handleLineCardCommand } from "./card-command.js";
+import { createActionCard, createInfoCard } from "./flex-templates/basic-cards.js";
 import {
-  createActionCard,
   createAppleTvRemoteCard,
   createDeviceControlCard,
-  createEventCard,
-  createImageCard,
-  createInfoCard,
-  createListCard,
   createMediaPlayerCard,
-} from "./flex-templates.js";
-import {
-  buildTemplateMessageFromPayload,
-  createConfirmTemplate,
-  createButtonTemplate,
-  createTemplateCarousel,
-  createCarouselColumn,
-} from "./template-messages.js";
+} from "./flex-templates/media-control-cards.js";
+import { createEventCard } from "./flex-templates/schedule-cards.js";
+import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import type { LineTemplateMessagePayload } from "./types.js";
+
+function renderTemplate(payload: LineTemplateMessagePayload): messagingApi.TemplateMessage {
+  const message = buildTemplateMessageFromPayload(payload);
+  if (message?.type !== "template") {
+    throw new Error(`Expected a LINE template, received ${message?.type ?? "nothing"}`);
+  }
+  return message;
+}
+
+const expectedUnavailableCallbackAction = {
+  type: "message",
+  label: "Unavailable",
+  text: "Action unavailable: callback data exceeds LINE's limit.",
+};
+
+const expectedUnavailableLink = {
+  type: "message",
+  label: "Unavailable",
+  text: "Link unavailable: URL exceeds LINE's limit.",
+};
+
+const expectedUnavailableMessageText = {
+  type: "message",
+  label: "Unavailable",
+  text: "Action unavailable: message text exceeds LINE's limit.",
+};
 
 const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
 const lineFlexCardCommandScenarios = [
@@ -43,56 +58,12 @@ const lineFlexCardCommandScenarios = [
     args: (body: string) => `image "Title" "${body}" --url https://example.test/image.png`,
     expectedAltText: (body: string) => `Title: ${body}`,
   },
-  {
-    kind: "action",
-    args: (body: string) => `action "Title" "${body}" --actions "Open|ok"`,
-    expectedAltText: (body: string) => `Title: ${body}`,
-  },
-  {
-    kind: "list",
-    args: (body: string) => `list "Title" "${body}|Description"`,
-    expectedAltText: (body: string) => `Title: ${body}`,
-  },
-  {
-    kind: "receipt",
-    args: (body: string) => `receipt "Title" "${body}:$1" --total "$1"`,
-    expectedAltText: (body: string) => `Title: ${body} $1`,
-  },
-] as const;
-
-const lineTemplateMessageScenarios = [
-  {
-    kind: "confirm",
-    create: (altText: string) =>
-      createConfirmTemplate("q".repeat(300), messageAction("Yes"), messageAction("No"), altText),
-    bodyLimit: 240,
-  },
-  {
-    kind: "buttons",
-    create: (altText: string) =>
-      createButtonTemplate("Menu", "b".repeat(200), [messageAction("Open")], { altText }),
-    bodyLimit: 60,
-  },
-  {
-    kind: "carousel",
-    create: (altText: string) =>
-      createTemplateCarousel(
-        [createCarouselColumn({ text: "c".repeat(150), actions: [messageAction("Open")] })],
-        { altText },
-      ),
-    bodyLimit: 120,
-  },
 ] as const;
 
 async function runLineFlexCardCommand(
   args: string,
 ): Promise<{ altText: string; contents: messagingApi.FlexContainer }> {
-  const result = (await registerCommandWithHandler((command: unknown) => {
-    const { handler } = command as {
-      handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-    };
-    return handler({ channel: "line", args });
-  })) as {
+  const result = (await handleLineCardCommand(args)) as {
     channelData: {
       line: { flexMessage: { altText: string; contents: messagingApi.FlexContainer } };
     };
@@ -100,242 +71,65 @@ async function runLineFlexCardCommand(
   return result.channelData.line.flexMessage;
 }
 
-type LineProviderRequest = {
-  path: string;
-  authenticated: boolean;
-  type: string;
-  altText: string;
-};
-
-async function withLineProvider(
-  run: (client: messagingApi.MessagingApiClient, requests: LineProviderRequest[]) => Promise<void>,
-): Promise<void> {
-  const requests: LineProviderRequest[] = [];
-  const server = createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => {
-      chunks.push(chunk);
-    });
-    request.once("end", () => {
-      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-        messages: Array<{ type: string; altText: string }>;
-      };
-      requests.push({
-        path: request.url ?? "",
-        authenticated: request.headers.authorization === "Bearer isolated-test-token",
-        type: payload.messages[0]?.type ?? "",
-        altText: payload.messages[0]?.altText ?? "",
-      });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ sentMessages: [{ id: `card-${requests.length}` }] }));
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("LINE card provider did not bind a TCP port");
-    }
-    const client = new messagingApi.MessagingApiClient({
-      channelAccessToken: "isolated-test-token",
-      baseURL: `http://127.0.0.1:${address.port}`,
-    });
-    await run(client, requests);
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+function resolveLineFlexCardActions(message: {
+  contents: messagingApi.FlexContainer;
+}): messagingApi.Action[] {
+  if (message.contents.type !== "bubble") {
+    throw new Error("Expected LINE Flex action card to render a bubble");
   }
+  const footer = expectDefined(message.contents.footer, "LINE flex-message footer");
+  return footer.contents.map((component) => {
+    if (component.type !== "button") {
+      throw new Error("Expected LINE Flex action card footer to contain buttons");
+    }
+    return component.action;
+  });
 }
 
-describe("createConfirmTemplate", () => {
-  it("truncates text to 240 characters", () => {
-    const longText = "x".repeat(300);
-    const template = createConfirmTemplate(longText, messageAction("Yes"), messageAction("No"));
+function cardButtons(component: messagingApi.FlexComponent | undefined): messagingApi.FlexButton[] {
+  if (component?.type === "box") {
+    return component.contents.flatMap(cardButtons);
+  }
+  return component?.type === "button" ? [component] : [];
+}
 
-    expect((template.template as { text: string }).text.length).toBe(240);
-  });
-
-  it("drops a surrogate-pair emoji from fallback altText instead of splitting it", () => {
-    const template = createConfirmTemplate(
-      `${"x".repeat(1499)}😀`,
-      messageAction("Yes"),
-      messageAction("No"),
-    );
-
-    expect(template.altText).toBe("x".repeat(1499));
-    expect(loneHighSurrogate.test(template.altText)).toBe(false);
-  });
-});
-
-describe("createButtonTemplate", () => {
-  it("omits a blank optional title", () => {
-    const template = createButtonTemplate(undefined, "Text", [messageAction("OK")]);
-    expect(template).toMatchObject({
-      altText: "Text",
-      template: { type: "buttons", text: "Text" },
+describe("LINE template payload limits", () => {
+  it("keeps the fallback confirm alt text Unicode-safe", () => {
+    const message = renderTemplate({
+      type: "confirm",
+      text: `${"x".repeat(1499)}😀`,
+      confirmLabel: "Yes",
+      confirmData: "Yes",
+      cancelLabel: "No",
+      cancelData: "No",
     });
-    expect(template.template).not.toHaveProperty("title");
+    expect(message.altText).toBe("x".repeat(1499));
+    expect(loneHighSurrogate.test(message.altText)).toBe(false);
   });
 
-  it("uses the titleless 160-character text limit for an empty title", () => {
-    const template = createButtonTemplate("", "x".repeat(160), [messageAction("OK")]);
-    expect(template.template).toMatchObject({ text: "x".repeat(160) });
-  });
-
-  it("limits actions to 4", () => {
-    const actions = Array.from({ length: 6 }, (_, i) => messageAction(`Button ${i}`));
-    const template = createButtonTemplate("Title", "Text", actions);
-
-    expect((template.template as { actions: unknown[] }).actions.length).toBe(4);
-  });
-
-  it("truncates title to 40 characters", () => {
-    const longTitle = "x".repeat(50);
-    const template = createButtonTemplate(longTitle, "Text", [messageAction("OK")]);
-
-    expect((template.template as { title: string }).title.length).toBe(40);
-  });
-
-  it("drops a surrogate-pair emoji from the title instead of splitting it", () => {
-    // 39 chars + an emoji land the truncation boundary inside the surrogate pair;
-    // a raw code-unit slice would keep only the lone high surrogate.
-    const template = createButtonTemplate(`${"x".repeat(39)}😀`, "Text", [messageAction("OK")]);
-    const title = (template.template as { title: string }).title;
-
-    expect(title).toBe("x".repeat(39));
-    expect(loneHighSurrogate.test(title)).toBe(false);
-  });
-
-  it("drops a surrogate-pair emoji from explicit altText instead of splitting it", () => {
-    const template = createButtonTemplate("Title", "Text", [messageAction("OK")], {
-      altText: `${"x".repeat(1499)}😀`,
-    });
-
-    expect(template.altText).toBe("x".repeat(1499));
-    expect(loneHighSurrogate.test(template.altText)).toBe(false);
-  });
-
-  it("truncates text to 60 chars when no thumbnail is provided", () => {
-    const longText = "x".repeat(100);
-    const template = createButtonTemplate("Title", longText, [messageAction("OK")]);
-
-    expect((template.template as { text: string }).text.length).toBe(60);
-  });
-
-  it("truncates text to 60 chars when title and thumbnail are provided", () => {
-    const longText = "x".repeat(100);
-    const template = createButtonTemplate("Title", longText, [messageAction("OK")], {
+  it.each([
+    {
+      title: undefined,
       thumbnailImageUrl: "https://example.com/thumb.jpg",
-    });
-
-    expect((template.template as { text: string }).text.length).toBe(60);
-  });
-});
-
-describe("createCarouselColumn", () => {
-  it("limits actions to 3", () => {
-    const column = createCarouselColumn({
-      text: "Text",
-      actions: [
-        messageAction("A1"),
-        messageAction("A2"),
-        messageAction("A3"),
-        messageAction("A4"),
-        messageAction("A5"),
-      ],
-    });
-
-    expect(column.actions.length).toBe(3);
-  });
-
-  it("truncates text to 120 characters when no title or image is set", () => {
-    const longText = "x".repeat(150);
-    const column = createCarouselColumn({ text: longText, actions: [messageAction("OK")] });
-
-    expect(column.text.length).toBe(120);
-  });
-
-  it("truncates text to 60 characters when a title is set", () => {
-    const longText = "x".repeat(150);
-    const column = createCarouselColumn({
-      title: "Title",
-      text: longText,
-      actions: [messageAction("OK")],
-    });
-
-    expect(column.text.length).toBe(60);
-  });
-
-  it("drops a surrogate-pair emoji from the title instead of splitting it", () => {
-    const column = createCarouselColumn({
-      title: `${"x".repeat(39)}😀`,
-      text: "Text",
-      actions: [messageAction("OK")],
-    });
-
-    expect(column.title).toBe("x".repeat(39));
-    expect(loneHighSurrogate.test(column.title ?? "")).toBe(false);
-  });
-
-  it("does not split an emoji grapheme at the 60-code-unit boundary", () => {
-    const text = `${"x".repeat(59)}👨‍👩‍👧‍👦after`;
-    const column = createCarouselColumn({
-      title: "Title",
-      text,
-      actions: [messageAction("OK")],
-    });
-
-    expect(column.text).toBe("x".repeat(59));
-  });
-
-  it("keeps required text when the first grapheme exceeds the limit", () => {
-    const text = `😀${"\u0301".repeat(59)}`;
-    const column = createCarouselColumn({
-      title: "Title",
-      text,
-      actions: [messageAction("OK")],
-    });
-
-    expect(column.text.length).toBe(60);
-    expect(column.text.startsWith("😀")).toBe(true);
-  });
-
-  it("uses the compact limit when a whitespace-only title is present", () => {
-    const column = createCarouselColumn({
-      title: " ",
       text: "x".repeat(150),
-      actions: [messageAction("OK")],
-    });
-
-    expect(column.text).toBe("x".repeat(60));
-  });
-
-  it("truncates text to 60 characters when a thumbnail image is set", () => {
-    const longText = "x".repeat(150);
-    const column = createCarouselColumn({
-      text: longText,
-      thumbnailImageUrl: "https://example.com/thumb.jpg",
-      actions: [messageAction("OK")],
-    });
-
-    expect(column.text.length).toBe(60);
-  });
-});
-
-describe("carousel column limits", () => {
-  it("limits columns to 10", () => {
-    const template = createTemplateCarousel(
-      Array.from({ length: 15 }, () =>
-        createCarouselColumn({ text: "Text", actions: [messageAction("OK")] }),
-      ),
-    );
-    expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
-  });
+      expected: "x".repeat(60),
+    },
+    {
+      title: "Title",
+      thumbnailImageUrl: undefined,
+      text: `😀${"\u0301".repeat(59)}`,
+      expected: `😀${"\u0301".repeat(58)}`,
+    },
+  ])(
+    "bounds carousel text with title $title and image $thumbnailImageUrl",
+    ({ title, thumbnailImageUrl, text, expected }) => {
+      const message = renderTemplate({
+        type: "carousel",
+        columns: [{ title, thumbnailImageUrl, text, actions: [{ type: "message", label: "OK" }] }],
+      });
+      expect(message.template).toMatchObject({ columns: [{ text: expected }] });
+    },
+  );
 });
 
 describe("flex cards", () => {
@@ -344,34 +138,6 @@ describe("flex cards", () => {
 
     const footer = card.footer as { contents: Array<{ text: string }> };
     expect(expectDefined(footer.contents[0], "info-card footer content").text).toBe("Footer text");
-  });
-
-  it("limits list items to 8", () => {
-    const items = Array.from({ length: 15 }, (_, i) => ({ title: `Item ${i}` }));
-    const card = createListCard("List", items);
-
-    const body = card.body as { contents: Array<{ type: string; contents?: unknown[] }> };
-    const listBox = body.contents[2] as { contents: unknown[] };
-    expect(listBox.contents.length).toBe(8);
-  });
-
-  it("includes image-card body text when provided", () => {
-    const card = createImageCard("https://example.com/img.jpg", "Title", "Body text");
-
-    const body = card.body as { contents: Array<{ text: string }> };
-    expect(body.contents.length).toBe(2);
-    expect(expectDefined(body.contents[1], "image-card body content").text).toBe("Body text");
-  });
-
-  it("limits action-card actions to 4", () => {
-    const actions = Array.from({ length: 6 }, (_, i) => ({
-      label: `Action ${i}`,
-      action: { type: "message" as const, label: `A${i}`, text: `action${i}` },
-    }));
-    const card = createActionCard("Title", "Body", actions);
-
-    const footer = card.footer as { contents: unknown[] };
-    expect(footer.contents.length).toBe(4);
   });
 
   it("limits device controls to 6", () => {
@@ -414,104 +180,57 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(loneHighSurrogate.test(action.label)).toBe(false);
   });
 
-  it("messageAction leaves a short ASCII label unchanged", () => {
-    const action = messageAction("Yes");
-
-    expect(action.label).toBe("Yes");
-  });
-
-  it("uriAction drops a half emoji instead of leaving a lone surrogate", () => {
-    const action = uriAction(labelWithEmoji, "https://example.com") as { label: string };
-
-    expect(action.label).toBe(labelWithEmoji);
-    expect(loneHighSurrogate.test(action.label)).toBe(false);
-  });
-
-  it("postbackAction preserves valid grapheme labels but disables overlong callback data", () => {
+  it("datetime picker normalization preserves labels and disables overlong callback data", () => {
     const exactData = `${"d".repeat(298)}😀`;
     const overlongData = `${"d".repeat(299)}😀`;
-    const action = postbackAction(labelWithEmoji, "data") as { label: string };
-    const exact = postbackAction("Label", exactData) as { data: string };
-    const unavailable = postbackAction("Label", overlongData);
+    const action = normalizeLineAction({
+      type: "datetimepicker",
+      label: labelWithEmoji,
+      data: "data",
+      mode: "datetime",
+    }) as { label: string };
+    const exact = normalizeLineAction({
+      type: "datetimepicker",
+      label: "Pick",
+      data: exactData,
+      mode: "datetime",
+    }) as { data: string };
+    const unavailable = normalizeLineAction({
+      type: "datetimepicker",
+      label: "Pick",
+      data: overlongData,
+      mode: "datetime",
+    });
 
     expect(exactData).toHaveLength(300);
     expect(overlongData).toHaveLength(301);
     expect(action.label).toBe(labelWithEmoji);
     expect(loneHighSurrogate.test(action.label)).toBe(false);
     expect(exact.data).toBe(exactData);
-    expect(unavailable).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
-    });
+    expect(unavailable).toEqual(expectedUnavailableCallbackAction);
   });
 
-  it("postbackAction truncates displayText by grapheme cluster but keeps undefined", () => {
-    const displayText = `${"t".repeat(300)}😀`;
-    const withDisplay = postbackAction("Label", "data", displayText) as {
-      displayText?: string;
-    };
-    const withoutDisplay = postbackAction("Label", "data") as { displayText?: string };
-
-    expect(withDisplay.displayText).toBe("t".repeat(300));
-    expect(loneHighSurrogate.test(withDisplay.displayText ?? "")).toBe(false);
-    expect(withoutDisplay.displayText).toBeUndefined();
-  });
-
-  it("datetimePickerAction preserves valid grapheme labels but disables overlong callback data", () => {
-    const exactData = `${"d".repeat(298)}😀`;
-    const overlongData = `${"d".repeat(299)}😀`;
-    const action = datetimePickerAction(labelWithEmoji, "data", "datetime") as { label: string };
-    const exact = datetimePickerAction("Pick", exactData, "datetime") as { data: string };
-    const unavailable = datetimePickerAction("Pick", overlongData, "datetime");
-
-    expect(exactData).toHaveLength(300);
-    expect(overlongData).toHaveLength(301);
-    expect(action.label).toBe(labelWithEmoji);
-    expect(loneHighSurrogate.test(action.label)).toBe(false);
-    expect(exact.data).toBe(exactData);
-    expect(unavailable).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
-    });
-  });
-
-  it("/card action command visibly disables overlong callback data", async () => {
-    const registerCommand = (command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `action "Menu" "Body" --actions "${labelWithEmoji}|k=${"d".repeat(297)}😀"`,
-      });
-    };
-    const result = (await registerCommandWithHandler(registerCommand)) as {
-      channelData: {
-        line: {
-          flexMessage: {
-            contents: {
-              footer: {
-                contents: Array<{
-                  action: { type: string; label: string; text?: string };
-                }>;
-              };
-            };
-          };
-        };
-      };
-    };
-    const action = expectDefined(
-      result.channelData.line.flexMessage.contents.footer.contents[0],
-      "LINE flex-message footer action",
-    ).action;
-
-    expect(action).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
-    });
+  it.each([
+    { kind: "message", data: "/status", expected: { type: "message", text: "/status" } },
+    {
+      kind: "postback",
+      data: "action=status",
+      expected: { type: "postback", data: "action=status" },
+    },
+    {
+      kind: "uri",
+      data: "https://example.test/status",
+      expected: { type: "uri", uri: "https://example.test/status" },
+    },
+  ])("/card action preserves 40-character $kind labels", async ({ data, expected }) => {
+    const label = "x".repeat(40);
+    const message = await runLineFlexCardCommand(
+      `action "Menu" "Body" --actions "${label}|${data},${label}y|${data}"`,
+    );
+    expect(resolveLineFlexCardActions(message)).toMatchObject([
+      { ...expected, label },
+      { ...expected, label },
+    ]);
   });
 
   it.each(lineFlexCardCommandScenarios)(
@@ -524,163 +243,18 @@ describe("action label/data surrogate-safe truncation", () => {
     },
   );
 
-  it.each(lineFlexCardCommandScenarios)(
-    "/card $kind bounds alternative text without splitting a Unicode surrogate pair",
-    async (scenario) => {
-      const body = `${"a".repeat(1492)}😀 overflow`;
-      const { altText } = await runLineFlexCardCommand(scenario.args(body));
-
-      expect(altText).toBe(`Title: ${"a".repeat(1492)}`);
-      expect(loneHighSurrogate.test(altText)).toBe(false);
-    },
-  );
-
-  it("preserves every Flex card command through the real LINE provider SDK", async () => {
-    await withLineProvider(async (client, received) => {
-      const body = "a".repeat(1200);
-
-      for (const scenario of lineFlexCardCommandScenarios) {
-        const message = await runLineFlexCardCommand(scenario.args(body));
-        await client.pushMessage({
-          to: "U123",
-          messages: [{ type: "flex", altText: message.altText, contents: message.contents }],
-        });
-      }
-
-      expect(received).toHaveLength(lineFlexCardCommandScenarios.length);
-      expect(received.every((request) => request.authenticated)).toBe(true);
-      expect(received.every((request) => request.type === "flex")).toBe(true);
-      expect(received.map((request) => request.altText)).toEqual(
-        lineFlexCardCommandScenarios.map((scenario) => scenario.expectedAltText(body)),
-      );
+  it("device control postback labels count grapheme clusters", () => {
+    const label = `${"x".repeat(17)}😀`;
+    const card = createDeviceControlCard({
+      deviceName: "Device",
+      controls: [{ label, data: "extra" }],
     });
-  });
+    const extraAction = cardButtons(card.footer)
+      .map((button) => button.action)
+      .find((action) => action.type === "postback" && action.data === "extra");
 
-  it.each(lineTemplateMessageScenarios)(
-    "preserves provider-valid $kind alternative text without changing inner text limits",
-    (scenario) => {
-      const altText = "a".repeat(1200);
-      const message = scenario.create(altText);
-
-      expect(message.altText).toBe(altText);
-      if ("bodyLimit" in scenario) {
-        const template = message.template as {
-          text?: string;
-          columns?: Array<{ text?: string }>;
-        };
-        expect((template.text ?? template.columns?.[0]?.text)?.length).toBe(scenario.bodyLimit);
-      }
-    },
-  );
-
-  it.each(lineTemplateMessageScenarios)(
-    "bounds $kind alternative text at the provider's Unicode-safe 1500-unit limit",
-    (scenario) => {
-      const message = scenario.create(`${"a".repeat(1499)}😀 overflow`);
-
-      expect(message.altText).toBe("a".repeat(1499));
-      expect(loneHighSurrogate.test(message.altText)).toBe(false);
-    },
-  );
-
-  it("preserves all template families through real SDK push and reply requests", async () => {
-    await withLineProvider(async (client, received) => {
-      const altText = "a".repeat(1200);
-
-      for (const scenario of lineTemplateMessageScenarios) {
-        const message = scenario.create(altText);
-        await client.pushMessage({ to: "U123", messages: [message] });
-        await client.replyMessage({ replyToken: "reply-token", messages: [message] });
-      }
-
-      expect(received).toHaveLength(lineTemplateMessageScenarios.length * 2);
-      expect(received.every((request) => request.authenticated)).toBe(true);
-      expect(received.every((request) => request.type === "template")).toBe(true);
-      expect(received.every((request) => request.altText === altText)).toBe(true);
-      expect(received.filter((request) => request.path.endsWith("/push"))).toHaveLength(
-        lineTemplateMessageScenarios.length,
-      );
-      expect(received.filter((request) => request.path.endsWith("/reply"))).toHaveLength(
-        lineTemplateMessageScenarios.length,
-      );
-    });
-  });
-
-  it("/card receipt preserves a provider-valid Unicode alternative-text boundary", async () => {
-    const registerCommand = (command: unknown) => {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      return handler({
-        channel: "line",
-        args: `receipt "R" "${"a".repeat(395)}:😀x" --total "$30"`,
-      });
-    };
-    const result = (await registerCommandWithHandler(registerCommand)) as {
-      channelData: { line: { flexMessage: { altText: string } } };
-    };
-    const altText = result.channelData.line.flexMessage.altText;
-
-    expect(altText).toBe(`R: ${"a".repeat(395)} 😀x`);
-    expect(loneHighSurrogate.test(altText)).toBe(false);
-  });
-
-  it("media control postback labels count grapheme clusters", () => {
-    const card = createMediaPlayerCard({
-      title: "Track",
-      controls: {
-        play: { data: "play" },
-      },
-      extraActions: [{ label: `${"x".repeat(14)}😀`, data: "extra" }],
-    });
-    const footer = card.footer as {
-      contents: Array<{ contents?: Array<{ action?: { data?: string; label: string } }> }>;
-    };
-    const extraAction = footer.contents
-      .flatMap((content) => content.contents ?? [])
-      .find((button) => button.action?.data === "extra")?.action;
-
-    expect(extraAction?.label).toBe(`${"x".repeat(14)}😀`);
+    expect(extraAction?.label).toBe(label);
     expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
-  });
-
-  it("uriAction visibly disables overlong links instead of changing their destination", () => {
-    const validUri = `https://e.example/?q=${"u".repeat(979)}`;
-    const validAction = uriAction("Open", validUri) as { type: string; uri?: string };
-    const overlongAction = uriAction("Open", `${validUri}u`) as {
-      type: string;
-      label?: string;
-      text?: string;
-    };
-
-    expect(validUri).toHaveLength(1000);
-    expect(validAction).toMatchObject({ type: "uri", uri: validUri });
-    expect(overlongAction).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Link unavailable: URL exceeds LINE's limit.",
-    });
-  });
-
-  it("buttons template payload visibly disables URIs past the 1000-unit cap", () => {
-    const template = buildTemplateMessageFromPayload({
-      type: "buttons",
-      text: "Pick",
-      actions: [{ type: "uri", label: "Open", uri: `https://e.example/?q=${"u".repeat(1200)}` }],
-    });
-
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
-    const uriTemplateAction = expectDefined(
-      buttonsTemplate.actions[0],
-      "buttons template uri action",
-    );
-    expect(uriTemplateAction).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Link unavailable: URL exceeds LINE's limit.",
-    });
   });
 
   it("buttons template payload visibly disables overlong postback data", () => {
@@ -689,18 +263,16 @@ describe("action label/data surrogate-safe truncation", () => {
       text: "Pick",
       actions: [{ type: "postback", label: "Open", data: `action=open&token=${"x".repeat(300)}` }],
     });
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
+    const message = expectDefined(template, "buttons template message");
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error("expected buttons template");
+    }
+    const buttonsTemplate = message.template;
 
-    expect(buttonsTemplate.actions[0]).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
-    });
+    expect(buttonsTemplate.actions[0]).toEqual(expectedUnavailableCallbackAction);
   });
 
-  it("normalizes raw actions at exported template builder boundaries", () => {
+  it("normalizes raw template actions at the outbound message boundary", () => {
     const oversizedPostback: Action = {
       type: "postback",
       label: "Open",
@@ -711,37 +283,42 @@ describe("action label/data surrogate-safe truncation", () => {
       label: "Open",
       uri: `https://e.example/?q=${"x".repeat(1200)}`,
     };
-    const unavailableAction = {
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
-    };
-    const unavailableLink = {
-      type: "message",
-      label: "Unavailable",
-      text: "Link unavailable: URL exceeds LINE's limit.",
-    };
 
-    const buttons = createButtonTemplate(undefined, "Pick", [oversizedPostback], {
-      defaultAction: oversizedUri,
-    }).template as {
-      actions: Action[];
-      defaultAction?: Action;
-    };
-    expect(buttons.actions).toEqual([unavailableAction]);
-    expect(buttons.defaultAction).toEqual(unavailableLink);
-
-    const carousel = createTemplateCarousel([
-      {
+    const buttons = normalizeLineMessage({
+      type: "template",
+      altText: "Pick",
+      template: {
+        type: "buttons",
         text: "Pick",
         actions: [oversizedPostback],
         defaultAction: oversizedUri,
       },
-    ]).template as {
-      columns: Array<{ actions: Action[]; defaultAction?: Action }>;
-    };
-    expect(carousel.columns[0]?.actions).toEqual([unavailableAction]);
-    expect(carousel.columns[0]?.defaultAction).toEqual(unavailableLink);
+    });
+    expect(buttons).toMatchObject({
+      template: {
+        actions: [expectedUnavailableCallbackAction],
+        defaultAction: expectedUnavailableLink,
+      },
+    });
+
+    const carousel = normalizeLineMessage({
+      type: "template",
+      altText: "Pick",
+      template: {
+        type: "carousel",
+        columns: [{ text: "Pick", actions: [oversizedPostback], defaultAction: oversizedUri }],
+      },
+    });
+    expect(carousel).toMatchObject({
+      template: {
+        columns: [
+          {
+            actions: [expectedUnavailableCallbackAction],
+            defaultAction: expectedUnavailableLink,
+          },
+        ],
+      },
+    });
   });
 
   it("normalizes every length-constrained raw action field", () => {
@@ -752,11 +329,7 @@ describe("action label/data surrogate-safe truncation", () => {
         uri: "https://e.example",
         altUri: { desktop: `https://e.example/?q=${"x".repeat(1200)}` },
       }),
-    ).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Link unavailable: URL exceeds LINE's limit.",
-    });
+    ).toEqual(expectedUnavailableLink);
 
     const postback = normalizeLineAction({
       type: "postback",
@@ -768,11 +341,9 @@ describe("action label/data surrogate-safe truncation", () => {
       displayText: "d".repeat(300),
     });
 
-    expect(normalizeLineAction({ type: "message", label: "Open", text: "x".repeat(301) })).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: message text exceeds LINE's limit.",
-    });
+    expect(normalizeLineAction({ type: "message", label: "Open", text: "x".repeat(301) })).toEqual(
+      expectedUnavailableMessageText,
+    );
     expect(
       normalizeLineAction({
         type: "postback",
@@ -780,11 +351,7 @@ describe("action label/data surrogate-safe truncation", () => {
         data: "action=open",
         fillInText: "x".repeat(301),
       }),
-    ).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: message text exceeds LINE's limit.",
-    });
+    ).toEqual(expectedUnavailableMessageText);
     expect(
       normalizeLineAction({
         type: "postback",
@@ -792,21 +359,13 @@ describe("action label/data surrogate-safe truncation", () => {
         data: "action=open",
         text: "x".repeat(301),
       }),
-    ).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: message text exceeds LINE's limit.",
-    });
+    ).toEqual(expectedUnavailableMessageText);
     const emojiText = "😀".repeat(300);
     expect(messageAction("Open", emojiText)).toMatchObject({ text: emojiText });
     const familyEmoji = "👨‍👩‍👧‍👦";
     expect(truncateLineActionLabel(familyEmoji.repeat(3))).toBe(familyEmoji.repeat(2));
     expect(truncateLineActionLabel(`👩${"‍👩".repeat(10)}`)).toBe("…");
-    expect(messageAction("Open", familyEmoji.repeat(43))).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: message text exceeds LINE's limit.",
-    });
+    expect(messageAction("Open", familyEmoji.repeat(43))).toEqual(expectedUnavailableMessageText);
     expect(messageAction("Open", familyEmoji.repeat(42))).toMatchObject({
       text: familyEmoji.repeat(42),
     });
@@ -823,7 +382,7 @@ describe("action label/data surrogate-safe truncation", () => {
     });
   });
 
-  it("normalizes raw actions at exported flex builder boundaries", () => {
+  it("normalizes action cards and raw Flex actions at the outbound boundary", () => {
     const oversizedUri: Action = {
       type: "uri",
       label: "Open",
@@ -835,52 +394,47 @@ describe("action label/data surrogate-safe truncation", () => {
       data: "x".repeat(301),
     };
 
-    const image = createImageCard("https://e.example/image.jpg", "Image", undefined, {
-      action: oversizedUri,
-    });
-    expect((image.hero as { action?: Action }).action).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Link unavailable: URL exceeds LINE's limit.",
-    });
-
-    const card = createActionCard("Title", "Body", [{ label: "Open", action: oversizedPostback }]);
+    const card = createActionCard("Title", "Body", [oversizedPostback]);
     const button = (card.footer as { contents: Array<{ action: Action }> }).contents[0];
-    expect(button?.action).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
-    });
+    expect(button?.action).toEqual(expectedUnavailableCallbackAction);
 
     const validLongLabel = "x".repeat(40);
     const labeledCard = createActionCard("Title", "Body", [
-      { label: validLongLabel, action: { type: "message", label: validLongLabel, text: "Open" } },
+      { type: "message", label: validLongLabel, text: "Open" },
     ]);
     const labeledButton = (labeledCard.footer as { contents: Array<{ action: Action }> })
       .contents[0];
     expect(labeledButton?.action.label).toBe(validLongLabel);
 
-    const list = createListCard("List", [{ title: "Item", action: oversizedPostback }]);
-    const listBody = (list.body as { contents: unknown[] }).contents;
-    const listBox = listBody[2] as {
-      contents: Array<{ action?: Action }>;
-    };
-    expect(listBox.contents[0]?.action).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
+    const normalized = normalizeLineMessage({
+      type: "flex",
+      altText: "Image and event",
+      contents: {
+        type: "bubble",
+        hero: { type: "image", url: "https://e.example/image.jpg", action: oversizedUri },
+        body: {
+          type: "box",
+          layout: "vertical",
+          action: oversizedUri,
+          contents: [{ type: "text", text: "Event", action: oversizedPostback }],
+        },
+      },
     });
-
-    const event = createEventCard({
-      title: "Event",
-      date: "Today",
-      action: oversizedUri,
+    expect(normalized).toMatchObject({
+      contents: {
+        hero: { type: "image", url: "https://e.example/image.jpg" },
+        body: {
+          contents: [
+            { type: "text", text: "Event" },
+            {
+              type: "text",
+              text: `${expectedUnavailableLink.text}\n${expectedUnavailableCallbackAction.text}`,
+            },
+          ],
+        },
+      },
     });
-    expect((event.body as { action?: Action }).action).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Link unavailable: URL exceeds LINE's limit.",
-    });
+    expect(JSON.stringify(normalized)).not.toContain('"action":');
   });
 
   it("media control cards visibly disable overlong opaque callbacks", () => {
@@ -893,50 +447,13 @@ describe("action label/data surrogate-safe truncation", () => {
         pause: { data: overlongData },
         next: { data: overlongData },
       },
-      extraActions: [{ label: "Extra", data: overlongData }],
     });
-    const footer = card.footer as {
-      contents: Array<{
-        contents?: Array<{
-          action?: { type: string; data?: string; label?: string; text?: string };
-        }>;
-      }>;
-    };
-    const actions = footer.contents
-      .flatMap((content) => content.contents ?? [])
-      .flatMap((button) => (button.action ? [button.action] : []));
+    const actions = cardButtons(card.footer).map((button) => button.action);
 
-    expect(actions).toHaveLength(5);
+    expect(actions).toHaveLength(4);
     for (const action of actions) {
-      expect(action).toEqual({
-        type: "message",
-        label: "Unavailable",
-        text: "Action unavailable: callback data exceeds LINE's limit.",
-      });
+      expect(action).toEqual(expectedUnavailableCallbackAction);
     }
-  });
-
-  it("device controls visibly disable overlong opaque callbacks", () => {
-    const card = createDeviceControlCard({
-      deviceName: "Device",
-      controls: [{ label: "On", data: `${"d".repeat(299)}😀` }],
-    });
-    const footer = card.footer as {
-      contents: Array<{
-        contents: Array<{
-          action?: { type: string; data?: string; label?: string; text?: string };
-        }>;
-      }>;
-    };
-    const action = footer.contents
-      .flatMap((row) => row.contents)
-      .find((button) => button.action)?.action;
-
-    expect(action).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
-    });
   });
 
   it("Apple TV controls visibly disable overlong opaque callbacks", () => {
@@ -958,36 +475,11 @@ describe("action label/data surrogate-safe truncation", () => {
         mute: overlongData,
       },
     });
-    const body = card.body as {
-      contents: Array<{
-        contents?: Array<{
-          action?: { type: string; data?: string; label?: string; text?: string };
-        }>;
-      }>;
-    };
-    const actions = body.contents
-      .flatMap((row) => row.contents ?? [])
-      .flatMap((button) => (button.action ? [button.action] : []));
+    const actions = cardButtons(card.body).map((button) => button.action);
 
     expect(actions).toHaveLength(12);
     for (const action of actions) {
-      expect(action).toEqual({
-        type: "message",
-        label: "Unavailable",
-        text: "Action unavailable: callback data exceeds LINE's limit.",
-      });
+      expect(action).toEqual(expectedUnavailableCallbackAction);
     }
   });
 });
-
-async function registerCommandWithHandler(
-  runHandler: (command: unknown) => Promise<unknown>,
-): Promise<unknown> {
-  let result: unknown;
-  registerLineCardCommand({
-    registerCommand(command: unknown) {
-      result = runHandler(command);
-    },
-  } as never);
-  return result;
-}

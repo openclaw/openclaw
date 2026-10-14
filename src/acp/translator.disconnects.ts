@@ -1,5 +1,3 @@
-/** Gateway disconnect grace period and pending-prompt reconciliation. */
-import type { StopReason } from "@agentclientprotocol/sdk";
 import type { GatewayClient } from "../gateway/client.js";
 import type {
   AcpAgentWaitResult,
@@ -21,10 +19,10 @@ export class AcpTranslatorDisconnects {
       sessionId: string,
       runId: string,
     ) => AcpPendingPrompt | undefined,
-    private readonly finishPrompt: (
+    private readonly settleRecoveredPrompt: (
       sessionId: string,
       pending: AcpPendingPrompt,
-      stopReason: StopReason,
+      result: AcpAgentWaitResult,
     ) => Promise<void>,
     private readonly rejectPendingPrompt: (
       pending: AcpPendingPrompt,
@@ -99,25 +97,26 @@ export class AcpTranslatorDisconnects {
     this.disconnectTimer.unref?.();
   }
 
-  private clearPendingDisconnectState(
+  private async expirePendingPrompt(
     pending: AcpPendingPrompt,
     disconnectContext: AcpDisconnectContext,
-  ): void {
+  ): Promise<false> {
     if (pending.disconnectContext !== disconnectContext) {
-      return;
+      return false;
     }
-    pending.disconnectContext = undefined;
-  }
-
-  private shouldRejectPendingAtDisconnectDeadline(
-    pending: AcpPendingPrompt,
-    disconnectContext: AcpDisconnectContext,
-  ): boolean {
-    return (
-      pending.disconnectContext === disconnectContext &&
-      (!pending.sendAccepted ||
-        this.activeDisconnectContext?.generation === disconnectContext.generation)
-    );
+    if (
+      !pending.sendAccepted ||
+      this.activeDisconnectContext?.generation === disconnectContext.generation
+    ) {
+      await this.rejectPendingPrompt(
+        pending,
+        new Error(`Gateway disconnected: ${disconnectContext.reason}`),
+        { recordDisconnectNotice: true },
+      );
+    } else {
+      pending.disconnectContext = undefined;
+    }
+    return false;
   }
 
   private async reconcilePendingPrompts(
@@ -177,16 +176,7 @@ export class AcpTranslatorDisconnects {
     } catch (err) {
       this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
       if (deadlineExpired) {
-        if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
-          await this.rejectPendingPrompt(
-            pending,
-            new Error(`Gateway disconnected: ${disconnectContext.reason}`),
-            { recordDisconnectNotice: true },
-          );
-          return false;
-        }
-        this.clearPendingDisconnectState(pending, disconnectContext);
-        return false;
+        return await this.expirePendingPrompt(pending, disconnectContext);
       }
       return true;
     }
@@ -195,29 +185,17 @@ export class AcpTranslatorDisconnects {
     if (!currentPending) {
       return false;
     }
-    if (result?.status === "ok") {
-      await this.finishPrompt(sessionId, currentPending, "end_turn");
-      return false;
-    }
-    if (result?.status === "error") {
-      void this.finishPrompt(sessionId, currentPending, "end_turn");
+    const hasVisibleReply = result?.terminalReply?.disposition === "visible";
+    if (
+      result?.status === "ok" ||
+      result?.status === "error" ||
+      (result?.status === "timeout" && hasVisibleReply)
+    ) {
+      await this.settleRecoveredPrompt(sessionId, currentPending, result);
       return false;
     }
     if (deadlineExpired) {
-      if (this.shouldRejectPendingAtDisconnectDeadline(currentPending, disconnectContext)) {
-        const currentDisconnectContext = currentPending.disconnectContext;
-        if (!currentDisconnectContext) {
-          return false;
-        }
-        await this.rejectPendingPrompt(
-          currentPending,
-          new Error(`Gateway disconnected: ${currentDisconnectContext.reason}`),
-          { recordDisconnectNotice: true },
-        );
-        return false;
-      }
-      this.clearPendingDisconnectState(currentPending, disconnectContext);
-      return false;
+      return await this.expirePendingPrompt(currentPending, disconnectContext);
     }
     return true;
   }

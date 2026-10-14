@@ -3,7 +3,7 @@ import type { SerializedEventPayload } from "./node-registry.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 
 describe("node subscription manager", () => {
-  test("routes events with each subscribed node pairing generation", async () => {
+  test("routes events and tracks demand across pairing-fenced subscriptions", async () => {
     const manager = createNodeSubscriptionManager();
     const sent: Array<{
       nodeId: string;
@@ -11,19 +11,36 @@ describe("node subscription manager", () => {
       event: string;
       payloadJSON?: SerializedEventPayload | null;
     }> = [];
-
-    manager.subscribe("node-a", "generation-a", "main");
-    manager.subscribe("node-b", "generation-b", "main");
-    await manager.sendToSession("main", "chat", { ok: true }, (event) => {
+    const sendEvent = (event: (typeof sent)[number]) => {
       sent.push(event);
-    });
+    };
 
-    expect(sent).toHaveLength(2);
+    expect(manager.hasSubscribers("main")).toBe(false);
+    expect(manager.hasSubscribers("  ")).toBe(false);
+    manager.subscribe("node-a", "generation-a", " main ");
+    manager.subscribe("node-b", "generation-b", "main");
+    expect(manager.hasSubscribers(" main ")).toBe(true);
+    expect(manager.hasSubscribers("Main")).toBe(false);
+    await manager.sendToSession("main", "chat", { ok: true }, sendEvent);
+
     expect(sent.map((event) => event.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
     expect(sent.map((event) => event.pairingGeneration).toSorted()).toEqual([
       "generation-a",
       "generation-b",
     ]);
+
+    sent.length = 0;
+    manager.unsubscribe("node-a", "generation-a", " main ");
+    manager.unsubscribe("node-b", "stale-generation", "main");
+    expect(manager.hasSubscribers("main")).toBe(true);
+    await manager.sendToSession("main", "chat", { ok: true }, sendEvent);
+    expect(sent.map((event) => event.nodeId)).toEqual(["node-b"]);
+
+    sent.length = 0;
+    manager.unsubscribe("node-b", "generation-b", "main");
+    expect(manager.hasSubscribers("main")).toBe(false);
+    await manager.sendToSession("main", "chat", { ok: true }, sendEvent);
+    expect(sent).toEqual([]);
   });
 
   test("unsubscribeAll clears both subscription indexes", async () => {
@@ -35,7 +52,12 @@ describe("node subscription manager", () => {
 
     manager.subscribe("node-a", "generation-a", "main");
     manager.subscribe("node-a", "generation-a", "secondary");
+    manager.unsubscribeAll("node-a", "stale-generation");
+    expect(manager.hasSubscribers("main")).toBe(true);
+    expect(manager.hasSubscribers("secondary")).toBe(true);
     manager.unsubscribeAll("node-a");
+    expect(manager.hasSubscribers("main")).toBe(false);
+    expect(manager.hasSubscribers("secondary")).toBe(false);
     await manager.sendToSession("main", "tick", {}, sendEvent);
     await manager.sendToSession("secondary", "tick", {}, sendEvent);
 

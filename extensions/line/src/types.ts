@@ -1,7 +1,10 @@
-// Line type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
+import type { Static } from "typebox";
+import type { z } from "zod";
+import type { LineAccountConfigSchema, LineConfigSchema } from "./config-schema.js";
+import type { lineChannelDataSchema } from "./rich-message-schema.js";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 export type LineCredentialStatus = "available" | "configured_unavailable" | "missing";
@@ -10,46 +13,8 @@ export type LineCredentialUnavailableDiagnostic = Extract<
   { status: "configured_unavailable" }
 >["diagnostic"];
 
-interface LineThreadBindingsConfig {
-  enabled?: boolean;
-  idleHours?: number;
-  maxAgeHours?: number;
-  spawnSessions?: boolean;
-  defaultSpawnContext?: "isolated" | "fork";
-}
-
-interface LineAccountBaseConfig {
-  enabled?: boolean;
-  channelAccessToken?: string;
-  channelSecret?: string;
-  tokenFile?: string;
-  secretFile?: string;
-  name?: string;
-  allowFrom?: Array<string | number>;
-  groupAllowFrom?: Array<string | number>;
-  dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  responsePrefix?: string;
-  mediaMaxMb?: number;
-  webhookPath?: string;
-  threadBindings?: LineThreadBindingsConfig;
-  groups?: Record<string, LineGroupConfig>;
-}
-
-export interface LineConfig extends LineAccountBaseConfig {
-  accounts?: Record<string, LineAccountConfig>;
-  defaultAccount?: string;
-}
-
-export interface LineAccountConfig extends LineAccountBaseConfig {}
-
-export interface LineGroupConfig {
-  enabled?: boolean;
-  allowFrom?: Array<string | number>;
-  requireMention?: boolean;
-  systemPrompt?: string;
-  skills?: string[];
-}
+export type LineConfig = z.input<typeof LineConfigSchema>;
+export type LineAccountConfig = z.input<typeof LineAccountConfigSchema>;
 
 export interface ResolvedLineAccount {
   accountId: string;
@@ -71,6 +36,20 @@ export interface LineSendResult {
   receipt: MessageReceipt;
 }
 
+/** Console-side webhook state, which decides whether LINE delivers anything at all. */
+export type LineProbeWebhookState = { status: "active" | "disabled" | "unset" };
+
+/**
+ * LINE's own view of an account's monthly message allowance.
+ *
+ * The plan decides whether a limit exists at all, so the two cases stay separate
+ * shapes instead of encoding "unlimited" as a sentinel number that every caller
+ * would have to remember to special-case.
+ */
+export type LineMessageQuota =
+  | { kind: "unlimited" }
+  | { kind: "limited"; limit: number; used: number };
+
 export type LineProbeResult = BaseProbeResult<string> & {
   elapsedMs?: number;
   bot?: {
@@ -79,6 +58,9 @@ export type LineProbeResult = BaseProbeResult<string> & {
     basicId?: string;
     pictureUrl?: string;
   };
+  /** Absent when LINE did not answer, which stays "unknown" rather than "fine". */
+  webhook?: LineProbeWebhookState;
+  quota?: LineMessageQuota;
 };
 
 type LineFlexMessagePayload = {
@@ -86,40 +68,16 @@ type LineFlexMessagePayload = {
   contents: unknown;
 };
 
-export type LineRichCard =
-  | {
-      type: "media_player";
-      title: string;
-      artist?: string;
-      source?: string;
-      imageUrl?: string;
-      status?: "playing" | "paused";
-    }
-  | {
-      type: "event";
-      title: string;
-      date: string;
-      time?: string;
-      location?: string;
-      description?: string;
-    }
-  | {
-      type: "agenda";
-      title: string;
-      events: Array<{ title: string; time?: string; location?: string }>;
-    }
-  | {
-      type: "device";
-      name: string;
-      deviceType?: string;
-      status?: string;
-      controls?: Array<{ label: string; action: string }>;
-    }
-  | { type: "appletv_remote"; name?: string; status?: string };
-
 export type LineQuickReplyItem = {
   label: string;
   action: { type: "command"; command: string } | { type: "callback"; value: string };
+};
+
+export type LineTemplateActionPayload = {
+  type: "message" | "uri" | "postback";
+  label: string;
+  data?: string;
+  uri?: string;
 };
 
 export type LineTemplateMessagePayload =
@@ -136,12 +94,7 @@ export type LineTemplateMessagePayload =
       type: "buttons";
       title?: string;
       text: string;
-      actions: Array<{
-        type: "message" | "uri" | "postback";
-        label: string;
-        data?: string;
-        uri?: string;
-      }>;
+      actions: LineTemplateActionPayload[];
       thumbnailImageUrl?: string;
       altText?: string;
     }
@@ -151,30 +104,14 @@ export type LineTemplateMessagePayload =
         title?: string;
         text: string;
         thumbnailImageUrl?: string;
-        actions: Array<{
-          type: "message" | "uri" | "postback";
-          label: string;
-          data?: string;
-          uri?: string;
-        }>;
+        actions: LineTemplateActionPayload[];
       }>;
       altText?: string;
     };
 
-export type LineChannelData = {
+export type LineChannelData = Static<typeof lineChannelDataSchema>["line"] & {
   quickReplies?: string[];
   quickReplyItems?: LineQuickReplyItem[];
-  mediaKind?: LineOutboundMediaKind;
-  previewImageUrl?: string;
-  durationMs?: number;
-  trackingId?: string;
-  location?: {
-    title: string;
-    address: string;
-    latitude: number;
-    longitude: number;
-  };
-  card?: LineRichCard;
   flexMessage?: LineFlexMessagePayload;
   templateMessage?: LineTemplateMessagePayload;
 };

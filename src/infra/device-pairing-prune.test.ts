@@ -1,10 +1,12 @@
 // Covers silent-pairing approval provenance and superseded-record pruning.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
   getPairedDevice,
+  hasPairedCardRenderer,
   listDevicePairing,
   pruneSupersededSilentPairedDevices,
   requestDevicePairing,
@@ -16,8 +18,22 @@ type PairedDeviceApprovalKind = NonNullable<
   Parameters<typeof approveDevicePairing>[1]["approvedVia"]
 >;
 
+const suiteStateDirs: string[] = [];
+
 async function makeBaseDir(): Promise<string> {
-  return await suiteRootTracker.make("case");
+  const baseDir = await suiteRootTracker.make("case");
+  suiteStateDirs.push(baseDir);
+  return baseDir;
+}
+
+async function cleanupSuite(): Promise<void> {
+  for (const baseDir of suiteStateDirs) {
+    await closeOpenClawStateDatabaseByPathAsync(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: baseDir }),
+    );
+  }
+  suiteStateDirs.length = 0;
+  await suiteRootTracker.cleanup();
 }
 
 // Rewrites a paired record without approvedVia to simulate approvals that
@@ -45,6 +61,7 @@ async function pairDevice(params: {
   clientId?: string;
   clientMode?: string;
   displayName?: string;
+  platform?: string;
   roles?: string[];
 }) {
   const request = await requestDevicePairing(
@@ -54,6 +71,7 @@ async function pairDevice(params: {
       clientId: params.clientId ?? "cli",
       clientMode: params.clientMode ?? "cli",
       displayName: params.displayName,
+      platform: params.platform,
       role: params.roles?.[0] ?? "operator",
       roles: params.roles ?? ["operator"],
       scopes: [],
@@ -76,10 +94,7 @@ describe("device pairing approval provenance", () => {
     await suiteRootTracker.setup();
   });
 
-  afterAll(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await suiteRootTracker.cleanup();
-  });
+  afterAll(cleanupSuite);
 
   test("records silent, owner, and bootstrap approval kinds", async () => {
     const baseDir = await makeBaseDir();
@@ -139,10 +154,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
     await suiteRootTracker.setup();
   });
 
-  afterAll(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await suiteRootTracker.cleanup();
-  });
+  afterAll(cleanupSuite);
 
   test("removes stale silent siblings from the same client cluster only", async () => {
     const baseDir = await makeBaseDir();
@@ -277,5 +289,30 @@ describe("pruneSupersededSilentPairedDevices", () => {
 
     expect(removed).toEqual([]);
     expect(await getPairedDevice("legacy", baseDir)).not.toBeNull();
+  });
+
+  test("invalidates the card renderer cache after pruning the last renderer", async () => {
+    const baseDir = await makeBaseDir();
+    await pairDevice({
+      baseDir,
+      deviceId: "stale-renderer",
+      approvedVia: "silent",
+      platform: "ios",
+    });
+    const anchor = await pairDevice({
+      baseDir,
+      deviceId: "anchor",
+      approvedVia: "silent",
+      platform: "linux",
+    });
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(true);
+
+    await pruneSupersededSilentPairedDevices({
+      deviceId: anchor.deviceId,
+      baseDir,
+      nowMs: agedNowMs(),
+    });
+
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
   });
 });

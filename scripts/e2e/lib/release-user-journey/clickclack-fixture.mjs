@@ -1,8 +1,8 @@
-// ClickClack fixture server for release user-journey E2E scenarios.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
+import { readBoundedRequestBody } from "../request-body.mjs";
 
 const port = readTcpPortEnv("CLICKCLACK_FIXTURE_PORT", 44181);
 const requestMaxBytes = readPositiveIntEnv("CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES", 4 * 1024 * 1024);
@@ -44,6 +44,7 @@ const messages = [];
 const threadReplies = [];
 const outboundMessages = [];
 const sockets = new Set();
+let socketGeneration = 0;
 
 function persist() {
   fs.writeFileSync(
@@ -54,6 +55,7 @@ function persist() {
         threadReplies,
         outboundMessages,
         socketCount: sockets.size,
+        socketGeneration,
       },
       null,
       2,
@@ -70,72 +72,28 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-function unauthorized(res) {
-  json(res, 401, { error: "unauthorized" });
-}
-
 function checkAuth(req, res) {
   if (req.url?.startsWith("/fixture/") || req.url === "/health") {
     return true;
   }
   if (req.headers.authorization !== `Bearer ${token}`) {
-    unauthorized(res);
+    json(res, 401, { error: "unauthorized" });
     return false;
   }
   return true;
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    let bytes = 0;
-    let settled = false;
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      if (settled) {
-        return;
-      }
-      bytes += Buffer.byteLength(chunk, "utf8");
-      if (bytes > requestMaxBytes) {
-        settled = true;
-        body = "";
-        req.resume();
-        reject(requestBodyTooLargeError());
-        return;
-      }
-      body += chunk;
-    });
-    req.on("end", () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        resolve({});
-      }
-    });
-    req.on("error", (error) => {
-      if (!settled) {
-        settled = true;
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  });
-}
-
-function requestBodyTooLargeError() {
-  return Object.assign(
-    new Error(`ClickClack fixture request body exceeded ${requestMaxBytes} bytes`),
-    {
+async function readBody(req) {
+  const body = await readBoundedRequestBody(req, requestMaxBytes, (limit) =>
+    Object.assign(new Error(`ClickClack fixture request body exceeded ${limit} bytes`), {
       code: "ETOOBIG",
-    },
+    }),
   );
-}
-
-function isRequestBodyTooLargeError(error) {
-  return error instanceof Error && error.code === "ETOOBIG";
+  try {
+    return body ? JSON.parse(body) : {};
+  } catch {
+    return {};
+  }
 }
 
 function handleRequestError(res, error) {
@@ -143,7 +101,7 @@ function handleRequestError(res, error) {
     res.destroy();
     return;
   }
-  if (isRequestBodyTooLargeError(error)) {
+  if (error instanceof Error && error.code === "ETOOBIG") {
     json(res, 413, { error: error.message });
     return;
   }
@@ -245,7 +203,7 @@ async function handleRequest(req, res) {
     if (req.method === "GET" && url.pathname === `/api/channels/${channel.id}/messages`) {
       const afterSeq = Number(url.searchParams.get("after_seq") ?? 0);
       json(res, 200, {
-        messages: messages.filter((message) => (message.channel_seq ?? 0) > afterSeq),
+        messages: messages.filter((message) => message.channel_seq > afterSeq),
       });
       return;
     }
@@ -289,7 +247,13 @@ async function handleRequest(req, res) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/fixture/state") {
-      json(res, 200, { messages, threadReplies, outboundMessages, socketCount: sockets.size });
+      json(res, 200, {
+        messages,
+        threadReplies,
+        outboundMessages,
+        socketCount: sockets.size,
+        socketGeneration,
+      });
       return;
     }
     json(res, 404, { error: `unhandled ${req.method} ${url.pathname}` });
@@ -328,15 +292,20 @@ server.on("upgrade", (req, socket) => {
     ].join("\r\n"),
   );
   sockets.add(socket);
+  socketGeneration += 1;
   persist();
-  socket.on("close", () => {
-    sockets.delete(socket);
-    persist();
+  const cleanupSocket = () => {
+    if (sockets.delete(socket)) {
+      persist();
+    }
+  };
+  socket.on("close", cleanupSocket);
+  socket.on("end", () => {
+    cleanupSocket();
+    socket.end();
   });
-  socket.on("error", () => {
-    sockets.delete(socket);
-    persist();
-  });
+  socket.on("error", cleanupSocket);
+  socket.resume();
 });
 
 persist();

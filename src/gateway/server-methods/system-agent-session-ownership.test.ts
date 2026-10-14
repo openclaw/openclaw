@@ -2,6 +2,12 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { SystemAgentWizardAnswerError } from "../../system-agent/chat-engine.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
@@ -11,19 +17,35 @@ const inferenceFallbackMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
 }));
 const transcriptStoreMocks = vi.hoisted(() => ({
-  appendTranscriptReset: vi.fn(),
-  appendTranscriptTurn: vi.fn(),
-  readTranscriptTail: vi.fn(() => []),
+  appendReset: vi.fn(),
+  appendTurn: vi.fn(),
+  readTranscriptTailAsync: vi
+    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
+    .mockResolvedValue([]),
 }));
 
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback:
     inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
 }));
-vi.mock("../../system-agent/transcript-store.js", () => transcriptStoreMocks);
+// mock-isolation: Keep machine-wide audit state outside caller-identity and session-routing tests.
+vi.mock("../../system-agent/transcript-store.js", () => ({
+  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
+  createSystemAgentTranscriptStore: () => ({
+    assertCurrent: () => undefined,
+    appendTurn: transcriptStoreMocks.appendTurn,
+    appendReset: transcriptStoreMocks.appendReset,
+    readTail: (limit: number, afterLastReset = false) =>
+      afterLastReset
+        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
+        : transcriptStoreMocks.readTranscriptTailAsync(limit),
+  }),
+}));
 // Ownership tests exercise fresh-session creation; keep the caretaker greeting
 // deterministic so identity behavior is the only variable under test.
+// mock-isolation: Keep greeting discovery and provider inference outside caller-identity tests.
 vi.mock("../../system-agent/greeting.js", () => ({
+  createSystemAgentGreetingCache: () => ({ assertCurrent: () => undefined }),
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
   buildSystemAgentGreetingQuestion: vi.fn(() => undefined),
   loadSystemAgentGreetingFacts: vi.fn(() => ({
@@ -99,6 +121,8 @@ function makeClient(params: {
   connId: string;
   deviceId?: string;
   authenticatedUserId?: string;
+  profileId?: string;
+  githubSyncPending?: boolean;
 }): GatewayClient {
   return {
     connId: params.connId,
@@ -107,6 +131,21 @@ function makeClient(params: {
       ...(params.deviceId ? { device: { id: params.deviceId } } : {}),
     },
     ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
+    ...(params.profileId
+      ? {
+          authenticatedUserProfile: {
+            profileId: params.profileId,
+            displayName: null,
+            hasAvatar: false,
+            updatedAt: 1,
+          },
+        }
+      : {}),
+    ...(params.githubSyncPending
+      ? {
+          authenticatedGitHubIdentitySync: async () => ({ profileId: "pending", updatedAt: 1 }),
+        }
+      : {}),
   } as GatewayClient;
 }
 
@@ -202,7 +241,10 @@ describe("openclaw.chat session ownership", () => {
     expect(turn).toMatchObject({
       ok: false,
       payload: undefined,
-      error: { code: "INVALID_REQUEST" },
+      error: {
+        code: "INVALID_REQUEST",
+        details: { code: "system_agent_session_invalidated" },
+      },
     });
     expect(approval).toMatchObject({
       ok: false,
@@ -231,14 +273,18 @@ describe("openclaw.chat session ownership", () => {
   it("preserves the live session and pending approval when reset persistence fails", async () => {
     const engine = makeEngine();
     const session = seededSession({ engine });
-    session.pendingApproval = { id: "approval-1", proposalHash: "proposal-1" };
+    session.pendingApproval = {
+      id: "approval-1",
+      proposalHash: "proposal-1",
+      completion: Promise.resolve({ text: "Denied", action: "none" }),
+    };
     const sessions = new Map<string, SystemAgentChatSession>([["owned-session", session]]);
     const expire = vi.fn();
     const context = {
       ...makeContext(sessions),
       systemAgentApprovalManager: { expire },
     } as unknown as GatewayRequestContext;
-    transcriptStoreMocks.appendTranscriptReset.mockImplementationOnce(() => {
+    transcriptStoreMocks.appendReset.mockImplementationOnce(() => {
       throw new Error("transcript store unavailable");
     });
 
@@ -246,63 +292,74 @@ describe("openclaw.chat session ownership", () => {
       "transcript store unavailable",
     );
 
-    expect(transcriptStoreMocks.appendTranscriptReset).toHaveBeenCalledOnce();
+    expect(transcriptStoreMocks.appendReset).toHaveBeenCalledOnce();
     expect(sessions.get("owned-session")).toBe(session);
     expect(session.pendingApproval).toEqual({
       id: "approval-1",
       proposalHash: "proposal-1",
+      completion: expect.any(Promise),
     });
     expect(expire).not.toHaveBeenCalled();
     expect(engine.dispose).not.toHaveBeenCalled();
     expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).not.toHaveBeenCalled();
   });
 
-  it("lets the same authenticated principal resume after reconnecting", async () => {
+  it("uses the immutable profile across a GitHub login rename", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
     const context = makeContext(sessions);
     await callChat(
       context,
-      { sessionId: "reconnect" },
+      { sessionId: "github-rename" },
       makeClient({
         connId: "conn-old",
-        deviceId: "device-old",
-        authenticatedUserId: "owner@example.com",
+        authenticatedUserId: "old-login@github",
+        profileId: "profile-account-a",
       }),
     );
     const handle = expectDefined(createdEngines[0], "created system-agent engine").handle;
 
     const resumed = await callChat(
       context,
-      { sessionId: "reconnect", message: "continue" },
+      { sessionId: "github-rename", message: "continue" },
       makeClient({
         connId: "conn-new",
-        deviceId: "device-new",
-        authenticatedUserId: "owner@example.com",
+        authenticatedUserId: "new-login@github",
+        profileId: "profile-account-a",
       }),
     );
 
+    expect(sessions.get("github-rename")?.ownerKey).toBe("user:profile-account-a");
     expect(resumed.ok).toBe(true);
     expect(handle).toHaveBeenCalledWith("continue");
   });
 
-  it("lets the same paired device resume after reconnecting", async () => {
+  it("rejects pending GitHub ownership and binds only the attached canonical profile", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
     const context = makeContext(sessions);
-    await callChat(
-      context,
-      { sessionId: "device-reconnect" },
-      makeClient({ connId: "conn-old", deviceId: "device-owner" }),
-    );
-    const handle = expectDefined(createdEngines[0], "created system-agent engine").handle;
+    const pendingClient = makeClient({
+      connId: "conn-pending",
+      deviceId: "device-pending",
+      authenticatedUserId: "released-login@github",
+      githubSyncPending: true,
+    });
 
-    const resumed = await callChat(
-      context,
-      { sessionId: "device-reconnect", message: "continue" },
-      makeClient({ connId: "conn-new", deviceId: "device-owner" }),
-    );
+    const pending = await callChat(context, { sessionId: "github-pending" }, pendingClient);
+    expect(pending).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true },
+    });
+    expect(sessions.has("github-pending")).toBe(false);
 
-    expect(resumed.ok).toBe(true);
-    expect(handle).toHaveBeenCalledWith("continue");
+    pendingClient.authenticatedUserProfile = {
+      profileId: "profile-canonical",
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 2,
+    };
+    const attached = await callChat(context, { sessionId: "github-pending" }, pendingClient);
+
+    expect(attached.ok).toBe(true);
+    expect(sessions.get("github-pending")?.ownerKey).toBe("user:profile-canonical");
   });
 
   it("rejects non-delegated chat without a server-authenticated identity", async () => {
@@ -331,19 +388,32 @@ describe("openclaw.chat session ownership", () => {
     });
     const handle = expectDefined(createdEngines[0], "created delegated engine").handle;
 
-    const resumed = await callChat(
-      context,
-      { sessionId: "delegated", message: "continue", delegation },
-      makeClient({
-        connId: "conn-other",
-        deviceId: "device-other",
-        authenticatedUserId: "other@example.com",
-      }),
-    );
-
-    expect(resumed.ok).toBe(true);
-    expect(handle).toHaveBeenCalledWith("continue");
-    expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledOnce();
+    const caller = {
+      ...delegation,
+      operationalRunInstance: createOperationalRunInstanceRef("delegated-ownership-run"),
+    };
+    const authority = claimAgentRunDelegatedAuthority(caller.operationalRunInstance);
+    const resume = () =>
+      withGatewayToolCallerIdentity(caller, () =>
+        callChat(
+          context,
+          { sessionId: "delegated", message: "continue", delegation },
+          makeClient({
+            connId: "conn-other",
+            deviceId: "device-other",
+            authenticatedUserId: "other@example.com",
+          }),
+        ),
+      );
+    try {
+      expect((await resume()).ok).toBe(true);
+      expect(handle).toHaveBeenCalledWith("continue");
+      expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledOnce();
+    } finally {
+      releaseAgentRunDelegatedAuthority(authority);
+    }
+    await expect(resume()).rejects.toThrow("requires an active run authority");
+    expect(handle).toHaveBeenCalledOnce();
   });
 
   it("rejects delegated reuse of a non-delegated session", async () => {
@@ -372,16 +442,6 @@ describe("openclaw.chat session responses", () => {
       ok: true,
       payload: { sessionId: "s1", reply: "welcome text", action: "none" },
     });
-  });
-
-  it("routes messages through the session engine", async () => {
-    const engine = makeEngine();
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "status" });
-
-    expect(engine.handle).toHaveBeenCalledWith("status");
-    expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
   });
 
   it("rejects a structured answer without an active chat session", async () => {
@@ -440,7 +500,7 @@ describe("openclaw.chat session responses", () => {
     });
 
     expect(call).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
+    expect(transcriptStoreMocks.appendTurn).not.toHaveBeenCalled();
   });
 
   it("forwards sensitive-input metadata", async () => {

@@ -7,10 +7,19 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { buildTimestampPrefix } from "../../gateway/server-methods/agent-timestamp.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
+import { createUserTranscriptContextRegistry } from "../embedded-agent-runner/run/attempt-user-transcript-context-registry.js";
+import {
+  attachSteeringRuntimeContext,
+  setSteeringRuntimeContextRetention,
+} from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type { AgentTool } from "../runtime/index.js";
+import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -20,6 +29,10 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import {
+  agentSessionQueuePromptContext,
+  agentSessionSetPromptPreparation,
+} from "./agent-session-prompting.js";
 import type { AgentSession } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -72,6 +85,153 @@ function mockAbortableQueuedRun() {
 }
 
 describe("AgentSession queue and next-turn lifecycle correctness", () => {
+  it.each(["queued", "steering"] as const)(
+    "preserves %s custom context envelopes across transcript replay",
+    async (delivery) => {
+      const { session, sessionManager } = await createTestSession();
+      const timestamp = 1717570800000;
+      const text = "Persistent synthetic context";
+      const convert = session.agent.convertToLlm;
+      session.agent.convertToLlm = (messages) =>
+        convert(normalizeMessagesForLlmBoundary(messages, { appendOnlyRuntimeContext: true }));
+      let requested: Context["messages"] = [];
+      streamMocks.streamSimple.mockImplementation((model, context) => {
+        requested = structuredClone(context.messages);
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "done" }]),
+        );
+      });
+      if (delivery === "queued") {
+        session[agentSessionQueuePromptContext]({
+          role: "custom",
+          customType: "cache-context",
+          content: text,
+          display: false,
+          timestamp,
+        });
+      } else {
+        setSteeringRuntimeContextRetention(session, true);
+        const user = { role: "user" as const, content: "Queued user", timestamp };
+        const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
+        try {
+          attachSteeringRuntimeContext(user, { text });
+        } finally {
+          clock.mockRestore();
+        }
+        session.agent.steer(user);
+      }
+      await session.prompt("Continue");
+
+      const replayed = await session.agent.convertToLlm(
+        sessionManager.buildSessionContext().messages,
+      );
+      const contextMessage = (messages: Context["messages"]) =>
+        messages.find((message) => JSON.stringify(message.content).includes(text));
+      expect(contextMessage(requested)).toMatchObject({ role: "user", timestamp });
+      expect(contextMessage(replayed)).toEqual(contextMessage(requested));
+    },
+  );
+
+  it.each(
+    (["apply", "dispose", "replace"] as const).flatMap((closure) =>
+      (["preparation", "admission"] as const).map((phase) => ({ closure, phase })),
+    ),
+  )(
+    "guards first-model $phase after a delayed SDK prompt override: $closure",
+    async ({ closure, phase }) => {
+      const hookEntered = createDeferredCore();
+      const hookRelease = createDeferredCore();
+      const preparationEntered = createDeferredCore();
+      const preparationRelease = createDeferredCore();
+      const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+        [
+          "before_agent_start",
+          [
+            async () => {
+              hookEntered.resolve();
+              await hookRelease.promise;
+              return { systemPrompt: "late SDK override" };
+            },
+          ],
+        ],
+      ]);
+      const tools: ToolDefinition[] = ["read_policy", "write_policy"].map((name) => ({
+        name,
+        label: name,
+        description: name,
+        parameters: Type.Object({}),
+        execute: async () => ({ content: [], details: {} }),
+      }));
+      const requests: Array<{ prompt: string; tools: string[] }> = [];
+      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+        requests.push({
+          prompt: context.systemPrompt ?? "",
+          tools: context.tools?.map((tool) => tool.name) ?? [],
+        });
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "done" }]),
+        );
+      });
+      const { session } = await createTestSession({
+        resourceLoader: createResourceLoader(handlers),
+        customTools: tools,
+      });
+      const prompt = session.prompt("apply permissions before the first request");
+      const settled = Promise.allSettled([prompt]);
+      await hookEntered.promise;
+      session[agentSessionSetPromptPreparation](async () => {
+        const waitForUpdate = async () => {
+          preparationEntered.resolve();
+          await preparationRelease.promise;
+        };
+        const update = () => {
+          session.setActiveToolsByName(["read_policy"]);
+          session.agent.state.systemPrompt += "\nPermission change: read-only";
+        };
+        if (phase === "preparation") {
+          await waitForUpdate();
+          update();
+          return undefined;
+        }
+        return async (onAdmitted) => {
+          await waitForUpdate();
+          onAdmitted(update);
+          expect(session.agent.state.isStreaming).toBe(true);
+        };
+      });
+      hookRelease.resolve();
+      // A missing preparation boundary completes the request instead of entering the barrier.
+      await Promise.race([settled, preparationEntered.promise]);
+      try {
+        expect(requests).toEqual([]);
+        if (closure === "dispose") {
+          session.dispose();
+        } else if (closure === "replace") {
+          session[agentSessionSetPromptPreparation](async () => {});
+        }
+      } finally {
+        preparationRelease.resolve();
+        await settled;
+      }
+      const [result] = await settled;
+      if (closure === "apply") {
+        expect(result?.status).toBe("fulfilled");
+        expect(requests).toEqual([
+          { prompt: "late SDK override\nPermission change: read-only", tools: ["read_policy"] },
+        ]);
+      } else {
+        expect(result).toMatchObject({
+          status: "rejected",
+          reason: { message: "Session prompt preparation is stale after replacement or disposal." },
+        });
+        expect(requests).toEqual([]);
+        if (phase === "admission") {
+          expect(session.agent.state.systemPrompt).not.toContain("Permission change: read-only");
+        }
+      }
+    },
+  );
+
   it("drains a follow-up queued by an agent-end handler", async () => {
     const sessionRef: { current?: AgentSession } = {};
     let queued = false;
@@ -108,6 +268,106 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(JSON.stringify(requests[1]?.messages)).toContain("queued after end");
     expect(session.agent.hasQueuedMessages()).toBe(false);
     expect(lifecycleEvents).toEqual(["agent_end", "agent_end", "agent_settled"]);
+  });
+
+  it("does not settle an active run when a concurrent prompt loses admission", async () => {
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let admissionCount = 0;
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["before_agent_start", [async () => await (admissionCount++ === 0 ? firstGate : secondGate)]],
+    ]);
+    let finishResponse: (() => void) | undefined;
+    const requests: Context[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      const stream = createAssistantMessageEventStream();
+      finishResponse = () => {
+        const message = createAssistant(activeModel, [{ type: "text", text: "finished" }]);
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      };
+      return stream;
+    });
+    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
+    const settled = vi.fn();
+    session.subscribe((event) => {
+      if (event.type === "agent_settled") {
+        settled();
+      }
+    });
+
+    const firstPrompt = session.prompt("first");
+    await vi.waitFor(() => expect(admissionCount).toBe(1));
+    const secondPrompt = session.prompt("second");
+    await vi.waitFor(() => expect(admissionCount).toBe(2));
+    releaseFirst();
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    releaseSecond();
+
+    await expect(secondPrompt).rejects.toThrow("Agent is already processing a prompt");
+    expect(settled).not.toHaveBeenCalled();
+    finishResponse?.();
+    await firstPrompt;
+    expect(settled).toHaveBeenCalledOnce();
+  });
+
+  it("keeps one logical prompt owner across an automatic retry gap", async () => {
+    vi.useFakeTimers();
+    try {
+      const requests: Context[] = [];
+      streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+        requests.push(context);
+        if (requests.length === 1) {
+          return createAssistantResultStream({
+            ...createAssistant(activeModel, [], "error"),
+            errorMessage: "HTTP 503 temporary provider response",
+          });
+        }
+        return createAssistantResultStream(
+          createAssistant(activeModel, [{ type: "text", text: "retry recovered" }]),
+        );
+      });
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: true, baseDelayMs: 10_000, maxRetries: 1 },
+      });
+      const { session } = await createTestSession({ settingsManager });
+      let permissionPrompt = "initial permission prompt";
+      session[agentSessionSetPromptPreparation](async () => {
+        session.agent.state.systemPrompt = permissionPrompt;
+      });
+      const lifecycleEvents: string[] = [];
+      session.subscribe((event) => lifecycleEvents.push(event.type));
+
+      const prompt = session.prompt("initial prompt");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requests).toHaveLength(1);
+      expect(lifecycleEvents).toContain("auto_retry_start");
+
+      permissionPrompt = "updated permission prompt";
+      await session.prompt("steer during retry", { streamingBehavior: "steer" });
+      expect(requests).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await prompt;
+
+      expect(requests).toHaveLength(2);
+      expect(requests.map((request) => request.systemPrompt)).toEqual([
+        "initial permission prompt",
+        "updated permission prompt",
+      ]);
+      expect(JSON.stringify(requests[1]?.messages)).toContain("steer during retry");
+      expect(lifecycleEvents.filter((type) => type === "agent_settled")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -273,6 +533,80 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(session.pendingMessageCount).toBe(0);
   });
 
+  it.each([false, true])(
+    "keeps accepted steering bytes stable across transcript persistence (image: %s)",
+    async (withImage) => {
+      const { session, sessionManager } = await createTestSession();
+      const admittedAt = 1717570800000;
+      const queuedAt = admittedAt + 120_000;
+      const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "Visible transcript prompt",
+          timestamp: admittedAt,
+          sender: { id: "alice-id", name: "Alice" },
+        },
+        target: createTestUserTurnTranscriptTarget(),
+      });
+      const queued = vi.spyOn(session.agent, "admitSteeringMessage");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
+      try {
+        await session.steer("Expanded runtime prompt", withImage ? [image] : undefined, recorder);
+      } finally {
+        clock.mockRestore();
+      }
+      const message = queued.mock.calls[0]?.[0];
+      if (!message || message.role !== "user") {
+        throw new Error("expected queued user message");
+      }
+      const registry = createUserTranscriptContextRegistry();
+      const project = () =>
+        normalizeMessagesForLlmBoundary([message], {
+          timezone: "UTC",
+          userTranscriptContexts: registry.list(),
+        });
+      const accepted = project();
+      const guard = guardSessionManager(sessionManager, {
+        onUserMessagePersisted: (persisted, runtime) => {
+          if (runtime) {
+            registry.record(runtime, persisted);
+          }
+        },
+      });
+      const entryId = guard.appendMessage(message);
+      const acceptedContent = accepted[0]?.role === "user" ? accepted[0].content : undefined;
+      const firstBlock = Array.isArray(acceptedContent) ? acceptedContent[0] : undefined;
+      const acceptedText =
+        typeof acceptedContent === "string"
+          ? acceptedContent
+          : firstBlock?.type === "text"
+            ? firstBlock.text
+            : undefined;
+
+      expect(project()).toEqual(accepted);
+      expect(acceptedText).toContain('"name":"Alice"');
+      expect(acceptedText).toContain(
+        buildTimestampPrefix(new Date(admittedAt), { timezone: "UTC" }),
+      );
+      expect(acceptedText).toContain("Expanded runtime prompt");
+      expect(acceptedText).not.toContain("Visible transcript prompt");
+      expect(message.timestamp).toBe(admittedAt);
+      expect(message.content).toEqual([
+        { type: "text", text: "Expanded runtime prompt" },
+        ...(withImage ? [image] : []),
+      ]);
+      expect(guard.getEntry(entryId)).toMatchObject({
+        message: {
+          timestamp: admittedAt,
+          content: withImage ? message.content : "Visible transcript prompt",
+        },
+      });
+      if (withImage) {
+        expect(acceptedContent).toContainEqual(image);
+      }
+    },
+  );
+
   it.each([
     {
       kind: "steering",
@@ -308,89 +642,162 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(scenario.messages(session)).toEqual([""]);
   });
 
-  it("cancels only an uncommitted steering confirmation after an aborted turn", async () => {
-    const { executeTool, requests, tool } = mockAbortableQueuedRun();
-    const { session } = await createTestSession({ customTools: [tool] });
-    const prompt = session.prompt("wait for operator cancellation");
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
+  it.each([true, false])(
+    "cancels only an uncommitted steer after an aborted turn (wait: %s)",
+    async (waitForTranscriptCommit) => {
+      const { executeTool, requests, tool } = mockAbortableQueuedRun();
+      const { session } = await createTestSession({ customTools: [tool] });
+      const prompt = session.prompt("wait for operator cancellation");
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
 
-    await session.steer("keep unrelated steering");
-    await session.followUp("keep unrelated follow-up");
-    const delivery = steerActiveSessionWithOptionalDeliveryWait(
-      session,
-      "cancel only this steering",
-      { deliveryTimeoutMs: 10_000, waitForTranscriptCommit: true },
-    ).then(
-      () => "committed",
-      (error: unknown) => (error instanceof Error ? error.message : String(error)),
-    );
-    await vi.waitFor(() =>
-      expect(session.getSteeringMessages()).toEqual([
-        "keep unrelated steering",
+      await session.steer("keep unrelated steering");
+      await session.followUp("keep unrelated follow-up");
+      const delivery = steerActiveSessionWithOptionalDeliveryWait(
+        session,
         "cancel only this steering",
-      ]),
-    );
+        { deliveryTimeoutMs: 10_000, waitForTranscriptCommit },
+      ).then(
+        () => (waitForTranscriptCommit ? "committed" : "admitted"),
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+      await vi.waitFor(() =>
+        expect(session.getSteeringMessages()).toEqual([
+          "keep unrelated steering",
+          "cancel only this steering",
+        ]),
+      );
 
-    await Promise.all([session.abort(), prompt]);
+      if (!waitForTranscriptCommit) {
+        await expect(delivery).resolves.toBe("admitted");
+      }
+      await Promise.all([session.abort(), prompt]);
 
-    await expect(delivery).resolves.toBe(
-      "active session ended before queued steering message was committed to the transcript",
+      await expect(delivery).resolves.toBe(
+        waitForTranscriptCommit
+          ? "active session ended before queued steering message was committed to the transcript"
+          : "admitted",
+      );
+      expect(requests).toHaveLength(1);
+      expect(executeTool).not.toHaveBeenCalled();
+      expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
+      expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
+      expect(session.agent.hasQueuedMessages()).toBe(true);
+      const nextRequests: Context[] = [];
+      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+        nextRequests.push(context);
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "next answer" }]),
+        );
+      });
+      await session.prompt("new legitimate turn");
+      expect(nextRequests.length).toBeGreaterThan(0);
+      expect(JSON.stringify(nextRequests)).not.toContain("cancel only this steering");
+    },
+  );
+
+  it("cancels a steering confirmation after the runtime drains it", async () => {
+    const requests: Context[] = [];
+    let finishInitialResponse: (() => void) | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        finishInitialResponse = () => {
+          const message = createAssistant(activeModel, [{ type: "text", text: "first answer" }]);
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        };
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "stale steering ran" }]),
+      );
+    });
+    const { session } = await createTestSession();
+    let releaseTurn!: () => void;
+    const turnRelease = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    let reportTurnStarted!: () => void;
+    const turnStarted = new Promise<void>((resolve) => {
+      reportTurnStarted = resolve;
+    });
+    let turnStartCount = 0;
+    session.agent.subscribe(async (event) => {
+      if (event.type === "turn_start" && ++turnStartCount === 2) {
+        reportTurnStarted();
+        await turnRelease;
+      }
+    });
+    const sourceAbort = new AbortController();
+    const prompt = session.prompt("wait for steering");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    const delivery = steerActiveSessionWithOptionalDeliveryWait(session, "cancel after drain", {
+      abortSignal: sourceAbort.signal,
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+    });
+    const rejection = expect(delivery).rejects.toThrow(
+      "queued steering message was cancelled before delivery",
     );
+    await vi.waitFor(() => expect(session.getSteeringMessages()).toEqual(["cancel after drain"]));
+
+    finishInitialResponse?.();
+    await turnStarted;
+    sourceAbort.abort();
+    await rejection;
+    releaseTurn();
+    await prompt;
+
     expect(requests).toHaveLength(1);
-    expect(executeTool).not.toHaveBeenCalled();
-    expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
-    expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
-    expect(session.agent.hasQueuedMessages()).toBe(true);
+    expect(session.getSteeringMessages()).toEqual([]);
+    expect(session.agent.hasQueuedMessages()).toBe(false);
   });
 
-  it("leaves queued messages dormant after a turn handoff", async () => {
-    const sessionRef: { current?: AgentSession } = {};
-    const settled = vi.fn();
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      ["agent_settled", [async () => settled()]],
-    ]);
-    const yieldTool: ToolDefinition = {
-      name: "yield_turn",
-      label: "Yield turn",
-      description: "ends the current turn for an external handoff",
-      parameters: Type.Object({}),
-      execute: async () => {
-        const activeSession = sessionRef.current;
-        if (!activeSession) {
-          throw new Error("session not ready");
-        }
-        activeSession.agent.steer({
-          role: "custom",
-          customType: "test.turn-handoff",
-          content: "resume only for external delivery",
-          display: false,
-          timestamp: Date.now(),
-        });
-        activeSession.agent.abort({ code: "turn_handoff", turnHandoff: true });
-        return { content: [{ type: "text", text: "yielded" }], details: { yielded: true } };
-      },
-    };
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        createAssistant(
-          activeModel,
-          [{ type: "toolCall", id: "call-yield", name: "yield_turn", arguments: {} }],
-          "toolUse",
-        ),
-      ),
-    );
-    const { session } = await createTestSession({
-      customTools: [yieldTool],
-      resourceLoader: createResourceLoader(handlers),
+  it("does not answer a steer in place of a failed request", async () => {
+    const requests: Context[] = [];
+    const requestStarted = createDeferredCore();
+    const steerAccepted = createDeferredCore();
+    let failInitialResponse: (() => void) | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        failInitialResponse = () => {
+          const message = {
+            ...createAssistant(activeModel, [], "error"),
+            errorMessage: "Unknown error (no error details in response)",
+          };
+          stream.push({ type: "error", reason: "error", error: message });
+          stream.end();
+        };
+        requestStarted.resolve();
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "answered only the steer" }]),
+      );
     });
-    sessionRef.current = session;
+    const { session } = await createTestSession();
+    const prompt = session.prompt("first question");
+    await requestStarted.promise;
+    const delivery = steerActiveSessionWithOptionalDeliveryWait(session, "second question", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      onQueueAccepted: () => steerAccepted.resolve(),
+    });
+    await steerAccepted.promise;
+    expect(session.getSteeringMessages()).toEqual(["second question"]);
 
-    await session.prompt("yield now");
+    failInitialResponse?.();
+    // The run owner retries the failed request; the caller re-queues the steer.
+    await expect(delivery).rejects.toThrow(
+      "active session ended before queued steering message was committed",
+    );
+    await prompt;
 
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expect(session.agent.hasQueuedMessages()).toBe(true);
-    expect(settled).not.toHaveBeenCalled();
-    session.agent.clearAllQueues();
+    expect(requests).toHaveLength(1);
+    expect(session.agent.hasQueuedMessages()).toBe(false);
   });
 
   it("applies session model, tool, and prompt changes on the following tool turn", async () => {
@@ -449,6 +856,57 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       { model: testModel.id, prompt: "prompt override", tools: ["switch_state"] },
       { model: nextModel.id, prompt: "prompt override", tools: ["second_tool"] },
     ]);
+  });
+
+  it("replaces permission-bound tools during a run without retaining removed tools", async () => {
+    const executions: string[] = [];
+    const sessionRef: { current?: AgentSession } = {};
+    const readTool: ToolDefinition = {
+      name: "read_policy",
+      label: "Read policy",
+      description: "Read with the current permission boundary",
+      parameters: Type.Object({}),
+      execute: async () => {
+        executions.push("restricted");
+        return { content: [{ type: "text", text: "restricted" }], details: {} };
+      },
+    };
+    const changeTool: ToolDefinition = {
+      ...readTool,
+      name: "change_permission",
+      execute: async () => {
+        sessionRef.current!.replaceCustomTools([readTool], [readTool.name]);
+        return { content: [{ type: "text", text: "Permission change" }], details: {} };
+      },
+    };
+    const previousReadTool: ToolDefinition = {
+      ...readTool,
+      execute: async () => {
+        executions.push("unrestricted");
+        return { content: [{ type: "text", text: "unrestricted" }], details: {} };
+      },
+    };
+    const requests: string[][] = [];
+    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+      requests.push(context.tools?.map((tool) => tool.name) ?? []);
+      const name = requests.length === 1 ? changeTool.name : readTool.name;
+      const content: AssistantMessage["content"] =
+        requests.length < 3
+          ? [{ type: "toolCall", id: `call-${requests.length}`, name, arguments: {} }]
+          : [{ type: "text", text: "done" }];
+      return createAssistantResultStream(
+        createAssistant(model, content, requests.length < 3 ? "toolUse" : "stop"),
+      );
+    });
+    const { session } = await createTestSession({ customTools: [changeTool, previousReadTool] });
+    sessionRef.current = session;
+    session.setActiveToolsByName([changeTool.name, readTool.name]);
+
+    await session.prompt("tighten permissions");
+
+    expect(requests).toEqual([[changeTool.name, readTool.name], [readTool.name], [readTool.name]]);
+    expect(executions).toEqual(["restricted"]);
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual([readTool.name]);
   });
 
   it("preserves explicit updates from an existing next-turn hook", async () => {
@@ -564,7 +1022,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const abortRetry = vi.spyOn(session, "abortRetry");
     const abortCompaction = vi.spyOn(session, "abortCompaction");
     const abortBranchSummary = vi.spyOn(session, "abortBranchSummary");
-    const abortBash = vi.spyOn(session, "abortBash");
     const abortAgent = vi.spyOn(session.agent, "abort");
     abortRetry.mockImplementationOnce(() => {
       throw new Error("retry abort failed");
@@ -579,7 +1036,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(abortRetry).toHaveBeenCalledOnce();
     expect(abortCompaction).toHaveBeenCalledOnce();
     expect(abortBranchSummary).toHaveBeenCalledOnce();
-    expect(abortBash).toHaveBeenCalledOnce();
     expect(abortAgent).toHaveBeenCalledOnce();
   });
 

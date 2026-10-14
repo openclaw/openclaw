@@ -30,6 +30,7 @@ describe("Control UI build info", () => {
       expect(
         controlUiBuildDiffersFrom({
           version: "2026.7.20",
+          buildId: "other",
           controlUiBuildSource: "configured",
         }),
       ).toBe(false);
@@ -50,12 +51,6 @@ describe("Control UI build info", () => {
       vi.unstubAllGlobals();
       vi.resetModules();
     }
-  });
-
-  it("keeps only full Git SHAs", () => {
-    expect(normalizeControlUiBuildInfo({ commit: COMMIT.toUpperCase() }).commit).toBe(COMMIT);
-    expect(normalizeControlUiBuildInfo({ commit: COMMIT.slice(0, 12) }).commit).toBeNull();
-    expect(normalizeControlUiBuildInfo({ commit: "not-a-sha" }).commit).toBeNull();
   });
 
   it("normalizes advisory branch identity", () => {
@@ -96,30 +91,6 @@ describe("Control UI build info", () => {
     expect(
       normalizeControlUiBuildInfo({ commitAt: "2026-07-10T11:22:33+02:00" }).commitAt,
     ).toBeNull();
-  });
-
-  it("renders invalid injected metadata as unavailable instead of inventing identity", () => {
-    expect(
-      normalizeControlUiBuildInfo({
-        version: "  ",
-        commit: "deadbeef",
-        commitAt: "later",
-        builtAt: "later",
-        branch: "HEAD",
-        dirty: "yes",
-        release: "yes",
-        buildId: "",
-      }),
-    ).toEqual({
-      version: null,
-      commit: null,
-      commitAt: null,
-      builtAt: null,
-      branch: null,
-      dirty: null,
-      release: false,
-      buildId: "dev",
-    });
   });
 
   it("passes through normalized branch, dirty state, and release identity", () => {

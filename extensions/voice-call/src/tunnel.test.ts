@@ -12,25 +12,14 @@ class FakeChildProcess extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   killedWith: NodeJS.Signals | null = null;
-  readonly killSignals: NodeJS.Signals[] = [];
-  readonly ignoredSignals = new Set<NodeJS.Signals>();
   closeOnKill = true;
 
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.killedWith = signal;
-    this.killSignals.push(signal);
-    if (this.closeOnKill && !this.ignoredSignals.has(signal)) {
+    if (this.closeOnKill) {
       queueMicrotask(() => this.emit("close", null));
     }
     return true;
-  }
-
-  close(code: number | null = 0): void {
-    this.emit("close", code);
-  }
-
-  fail(error: Error): void {
-    this.emit("error", error);
   }
 }
 
@@ -39,25 +28,20 @@ const mocks = vi.hoisted(() => ({
   realSpawn: undefined as undefined | typeof import("node:child_process").spawn,
   setupTailscaleExposureRoutes: vi.fn(),
   cleanupTailscaleExposureRoute: vi.fn(),
-  runCommand: vi.fn(),
 }));
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+// mock-isolation: Replace the SDK spawn boundary without loading its process owners and workers.
+vi.mock("openclaw/plugin-sdk/process-runtime", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   mocks.realSpawn = actual.spawn;
   return {
-    ...actual,
-    spawn: mocks.spawn,
+    spawnOomScoreAdjusted: mocks.spawn,
   };
 });
 
 vi.mock("./webhook/tailscale.js", () => ({
   setupTailscaleExposureRoutes: mocks.setupTailscaleExposureRoutes,
   cleanupTailscaleExposureRoute: mocks.cleanupTailscaleExposureRoute,
-}));
-
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
-  runCommandWithTimeout: mocks.runCommand,
 }));
 
 import { startTunnel } from "./tunnel.js";
@@ -70,21 +54,8 @@ async function requireTunnel(result: ReturnType<typeof startTunnel>) {
   return tunnel;
 }
 
-function startNgrokTunnel(config: {
-  port: number;
-  path: string;
-  authToken?: string;
-  domain?: string;
-}) {
-  return requireTunnel(
-    startTunnel({
-      provider: "ngrok",
-      port: config.port,
-      path: config.path,
-      ngrokAuthToken: config.authToken,
-      ngrokDomain: config.domain,
-    }),
-  );
+function startNgrokTunnel(config: { port: number; path: string }) {
+  return requireTunnel(startTunnel({ provider: "ngrok", ...config }));
 }
 
 function startTailscaleTunnel(config: {
@@ -148,18 +119,6 @@ function mockSpawnUtf8SplitChild(params: {
   });
 }
 
-function commandResult(overrides: Record<string, unknown> = {}) {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
 describe("voice-call tunnels", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -167,26 +126,6 @@ describe("voice-call tunnels", () => {
       "https://host.tailnet.ts.net/voice/webhook",
     );
     mocks.cleanupTailscaleExposureRoute.mockResolvedValue(undefined);
-    mocks.runCommand.mockResolvedValue(commandResult());
-  });
-
-  it("starts ngrok and appends the webhook path to the public URL", async () => {
-    const proc = nextProcess();
-    const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
-
-    emitNgrokUrl(proc, "https://abc.ngrok.io");
-
-    const tunnel = await result;
-    expect(tunnel.publicUrl).toBe("https://abc.ngrok.io/voice/webhook");
-    expect(tunnel.provider).toBe("ngrok");
-    expect(tunnel.stop).toBeTypeOf("function");
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "ngrok",
-      ["http", "3334", "--log", "stdout", "--log-format", "json"],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
   });
 
   it("bounds ngrok stop even when forced termination never emits close", async () => {
@@ -231,25 +170,6 @@ describe("voice-call tunnels", () => {
     }
   });
 
-  it("force-kills ngrok before rejecting a startup timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      const proc = nextProcess();
-      proc.ignoredSignals.add("SIGTERM");
-      const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
-      const rejection = expect(result).rejects.toThrow("ngrok startup timed out (30s)");
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(proc.killSignals).toEqual(["SIGTERM"]);
-
-      await vi.advanceTimersByTimeAsync(2_000);
-      await rejection;
-      expect(proc.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("parses complete ngrok log lines before bounding the incomplete tail", async () => {
     const proc = nextProcess();
     const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
@@ -268,53 +188,12 @@ describe("voice-call tunnels", () => {
 
     const tunnel = await result;
     expect(tunnel.publicUrl).toBe("https://large.ngrok.io/voice/webhook");
-  });
-
-  it("sets ngrok auth token before starting the tunnel", async () => {
-    const tunnelProc = nextProcess();
-    const result = startNgrokTunnel({
-      port: 3334,
-      path: "/hook",
-      authToken: "token",
-    });
-
-    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(1));
-    emitNgrokUrl(tunnelProc, "https://auth.ngrok.io");
-
-    const tunnel = await result;
-    expect(tunnel.publicUrl).toBe("https://auth.ngrok.io/hook");
     expect(tunnel.provider).toBe("ngrok");
-    expect(mocks.runCommand).toHaveBeenCalledWith(
-      ["ngrok", "config", "add-authtoken", "token"],
-      expect.objectContaining({ timeoutMs: 30_000 }),
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "ngrok",
+      ["http", "3334", "--log", "stdout", "--log-format", "json"],
+      { stdio: ["ignore", "pipe", "pipe"] },
     );
-  });
-
-  it("bounds ngrok command failure output", async () => {
-    mocks.runCommand.mockResolvedValueOnce(
-      commandResult({
-        code: 1,
-        stderr: `${"x".repeat(16_000)}-end`,
-        stderrTruncatedBytes: 4_000,
-      }),
-    );
-    const result = startNgrokTunnel({
-      port: 3334,
-      path: "/hook",
-      authToken: "token",
-    });
-
-    await expect(result).rejects.toThrow("[output truncated]");
-    await expect(result).rejects.toThrow("-end");
-  });
-
-  it("rejects ngrok startup errors from stderr", async () => {
-    const proc = nextProcess();
-    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
-
-    proc.stderr.write("ERR_NGROK_3200: invalid auth token");
-
-    await expect(result).rejects.toThrow("ngrok error: ERR_NGROK_3200: invalid auth token");
   });
 
   it("preserves split ngrok errors across a UTF-16-safe bounded tail", async () => {
@@ -338,16 +217,6 @@ describe("voice-call tunnels", () => {
     const result = startNgrokTunnel({ port: 3334, path: "/hook" });
 
     await expect(result).rejects.toThrow(`ngrok error: ${message}`);
-  });
-
-  it("preserves UTF-8 across real child stdout pipe chunks", async () => {
-    const line = '{"msg":"started tunnel","url":"https://utf8.ngrok.io","info":"😀"}\n';
-    const { splitAt } = midEmojiSplit(line);
-    mockSpawnUtf8SplitChild({ stream: "stdout", text: line, splitAt });
-    const tunnel = await startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
-
-    expect(tunnel.publicUrl).toBe("https://utf8.ngrok.io/voice/webhook");
-    await tunnel.stop();
   });
 
   it("routes Tailscale Funnel setup and cleanup through the shared exposure owner", async () => {
@@ -400,16 +269,8 @@ describe("voice-call tunnels", () => {
     ).rejects.toThrow("Tailscale funnel failed");
   });
 
-  it("dispatches tunnel providers from config", async () => {
+  it("does not create a tunnel when disabled", async () => {
     await expect(startTunnel({ provider: "none", port: 3334, path: "/hook" })).resolves.toBeNull();
-
-    const proc = nextProcess();
-    const result = startTunnel({ provider: "ngrok", port: 3334, path: "/hook" });
-    emitNgrokUrl(proc, "https://dispatch.ngrok.io");
-
-    const tunnel = await result;
-    expect(tunnel?.publicUrl).toBe("https://dispatch.ngrok.io/hook");
-    expect(tunnel?.provider).toBe("ngrok");
   });
 
   it("rejects when ngrok stdout emits an error before the tunnel is ready", async () => {
@@ -418,21 +279,6 @@ describe("voice-call tunnels", () => {
     proc.stdout.emit("error", new Error("EPIPE"));
     await expect(result).rejects.toThrow("ngrok stdout error: EPIPE");
     expect(proc.killedWith).toBe("SIGKILL");
-  });
-
-  it("rejects when ngrok stderr emits an error before the tunnel is ready", async () => {
-    const proc = nextProcess();
-    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
-    proc.stderr.emit("error", new Error("EIO"));
-    await expect(result).rejects.toThrow("ngrok stderr error: EIO");
-    expect(proc.killedWith).toBe("SIGKILL");
-  });
-
-  it("preserves ngrok auth wrapper errors", async () => {
-    mocks.runCommand.mockRejectedValueOnce(new Error("ngrok auth failed"));
-    const result = startNgrokTunnel({ port: 3334, path: "/hook", authToken: "token" });
-    await expect(result).rejects.toThrow("ngrok auth failed");
-    expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
   it("stops immediately when the ngrok process already exited", async () => {

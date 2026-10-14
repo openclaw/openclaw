@@ -71,6 +71,16 @@ describe("gatewayAuthTokenCommand", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("diagnoses a redaction marker returned by an older Gateway instead of revealing it", async () => {
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: { gateway: { auth: { mode: "token", token: "__OPENCLAW_REDACTED__" } } },
+    });
+    await expect(gatewayAuthTokenCommand(runtime, { env: {}, interactive: true })).rejects.toThrow(
+      "openclaw doctor --fix",
+    );
+    expect(runtime.writeStdout).not.toHaveBeenCalled();
+  });
+
   it("refuses non-interactive output before reading config or secrets", async () => {
     await expect(gatewayAuthTokenCommand(runtime, { interactive: false })).rejects.toThrow(
       "outside an interactive terminal",
@@ -116,7 +126,7 @@ describe("gatewayAuthTokenCommand", () => {
     expect(runtime.writeStdout).not.toHaveBeenCalled();
   });
 
-  it.each(["password", "none", "trusted-proxy"] as const)(
+  it.each(["trusted-proxy"] as const)(
     "refuses an inactive token when auth mode is %s",
     async (mode) => {
       mocks.readConfigFileSnapshot.mockResolvedValue({

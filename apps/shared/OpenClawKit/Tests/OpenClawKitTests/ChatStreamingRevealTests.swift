@@ -42,7 +42,7 @@ struct ChatStreamingRevealTests {
 
         let appended = step(state: initial, newText: "one two", now: 0.2)
         let frame = revealedOpacities(state: appended, now: 0.2)
-        #expect(frame.fullyRevealedPrefixCharacterOffset == 4)
+        #expect(frame.fading.first?.characterRange == 4..<7)
         #expect(frame.fading.count == 1)
     }
 
@@ -73,6 +73,5 @@ struct ChatStreamingRevealTests {
         #expect(state.words.count == 1)
         #expect(state.words.first?.characterRange == 0..<text.count)
         #expect(revealedOpacities(state: state, now: 6).fading.isEmpty)
-        #expect(revealedOpacities(state: state, now: 6).fullyRevealedPrefixCharacterOffset == text.count)
     }
 }

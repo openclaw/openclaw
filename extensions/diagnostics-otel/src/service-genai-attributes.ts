@@ -1,28 +1,24 @@
-import { SpanKind } from "@opentelemetry/api";
 import { GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT } from "@opentelemetry/semantic-conventions/incubating";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { asFiniteNumber, asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { DiagnosticEventPayload } from "../api.js";
-import { redactSensitiveText } from "../api.js";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "openclaw/plugin-sdk/number-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
   OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
 } from "./service-constants.js";
 import type { ModelCallLifecycleDiagnosticEvent } from "./service-types.js";
 
-function hasOtelSemconvOptIn(value: string | undefined, optIn: string): boolean {
+function emitLatestGenAiSemconv(): boolean {
   return (
-    value
+    process.env[OTEL_SEMCONV_STABILITY_OPT_IN_ENV]
       ?.split(",")
       .map((part) => part.trim())
-      .includes(optIn) ?? false
-  );
-}
-
-function emitLatestGenAiSemconv(): boolean {
-  return hasOtelSemconvOptIn(
-    process.env[OTEL_SEMCONV_STABILITY_OPT_IN_ENV],
-    GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
+      .includes(GEN_AI_LATEST_EXPERIMENTAL_OPT_IN) ?? false
   );
 }
 
@@ -48,48 +44,12 @@ export function genAiOperationName(
   return "chat";
 }
 
-export function positiveFiniteNumber(value: number | undefined): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0, minExclusive: true });
-}
-
-function nonNegativeFiniteNumber(value: number | undefined): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0 });
-}
-
 export function assignPositiveNumberAttr(
   attrs: Record<string, string | number | boolean>,
   key: string,
   value: number | undefined,
 ): void {
-  const normalized = positiveFiniteNumber(value);
-  if (normalized !== undefined) {
-    attrs[key] = normalized;
-  }
-}
-
-export function assignModelCallSizeTimingAttrs(
-  attrs: Record<string, string | number | boolean>,
-  evt: {
-    requestPayloadBytes?: number;
-    responseStreamBytes?: number;
-    timeToFirstByteMs?: number;
-  },
-): void {
-  assignPositiveNumberAttr(attrs, "openclaw.model_call.request_bytes", evt.requestPayloadBytes);
-  assignPositiveNumberAttr(attrs, "openclaw.model_call.response_bytes", evt.responseStreamBytes);
-  assignPositiveNumberAttr(
-    attrs,
-    "openclaw.model_call.time_to_first_byte_ms",
-    evt.timeToFirstByteMs,
-  );
-}
-
-function assignNumberAttr(
-  attrs: Record<string, string | number | boolean>,
-  key: string,
-  value: number | undefined,
-): void {
-  const normalized = asFiniteNumber(value);
+  const normalized = asPositiveFiniteNumber(value);
   if (normalized !== undefined) {
     attrs[key] = normalized;
   }
@@ -101,13 +61,13 @@ function modelCallPromptTokens(usage: {
   cacheRead?: number;
   cacheWrite?: number;
 }): number | undefined {
-  const promptTokens = nonNegativeFiniteNumber(usage.promptTokens);
+  const promptTokens = asNonNegativeFiniteNumber(usage.promptTokens);
   if (promptTokens !== undefined) {
     return promptTokens;
   }
-  const input = nonNegativeFiniteNumber(usage.input);
-  const cacheRead = nonNegativeFiniteNumber(usage.cacheRead);
-  const cacheWrite = nonNegativeFiniteNumber(usage.cacheWrite);
+  const input = asNonNegativeFiniteNumber(usage.input);
+  const cacheRead = asNonNegativeFiniteNumber(usage.cacheRead);
+  const cacheWrite = asNonNegativeFiniteNumber(usage.cacheWrite);
   if (input === undefined && cacheRead === undefined && cacheWrite === undefined) {
     return undefined;
   }
@@ -130,7 +90,10 @@ export function assignModelCallPromptStatsAttrs(
     ["openclaw.model_call.prompt.tool_definitions_chars", stats.toolDefinitionsChars],
     ["openclaw.model_call.prompt.total_chars", stats.totalChars],
   ] as const) {
-    assignNumberAttr(attrs, key, value);
+    const normalized = asFiniteNumber(value);
+    if (normalized !== undefined) {
+      attrs[key] = normalized;
+    }
   }
 }
 
@@ -156,7 +119,7 @@ export function assignModelCallUsageAttrs(
     ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
     ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
   ] as const) {
-    const normalized = nonNegativeFiniteNumber(value);
+    const normalized = asNonNegativeFiniteNumber(value);
     if (normalized !== undefined) {
       attrs[key] = normalized;
     }
@@ -198,13 +161,7 @@ export function assignGenAiModelCallAttrs(
   },
 ): void {
   assignGenAiSpanIdentityAttrs(attrs, evt);
-  attrs["openclaw.model_call.observation_unit"] = modelCallObservationUnit(evt);
-}
-
-export function modelCallObservationUnit(evt: {
-  observationUnit?: "request" | "turn";
-}): "request" | "turn" {
-  return evt.observationUnit ?? "request";
+  attrs["openclaw.model_call.observation_unit"] = evt.observationUnit ?? "request";
 }
 
 export function modelCallSpanName(evt: {
@@ -219,10 +176,6 @@ export function modelCallSpanName(evt: {
   return operationName === GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT
     ? operationName
     : `${operationName} ${normalizeDiagnosticValue(evt.model)}`;
-}
-
-export function modelCallSpanKind(): SpanKind | undefined {
-  return SpanKind.CLIENT;
 }
 
 export function addUpstreamRequestIdSpanEvent(

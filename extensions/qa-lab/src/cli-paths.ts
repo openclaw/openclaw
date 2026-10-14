@@ -1,6 +1,7 @@
-// Qa Lab plugin module implements cli paths behavior.
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
+import { isRepoRootRelativeRef } from "./repo-path.js";
 
 export function toRepoPath(filePath: string): string {
   return filePath.split(path.sep).join("/");
@@ -10,8 +11,21 @@ export function toRepoRelativePath(repoRoot: string, filePath: string): string {
   return toRepoPath(path.relative(repoRoot, filePath));
 }
 
-export function isRepoRootRelativeRef(value: string) {
-  return !path.isAbsolute(value) && value.split(/[\\/]+/u).every((part) => part !== "..");
+export function repoRootTokenArtifactPath(value: string): string | null {
+  const normalized = value.split(/[\\/]+/u).join("/");
+  return normalized.startsWith("<repo-root>/") ? normalized.slice("<repo-root>/".length) : null;
+}
+
+/** Retain the producer's known base when a bundle crosses output directories. */
+export function toRepoArtifactPath(repoRoot: string, filePath: string): string {
+  const absolutePath = path.resolve(filePath);
+  const relativePath = toRepoRelativePath(repoRoot, absolutePath);
+  return isRepoRootRelativeRef(relativePath) ? `<repo-root>/${relativePath}` : absolutePath;
+}
+
+export function resolveQaArtifactPath(repoRoot: string, evidenceDir: string, value: string) {
+  const repoPath = repoRootTokenArtifactPath(value);
+  return repoPath !== null ? path.resolve(repoRoot, repoPath) : path.resolve(evidenceDir, value);
 }
 
 export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: string) {
@@ -28,19 +42,20 @@ export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: strin
   return resolved.path;
 }
 
-function assertRepoRelativePath(repoRoot: string, targetPath: string, label: string) {
-  const relative = path.relative(repoRoot, targetPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+export async function ensureRepoBoundDirectory(
+  repoRoot: string,
+  targetDir: string,
+  label: string,
+  opts?: { mode?: number },
+) {
+  const rootDir = path.resolve(repoRoot);
+  const targetPath = path.resolve(targetDir);
+  if (!isPathInside(rootDir, targetPath)) {
     throw new Error(`${label} must stay within the repo root.`);
   }
-  return relative;
-}
-
-async function assertNoSymlinkSegments(repoRoot: string, targetPath: string, label: string) {
-  assertRepoRelativePath(repoRoot, targetPath, label);
   try {
     await assertNoSymlinkParents({
-      rootDir: repoRoot,
+      rootDir,
       targetPath,
       messagePrefix: label,
     });
@@ -50,15 +65,6 @@ async function assertNoSymlinkSegments(repoRoot: string, targetPath: string, lab
     }
     throw error;
   }
-}
-
-export async function ensureRepoBoundDirectory(
-  repoRoot: string,
-  targetDir: string,
-  label: string,
-  opts?: { mode?: number },
-) {
-  await assertNoSymlinkSegments(path.resolve(repoRoot), path.resolve(targetDir), label);
   const result = await pathScope(repoRoot, { label }).ensureDir(targetDir, { mode: opts?.mode });
   if (!result.ok) {
     throw new Error(`${label} must stay within the repo root.`);

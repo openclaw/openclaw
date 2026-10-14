@@ -1,10 +1,12 @@
 import { randomBytes } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import type {
   GatewaySuspendPrepareResult,
   GatewaySuspendResumeResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
 import type { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 
 type SuspendRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
@@ -24,7 +26,7 @@ function parseWaitMs(value: string | number | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const seconds = typeof value === "number" ? value : Number(value.trim());
+  const seconds = typeof value === "number" ? value : Number(value.trim() || Number.NaN);
   if (!Number.isFinite(seconds) || seconds < 0) {
     throw new Error("--wait must be a non-negative number of seconds");
   }
@@ -56,14 +58,6 @@ function formatBusyResult(
   ].join("\n");
 }
 
-function writeSuspendJson(
-  runtime: OutputRuntimeEnv,
-  result: GatewaySuspendPrepareResult,
-  requestId: string,
-): void {
-  runtime.writeJson({ ...result, requestId });
-}
-
 export async function runGatewaySuspend(
   options: {
     rpcOpts: SuspendRpcOpts;
@@ -74,12 +68,7 @@ export async function runGatewaySuspend(
   deps: SuspendCliDeps,
 ): Promise<void> {
   const nowMs = deps.nowMs ?? Date.now;
-  const sleep =
-    deps.sleep ??
-    (async (delayMs: number) =>
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, delayMs);
-      }));
+  const wait = deps.sleep ?? sleep;
   const requestId = resolveRequestId(options.requestId);
   const waitMs = parseWaitMs(options.waitSeconds);
   const deadlineMs = waitMs === undefined ? undefined : nowMs() + waitMs;
@@ -97,7 +86,7 @@ export async function runGatewaySuspend(
     })) as GatewaySuspendPrepareResult;
     if (latest.status === "ready") {
       if (options.json) {
-        writeSuspendJson(deps.runtime, latest, requestId);
+        deps.runtime.writeJson({ ...latest, requestId });
         return;
       }
       const rich = isRich();
@@ -106,17 +95,19 @@ export async function runGatewaySuspend(
       deps.runtime.log(
         `${colorize(rich, theme.muted, "Expires:")} ${new Date(latest.expiresAtMs).toISOString()} (${latest.expiresAtMs} ms)`,
       );
-      deps.runtime.log(`Resume with: openclaw gateway resume ${latest.suspensionId}`);
+      const port = options.rpcOpts.localPortOverride;
+      const command = `openclaw gateway resume ${latest.suspensionId}`;
+      deps.runtime.log(
+        `Resume with: ${formatCliCommand(port === undefined ? command : `${command} --port ${port}`)}`,
+      );
       return;
+    }
+    if (latest.status === "draining") {
+      throw new Error("Gateway suspension unexpectedly entered drain mode");
     }
 
     if (deadlineMs === undefined) {
-      if (options.json) {
-        writeSuspendJson(deps.runtime, latest, requestId);
-        deps.runtime.exit(1);
-        return;
-      }
-      throw new Error(`${formatBusyResult(latest)}\nRetry later or use --wait <seconds>.`);
+      break;
     }
 
     const remainingMs = deadlineMs - nowMs();
@@ -124,18 +115,22 @@ export async function runGatewaySuspend(
       break;
     }
     const delayMs = Math.min(remainingMs, Math.max(MIN_SUSPEND_POLL_DELAY_MS, latest.retryAfterMs));
-    await sleep(delayMs);
+    await wait(delayMs);
   }
 
   if (!latest || latest.status !== "busy") {
     throw new Error("Gateway suspension polling ended without a result");
   }
   if (options.json) {
-    writeSuspendJson(deps.runtime, latest, requestId);
+    deps.runtime.writeJson({ ...latest, requestId });
     deps.runtime.exit(1);
     return;
   }
-  throw new Error(`${formatBusyResult(latest)}\nTimed out waiting for the Gateway to become idle.`);
+  const hint =
+    deadlineMs === undefined
+      ? "Retry later or use --wait <seconds>."
+      : "Timed out waiting for the Gateway to become idle.";
+  throw new Error(`${formatBusyResult(latest)}\n${hint}`);
 }
 
 export async function runGatewayResume(

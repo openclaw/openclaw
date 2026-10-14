@@ -1,10 +1,6 @@
-// Tlon plugin module implements errors behavior.
-type UrbitErrorCode =
-  | "invalid_url"
-  | "http_error"
-  | "auth_failed"
-  | "missing_cookie"
-  | "channel_not_open";
+import { redactUrbitErrorText } from "./redact.js";
+
+type UrbitErrorCode = "invalid_url" | "http_error" | "auth_failed" | "missing_cookie";
 
 class UrbitError extends Error {
   readonly code: UrbitErrorCode;
@@ -29,14 +25,17 @@ export class UrbitHttpError extends UrbitError {
   readonly bodyText?: string;
 
   constructor(params: { operation: string; status: number; bodyText?: string; cause?: unknown }) {
-    const suffix = params.bodyText ? ` - ${params.bodyText}` : "";
+    // A ship or proxy can reflect the session cookie sent with the request in the
+    // error body; mask it before the text enters messages, logs, or diagnostics.
+    const bodyText = params.bodyText ? redactUrbitErrorText(params.bodyText) : undefined;
+    const suffix = bodyText ? ` - ${bodyText}` : "";
     super("http_error", `${params.operation} failed: ${params.status}${suffix}`, {
       cause: params.cause,
     });
     this.name = "UrbitHttpError";
     this.status = params.status;
     this.operation = params.operation;
-    this.bodyText = params.bodyText;
+    this.bodyText = bodyText;
   }
 }
 

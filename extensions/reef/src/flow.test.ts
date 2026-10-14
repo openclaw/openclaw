@@ -1,15 +1,18 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
   generateIdentity,
-  MemoryAuditStore,
-  MemoryReplayStore,
-  open,
+  guardInstructions,
+  openClaimed,
   sha256Hex,
   verifyReceipt,
+  type ReplayStore,
   type Verdict,
 } from "../protocol/index.js";
-import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
+import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { ReefChannelConfigSchema } from "./config-schema.js";
+import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
@@ -22,14 +25,57 @@ import {
   transport,
   trust,
 } from "./flow.test-helpers.js";
-import type { ReefTransportClient } from "./transport.js";
+import { createConfiguredGuard } from "./guard.js";
+import { setReefRuntime } from "./runtime.js";
+import { ReefInboxEntryParkedError, type ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 
-beforeEach(resetFlowStoresForTests);
+const oauthGuardModel = "gpt-5.6-terra";
+const oauthGuardResponseModel = `${oauthGuardModel}-2026-08-01`;
+
+beforeEach(async () => {
+  await resetFlowStoresForTests();
+  setReefRuntime(createPluginRuntimeMock());
+});
 afterEach(() => {
   vi.unstubAllEnvs();
-  resetFlowStoresForTests();
+  return resetFlowStoresForTests();
 });
+
+function createFlow({
+  handle = "bob",
+  peer = "alice",
+  verdicts = [allow],
+}: { handle?: string; peer?: string; verdicts?: Verdict[] } = {}) {
+  const keys = reefKeys();
+  const peerKeys = generateIdentity();
+  const cfg = config();
+  cfg.handle = handle;
+  const trusted = trust({ [peer]: peerTrust(peerKeys) });
+  const relay = transport();
+  const stores = flowStores();
+  const classifier = guard(...verdicts);
+  const audit = new MemoryAuditStore(new Uint8Array(32).fill(10));
+  const onIngress = vi.fn<ConstructorParameters<typeof ReefMessageFlow>[0]["onIngress"]>(
+    async () => {},
+  );
+  const flow = new ReefMessageFlow({
+    config: cfg,
+    trust: trusted.store,
+    keys,
+    transport: relay as unknown as ReefTransportClient,
+    guard: classifier,
+    audit,
+    replay: new MemoryReplayStore(),
+    ...stores,
+    onIngress: async (message, assertCurrent) => {
+      assertCurrent();
+      await onIngress(message, assertCurrent);
+    },
+    onOwnerNotice: async () => {},
+  });
+  return { keys, peerKeys, trusted, relay, stores, classifier, audit, onIngress, flow };
+}
 
 describe("createConfiguredGuard", () => {
   it("rejects a whitespace-only guard credential", () => {
@@ -56,36 +102,227 @@ describe("createConfiguredGuard", () => {
     const init = fetcher.mock.calls[0]?.[1];
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer guard-key");
   });
+
+  it.each([
+    { label: "with an exact provider-attested model", responseModel: oauthGuardModel },
+    {
+      label: "with a dashed provider-attested date suffix",
+      responseModel: oauthGuardResponseModel,
+    },
+  ])(
+    "uses the host-owned OpenAI OAuth profile with strict structured output $label",
+    async ({ responseModel }) => {
+      const runtime = createPluginRuntimeMock();
+      const verdict = {
+        decision: "allow",
+        category: "safe",
+        reason: "Safe.",
+        policyVersion: "v1",
+      };
+      runtime.llm.complete = vi.fn().mockResolvedValue({
+        text: JSON.stringify(verdict),
+        provider: "openai",
+        model: oauthGuardModel,
+        responseModel,
+        stopReason: "stop",
+        agentId: "main",
+        usage: {},
+        execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+        audit: { caller: { kind: "plugin", id: "reef" } },
+      });
+      setReefRuntime(runtime);
+      const classifier = createConfiguredGuard(
+        ReefChannelConfigSchema.parse({
+          guard: {
+            provider: "openai",
+            authMode: "oauth",
+            authProfileId: "openai:work",
+            pinnedModel: oauthGuardModel,
+            policyVersion: "v1",
+            timeoutMs: 1_000,
+          },
+        }),
+      );
+
+      await expect(
+        classifier.classify({
+          direction: "outbound",
+          source: "alice#1",
+          destination: "bob#1",
+          text: "hello",
+          policyVersion: "v1",
+        }),
+      ).resolves.toMatchObject({ decision: "allow", model: oauthGuardModel });
+
+      expect(runtime.llm.complete).toHaveBeenCalledWith({
+        model: `openai/${oauthGuardModel}@openai:work`,
+        systemPrompt: `${guardInstructions("outbound")} Set policyVersion to exactly "v1". The object must exactly match this schema: ${JSON.stringify(
+          {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              decision: { type: "string", enum: ["allow", "deny", "review"] },
+              category: { type: "string" },
+              reason: { type: "string" },
+              policyVersion: { type: "string" },
+            },
+            required: ["decision", "category", "reason", "policyVersion"],
+          },
+        )}`,
+        messages: [
+          {
+            role: "user",
+            content: JSON.stringify({
+              direction: "outbound",
+              source: "alice#1",
+              destination: "bob#1",
+              text: "hello",
+              policyVersion: "v1",
+            }),
+          },
+        ],
+        maxTokens: 512,
+        purpose: "reef.guard",
+        reasoning: "low",
+        requiredAuthMode: "oauth",
+        responseFormat: {
+          type: "json_schema",
+          json_schema: {
+            name: "reef_guard_verdict",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                decision: { type: "string", enum: ["allow", "deny", "review"] },
+                category: { type: "string" },
+                reason: { type: "string" },
+                policyVersion: { type: "string" },
+              },
+              required: ["decision", "category", "reason", "policyVersion"],
+            },
+          },
+        },
+        signal: expect.any(AbortSignal),
+      });
+    },
+  );
+
+  it.each([
+    [
+      "wrong provider",
+      { provider: "anthropic", responseModel: oauthGuardResponseModel, stopReason: "stop" },
+    ],
+    [
+      "wrong logical model",
+      { model: "gpt-5.6-sol", responseModel: oauthGuardResponseModel, stopReason: "stop" },
+    ],
+    ["missing response model", { responseModel: undefined, stopReason: "stop" }],
+    ["mismatched response model", { responseModel: "gpt-5.6-sol", stopReason: "stop" }],
+    [
+      "non-date response suffix",
+      { responseModel: `${oauthGuardModel}-preview`, stopReason: "stop" },
+    ],
+    ["incomplete response", { responseModel: oauthGuardResponseModel, stopReason: "length" }],
+  ])("fails closed for OAuth guard evidence: %s", async (_label, evidence) => {
+    const runtime = createPluginRuntimeMock();
+    runtime.llm.complete = vi.fn().mockResolvedValue({
+      text: JSON.stringify({
+        decision: "allow",
+        category: "safe",
+        reason: "Safe.",
+        policyVersion: "v1",
+      }),
+      provider: "openai",
+      model: oauthGuardModel,
+      ...evidence,
+      agentId: "main",
+      usage: {},
+      execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+      audit: { caller: { kind: "plugin", id: "reef" } },
+    });
+    setReefRuntime(runtime);
+    const classifier = createConfiguredGuard(
+      ReefChannelConfigSchema.parse({
+        guard: {
+          provider: "openai",
+          authMode: "oauth",
+          authProfileId: "openai:work",
+          pinnedModel: oauthGuardModel,
+          policyVersion: "v1",
+          timeoutMs: 1_000,
+        },
+      }),
+    );
+
+    await expect(
+      classifier.classify({
+        direction: "outbound",
+        source: "alice#1",
+        destination: "bob#1",
+        text: "hello",
+        policyVersion: "v1",
+      }),
+    ).resolves.toMatchObject({ decision: "deny", category: "guard_failure" });
+  });
+
+  it("rejects a different provider-attested date for a dated OAuth guard model pin", async () => {
+    const runtime = createPluginRuntimeMock();
+    runtime.llm.complete = vi.fn().mockResolvedValue({
+      text: JSON.stringify({
+        decision: "allow",
+        category: "safe",
+        reason: "Safe.",
+        policyVersion: "v1",
+      }),
+      provider: "openai",
+      model: "gpt-5.6-luna-20260801",
+      responseModel: "gpt-5.6-luna-20260802",
+      stopReason: "stop",
+      agentId: "main",
+      usage: {},
+      execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+      audit: { caller: { kind: "plugin", id: "reef" } },
+    });
+    setReefRuntime(runtime);
+    const classifier = createConfiguredGuard(
+      ReefChannelConfigSchema.parse({
+        guard: {
+          provider: "openai",
+          authMode: "oauth",
+          authProfileId: "openai:work",
+          pinnedModel: "gpt-5.6-luna-20260801",
+          policyVersion: "v1",
+          timeoutMs: 1_000,
+        },
+      }),
+    );
+
+    await expect(
+      classifier.classify({
+        direction: "outbound",
+        source: "alice#1",
+        destination: "bob#1",
+        text: "hello",
+        policyVersion: "v1",
+      }),
+    ).resolves.toMatchObject({ decision: "deny", category: "guard_failure" });
+  });
 });
 
 describe("ReefMessageFlow inbound", () => {
   it("delivers and persists before ack, then acks duplicate redelivery without delivering twice", async () => {
-    const alice = generateIdentity();
-    const bob = reefKeys();
+    const { peerKeys: alice, keys: bob, stores, onIngress, relay, flow } = createFlow();
     const id = "01JZ0000000000000000000104";
-    const stores = flowStores();
     const order: string[] = [];
-    const onIngress = vi.fn(async () => {
+    onIngress.mockImplementation(async () => {
+      await expect(stores.delivered.status(id)).resolves.toBeUndefined();
       order.push("ingress");
     });
-    const relay = transport();
-    const trusted = trust({ alice: peerTrust(alice) });
     relay.acknowledge.mockImplementation(async () => {
-      await expect(stores.delivered.has(id)).resolves.toBe(true);
+      await expect(stores.delivered.status(id)).resolves.toBe("delivered");
       order.push("ack");
       return { result: "deleted" };
-    });
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(10)),
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress,
-      onOwnerNotice: async () => {},
     });
     const entry: InboxEntry = {
       seq: 1,
@@ -98,78 +335,75 @@ describe("ReefMessageFlow inbound", () => {
 
     await flow.processEntries([entry]);
     expect(order).toEqual(["ingress", "ack"]);
-    await expect(stores.delivered.has(id)).resolves.toBe(true);
+    await expect(stores.delivered.status(id)).resolves.toBe("delivered");
 
     await flow.processEntries([{ ...entry, seq: 2 }]);
     expect(order).toEqual(["ingress", "ack", "ack"]);
     expect(onIngress).toHaveBeenCalledOnce();
+    expect(onIngress.mock.calls[0]![0]).toMatchObject({
+      id,
+      peer: "alice",
+      text: "deliver safely",
+    });
     expect(relay.acknowledge).toHaveBeenCalledTimes(2);
+    for (const [peer, receiptId, receipt] of relay.acknowledge.mock.calls) {
+      expect([peer, receiptId]).toEqual(["alice", id]);
+      expect(verifyReceipt(receipt, bob.signing.publicKey)).toBe(true);
+      expect(receipt).toMatchObject({ id, status: "accepted" });
+    }
   });
 
-  it("acks a signed accepted receipt and delivers duplicate redelivery once, keyed by envelope id", async () => {
-    const alice = generateIdentity();
-    const bob = reefKeys();
-    const relay = transport();
-    const trusted = trust({ alice: peerTrust(alice) });
-    const ingress = new Map<string, unknown>();
-    const stores = flowStores();
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
+  it("parks a review-pending inbound message until the owner decides, without re-classifying", async () => {
+    const id = "01JZ0000000000000000000106";
+    const review: Verdict = { ...allow, decision: "review", category: "ambiguous" };
+    // A stochastic classifier would allow a second call; pending review owns redelivery.
+    const {
+      peerKeys: alice,
       keys: bob,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(4)),
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async (message) => {
-        ingress.set(message.id, message);
-      },
-      onOwnerNotice: async () => {},
-    });
-    const id = "01JZ0000000000000000000100";
+      stores,
+      onIngress,
+      relay,
+      classifier,
+      audit,
+      flow,
+    } = createFlow({ verdicts: [review, allow] });
     const entry: InboxEntry = {
       seq: 1,
       peer: "alice",
       id,
       kind: "message",
-      envelope: await envelope(alice, bob, id, "hello"),
+      envelope: await envelope(alice, bob, id, "needs an owner decision"),
       ts: Math.floor(Date.now() / 1_000),
     };
 
-    await flow.processEntries([entry]);
-    await flow.processEntries([{ ...entry, seq: 2 }]);
+    await expect(flow.processEntries([entry])).rejects.toMatchObject({
+      name: "ReefInboxEntryParkedError",
+    });
+    expect(relay.acknowledge).not.toHaveBeenCalled();
+    // Redelivery before the decision parks again with zero guard calls.
+    await expect(flow.processEntries([{ ...entry, seq: 2 }])).rejects.toMatchObject({
+      name: "ReefInboxEntryParkedError",
+    });
+    expect(classifier.classify).toHaveBeenCalledTimes(1);
+    expect(onIngress).not.toHaveBeenCalled();
 
-    expect(ingress.size).toBe(1);
-    expect(ingress.get(id)).toMatchObject({ id, peer: "alice", text: "hello" });
-    expect(relay.acknowledge).toHaveBeenCalledTimes(2);
-    for (const call of relay.acknowledge.mock.calls) {
-      expect(call.slice(0, 2)).toEqual(["alice", id]);
-      expect(verifyReceipt(call[2]!, bob.signing.publicKey)).toBe(true);
-      expect(call[2]).toMatchObject({ id, status: "accepted" });
-    }
+    const pending = await stores.reviews.list();
+    expect(pending).toHaveLength(1);
+    await stores.reviews.decide(pending[0]!.approvalDigest, true);
+    await flow.processEntries([{ ...entry, seq: 3 }]);
+    expect(onIngress).toHaveBeenCalledOnce();
+    expect(relay.acknowledge).toHaveBeenCalledOnce();
+    // One post-approval classification, never a per-redelivery re-roll.
+    expect(classifier.classify).toHaveBeenCalledTimes(2);
+    // One durable read observation for the whole park lifecycle — a 30s
+    // re-poll cadence must not fill the audit chain with retries.
+    const readEvents = (await audit.entries()).filter((row) => row.event.type === "read");
+    expect(readEvents).toHaveLength(1);
   });
 
   it("acks a signed rejected receipt and never delivers its body", async () => {
-    const alice = generateIdentity();
-    const bob = reefKeys();
-    const relay = transport();
-    const onIngress = vi.fn();
-    const trusted = trust({ alice: peerTrust(alice) });
     const deny: Verdict = { ...allow, decision: "deny", category: "injection", reason: "Denied." };
-    const stores = flowStores();
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(deny),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(5)),
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress,
-      onOwnerNotice: async () => {},
-    });
+    const { peerKeys: alice, keys: bob, relay, onIngress, flow } = createFlow({ verdicts: [deny] });
     const id = "01JZ0000000000000000000101";
 
     await flow.processEntries([
@@ -191,25 +425,7 @@ describe("ReefMessageFlow inbound", () => {
   });
 
   it("rejects unapproved and safety-number-changed senders before guard or ack", async () => {
-    const alice = generateIdentity();
-    const bob = reefKeys();
-    const relay = transport();
-    const classifier = guard(allow);
-    const cfg = config();
-    const trusted = trust({ alice: peerTrust(alice) });
-    const stores = flowStores();
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted.store,
-      keys: bob,
-      transport: relay as unknown as ReefTransportClient,
-      guard: classifier,
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(6)),
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const { peerKeys: alice, keys: bob, relay, classifier, trusted, flow } = createFlow();
     const first = await envelope(alice, bob, "01JZ0000000000000000000102", "hello");
     trusted.values.delete("alice");
     await expect(
@@ -241,65 +457,72 @@ describe("ReefMessageFlow inbound", () => {
     expect(classifier.classify).not.toHaveBeenCalled();
     expect(relay.acknowledge).not.toHaveBeenCalled();
   });
+
+  it.each(["revoked", "policy changed"])(
+    "rejects inbound dispatch when trust is %s during delivered lookup",
+    async (change) => {
+      const { peerKeys, keys, trusted, stores, onIngress, relay, flow } = createFlow();
+      const message = await envelope(
+        peerKeys,
+        keys,
+        "01JZ0000000000000000000104",
+        "private coordination",
+      );
+      vi.spyOn(stores.delivered, "status").mockImplementationOnce(async () => {
+        if (change === "revoked") {
+          trusted.values.delete("alice");
+        } else {
+          trusted.values.set("alice", peerTrust(peerKeys, { autonomy: "notify-only" }));
+        }
+        return undefined;
+      });
+
+      await expect(
+        flow.processEntries([
+          {
+            seq: 1,
+            peer: "alice",
+            id: message.id,
+            kind: "message",
+            envelope: message,
+            ts: Math.floor(Date.now() / 1_000),
+          },
+        ]),
+      ).rejects.toThrow("changed trust before dispatch");
+
+      expect(onIngress).not.toHaveBeenCalled();
+      expect(relay.acknowledge).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("ReefMessageFlow outbound", () => {
   it("seals and posts an allowed message", async () => {
-    const alice = reefKeys();
-    const bob = generateIdentity();
-    const cfg = config();
-    cfg.handle = "alice";
-    const trusted = trust({ bob: peerTrust(bob) });
-    const relay = transport();
-    const stores = flowStores();
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted.store,
+    const {
       keys: alice,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+      peerKeys: bob,
+      relay,
+      flow,
+    } = createFlow({ handle: "alice", peer: "bob" });
 
     const id = await flow.send("bob", "hello", { thread: "01JZ0000000000000000000199" });
     expect(relay.sendEnvelope).toHaveBeenCalledOnce();
-    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<typeof open>[0]["envelope"];
+    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<
+      typeof openClaimed
+    >[0]["envelope"];
     expect(sent.id).toBe(id);
-    await expect(
-      open({
-        envelope: sent,
-        self: "bob#1",
-        recipientEncryptionSecretKey: bob.encryption.secretKey,
-        senderSigningPublicKey: alice.signing.publicKey,
-        replayStore: new MemoryReplayStore(),
-      }),
-    ).resolves.toEqual({ text: "hello", thread: "01JZ0000000000000000000199" });
+    const opened = await openClaimed({
+      envelope: sent,
+      self: "bob#1",
+      recipientEncryptionSecretKey: bob.encryption.secretKey,
+      senderSigningPublicKey: alice.signing.publicKey,
+      replayStore: new MemoryReplayStore(),
+    });
+    expect(opened.body).toEqual({ text: "hello", thread: "01JZ0000000000000000000199" });
   });
 
   it("uses a message id reserved before delivery", async () => {
-    const alice = reefKeys();
-    const bob = generateIdentity();
-    const cfg = config();
-    cfg.handle = "alice";
-    const trusted = trust({ bob: peerTrust(bob) });
-    const relay = transport();
-    const stores = flowStores();
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted.store,
-      keys: alice,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const { relay, flow } = createFlow({ handle: "alice", peer: "bob" });
     const reservedId = "01JZ0000000000000000000201";
     const order: string[] = [];
     relay.sendEnvelope.mockImplementationOnce(async (_peer, sentEnvelope) => {
@@ -316,36 +539,27 @@ describe("ReefMessageFlow outbound", () => {
       }),
     ).resolves.toBe(reservedId);
     expect(order).toEqual(["dispatch", "relay"]);
-    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<typeof open>[0]["envelope"];
+    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<
+      typeof openClaimed
+    >[0]["envelope"];
     expect(sent.id).toBe(reservedId);
   });
 
   it("persists a proposal-bound owner review request and does not send or auto-approve", async () => {
-    const alice = reefKeys();
-    const bob = generateIdentity();
-    const cfg = config();
-    cfg.handle = "alice";
-    const trusted = trust({ bob: peerTrust(bob) });
-    const relay = transport();
-    const stores = flowStores();
-    const { reviews } = stores;
     const review: Verdict = {
       ...allow,
       decision: "review",
       category: "ambiguous",
       reason: "Owner review.",
     };
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted.store,
-      keys: alice,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(review),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(8)),
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
+    const {
+      relay,
+      flow,
+      stores: { reviews },
+    } = createFlow({
+      handle: "alice",
+      peer: "bob",
+      verdicts: [review],
     });
 
     await expect(flow.send("bob", "needs review")).rejects.toMatchObject({
@@ -379,37 +593,15 @@ describe("ReefMessageFlow outbound", () => {
   });
 
   it("stops a guard denial before transport send", async () => {
-    const alice = reefKeys();
-    const bob = generateIdentity();
-    const cfg = config();
-    cfg.handle = "alice";
-    const trusted = trust({ bob: peerTrust(bob) });
-    const relay = transport();
     const deny: Verdict = {
       ...allow,
       decision: "deny",
       category: "confidential",
       reason: "Denied.",
     };
-    const stores = flowStores();
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted.store,
-      keys: alice,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(deny),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const { relay, flow } = createFlow({ handle: "alice", peer: "bob", verdicts: [deny] });
     const onPlatformSendDispatch = vi.fn(async () => undefined);
 
-    await expect(flow.send("bob", "ordinary text")).rejects.toMatchObject({
-      stage: "guard",
-      message: expect.stringContaining("Do not retry or rephrase it automatically"),
-    });
     await expect(
       flow.send("bob", "ordinary text", { onPlatformSendDispatch }),
     ).rejects.toMatchObject({
@@ -418,5 +610,84 @@ describe("ReefMessageFlow outbound", () => {
     });
     expect(onPlatformSendDispatch).not.toHaveBeenCalled();
     expect(relay.sendEnvelope).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReefMessageFlow delivery-store capacity", () => {
+  it("parks after ingress without retaining bookkeeping when the delivered store fills before confirm", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const id = "01JZ0000000000000000000204";
+    const stores = flowStores(1);
+    await stores.delivered.confirm("occupied"); // delivered namespace full
+    const onIngress = vi.fn(async () => {});
+    const relay = transport();
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trust({ alice: peerTrust(alice) }).store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient, // SAFETY: test transport mock satisfies the client contract
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(23)),
+      replay: new MemoryReplayStore(),
+      ...stores,
+      onIngress,
+      onOwnerNotice: async () => {},
+    });
+    const entry: InboxEntry = {
+      seq: 1,
+      peer: "alice",
+      id,
+      kind: "message",
+      envelope: await envelope(alice, bob, id, "confirm hits full store"),
+      ts: Math.floor(Date.now() / 1_000),
+    };
+
+    await expect(flow.processEntries([entry])).rejects.toBeInstanceOf(ReefInboxEntryParkedError);
+    // Ingress ran, but no delivered marker was retained after confirm failed.
+    // Each re-poll re-ingests instead of unwinding the shared inbox.
+    expect(onIngress).toHaveBeenCalledTimes(1);
+    expect(relay.acknowledge).not.toHaveBeenCalled();
+    await expect(stores.delivered.status(id)).resolves.toBeUndefined();
+  });
+
+  it("parks an inbound message before ingress when replay state is at capacity", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const id = "01JZ0000000000000000000202";
+    const stores = flowStores();
+    const onIngress = vi.fn(async () => {});
+    const relay = transport();
+    const fullReplay = {
+      claim: async () => {
+        throw Object.assign(new Error("plugin state limit exceeded"), {
+          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+        });
+      },
+    } as unknown as ReplayStore; // SAFETY: capacity stub only implements claim
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trust({ alice: peerTrust(alice) }).store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient, // SAFETY: test transport mock satisfies the client contract
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(21)),
+      replay: fullReplay,
+      ...stores,
+      onIngress,
+      onOwnerNotice: async () => {},
+    });
+    const entry: InboxEntry = {
+      seq: 1,
+      peer: "alice",
+      id,
+      kind: "message",
+      envelope: await envelope(alice, bob, id, "replay store is full"),
+      ts: Math.floor(Date.now() / 1_000),
+    };
+
+    await expect(flow.processEntries([entry])).rejects.toBeInstanceOf(ReefInboxEntryParkedError);
+    expect(onIngress).not.toHaveBeenCalled();
+    expect(relay.acknowledge).not.toHaveBeenCalled();
   });
 });

@@ -1,29 +1,48 @@
 import type { DatabaseSync } from "node:sqlite";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 export const MESSAGE_TOOL_RUN_OUTCOMES_TABLE = "message_tool_run_outcomes";
 
-const SCHEMA_START = `CREATE TABLE IF NOT EXISTS ${MESSAGE_TOOL_RUN_OUTCOMES_TABLE} (`;
-const SCHEMA_END = "CREATE TABLE IF NOT EXISTS transcript_events (";
-const ENSURED_DATABASES = new WeakSet<DatabaseSync>();
-
-function messageToolRunOutcomeSchemaSql(): string {
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SCHEMA_START);
-  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw message-tool run outcome schema markers are missing.");
-  }
-  return OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end);
-}
-
 /** Lazily installs the additive outcome table on first use. */
-export function ensureMessageToolRunOutcomeSchema(db: DatabaseSync): void {
-  if (ENSURED_DATABASES.has(db)) {
+export function ensureMessageToolRunOutcomeSchema(
+  db: DatabaseSync,
+  admit?: (stage: "transaction" | "commit") => void,
+): void {
+  const facts = getAdmittedSqliteSchemaFacts(db);
+  if (
+    facts?.tables.has(MESSAGE_TOOL_RUN_OUTCOMES_TABLE) &&
+    facts.indexes.has("idx_agent_message_tool_run_outcomes_occurred")
+  ) {
     return;
   }
-  runSqliteImmediateTransactionSync(db, () => {
-    db.exec(messageToolRunOutcomeSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
-  });
-  ENSURED_DATABASES.add(db);
+  const install = () => {
+    // sqlite-allow-raw -- Canonical additive DDL only.
+    db.exec(
+      extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, MESSAGE_TOOL_RUN_OUTCOMES_TABLE, {
+        endMarker: "CREATE TABLE IF NOT EXISTS session_goal_operations (",
+        includeEndMarker: false,
+        errorMessage: "OpenClaw message-tool run outcome schema markers are missing.",
+      }),
+    );
+  };
+  if (db.isTransaction) {
+    install();
+    return;
+  }
+  runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      admit?.("transaction");
+      install();
+    },
+    {
+      withCommit(commit) {
+        admit?.("commit");
+        commit();
+      },
+    },
+  );
 }

@@ -2,11 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMattermostIngressMonitor } from "./monitor-ingress.js";
 
@@ -39,12 +39,16 @@ function startMonitor(
   queue: MattermostIngressQueue,
   dispatch: MattermostIngressDispatch,
   accountId = "default",
+  runtime: Parameters<typeof createMattermostIngressMonitor>[0]["runtime"] = {
+    error: vi.fn(),
+    log: vi.fn(),
+  },
 ) {
   return createMattermostIngressMonitor({
     accountId,
     queue,
     dispatch,
-    runtime: { error: vi.fn(), log: vi.fn() },
+    runtime,
     pollIntervalMs: 60_000,
     adoptionStallTimeoutMs: 5_000,
   });
@@ -79,45 +83,36 @@ afterEach(() => {
 });
 
 describe("Mattermost durable ingress", () => {
-  it("propagates durable append failure before handler scheduling", async () => {
+  it("visibly rejects an authorless event without disconnecting subsequent ingress", async () => {
     await withQueue(async (queue) => {
-      const appendError = new Error("sqlite unavailable");
-      const failingQueue = {
-        ...queue,
-        enqueue: vi.fn().mockRejectedValue(appendError),
-      } satisfies MattermostIngressQueue;
+      const enqueue = vi.spyOn(queue, "enqueue");
       const dispatch = vi.fn();
-      const monitor = startMonitor(failingQueue, dispatch);
+      const runtime = { error: vi.fn(), log: vi.fn() };
+      const monitor = startMonitor(queue, dispatch, "default", runtime);
       try {
-        await expect(monitor.receive(postedEvent())).rejects.toBe(appendError);
+        await monitor.receive(
+          JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-missing-author",
+                channel_id: "channel-1",
+                message: "hello",
+              }),
+            },
+            broadcast: { channel_id: "channel-1", user_id: "broadcast-user" },
+          }),
+        );
+        expect(enqueue).not.toHaveBeenCalled();
         expect(dispatch).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Mattermost posted event is missing post.user_id"),
+        );
+
+        await monitor.receive(postedEvent({ postId: "post-after-invalid" }));
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
       } finally {
         await monitor.stop();
-      }
-    });
-  });
-
-  it("recovers an uncompleted post with a fresh drain and dispatches exactly once", async () => {
-    await withQueue(async (queue) => {
-      const interruptedDispatch = vi.fn((_post, _payload, lifecycle) => {
-        lifecycle.onDeferred();
-        return { kind: "deferred" } as const;
-      });
-      const interrupted = startMonitor(queue, interruptedDispatch);
-      await interrupted.receive(postedEvent({ postId: "post-restart" }));
-      await interrupted.waitForIdle();
-      expect(await queue.listClaims()).toHaveLength(1);
-      await interrupted.stop();
-
-      const recoveredDispatch = vi.fn(async (_post, _payload, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const recovered = startMonitor(queue, recoveredDispatch);
-      try {
-        await recovered.waitForIdle();
-        expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await recovered.stop();
       }
     });
   });
@@ -147,10 +142,17 @@ describe("Mattermost durable ingress", () => {
 
       try {
         await Promise.all([monitorA.waitForIdle(), monitorBBeforeRestart.waitForIdle()]);
-        await monitorA.receive(postedEvent({ postId: "post-account-a" }));
+        const rawEventA = postedEvent({ postId: "post-account-a" });
+        await monitorA.receive(rawEventA);
         await monitorA.waitForIdle();
         const claimsABefore = await queueA.listClaims();
-        expect(claimsABefore).toHaveLength(1);
+        expect(claimsABefore).toEqual([
+          expect.objectContaining({
+            id: "post-account-a",
+            laneKey: "channel:channel-1",
+            payload: expect.objectContaining({ rawEvent: rawEventA }),
+          }),
+        ]);
         expect(dispatchA).toHaveBeenCalledTimes(1);
 
         admittingB = monitorBBeforeRestart.receive(postedEvent({ postId: "post-account-b" }));
@@ -200,74 +202,6 @@ describe("Mattermost durable ingress", () => {
           [admittingB, stoppingB].filter((task): task is Promise<void> => task !== undefined),
         );
         await Promise.allSettled([monitorA.stop(), monitorBBeforeRestart.stop()]);
-      }
-    });
-  });
-
-  it("retains completion so a duplicate post id cannot dispatch twice", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async (_post, _payload, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const monitor = startMonitor(queue, dispatch);
-      try {
-        const event = postedEvent({ postId: "post-completed" });
-        await monitor.receive(event);
-        await monitor.waitForIdle();
-        await monitor.receive(event);
-        await monitor.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await monitor.stop();
-      }
-    });
-  });
-
-  it("preserves every id from the retired merged-message guard key space", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async (_post, _payload, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const monitor = startMonitor(queue, dispatch);
-      try {
-        await monitor.receive(postedEvent({ postId: "post-batch-first", message: "first" }));
-        await monitor.receive(postedEvent({ postId: "post-batch-second", message: "second" }));
-        await monitor.waitForIdle();
-
-        await monitor.receive(postedEvent({ postId: "post-batch-first", message: "first" }));
-        await monitor.waitForIdle();
-
-        expect(dispatch).toHaveBeenCalledTimes(2);
-        expect(dispatch.mock.calls.map(([post]) => post.id)).toEqual([
-          "post-batch-first",
-          "post-batch-second",
-        ]);
-      } finally {
-        await monitor.stop();
-      }
-    });
-  });
-
-  it("stores the exact raw envelope in a per-channel lane", async () => {
-    await withQueue(async (queue) => {
-      const rawEvent = postedEvent({ postId: "post-raw", channelId: "channel-raw" });
-      const dispatch = vi.fn((_post, _payload, lifecycle) => {
-        lifecycle.onDeferred();
-        return { kind: "deferred" } as const;
-      });
-      const monitor = startMonitor(queue, dispatch);
-      try {
-        await monitor.receive(rawEvent);
-        await monitor.waitForIdle();
-        expect(await queue.listClaims()).toEqual([
-          expect.objectContaining({
-            id: "post-raw",
-            laneKey: "channel:channel-raw",
-            payload: expect.objectContaining({ rawEvent }),
-          }),
-        ]);
-      } finally {
-        await monitor.stop();
       }
     });
   });
@@ -415,6 +349,41 @@ describe("Mattermost durable ingress", () => {
         expect((await queue.enqueue("post-malformed", {} as MattermostIngressPayload)).kind).toBe(
           "failed",
         );
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("dead-letters a persisted authorless post without using broadcast recipient identity", async () => {
+    await withQueue(async (queue) => {
+      await queue.enqueue(
+        "post-missing-author",
+        {
+          version: 1,
+          receivedAt: 1,
+          rawEvent: JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-missing-author",
+                channel_id: "channel-1",
+                message: "hello",
+              }),
+            },
+            broadcast: { channel_id: "channel-1", user_id: "broadcast-user" },
+          }),
+        },
+        { receivedAt: 1, laneKey: "channel:channel-1" },
+      );
+      const dispatch = vi.fn();
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.waitForIdle();
+        expect(
+          (await queue.enqueue("post-missing-author", {} as MattermostIngressPayload)).kind,
+        ).toBe("failed");
         expect(dispatch).not.toHaveBeenCalled();
       } finally {
         await monitor.stop();

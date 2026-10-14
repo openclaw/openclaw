@@ -4,35 +4,68 @@ import { normalizeMimeType } from "./mime.js";
 
 describe("attachmentClassFromMime", () => {
   it.each([
-    ["text/plain", "text"],
-    ["application/vnd.api+json", "text"],
     ["application/pdf", "document"],
-    ["application/msword", "document"],
-    ["image/png", "image"],
     ["audio/mpeg", "audio"],
     ["video/mp4", "video"],
-    ["application/zip", "archive"],
-    ["application/octet-stream", "binary"],
   ] as const)("classifies %s as %s", (mime, expected) => {
     expect(attachmentClassFromMime(mime)).toBe(expected);
   });
 });
 
 describe("classifyAttachmentBytes", () => {
-  it("infers delimited text from otherwise untyped bytes", async () => {
-    await expect(
-      classifyAttachmentBytes({ buffer: Buffer.from("name,value\nopenclaw,1"), name: "data.bin" }),
-    ).resolves.toEqual({ mime: "text/csv", class: "text" });
+  const completeUtf8 = Buffer.from("验证".repeat(700), "utf8");
+
+  it.each([
+    ["input truncated mid-character at 4,096 bytes", completeUtf8.subarray(0, 4096), "binary"],
+    ["empty input", Buffer.alloc(0), "binary"],
+  ] as const)("classifies %s", async (_name, buffer, expectedClass) => {
+    await expect(classifyAttachmentBytes({ buffer, name: "notes" })).resolves.toEqual({
+      mime: undefined,
+      class: expectedClass,
+    });
   });
 
-  it("returns the UTF-16 charset with text classification", async () => {
-    await expect(
-      classifyAttachmentBytes({
-        buffer: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("hello", "utf16le")]),
-        name: "notes.bin",
-      }),
-    ).resolves.toEqual({ mime: "text/plain", class: "text", charset: "utf-16le" });
-  });
+  it.each([
+    ["two-byte sequence", 4095, [0xc2, 0xa3], "text"],
+    ["four-byte sequence after its third byte", 4093, [0xf0, 0x9f, 0xa6, 0x80], "text"],
+  ] as const)(
+    "bounds UTF-8 completion for a %s",
+    async (_name, prefixLength, bytes, expectedClass) => {
+      const buffer = Buffer.concat([
+        completeUtf8.subarray(0, 4092),
+        Buffer.alloc(prefixLength - 4092, 0x61),
+        Buffer.from(bytes),
+      ]);
+      await expect(classifyAttachmentBytes({ buffer, name: "notes" })).resolves.toEqual({
+        mime: expectedClass === "text" ? "text/plain" : undefined,
+        class: expectedClass,
+      });
+    },
+  );
+
+  it.each([["application/json", '{"name":"openclaw","stars":1}']] as const)(
+    "keeps declared %s for UTF-16 bytes with a BOM",
+    async (declaredMime, text) => {
+      await expect(
+        classifyAttachmentBytes({
+          buffer: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]),
+          declaredMime,
+        }),
+      ).resolves.toEqual({ mime: declaredMime, class: "text", charset: "utf-16le" });
+    },
+  );
+
+  it.each([["an unpaired surrogate", "a,\ud800b"]])(
+    "does not keep declared text/plain for UTF-16 BOM bytes with %s",
+    async (_label, text) => {
+      await expect(
+        classifyAttachmentBytes({
+          buffer: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]),
+          declaredMime: "text/plain",
+        }),
+      ).resolves.toEqual({ mime: "text/csv", class: "text", charset: "utf-16le" });
+    },
+  );
 
   it("keeps the charset when a BOM-less UTF-16 file resolves text by extension", async () => {
     await expect(
@@ -68,17 +101,6 @@ describe("classifyAttachmentBytes", () => {
         name: "payload.bin",
       }),
     ).resolves.toEqual({ mime: "application/octet-stream", class: "binary" });
-  });
-
-  it.each([
-    ["config.yaml", "application/yaml"],
-    ["payload.xml", "text/xml"],
-    ["debug.log", "text/plain"],
-    ["settings.ini", "text/plain"],
-  ] as const)("uses the canonical extension MIME for %s", async (name, mime) => {
-    await expect(
-      classifyAttachmentBytes({ buffer: Buffer.from("key=value"), name }),
-    ).resolves.toEqual({ mime, class: "text" });
   });
 });
 

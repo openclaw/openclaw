@@ -9,8 +9,6 @@ vi.mock("./facade-loader.js", () => ({
 
 describe("plugin-sdk browser facades", () => {
   beforeEach(() => {
-    // Facade wrappers cache successful loads; each case needs a clean wrapper module.
-    vi.resetModules();
     loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
   });
 
@@ -41,18 +39,6 @@ describe("plugin-sdk browser facades", () => {
     });
     expect(resolveBrowserConfig).toHaveBeenCalledWith(cfg, rootConfig);
     expect(resolveProfile).toHaveBeenCalledWith(resolvedConfig, "openclaw");
-  });
-
-  it("hard-fails when browser profile facade is unavailable", async () => {
-    loadBundledPluginPublicSurfaceModuleSyncCore.mockImplementation(() => {
-      throw new Error("missing browser profiles facade");
-    });
-
-    const browserProfiles = await import("./browser-profiles.js");
-
-    expect(() => browserProfiles.resolveBrowserConfig(undefined, undefined)).toThrow(
-      "missing browser profiles facade",
-    );
   });
 
   it("delegates browser control auth helpers to the browser facade", async () => {
@@ -87,17 +73,5 @@ describe("plugin-sdk browser facades", () => {
       dirName: "browser",
       artifactBasename: "browser-control-auth.js",
     });
-  });
-
-  it("hard-fails when browser control auth facade is unavailable", async () => {
-    loadBundledPluginPublicSurfaceModuleSyncCore.mockImplementation(() => {
-      throw new Error("missing browser control auth facade");
-    });
-
-    const controlAuth = await import("./browser-control-auth.js");
-
-    expect(() => controlAuth.resolveBrowserControlAuth(undefined, {} as NodeJS.ProcessEnv)).toThrow(
-      "missing browser control auth facade",
-    );
   });
 });

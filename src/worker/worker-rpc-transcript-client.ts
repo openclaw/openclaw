@@ -1,9 +1,10 @@
-import type {
-  WorkerTranscriptCommitRequestFrame,
-  WorkerTranscriptCommitResult,
-  WorkerTranscriptMessage,
+import {
+  WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  type WorkerTranscriptCommitRequestFrame,
+  type WorkerTranscriptCommitResult,
+  type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
 import type { TranscriptResponseError } from "./worker-rpc-client-shared.js";
@@ -88,7 +89,7 @@ export class WorkerTranscriptCommitClient {
     messages: readonly WorkerTranscriptMessage[],
   ): WorkerTranscriptMessage[] {
     let batch: WorkerTranscriptMessage[] = [];
-    for (const message of messages) {
+    for (const message of messages.slice(0, WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES)) {
       if (!isWorkerTranscriptMessageFrameSafe(message)) {
         throw new Error("worker transcript message exceeds the protocol payload limit");
       }
@@ -104,7 +105,7 @@ export class WorkerTranscriptCommitClient {
           messages: candidate,
         },
       };
-      if (Buffer.byteLength(JSON.stringify(frame), "utf8") > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
+      if (!isWorkerTranscriptFrameWithinBudget(frame)) {
         if (batch.length === 0) {
           throw new Error("worker transcript message exceeds the protocol payload limit");
         }
@@ -130,7 +131,7 @@ export class WorkerTranscriptCommitClient {
     while (true) {
       await this.connection.waitForReady();
       try {
-        const response = await this.connection.requestTranscriptCommit(request);
+        const response = await this.connection.rpc.request("transcript", request);
         if (response.ok) {
           this.baseLeafIdValue = response.payload.newLeafId;
           this.nextSeqValue = request.seq + 1;
@@ -138,7 +139,7 @@ export class WorkerTranscriptCommitClient {
         }
         if (response.error.details.reason === "stale-base-leaf") {
           // A stale base consumes this ledger seq. Retrying against a new leaf
-          // would append output built from stale context; milestone 3 must relaunch.
+          // would append output built from stale context; the turn must relaunch.
           this.nextSeqValue = request.seq + 1;
           this.terminalFailure = new WorkerTranscriptCommitError(
             response.error,
@@ -147,7 +148,12 @@ export class WorkerTranscriptCommitClient {
           throw this.terminalFailure;
         }
         fenceForOwnershipError(this.connection, response.error);
-        throw new WorkerTranscriptCommitError(response.error);
+        const failure = new WorkerTranscriptCommitError(response.error);
+        if (response.error.code === "UNAVAILABLE" && response.error.retryable === false) {
+          // Turn cleanup must retain the rejection instead of submitting the failed batch again.
+          this.terminalFailure = failure;
+        }
+        throw failure;
       } catch (error) {
         if (
           error instanceof WorkerConnectionInterruptedError &&

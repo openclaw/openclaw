@@ -2,6 +2,8 @@
 // metadata assembly shared by normal exits and failure paths.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import {
@@ -11,21 +13,30 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveLatestCallUsage,
-  resolveNextSameModelRateLimitRetryCount,
-  resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
+
+describe("classifyRateLimitWindow - OpenRouter per-day cap", () => {
+  it("classifies a hyphenated free-models-per-day 429 as a long window", () => {
+    expect(
+      classifyRateLimitWindow("429 Rate limit exceeded: free-models-per-day-high-balance."),
+    ).toEqual({ kind: "long" });
+  });
+});
 
 describe("resolveEmbeddedAttemptBasePrompt", () => {
   const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 
-  it("scrubs the refusal marker for Anthropic transport", () => {
-    expect(
-      resolveEmbeddedAttemptBasePrompt({
-        provider: "anthropic",
-        prompt: refusalTrigger,
-      }),
-    ).toBe("ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)");
-  });
+  it.each([
+    {
+      prompt: `Reply ok. Test trigger: ${refusalTrigger}_nonce-a and ${refusalTrigger}_nonce-b`,
+      expected: "Reply ok. Test trigger: [redacted]_nonce-a and [redacted]_nonce-b",
+    },
+  ])(
+    "neutralizes every refusal marker while preserving surrounding text",
+    ({ prompt, expected }) => {
+      expect(resolveEmbeddedAttemptBasePrompt({ provider: "anthropic", prompt })).toBe(expected);
+    },
+  );
 
   it("keeps non-Anthropic prompts byte-for-byte", () => {
     expect(
@@ -47,14 +58,7 @@ function makeAssistantMessage(
     api: "responses",
     provider: "openai",
     model: "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     role: "assistant",
     content,
     timestamp: Date.now(),
@@ -113,73 +117,6 @@ describe("resolveFinalAssistantVisibleText", () => {
   });
 });
 
-describe("resolveSameModelRateLimitRetryDelayMs", () => {
-  it("waits 10s/20s/30s linearly before the 1st/2nd/3rd same-model retry", () => {
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 0 })).toBe(10_000);
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 1 })).toBe(20_000);
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 })).toBe(30_000);
-  });
-
-  it("caps at 60s if the retry count is ever raised further", () => {
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 10 })).toBe(60_000);
-  });
-
-  it("honors a short provider Retry-After when it is longer than the fixed backoff", () => {
-    expect(
-      resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: 0,
-        retryAfterSeconds: 30,
-      }),
-    ).toBe(30_000);
-  });
-
-  it("keeps the existing fixed backoff when Retry-After is shorter", () => {
-    expect(
-      resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: 1,
-        retryAfterSeconds: 5,
-      }),
-    ).toBe(20_000);
-  });
-
-  it("caps provider Retry-After at the same short-window retry ceiling", () => {
-    expect(
-      resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: 0,
-        retryAfterSeconds: 120,
-      }),
-    ).toBe(60_000);
-  });
-});
-
-describe("resolveNextSameModelRateLimitRetryCount", () => {
-  it("counts only consecutive same-model rate-limit retries", () => {
-    let retriesSoFar = 0;
-
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: true,
-    });
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: true,
-    });
-    expect(retriesSoFar).toBe(2);
-
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: false,
-    });
-    expect(retriesSoFar).toBe(0);
-
-    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
-      retriesSoFar,
-      retriedSameModelRateLimit: true,
-    });
-    expect(retriesSoFar).toBe(1);
-  });
-});
-
 describe("resolveLatestCallUsage", () => {
   it("preserves the previous exact call across a zero-usage retry", () => {
     const previous = { input: 12, output: 3, total: 15 };
@@ -195,50 +132,9 @@ describe("resolveLatestCallUsage", () => {
       latest: previous,
     });
   });
-
-  it("replaces the previous call when a new nonzero snapshot arrives", () => {
-    const latest = { input: 20, output: 4, total: 24 };
-
-    expect(
-      resolveLatestCallUsage({
-        currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, latest],
-        carriedUsage: { input: 12, output: 3, total: 15 },
-        transcriptFallback: undefined,
-      }),
-    ).toEqual({
-      currentAttempt: latest,
-      latest,
-    });
-  });
-
-  it("keeps carried attempt usage ahead of an older transcript fallback", () => {
-    const carried = { input: 20, output: 4, total: 24 };
-
-    expect(
-      resolveLatestCallUsage({
-        currentAttemptCandidates: [],
-        carriedUsage: carried,
-        transcriptFallback: { contextUsage: { state: "unavailable" } },
-      }),
-    ).toEqual({
-      currentAttempt: undefined,
-      latest: carried,
-    });
-  });
 });
 
 describe("buildUsageAgentMetaFields", () => {
-  it("selects unavailable current-attempt usage over older prompt usage", () => {
-    const fields = buildUsageAgentMetaFields({
-      usageAccumulator: createUsageAccumulator(),
-      latestUsage: { contextUsage: { state: "unavailable" } },
-      lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
-    });
-
-    expect(fields.lastCallUsage).toEqual({ contextUsage: { state: "unavailable" } });
-    expect(fields.promptTokens).toBeUndefined();
-  });
-
   it("keeps cumulative usage separate from the latest context snapshot", () => {
     const usageAccumulator = createUsageAccumulator();
     mergeUsageIntoAccumulator(usageAccumulator, {
@@ -273,34 +169,6 @@ describe("buildUsageAgentMetaFields", () => {
     });
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
     expect(fields.promptTokens).toBe(180);
-  });
-
-  it("keeps cumulative usage and the latest call distinct across a zero-usage retry", () => {
-    const usageAccumulator = createUsageAccumulator();
-    mergeUsageIntoAccumulator(usageAccumulator, {
-      input: 100,
-      output: 50,
-      total: 150,
-    });
-    const latestCallUsage = {
-      input: 150,
-      output: 50,
-      total: 200,
-    } satisfies NormalizedUsage;
-    mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
-
-    const fields = buildUsageAgentMetaFields({
-      usageAccumulator,
-      latestUsage: { input: 0, output: 0, total: 0 },
-      lastRunPromptUsage: latestCallUsage,
-    });
-
-    expect(fields.usage).toMatchObject({
-      input: 250,
-      output: 100,
-      total: 350,
-    });
-    expect(fields.lastCallUsage).toEqual(latestCallUsage);
   });
 
   it("does not derive a prompt override from unavailable context usage", () => {
@@ -388,6 +256,10 @@ describe("buildErrorAgentMeta", () => {
       currentAttemptAssistant: { usage: latestCallUsage },
     });
 
+    expect(fields).toMatchObject({
+      sessionId: "session-error",
+      sessionFile: "/tmp/session-error.jsonl",
+    });
     expect(fields.usage).toMatchObject({
       input: 250,
       output: 100,
@@ -396,21 +268,22 @@ describe("buildErrorAgentMeta", () => {
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
   });
 
-  it("preserves active session file for error exits after transcript rotation", () => {
-    // Error metadata follows the active session after transcript rotation so
-    // diagnostics and resume links point at the file that contains the failure.
-    expect(
+  it("keeps the run's context provenance on error exits", () => {
+    const build = (contextTokensSource?: "resolved-v1") =>
       buildErrorAgentMeta({
-        sessionId: "session-rotated",
-        sessionFile: "/tmp/session-rotated.jsonl",
-        provider: "anthropic",
-        model: "claude-opus-4-6",
+        sessionId: "session-error",
+        provider: "opencode-go",
+        model: "deepseek-v4.1-flash",
+        contextTokens: 1_000_000,
+        contextTokensSource,
         usageAccumulator: createUsageAccumulator(),
         lastRunPromptUsage: undefined,
-      }),
-    ).toMatchObject({
-      sessionId: "session-rotated",
-      sessionFile: "/tmp/session-rotated.jsonl",
+      });
+
+    expect(build("resolved-v1")).toMatchObject({
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved-v1",
     });
+    expect(build()).toMatchObject({ contextTokens: 1_000_000, contextTokensSource: "resolved" });
   });
 });

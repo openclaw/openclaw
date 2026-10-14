@@ -26,7 +26,9 @@ tuning that applies everywhere.
   <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
   <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
   <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
+  <Card title="Render" href="/install/render">Managed web service</Card>
   <Card title="Raspberry Pi" href="/install/raspberry-pi">ARM self-hosted</Card>
+  <Card title="Upstash Box" href="/install/upstash">SSH-managed sandbox box</Card>
 </CardGroup>
 
 **AWS (EC2 / Lightsail / free tier)** also works well.
@@ -75,8 +77,9 @@ Security model details: [Security](/gateway/security).
 ## Using nodes with a VPS
 
 You can keep the Gateway in the cloud and pair **nodes** on your local devices
-(Mac/iOS/Android/headless). Nodes provide local screen/camera/canvas and `system.run`
-capabilities while the Gateway stays in the cloud.
+(Mac/iOS/Android/headless). Nodes provide local screen/camera and `system.run`
+capabilities while the Gateway stays in the cloud. A paired Mac can also present
+hosted widgets in its native panel.
 
 Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes).
 
@@ -103,11 +106,12 @@ For VM hosts using `systemd`, consider:
 
 - Service env for a stable startup path: `OPENCLAW_NO_RESPAWN=1` and
   `NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache`
-- Explicit restart behavior: `Restart=always`, `RestartSec=2`, `TimeoutStartSec=90`
+- A longer startup timeout for slow hosts: `TimeoutStartSec=90`.
+- The managed unit owns the generic restart policy: `Restart=always`, `RestartSec=5`.
 - SSD-backed disks for state/cache paths to reduce random-I/O cold-start penalties.
 
 The standard `openclaw onboard --install-daemon` path installs a systemd user
-unit; edit it with:
+unit; customize only host-specific startup settings with:
 
 ```bash
 systemctl --user edit openclaw-gateway.service
@@ -117,16 +121,13 @@ systemctl --user edit openclaw-gateway.service
 [Service]
 Environment=OPENCLAW_NO_RESPAWN=1
 Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
-Restart=always
-RestartSec=2
 TimeoutStartSec=90
 ```
 
 If you deliberately installed a system unit instead, edit it via
 `sudo systemctl edit openclaw-gateway.service`.
 
-How `Restart=` policies help automated recovery:
-[systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
+For the canonical managed unit body and its restart policy, see the [Gateway runbook](/gateway).
 
 For Linux OOM behavior, child process victim selection, and `exit 137`
 diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-pressure-and-oom-kills).
@@ -137,3 +138,6 @@ diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-p
 - [DigitalOcean](/install/digitalocean)
 - [Fly.io](/install/fly)
 - [Hetzner](/install/hetzner)
+- [Ansible](/install/ansible) — automated deployment to remote Debian/Ubuntu servers with Tailscale VPN and firewall isolation
+- [Kubernetes](/install/kubernetes) — a minimal Kustomize starting point when you run the Gateway on a cluster instead of a single VPS
+- [macOS VMs](/install/macos-vm) — a sandboxed macOS VM when you need macOS itself (iMessage) rather than a Linux host

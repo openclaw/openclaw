@@ -1,14 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
+import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
+import {
+  createCodeModeHarness,
+  resetCodeModeTestState,
+  runUntilCompleted,
+} from "./code-mode.test-support.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const oauthStatus = vi.hoisted(() => vi.fn());
 const startAuthorization = vi.hoisted(() => vi.fn());
 
 vi.mock("./mcp-oauth.js", () => ({
-  readMcpOAuthCredentialsStatus: oauthStatus,
+  readMcpOAuthCredentialsStatuses: oauthStatus,
   startMcpOAuthAuthorization: startAuthorization,
 }));
 
@@ -61,6 +68,7 @@ function createTestRuntime(params: Parameters<CreateSessionMcpRuntime>[0]): Sess
       isError: false,
     }),
     dispose: async () => {},
+    joinCleanup: async () => {},
   };
 }
 
@@ -69,7 +77,11 @@ describe("requester MCP connect runtime", () => {
   const created: Array<Parameters<CreateSessionMcpRuntime>[0]> = [];
 
   beforeEach(() => {
-    oauthStatus.mockReset().mockResolvedValue({ state: "unauthenticated" });
+    oauthStatus
+      .mockReset()
+      .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+        identities.map(() => ({ state: "unauthenticated" })),
+      );
     startAuthorization.mockReset().mockResolvedValue({
       status: "redirect",
       authorizationUrl: "https://auth.example/authorize?state=opaque",
@@ -87,6 +99,7 @@ describe("requester MCP connect runtime", () => {
 
   afterEach(async () => {
     await manager.disposeAll();
+    await resetCodeModeTestState();
   });
 
   it("materializes connect before authorization and real tools on the next message", async () => {
@@ -118,7 +131,9 @@ describe("requester MCP connect runtime", () => {
     expect(disconnected.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
     expect(created.find((params) => params.requesterScope)?.includeServerNames).toEqual(new Set());
     expect(startAuthorization).not.toHaveBeenCalled();
-    await expect(disconnected.tools[0]!.execute("connect", {})).resolves.toMatchObject({
+    const connecting = disconnected.tools[0]!.execute("connect", {});
+    expect(startAuthorization).toHaveBeenCalledOnce();
+    await expect(connecting).resolves.toMatchObject({
       details: {
         mcpConnect: {
           serverName: "calendar",
@@ -126,9 +141,45 @@ describe("requester MCP connect runtime", () => {
         },
       },
     });
+    startAuthorization
+      .mockResolvedValueOnce({
+        status: "redirect",
+        authorizationUrl: "https://auth.example/authorize?state=opaque",
+      })
+      .mockResolvedValueOnce({ status: "authorized" });
+    const codeMode = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeMode.tools, ...disconnected.tools],
+      config: codeMode.config,
+      catalogRef: codeMode.catalogRef,
+    });
+    const guest = await runUntilCompleted({
+      execTool: codeMode.tools[0]!,
+      waitTool: codeMode.tools[1]!,
+      code: "return { signIn: await MCP.calendar.connect(), connected: await MCP.calendar.connect() };",
+    });
+    expect(guest.status, JSON.stringify(guest)).toBe("completed");
+    expect(guest.value).toEqual({
+      signIn: {
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining("https://auth.example/authorize?state=opaque"),
+          },
+        ],
+        isError: false,
+      },
+      connected: {
+        content: [{ type: "text", text: expect.stringContaining('"calendar" is connected') }],
+        isError: false,
+      },
+    });
+    expect(disconnected.tools[0]?.resultContentSource).toBe("network");
     await disconnected.dispose();
 
-    oauthStatus.mockResolvedValue({ state: "authorized" });
+    oauthStatus.mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+      identities.map(() => ({ state: "authorized" })),
+    );
     const connectedRuntime = await manager.getOrCreate(request);
     const connected = await materializeBundleMcpToolsForRun({ runtime: connectedRuntime });
 
@@ -137,5 +188,47 @@ describe("requester MCP connect runtime", () => {
       new Set(["calendar"]),
     );
     await connected.dispose();
+  });
+
+  it("returns requester connection configuration failures as failed MCP guest results", async () => {
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-connect-missing-origin",
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      cfg: {
+        mcp: {
+          servers: {
+            calendar: {
+              url: "https://mcp.example/rpc",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const direct = await materialized.tools[0]!.execute("connect-direct", {});
+    expect(direct.details).toMatchObject({ status: "error", mcpServer: "calendar" });
+
+    const codeMode = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeMode.tools, ...materialized.tools],
+      config: codeMode.config,
+      catalogRef: codeMode.catalogRef,
+    });
+    const guest = await runUntilCompleted({
+      execTool: codeMode.tools[0]!,
+      waitTool: codeMode.tools[1]!,
+      code: "return await MCP.calendar.connect();",
+    });
+    expect(guest.status, JSON.stringify(guest)).toBe("completed");
+    expect(guest.value).toEqual({
+      content: [{ type: "text", text: expect.stringContaining("gateway.publicOrigin") }],
+      isError: true,
+    });
+    expect(guest.value).not.toHaveProperty("details");
+    await materialized.dispose();
   });
 });

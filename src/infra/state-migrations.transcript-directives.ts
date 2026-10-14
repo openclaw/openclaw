@@ -1,14 +1,23 @@
+import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
+import {
+  OpenClawAgentDatabaseLeaseActiveError,
+  assertAgentDatabaseMaintenanceAuthority,
+  assertNoOpenClawAgentDatabaseLeases,
+} from "../state/openclaw-agent-db-lease.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   migrateOpenClawAgentDatabaseForMaintenance,
 } from "../state/openclaw-agent-db-maintenance.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
+import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -16,13 +25,25 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
-import { resolveAgentDatabaseMigrationTargets } from "./state-migrations.media-persistence-targets.js";
+import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
+import {
+  resolveAgentDatabaseMigrationTargets,
+  type AgentDatabaseMigrationTarget,
+  type PreparedAgentDatabaseMigrationDiscovery,
+} from "./state-migrations.media-persistence-targets.js";
 import {
   migrateTranscriptDirectiveArchives,
+  recoverPendingTranscriptArchivePublication,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
+  transcriptDirectiveArchiveRecoveryPending,
+  transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
-import { transformHistoricalTranscriptEvent } from "./state-migrations.transcript-directives-transform.js";
+import {
+  parseDirectiveMigrationTranscriptEvent,
+  transformHistoricalTranscriptEvent,
+} from "./state-migrations.transcript-directives-transform.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const MIGRATION_META_KEY = "historical-transcript-directives-v1";
@@ -46,20 +67,8 @@ type TranscriptRowPlan = {
 type DatabaseMigrationResult = {
   archivedTranscripts: number;
   transcriptSessions: number;
+  warnings: string[];
 };
-
-function createMigrationDatabaseHandle(
-  database: DatabaseSync,
-  agentId: string,
-  pathname: string,
-): OpenClawAgentDatabase {
-  return {
-    agentId,
-    db: database,
-    path: pathname,
-    walMaintenance: { checkpoint: () => false, close: () => false },
-  };
-}
 
 function parseMigrationCursor(value: string | null | undefined, pathname: string): MigrationCursor {
   if (!value) {
@@ -112,37 +121,24 @@ function writeMigrationCursor(
 ): void {
   const now = Date.now();
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
+  const row = {
+    agent_id: agentId,
+    app_version: JSON.stringify(cursor),
+    role: "agent",
+    schema_version: 1,
+    updated_at: now,
+  };
   executeSqliteQuerySync(
     database,
     db
       .insertInto("schema_meta")
       .values({
-        agent_id: agentId,
-        app_version: JSON.stringify(cursor),
+        ...row,
         created_at: now,
         meta_key: MIGRATION_META_KEY,
-        role: "agent",
-        schema_version: 1,
-        updated_at: now,
       })
-      .onConflict((conflict) =>
-        conflict.column("meta_key").doUpdateSet({
-          agent_id: agentId,
-          app_version: JSON.stringify(cursor),
-          role: "agent",
-          schema_version: 1,
-          updated_at: now,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("meta_key").doUpdateSet(row)),
   );
-}
-
-function parseTranscriptEvent(raw: string, owner: string): TranscriptEvent {
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`${owner} contains invalid transcript JSON`, { cause: error });
-  }
 }
 
 function listTranscriptSessionBatch(database: DatabaseSync, afterSessionId: string): string[] {
@@ -154,10 +150,23 @@ function listTranscriptSessionBatch(database: DatabaseSync, afterSessionId: stri
       .select("session_id")
       .distinct()
       .where("session_id", ">", afterSessionId)
-      .where("event_json", "like", "%[[%")
+      .where(transcriptEventJsonSql(database), "like", "%[[%")
       .orderBy("session_id", "asc")
       .limit(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE),
   ).rows.map((row) => row.session_id);
+}
+
+function readTranscriptSessionRows(database: DatabaseSync, sessionId: string) {
+  const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
+  return executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom("transcript_events")
+      .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
+      .where("session_id", "=", sessionId)
+      .where(transcriptEventJsonSql(database), "like", "%[[%")
+      .orderBy("seq", "asc"),
+  ).rows;
 }
 
 function planTranscriptSession(
@@ -165,17 +174,11 @@ function planTranscriptSession(
   pathname: string,
   sessionId: string,
 ): TranscriptRowPlan[] {
-  const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
-  return executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("transcript_events")
-      .select(["event_json", "seq"])
-      .where("session_id", "=", sessionId)
-      .where("event_json", "like", "%[[%")
-      .orderBy("seq", "asc"),
-  ).rows.map((row) => {
-    const event = parseTranscriptEvent(row.event_json, `${pathname}:${sessionId}:${row.seq}`);
+  return readTranscriptSessionRows(database, sessionId).map((row) => {
+    const event = parseDirectiveMigrationTranscriptEvent(
+      row.event_json,
+      `${pathname}:${sessionId}:${row.seq}`,
+    );
     const transformed = transformHistoricalTranscriptEvent(event);
     return {
       eventJson: row.event_json,
@@ -190,16 +193,7 @@ function assertTranscriptSessionSourceUnchanged(
   sessionId: string,
   planned: readonly TranscriptRowPlan[],
 ): void {
-  const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
-  const current = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("transcript_events")
-      .select(["event_json", "seq"])
-      .where("session_id", "=", sessionId)
-      .where("event_json", "like", "%[[%")
-      .orderBy("seq", "asc"),
-  ).rows;
+  const current = readTranscriptSessionRows(database, sessionId);
   if (
     current.length !== planned.length ||
     current.some(
@@ -211,25 +205,70 @@ function assertTranscriptSessionSourceUnchanged(
   }
 }
 
-function migrateTranscriptSessions(params: {
+function transcriptSessionsNeedMigration(
+  database: DatabaseSync,
+  pathname: string,
+  afterSessionId: string,
+): boolean {
+  let cursor = afterSessionId;
+  while (true) {
+    const sessionIds = listTranscriptSessionBatch(database, cursor);
+    if (sessionIds.length === 0) {
+      return false;
+    }
+    for (const sessionId of sessionIds) {
+      if (
+        planTranscriptSession(database, pathname, sessionId).some(
+          (row) => row.rewrittenEventJson !== row.eventJson,
+        )
+      ) {
+        return true;
+      }
+    }
+    cursor = sessionIds.at(-1) ?? cursor;
+  }
+}
+
+function hasActiveAgentDatabaseLease(agentId: string, env: NodeJS.ProcessEnv): boolean {
+  try {
+    assertNoOpenClawAgentDatabaseLeases(agentId, { env });
+    return false;
+  } catch (error) {
+    if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
+      return true;
+    }
+    throw error;
+  }
+}
+
+async function migrateTranscriptSessions(params: {
   agentId: string;
   database: DatabaseSync;
   owner: OpenClawAgentDatabase;
   pathname: string;
   start: Extract<MigrationCursor, { phase: "transcripts" }>;
-}): number {
+}): Promise<number> {
   let rewrittenSessions = 0;
   let afterSessionId = params.start.sessionId;
   while (true) {
     const sessionIds = listTranscriptSessionBatch(params.database, afterSessionId);
     if (sessionIds.length === 0) {
-      runSqliteImmediateTransactionSync(params.database, () => {
-        writeMigrationCursor(params.database, params.agentId, {
-          generation: "",
-          phase: "archives",
-          sessionId: "",
-        });
-      });
+      runSqliteImmediateTransactionSync(
+        params.database,
+        () => {
+          assertAgentDatabaseMaintenanceAuthority();
+          writeMigrationCursor(params.database, params.agentId, {
+            generation: "",
+            phase: "archives",
+            sessionId: "",
+          });
+          assertAgentDatabaseMaintenanceAuthority();
+        },
+        {
+          databaseLabel: params.pathname,
+          operationLabel: "historical-transcript-directives.cursor",
+        },
+      );
       return rewrittenSessions;
     }
     for (const sessionId of sessionIds) {
@@ -238,6 +277,7 @@ function migrateTranscriptSessions(params: {
       runSqliteImmediateTransactionSync(
         params.database,
         () => {
+          assertAgentDatabaseMaintenanceAuthority();
           assertTranscriptSessionSourceUnchanged(params.database, sessionId, planned);
           updateSqliteTranscriptEventJsonInTransaction(
             params.owner,
@@ -251,6 +291,7 @@ function migrateTranscriptSessions(params: {
             phase: "transcripts",
             sessionId,
           });
+          assertAgentDatabaseMaintenanceAuthority();
         },
         {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -261,26 +302,38 @@ function migrateTranscriptSessions(params: {
       rewrittenSessions += changedRows.length > 0 ? 1 : 0;
       afterSessionId = sessionId;
     }
+    // Keep the caller responsive between bounded batches. The next transaction
+    // revalidates maintenance ownership before mutating state.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 
-function migrateAgentDatabase(params: {
-  agentId: string;
-  pathname: string;
-}): DatabaseMigrationResult {
-  migrateOpenClawAgentDatabaseForMaintenance(params);
+async function migrateAgentDatabase(
+  params: { agentId: string; pathname: string },
+  maintenance: OpenClawStateLeaseContext,
+): Promise<DatabaseMigrationResult> {
+  await migrateOpenClawAgentDatabaseForMaintenance(params, maintenance);
+  maintenance.assertOwned();
   const database = openNodeSqliteDatabase(params.pathname);
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertOpenClawAgentDatabaseForMaintenance(database, params);
     const cursor = readMigrationCursor(database, params.pathname);
     if (cursor.phase === "complete") {
-      return { archivedTranscripts: 0, transcriptSessions: 0 };
+      const warnings = await recoverPendingTranscriptArchivePublication({
+        agentId: params.agentId,
+        database,
+        pathname: params.pathname,
+        signal: resolveSqliteInspectionSignal(maintenance.signal),
+      });
+      return { archivedTranscripts: 0, transcriptSessions: 0, warnings };
     }
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
     const transcriptSessions =
       cursor.phase === "transcripts"
-        ? migrateTranscriptSessions({
+        ? await migrateTranscriptSessions({
             agentId: params.agentId,
             database,
             owner,
@@ -289,12 +342,13 @@ function migrateAgentDatabase(params: {
           })
         : 0;
     const archiveCursor = readMigrationCursor(database, params.pathname);
-    const archivedTranscripts =
+    const archives =
       archiveCursor.phase === "archives"
-        ? migrateTranscriptDirectiveArchives({
+        ? await migrateTranscriptDirectiveArchives({
             agentId: params.agentId,
             database,
             pathname: params.pathname,
+            signal: maintenance.signal,
             start: archiveCursor,
             writeCursor: (next) =>
               writeMigrationCursor(
@@ -303,43 +357,155 @@ function migrateAgentDatabase(params: {
                 "phase" in next ? next : { ...next, phase: "archives" },
               ),
           })
-        : 0;
-    return { archivedTranscripts, transcriptSessions };
+        : { rewrittenArchives: 0, warnings: [] };
+    return {
+      archivedTranscripts: archives.rewrittenArchives,
+      transcriptSessions,
+      warnings: archives.warnings,
+    };
   } finally {
     clearNodeSqliteKyselyCacheForDatabase(database);
     database.close();
   }
 }
 
-/** One-time startup migration from inline assistant directives to typed delivery facts. */
-export function migrateHistoricalTranscriptDirectives(
+async function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
+  agentId: string;
+  env: NodeJS.ProcessEnv;
+  pathname: string;
+}): Promise<boolean> {
+  const database = openNodeSqliteDatabase(params.pathname, { readOnly: true });
+  try {
+    const userVersion = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+    if (userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+      return true;
+    }
+    try {
+      assertOpenClawAgentDatabaseForMaintenance(database, params);
+    } catch {
+      return true;
+    }
+    const cursor = readMigrationCursor(database, params.pathname);
+    if (cursor.phase === "complete") {
+      return transcriptDirectiveArchiveRecoveryPending(database);
+    }
+    if (
+      cursor.phase === "transcripts" &&
+      transcriptSessionsNeedMigration(database, params.pathname, cursor.sessionId)
+    ) {
+      return true;
+    }
+    if (
+      await transcriptDirectiveArchivesNeedMigration(
+        database,
+        cursor.phase === "archives"
+          ? { generation: cursor.generation, sessionId: cursor.sessionId }
+          : { generation: "", sessionId: "" },
+      )
+    ) {
+      return true;
+    }
+    return !hasActiveAgentDatabaseLease(params.agentId, params.env);
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(database);
+    database.close();
+  }
+}
+
+/** Doctor normalization of historical inline assistant directives into typed delivery facts. */
+export async function migrateHistoricalTranscriptDirectives(
   params: {
     configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
+    preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+    preparedTargets?: readonly AgentDatabaseMigrationTarget[];
     env?: NodeJS.ProcessEnv;
   } = {},
-): MigrationMessages {
+): Promise<MigrationMessages> {
+  const signal = resolveSqliteInspectionSignal();
+  signal?.throwIfAborted();
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
-  const targets = resolveAgentDatabaseMigrationTargets({
-    changes,
-    configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
-    env,
-    warnings,
-  });
-  for (const target of targets) {
-    try {
-      const result = migrateAgentDatabase({ agentId: target.agentId, pathname: target.path });
-      if (result.transcriptSessions > 0 || result.archivedTranscripts > 0) {
-        changes.push(
-          `Migrated historical transcript directives in ${target.path}: ${result.transcriptSessions} active session(s), ${result.archivedTranscripts} archived transcript(s).`,
+  let recoverableWarningCount = 0;
+  try {
+    const discovery = params.preparedTargets
+      ? { targets: params.preparedTargets, recoverableWarningCount: 0 }
+      : resolveAgentDatabaseMigrationTargets({
+          changes,
+          configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+          env,
+          warnings,
+          preparedDiscovery: params.preparedDiscovery,
+        });
+    recoverableWarningCount = discovery.recoverableWarningCount;
+    const targets: AgentDatabaseMigrationTarget[] = [];
+    for (const target of discovery.targets) {
+      try {
+        assertMigrationTargetPathCurrent(target);
+        if (
+          await agentDatabaseNeedsTranscriptDirectiveMigration({
+            agentId: target.agentId,
+            env,
+            pathname: target.path,
+          })
+        ) {
+          targets.push(target);
+        }
+      } catch (error) {
+        if (signal?.aborted && error === signal.reason) {
+          throw error;
+        }
+        warnings.push(
+          `Skipped historical transcript directive migration preflight for ${target.path}: ${String(error)}`,
         );
       }
-    } catch (error) {
-      warnings.push(
-        `Skipped historical transcript directive migration for ${target.path}: ${String(error)}`,
-      );
     }
+    if (targets.length > 0) {
+      await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
+        for (const target of targets.toSorted(
+          (a, b) => a.agentId.localeCompare(b.agentId) || a.path.localeCompare(b.path),
+        )) {
+          try {
+            assertMigrationTargetPathCurrent(target);
+            const result = await migrateAgentDatabase(
+              { agentId: target.agentId, pathname: target.path },
+              maintenance,
+            );
+            warnings.push(...result.warnings);
+            recoverableWarningCount += result.warnings.length;
+            if (result.transcriptSessions > 0 || result.archivedTranscripts > 0) {
+              changes.push(
+                `Migrated historical transcript directives in ${target.path}: ${result.transcriptSessions} active session(s), ${result.archivedTranscripts} archived transcript(s).`,
+              );
+            }
+          } catch (error) {
+            if (signal?.aborted && error === signal.reason) {
+              throw error;
+            }
+            warnings.push(
+              `Skipped historical transcript directive migration for ${target.path}: ${String(error)}`,
+            );
+          }
+        }
+      });
+    }
+  } catch (error) {
+    if (signal?.aborted && error === signal.reason) {
+      throw error;
+    }
+    warnings.push(`Skipped historical transcript directive migration: ${String(error)}`);
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(warnings.length > 0 && warnings.length === recoverableWarningCount
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
+}
+
+function assertMigrationTargetPathCurrent(target: AgentDatabaseMigrationTarget): void {
+  if (fs.realpathSync.native(target.path) !== target.realPath) {
+    throw new Error(`Agent database path changed since migration discovery: ${target.path}`);
+  }
 }

@@ -1,37 +1,34 @@
+import { registerListener } from "../../../src/shared/listeners.js";
+import { webKitHostWindow } from "./native-webkit-bridge.ts";
+
 export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
+
+type NativeNotificationTestOutcome =
+  | { state: "pending" }
+  | { state: "sent" }
+  | { state: "error"; message: string };
 
 type NativeNotificationsSnapshot = {
   permission: NativeNotificationsPermission | "unknown";
+  test: NativeNotificationTestOutcome | null;
 };
 
-type NativeNotificationsMessage =
-  | { type: "status" }
-  | { type: "request-permission" }
-  | { type: "send-test" };
-
-type WebKitNotificationsMessageHandler = {
-  postMessage(message: NativeNotificationsMessage): void;
+type NativeBackgroundSessionCompletion = {
+  runId: string;
+  path: string;
+  search?: string;
 };
 
 type NativeNotificationsWindow = Window & {
   __OPENCLAW_NATIVE_NOTIFICATIONS__?: unknown;
-  webkit?: {
-    messageHandlers?: {
-      openclawNotifications?: WebKitNotificationsMessageHandler;
-    };
-  };
 };
 
 // Wire contract with the Mac app's dashboard bridge (DashboardWindowController+Notifications.swift).
 const NATIVE_NOTIFICATIONS_STATUS_EVENT = "openclaw:native-notifications-status";
 
-export type NativeNotificationsCapability = {
-  readonly snapshot: NativeNotificationsSnapshot;
-  subscribe(listener: (snapshot: NativeNotificationsSnapshot) => void): () => void;
-  requestPermission(): void;
-  sendTest(): void;
-  dispose(): void;
-};
+export type NativeNotificationsCapability = NonNullable<
+  ReturnType<typeof createNativeNotificationsCapability>
+>;
 
 function isNativeNotificationsPermission(value: unknown): value is NativeNotificationsPermission {
   return value === "granted" || value === "denied" || value === "notDetermined";
@@ -41,24 +38,28 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   if (typeof value !== "object" || value === null || !("permission" in value)) {
     return null;
   }
-  return isNativeNotificationsPermission(value.permission)
-    ? { permission: value.permission }
-    : null;
-}
-
-function getNativeNotificationsPoster():
-  | WebKitNotificationsMessageHandler["postMessage"]
-  | undefined {
-  if (typeof window === "undefined") {
-    return undefined;
+  if (!isNativeNotificationsPermission(value.permission)) {
+    return null;
   }
-  const handler = (window as NativeNotificationsWindow).webkit?.messageHandlers
-    ?.openclawNotifications;
-  return handler?.postMessage.bind(handler);
+  if (!("test" in value) || value.test === null) {
+    return { permission: value.permission, test: null };
+  }
+  const test = value.test;
+  if (typeof test !== "object" || test === null || !("state" in test)) {
+    return null;
+  }
+  if (test.state === "pending" || test.state === "sent") {
+    return { permission: value.permission, test: { state: test.state } };
+  }
+  if (test.state === "error" && "message" in test && typeof test.message === "string") {
+    return { permission: value.permission, test: { state: "error", message: test.message } };
+  }
+  return null;
 }
 
-export function createNativeNotificationsCapability(): NativeNotificationsCapability | null {
-  const postMessage = getNativeNotificationsPoster();
+export function createNativeNotificationsCapability() {
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawNotifications;
+  const postMessage = handler?.postMessage.bind(handler);
   if (!postMessage) {
     return null;
   }
@@ -66,6 +67,7 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
   const nativeWindow = window as NativeNotificationsWindow;
   let snapshot = snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_NOTIFICATIONS__"]) ?? {
     permission: "unknown" as const,
+    test: null,
   };
   const listeners = new Set<(snapshot: NativeNotificationsSnapshot) => void>();
 
@@ -92,17 +94,22 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    requestPermission() {
+    subscribe: (listener: (snapshot: NativeNotificationsSnapshot) => void) =>
+      registerListener(listeners, listener),
+    requestPermission(this: void) {
       postMessage({ type: "request-permission" });
     },
-    sendTest() {
+    sendTest(this: void) {
+      if (snapshot.test?.state === "pending") {
+        return;
+      }
+      publish({ ...snapshot, test: { state: "pending" } });
       postMessage({ type: "send-test" });
     },
-    dispose() {
+    backgroundSessionCompleted(this: void, completion: NativeBackgroundSessionCompletion) {
+      postMessage({ type: "background-session-completed", ...completion });
+    },
+    dispose(this: void) {
       window.removeEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);
       window.removeEventListener("focus", refreshStatus);
       listeners.clear();

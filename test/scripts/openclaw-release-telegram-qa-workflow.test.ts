@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
 const WORKFLOW_PATH = ".github/workflows/openclaw-release-telegram-qa.yml";
@@ -83,17 +85,18 @@ function runIdentityVerification(params: {
   oidcJobWorkflowSha?: string;
   oidcWorkflowSha?: string;
   targetContextRef?: string;
+  workflowBranch?: string;
   workflowSha?: string;
 }) {
   const repository = "openclaw/openclaw";
-  const trustedWorkflowRef = `${repository}/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main`;
+  const workflowBranch = params.workflowBranch ?? "main";
+  const workflowRefName = `refs/heads/${workflowBranch}`;
+  const trustedWorkflowRef = `${repository}/.github/workflows/openclaw-release-telegram-qa.yml@${workflowRefName}`;
   const invocation = params.invocation ?? "dispatch";
   const workflowRef =
     invocation === "dispatch"
       ? trustedWorkflowRef
-      : `${repository}/.github/workflows/openclaw-release-checks.yml@refs/heads/release-ci/test`;
-  const workflowRefName =
-    invocation === "dispatch" ? "refs/heads/main" : "refs/heads/release-ci/test";
+      : `${repository}/.github/workflows/openclaw-release-checks.yml@${workflowRefName}`;
   const workdir = tempDirs.make("openclaw-telegram-identity-");
   const fakeBin = join(workdir, "bin");
   const githubOutput = join(workdir, "github-output");
@@ -128,7 +131,7 @@ function runIdentityVerification(params: {
   );
   return spawnSync(
     "bash",
-    ["-c", requireRun("trusted_identity", "Verify dispatched-main identity")],
+    ["-c", requireRun("trusted_identity", "Verify dispatched workflow identity")],
     {
       cwd: workdir,
       encoding: "utf8",
@@ -164,6 +167,7 @@ function runIdentityVerification(params: {
 function runAdvisoryStatus(overrides: Record<string, string> = {}) {
   const runId = "123456";
   const runAttempt = "1";
+  const effectiveRunAttempt = overrides.GITHUB_RUN_ATTEMPT ?? runAttempt;
   const targetSha = "a".repeat(40);
   const workdir = tempDirs.make("openclaw-telegram-advisory-status-");
   const githubOutput = join(workdir, "github-output");
@@ -180,6 +184,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
       BUILD_STATUS: "success",
       CANDIDATE_ARTIFACT_DIGEST: "d".repeat(64),
       CANDIDATE_ARTIFACT_ID: "123",
+      CANDIDATE_RUN_ATTEMPT: runAttempt,
       CANDIDATE_VERSION: "2026.7.1-beta.3",
       EVIDENCE_ARTIFACT_DIGEST: "e".repeat(64),
       EVIDENCE_ARTIFACT_ID: "456",
@@ -208,7 +213,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
     workdir,
     ".artifacts",
     "release-check-status",
-    `qa_live_telegram_release_checks-${runId}-${runAttempt}.env`,
+    `qa_live_telegram_release_checks-${runId}-${effectiveRunAttempt}.env`,
   );
   const evidenceFile = statusFile.replace(/\.env$/u, ".json");
   return {
@@ -223,7 +228,15 @@ function runCandidateProvenance(
   provenanceBlock: ProvenanceBlock,
   params: {
     branchHeads?: string[];
+    releaseCompareStatus?: "ahead" | "behind" | "diverged" | "identical";
     candidateVersion?: string;
+    messageHeadline?: string;
+    directPullRequest?: {
+      state?: string;
+      baseRepository?: string;
+      mergeCommitOid?: string;
+      mergedBy?: string;
+    };
     mergedPullRequests?: Array<{
       baseRefName?: string;
       baseRepository?: string;
@@ -236,6 +249,7 @@ function runCandidateProvenance(
     signature?: "invalid" | "maintainer" | "missing" | "web-flow";
     targetContextRef?: string;
     targetRef?: string;
+    unrelatedOpenPullRequests?: number;
   } = {},
 ) {
   const candidateSha = "a".repeat(40);
@@ -260,6 +274,7 @@ function runCandidateProvenance(
       repository: {
         object: {
           oid: candidateSha,
+          messageHeadline: params.messageHeadline ?? "release fixture",
           signature:
             signature === "missing"
               ? null
@@ -283,6 +298,11 @@ function runCandidateProvenance(
                     },
                   ]
                 : []),
+              ...Array.from({ length: params.unrelatedOpenPullRequests ?? 0 }, (_, index) => ({
+                state: "OPEN",
+                headRefOid: `${index + 1}`.repeat(40),
+                headRepository: { nameWithOwner: "openclaw/openclaw" },
+              })),
               ...(params.mergedPullRequests ?? []).map((pullRequest) => ({
                 state: "MERGED",
                 baseRefName: pullRequest.baseRefName ?? "release/2026.7.1",
@@ -302,6 +322,7 @@ function runCandidateProvenance(
     join(fakeBin, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$*" == *"number="* ]]; then printf '%s\\n' "$FAKE_DIRECT_PR"; exit 0; fi
 if [[ "$*" == *"api graphql"* ]]; then printf '%s\\n' "$FAKE_METADATA"; exit 0; fi
 if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "$FAKE_BRANCH_HEADS"; exit 0; fi
 if [[ "$*" == *"/compare/"* ]]; then printf '%s\\n' "behind"; exit 0; fi
@@ -314,6 +335,11 @@ exit 64
     join(fakeBin, "git"),
     `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$*" == *"init --bare"* || "$*" == *"fetch --quiet"* ]]; then [[ -n "$FAKE_REMOTE_SHA" ]]; exit; fi
+if [[ "$*" == *"FETCH_HEAD^{commit}"* ]]; then printf '%s\\n' "$FAKE_REMOTE_SHA"; exit 0; fi
+if [[ "$*" == *"merge-base --is-ancestor"* ]]; then
+  [[ "$TARGET_SHA" == "$FAKE_REMOTE_SHA" || "$FAKE_RELEASE_COMPARE_STATUS" == ahead ]]; exit
+fi
 if [[ "$*" == *"rev-parse HEAD"* ]]; then printf '%s\\n' "$TARGET_SHA"; exit 0; fi
 if [[ "$*" == *"ls-remote"* ]]; then
   if [[ "$*" == *"refs/tags/"* && "$FAKE_REMOTE_REF" != refs/tags/* ]]; then exit 0; fi
@@ -331,10 +357,27 @@ exit 64
       ...process.env,
       FAKE_BRANCH_HEADS: (params.branchHeads ?? ["release/2026.7.1"]).join("\n"),
       FAKE_METADATA: JSON.stringify(metadata),
+      FAKE_DIRECT_PR: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: params.directPullRequest
+              ? {
+                  state: params.directPullRequest.state ?? "MERGED",
+                  baseRepository: {
+                    nameWithOwner: params.directPullRequest.baseRepository ?? "openclaw/openclaw",
+                  },
+                  mergeCommit: { oid: params.directPullRequest.mergeCommitOid ?? candidateSha },
+                  mergedBy: { login: params.directPullRequest.mergedBy ?? "release-maintainer" },
+                }
+              : null,
+          },
+        },
+      }),
       FAKE_PERMISSION: JSON.stringify({
         permission: params.permission === "admin" ? "admin" : "write",
         role_name: params.permission ?? "maintain",
       }),
+      FAKE_RELEASE_COMPARE_STATUS: params.releaseCompareStatus ?? "diverged",
       FAKE_REMOTE_REF: remoteRef,
       FAKE_REMOTE_SHA: params.remoteSha ?? candidateSha,
       CANDIDATE_GIT_DIR:
@@ -359,10 +402,13 @@ describe("release Telegram QA workflow", () => {
     expect(caller).toMatchObject({
       needs: ["resolve_target"],
       permissions: { actions: "write", contents: "read" },
-      "runs-on": "ubuntu-24.04",
       "timeout-minutes": 210,
     });
+    expect(evaluateWorkflowRunner(caller?.["runs-on"])).toBe("ubuntu-24.04");
     expect(caller?.environment).toBeUndefined();
+    expect(caller?.outputs?.conclusion).toBe(
+      "${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}",
+    );
     expect(caller?.["continue-on-error"]).toBeUndefined();
 
     const trusted = job("trusted_identity");
@@ -371,7 +417,7 @@ describe("release Telegram QA workflow", () => {
       "runs-on": "ubuntu-24.04",
       "timeout-minutes": 5,
     });
-    expect(step("trusted_identity", "Verify dispatched-main identity").id).toBe("identity");
+    expect(step("trusted_identity", "Verify dispatched workflow identity").id).toBe("identity");
 
     const candidateBuild = requireRun(
       "build_candidate",
@@ -388,10 +434,22 @@ describe("release Telegram QA workflow", () => {
     expect(requireRun("run_telegram", "Build trusted QA harness").trim()).toBe(
       "pnpm build qaRuntime",
     );
+    const extractCandidate = step("run_telegram", "Verify attestation and bounded extract");
+    expect(extractCandidate.env?.CALLED_WORKFLOW_REF).toBe(
+      "${{ needs.trusted_identity.outputs.workflow_ref }}",
+    );
+    expect(extractCandidate.run).toContain(
+      '--cert-identity "https://github.com/${CALLED_WORKFLOW_REF}"',
+    );
+    expect(extractCandidate.run).not.toContain("openclaw-release-telegram-qa.yml@refs/heads/main");
 
     const runJob = job("run_telegram");
     expect(runJob.environment).toBe("qa-live-shared");
     expect(runJob["timeout-minutes"]).toBe(60);
+    const advisoryStatusStep = step("advisory_status", "Record advisory status");
+    expect(advisoryStatusStep.env?.CANDIDATE_RUN_ATTEMPT).toBe(
+      "${{ needs.build_candidate.outputs.run_attempt }}",
+    );
     expect(requireRun("advisory_status", "Record advisory status").trim()).toBe(
       "set -euo pipefail\nnode scripts/release-telegram-qa.mjs advisory-status",
     );
@@ -410,9 +468,28 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
-  it("accepts only the resolved trusted workflow identity", () => {
+  it("routes every documented workflow ref through exact direct and reusable identity", () => {
     const trustedSha = "b".repeat(40);
-    expect(runIdentityVerification({ expectedTrustedWorkflowSha: trustedSha }).status).toBe(0);
+    const releaseCiBranch = `release-ci/${trustedSha.slice(0, 12)}-1787215404735`;
+    for (const workflowBranch of [
+      "main",
+      "release/2026.7.1",
+      "extended-stable/2026.7.33",
+      releaseCiBranch,
+    ]) {
+      for (const invocation of ["dispatch", "reusable"] as const) {
+        const result = runIdentityVerification({
+          expectedTrustedWorkflowSha: trustedSha,
+          invocation,
+          workflowBranch,
+        });
+        expect(result.status, `${workflowBranch}/${invocation}: ${result.stderr}`).toBe(0);
+      }
+    }
+  });
+
+  it("accepts only canonical exact-SHA workflow and target identities", () => {
+    const trustedSha = "b".repeat(40);
     for (const targetContextRef of [
       "release/2026.7.1",
       "extended-stable/2026.7.33",
@@ -438,39 +515,100 @@ describe("release Telegram QA workflow", () => {
         oidcJobWorkflowSha: "c".repeat(40),
       }).stderr,
     ).toContain("OIDC job_workflow_sha mismatch");
+    expect(
+      runIdentityVerification({
+        expectedTrustedWorkflowSha: trustedSha,
+        workflowBranch: "release-ci/not-canonical",
+      }).stderr,
+    ).toContain("must be exact main, canonical release or extended-stable");
+    expect(
+      runIdentityVerification({
+        expectedTrustedWorkflowSha: trustedSha,
+        workflowBranch: `release-ci/${"c".repeat(12)}-1787215404735`,
+      }).stderr,
+    ).toContain("release-ci ref does not match the authorized tooling SHA");
+    for (const workflowBranch of [
+      "release/2026.0.1",
+      "release/2026.07.1",
+      "extended-stable/2026.13.33",
+      "extended-stable/2026.7.32",
+    ]) {
+      expect(
+        runIdentityVerification({
+          expectedTrustedWorkflowSha: trustedSha,
+          workflowBranch,
+        }).stderr,
+      ).toContain("must be exact main, canonical release or extended-stable");
+    }
   });
 
-  it("accepts trusted release provenance and rejects same-repository PR heads", () => {
+  it("accepts only same-line extended-stable successors in both provenance blocks", () => {
     for (const provenanceBlock of PROVENANCE_BLOCKS) {
-      const signed = runCandidateProvenance(provenanceBlock);
-      expect(signed.status, `${provenanceBlock.stepName}: ${signed.stderr}`).toBe(0);
+      const accepted = runCandidateProvenance(provenanceBlock, {
+        candidateVersion: "2026.7.35",
+        targetContextRef: "extended-stable/2026.7.33",
+      });
+      expect(accepted.status, `${provenanceBlock.stepName}: ${accepted.stderr}`).toBe(0);
 
-      const openPr = runCandidateProvenance(provenanceBlock, { openPr: true });
-      expect(openPr.status, provenanceBlock.stepName).not.toBe(0);
-      if (provenanceBlock.jobName === "build_candidate") {
-        expect(openPr.stderr).toContain("open same-repository PR head");
+      for (const candidateVersion of ["2026.7.32", "2026.8.35", "2026.7.35-beta.1"]) {
+        const rejected = runCandidateProvenance(provenanceBlock, {
+          candidateVersion,
+          targetContextRef: "extended-stable/2026.7.33",
+        });
+        expect(rejected.status, `${provenanceBlock.stepName}: ${candidateVersion}`).toBe(1);
+        expect(rejected.stderr).toContain("PATCH >= 33");
       }
     }
   });
 
-  it("accepts canonical beta release branch heads in both provenance blocks", () => {
-    const results = PROVENANCE_BLOCKS.map((provenanceBlock) => ({
-      provenanceBlock,
-      result: runCandidateProvenance(provenanceBlock, {
-        candidateVersion: "2026.7.1-beta.3",
-        targetContextRef: "release/2026.7.1",
-      }),
-    }));
-    expect(
-      results.map(({ provenanceBlock, result }) => ({
-        block: provenanceBlock.stepName,
-        status: result.status,
-        stderr: result.stderr,
-      })),
-    ).toEqual([
-      { block: "Validate candidate release provenance", status: 0, stderr: "" },
-      { block: "Revalidate candidate release provenance", status: 0, stderr: "" },
-    ]);
+  it("keeps exact release candidates trusted when the canonical branch advances", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      for (const targetContextRef of ["release/2026.7.35", "extended-stable/2026.7.33"]) {
+        for (const signature of ["maintainer", "web-flow", "missing"] as const) {
+          const result = runCandidateProvenance(provenanceBlock, {
+            candidateVersion: "2026.7.35",
+            remoteSha: "b".repeat(40),
+            releaseCompareStatus: "ahead",
+            targetContextRef,
+            signature,
+            mergedPullRequests: [{ baseRefName: targetContextRef }],
+          });
+          expect(result.status, `${provenanceBlock.stepName}/${signature}: ${result.stderr}`).toBe(
+            0,
+          );
+          expect(result.stdout).toContain("Telegram candidate trust reason: release-branch");
+        }
+      }
+    }
+  });
+
+  it("rejects untrusted or uncontained candidates after the release branch advances", () => {
+    const cases = [
+      { releaseCompareStatus: "behind" as const },
+      { releaseCompareStatus: "diverged" as const },
+      { targetRef: "extended-stable/2026.7.33" },
+      { remoteSha: "" },
+      { openPr: true },
+      { signature: "invalid" as const },
+      { permission: "write" as const },
+      { mergedPullRequests: [] },
+      { mergedPullRequests: [{ mergeCommitOid: "c".repeat(40) }] },
+      { mergedPullRequests: [{ baseRepository: "fork/openclaw" }] },
+    ];
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      for (const params of cases) {
+        const result = runCandidateProvenance(provenanceBlock, {
+          candidateVersion: "2026.7.35",
+          remoteSha: "b".repeat(40),
+          releaseCompareStatus: "ahead",
+          targetContextRef: "extended-stable/2026.7.33",
+          signature: "web-flow",
+          mergedPullRequests: [{ baseRefName: "extended-stable/2026.7.33" }],
+          ...params,
+        });
+        expect(result.status, `${provenanceBlock.stepName}: ${JSON.stringify(params)}`).not.toBe(0);
+      }
+    }
   });
 
   it("accepts only strict signed frozen beta branch heads in both provenance blocks", () => {
@@ -566,52 +704,69 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
-  it("attributes web-flow release heads through a unique integration-base merge", () => {
-    const results = PROVENANCE_BLOCKS.flatMap((provenanceBlock) =>
-      ["2026.7.1", "2026.7.1-beta.3"].map((candidateVersion) => ({
-        candidateVersion,
-        provenanceBlock,
-        result: runCandidateProvenance(provenanceBlock, {
-          candidateVersion,
-          mergedPullRequests: [{ baseRefName: "release-integration/2026.7.1-repair-2" }],
+  it("verifies an exact merged PR directly when commit associations omit it", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      for (const signature of ["web-flow", "missing"] as const) {
+        const result = runCandidateProvenance(provenanceBlock, {
+          candidateVersion: "2026.7.33",
+          targetContextRef: "extended-stable/2026.7.33",
+          signature,
+          messageHeadline: "fix(release): keep survivor sessions inside retention (#149710)",
+          directPullRequest: {},
+          unrelatedOpenPullRequests: 2,
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("Telegram candidate trust reason: release-branch");
+      }
+    }
+  });
+
+  it("uses one exact associated merge without consulting the PR hint", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      const result = runCandidateProvenance(provenanceBlock, {
+        candidateVersion: "2026.7.33",
+        directPullRequest: { state: "OPEN" },
+        mergedPullRequests: [{}],
+        messageHeadline: "fixture (#149710)",
+        signature: "web-flow",
+        targetContextRef: "extended-stable/2026.7.33",
+        unrelatedOpenPullRequests: 2,
+      });
+      expect(result.status, `${provenanceBlock.stepName}: ${result.stderr}`).toBe(0);
+    }
+  });
+
+  it("never treats a commit's PR hint as release authorization", () => {
+    const cases = [
+      { label: "missing PR", directPullRequest: undefined },
+      { label: "open PR", directPullRequest: { state: "OPEN" } },
+      { label: "closed unmerged PR", directPullRequest: { state: "CLOSED" } },
+      { label: "foreign base repository", directPullRequest: { baseRepository: "fork/openclaw" } },
+      { label: "different merge SHA", directPullRequest: { mergeCommitOid: "b".repeat(40) } },
+      { label: "missing merger", directPullRequest: { mergedBy: "" } },
+      { label: "insufficient merger permission", permission: "write" as const },
+      { label: "invalid signature", signature: "invalid" as const },
+      { label: "open candidate head", openPr: true },
+      { label: "stale context branch", remoteSha: "b".repeat(40) },
+      { label: "wrong version", candidateVersion: "2026.8.33" },
+      { label: "no canonical PR suffix", messageHeadline: "claimed #149710 elsewhere" },
+      { label: "ambiguous existing associations", mergedPullRequests: [{}, {}] },
+    ];
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      for (const { label, ...params } of cases) {
+        const result = runCandidateProvenance(provenanceBlock, {
+          candidateVersion: "2026.7.33",
+          targetContextRef: "extended-stable/2026.7.33",
           signature: "web-flow",
-          targetContextRef: "release/2026.7.1",
-        }),
-      })),
-    );
-    expect(
-      results.map(({ candidateVersion, provenanceBlock, result }) => ({
-        block: provenanceBlock.stepName,
-        candidateVersion,
-        status: result.status,
-        stderr: result.stderr,
-      })),
-    ).toEqual([
-      {
-        block: "Validate candidate release provenance",
-        candidateVersion: "2026.7.1",
-        status: 0,
-        stderr: "",
-      },
-      {
-        block: "Validate candidate release provenance",
-        candidateVersion: "2026.7.1-beta.3",
-        status: 0,
-        stderr: "",
-      },
-      {
-        block: "Revalidate candidate release provenance",
-        candidateVersion: "2026.7.1",
-        status: 0,
-        stderr: "",
-      },
-      {
-        block: "Revalidate candidate release provenance",
-        candidateVersion: "2026.7.1-beta.3",
-        status: 0,
-        stderr: "",
-      },
-    ]);
+          messageHeadline: "fixture (#149710)",
+          directPullRequest: {},
+          ...params,
+        });
+        expect(result.status, `${provenanceBlock.stepName}: ${label}: ${result.stderr}`).not.toBe(
+          0,
+        );
+      }
+    }
   });
 
   it("keeps release provenance attribution fail-closed in both blocks", () => {
@@ -741,21 +896,21 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
-  it("writes terminal evidence only for complete successful producers", () => {
-    const success = runAdvisoryStatus();
-    expect(success.result.status, success.result.stderr).toBe(0);
-    expect(success.outputs.status).toBe("success");
-    expect(success.evidence).toMatchObject({
-      kind: "release-check-status",
-      status: "success",
-      candidateArtifact: { id: "123", sourceSha: "a".repeat(40) },
+  it("records reused candidate and fresh evidence attempts independently", () => {
+    const runId = "123456";
+    const targetSha = "a".repeat(40);
+    const rerun = runAdvisoryStatus({
+      GITHUB_RUN_ATTEMPT: "2",
+      EVIDENCE_ARTIFACT_NAME: `release-qa-live-telegram-${runId}-2-${targetSha}`,
     });
 
-    const failure = runAdvisoryStatus({ BUILD_RESULT: "failure", BUILD_STATUS: "failure" });
-    expect(failure.result.status, failure.result.stderr).toBe(0);
-    expect(failure.outputs.status).toBe("failure");
-    expect(failure.evidence.candidateArtifact).toMatchObject({ id: "123" });
-    expect(failure.statusFile).toContain("build:failure");
+    expect(rerun.result.status, rerun.result.stderr).toBe(0);
+    expect(rerun.evidence).toMatchObject({
+      runAttempt: 2,
+      candidateArtifact: { runAttempt: 1 },
+      evidenceArtifact: { runAttempt: 2 },
+    });
+    expect(rerun.statusFile).toContain("run_attempt=2");
   });
 
   it.runIf(process.platform === "linux")("retains only bounded, allowlisted diagnostics", () => {
@@ -792,53 +947,6 @@ describe("release Telegram QA workflow", () => {
     expect(output).not.toContain("private trace");
   });
 
-  it.runIf(process.platform === "linux")("keeps the newest eight gateway logs", () => {
-    const script = requireRun("run_telegram", "Capture isolated Telegram runtime diagnostics");
-    const selector = script.match(/mapfile -d '' -t gateway_logs < <\([\s\S]*?^\)/mu)?.[0];
-    expect(selector).toBeTruthy();
-    const workdir = tempDirs.make("openclaw-telegram-log-selector-");
-    const runtimeRoot = join(workdir, "runtime");
-    const fakeBin = join(workdir, "bin");
-    mkdirSync(join(runtimeRoot, "tmp"), { recursive: true });
-    mkdirSync(fakeBin);
-    writeFileSync(join(fakeBin, "sudo"), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
-    const paths = Array.from({ length: 12 }, (_, index) => {
-      const path = join(runtimeRoot, "tmp", `openclaw-${index}.log`);
-      writeFileSync(path, `${index}\n`);
-      utimesSync(path, index + 1, index + 1);
-      return path;
-    });
-    const result = spawnSync(
-      "bash",
-      ["-c", `set -euo pipefail\n${selector}\nprintf '%s\\0' "\${gateway_logs[@]}"`],
-      {
-        encoding: "utf8",
-        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, RUNTIME_ROOT: runtimeRoot },
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.split("\0").filter(Boolean)).toEqual(paths.slice(4).toReversed());
-  });
-
-  it("keeps generated SUT programs syntactically valid", () => {
-    const createSut = requireRun(
-      "run_telegram",
-      "Create isolated Telegram SUT identity and launcher",
-    );
-    const launcher = extractHereDocument(createSut, "LAUNCHER");
-    expect(spawnSync("bash", ["-n"], { encoding: "utf8", input: launcher }).status).toBe(0);
-    const preload = extractHereDocument(createSut, "PRELOAD");
-    const workdir = tempDirs.make("openclaw-telegram-preload-");
-    const preloadPath = join(workdir, "preload.mjs");
-    writeFileSync(preloadPath, preload);
-    const env = { ...process.env };
-    delete env.OPENCLAW_QA_SUT_PREENTRY_STOP;
-    expect(
-      spawnSync(process.execPath, ["--import", preloadPath, "-e", ""], { encoding: "utf8", env })
-        .status,
-    ).not.toBe(0);
-  });
-
   it("shares only the isolated workspace with the trusted scenario host", () => {
     const createSut = requireRun(
       "run_telegram",
@@ -872,23 +980,203 @@ describe("release Telegram QA workflow", () => {
     );
     expect(createSut).not.toContain('chmod 0711 "$temp_root"');
     expect(createSut).not.toContain('chmod 1777 "$temp_root"');
+    expect(createSut).toContain('"${temp_root}/state/qa-auth-bootstrap/openclaw.json")');
+    expect(createSut).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}"',
+    );
+    expect(createSut).toContain('generation_dir="${RUNTIME_ROOT}/config-generations"');
+    expect(createSut).toContain('install -d -o root -g root -m 0700 "$generation_dir"');
+    expect(createSut).toContain('"regular file:600:0:0"');
+    expect(createSut).toContain('/usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID"');
+    expect(createSut).toContain('export OPENCLAW_CONFIG_PATH="$projection_dir/openclaw.json"');
   });
 
-  it("adds an empty PS1 only after attested runtime environment verification", () => {
+  it.runIf(process.platform === "linux").each(["directory", "symlink"])(
+    "projects a %s run fixture through the actual SUT config seeder",
+    (kind) => {
+      const launcher = extractHereDocument(
+        requireRun("run_telegram", "Create isolated Telegram SUT identity and launcher"),
+        "LAUNCHER",
+      );
+      const source = launcher.match(
+        /\/bin\/bash --noprofile --norc -ceu '\n\s*(umask 077\n[\s\S]*?)\n\s*' openclaw-config-projection/u,
+      )?.[1];
+      if (!source) {
+        throw new Error("Expected the unprivileged SUT config seeder");
+      }
+      const program = source.replaceAll("'\\''", "'");
+      const root = tempDirs.make("openclaw-telegram-plugin-projection-");
+      const plugin = join(root, "hook");
+      mkdirSync(plugin);
+      writeFileSync(join(plugin, "index.js"), "export default { register() {} };\n");
+      if (kind === "symlink") {
+        symlinkSync(join(plugin, "index.js"), join(plugin, "escape.js"));
+      }
+      const configPath = join(root, "openclaw.json");
+      const external = "/outside/run/fixture";
+      const config = JSON.stringify({ plugins: { load: { paths: [plugin, external] } } });
+      writeFileSync(configPath, config);
+      const projection = join(root, "state", "projection");
+      const result = spawnSync(
+        "bash",
+        [
+          "-ceu",
+          program,
+          "openclaw-config-projection",
+          configPath,
+          projection,
+          createHash("sha256").update(config).digest("hex"),
+          root,
+        ],
+        { encoding: "utf8" },
+      );
+      if (kind === "symlink") {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "Telegram QA plugin fixture contains unsupported file types",
+        );
+        return;
+      }
+      expect(result.status, result.stderr).toBe(0);
+      const projected = JSON.parse(readFileSync(join(projection, "openclaw.json"), "utf8"));
+      const copied = projected.plugins.load.paths[0] as string;
+      expect(copied).not.toBe(plugin);
+      expect(readFileSync(join(copied, "index.js"), "utf8")).toBe(
+        "export default { register() {} };\n",
+      );
+      expect(statSync(copied).uid).toBe(process.getuid!());
+      expect(projected.plugins.load.paths[1]).toBe(external);
+      expect(readFileSync(configPath, "utf8")).toBe(config);
+    },
+  );
+
+  it("admits only one source-generation directory beneath the writable config root", () => {
+    const launcher = extractHereDocument(
+      requireRun("run_telegram", "Create isolated Telegram SUT identity and launcher"),
+      "LAUNCHER",
+    );
+    const admission = launcher.match(/case "\$OPENCLAW_CONFIG_PATH" in\n[\s\S]*?\n\s*esac/u)?.[0];
+    expect(admission).toBeTruthy();
+    const stateRoot = "/isolated-telegram/state";
+    const generation = "a".repeat(64);
+    const paths = [
+      [`${stateRoot}/qa-runtime-config/${generation}/openclaw.json`, true],
+      [`${stateRoot}/qa-runtime-config/openclaw.json`, false],
+      [`${stateRoot}/qa-runtime-config/not-a-generation/openclaw.json`, false],
+      [`${stateRoot}/qa-runtime-config/nested/${generation}/openclaw.json`, false],
+      [`${stateRoot}/qa-runtime-config/${generation.slice(1)}/openclaw.json`, false],
+      [`${stateRoot}/qa-runtime-config/${generation.toUpperCase()}/openclaw.json`, false],
+      [`${stateRoot}/other/${generation}/openclaw.json`, false],
+    ] as const;
+    for (const [configPath, allowed] of paths) {
+      const result = spawnSync("bash", ["-ceu", admission!], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateRoot,
+          OPENCLAW_CONFIG_PATH: configPath,
+        },
+      });
+      expect(result.status === 0, configPath).toBe(allowed);
+    }
+  });
+
+  it("keeps launcher identity private while forwarding the Gateway stdin lifeline", () => {
     const createSut = requireRun(
       "run_telegram",
       "Create isolated Telegram SUT identity and launcher",
     );
     const launcher = extractHereDocument(createSut, "LAUNCHER");
-    const verification = '[[ "$actual_env_keys_b64" == "$runtime_expected_env_keys_b64" ]]';
-    const ps1Export = "export PS1=";
-    const candidateExec = 'exec "$runtime_node_bin" "${runtime_node_args[@]}"';
+    const declarations = launcher.slice(
+      launcher.indexOf("transport_keys=("),
+      launcher.indexOf("\nload_process_identity()"),
+    );
+    const filter = launcher.slice(
+      launcher.indexOf("declare -A keep_env=()"),
+      launcher.indexOf("\ntemp_root="),
+    );
+    const handoff = launcher.slice(
+      launcher.indexOf("export SUT_UID "),
+      launcher.indexOf("\nlauncher_stage=enter-mount-namespace"),
+    );
+    const cleanup = launcher.match(
+      /\n(\s+unset \\\n[\s\S]*?)\n\s*\n\s*if \[\[ "\$runtime_boundary_mode"/u,
+    )?.[1];
+    expect(cleanup).toBeDefined();
+    const result = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-ceu",
+        `${declarations}\n${filter}\nconfig_path=/synthetic/openclaw.json\n${handoff}
+printf '%s\\n' "$BASHPID" "\${launcher_pid-}"
+${cleanup}
+printf '%s\\n' "\${OPENCLAW_GATEWAY_HOST_LIFELINE-}" "\${launcher_pid-unset}" "\${OPENCLAW_QA_PARENT_PID-unset}" "\${PRIVATE_RUNNER_VALUE-unset}"`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          OPENCLAW_GATEWAY_HOST_LIFELINE: "stdin",
+          OPENCLAW_QA_PARENT_PID: "999999",
+          PRIVATE_RUNNER_VALUE: "runner-only",
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const [shellPid, launcherPid, ...runtimeValues] = result.stdout.trim().split("\n");
+    expect(runtimeValues).toEqual(["stdin", "unset", "unset", "unset"]);
+    expect(shellPid).toMatch(/^[1-9][0-9]*$/u);
+    expect(launcherPid).toBe(shellPid);
+  });
 
-    expect(launcher.match(/export PS1=/gu)).toHaveLength(1);
-    expect(launcher.indexOf(verification)).toBeGreaterThan(-1);
-    expect(launcher.indexOf(ps1Export)).toBeGreaterThan(launcher.indexOf(verification));
-    expect(launcher.indexOf(candidateExec)).toBeGreaterThan(launcher.indexOf(ps1Export));
-    expect(launcher.match(/exec "\$runtime_node_bin"/gu)).toHaveLength(1);
-    expect(launcher).toContain('grep -Ev "^(PWD|SHLVL|_)$"');
+  it("does not read shell startup files from socket-backed QA stdin", () => {
+    const launcher = extractHereDocument(
+      requireRun("run_telegram", "Create isolated Telegram SUT identity and launcher"),
+      "LAUNCHER",
+    );
+    const shellCommands = [...launcher.matchAll(/\/bin\/bash ([^\n]*-ceu) '/gu)];
+    expect(shellCommands.length).toBeGreaterThan(0);
+    const workdir = tempDirs.make("openclaw-telegram-shell-startup-");
+    writeFileSync(join(workdir, ".bashrc"), 'printf "UNEXPECTED_STARTUP\\n" >&2\n');
+    for (const [, shellArgs] of shellCommands) {
+      if (!shellArgs) {
+        throw new Error("Expected generated Bash arguments");
+      }
+      const result = spawnSync(
+        process.platform === "win32" ? "bash" : "/bin/bash",
+        [...shellArgs.split(" "), 'read -r value; printf "%s\\n" "$value"'],
+        {
+          encoding: "utf8",
+          env: { HOME: workdir, PATH: process.env.PATH },
+          input: "synthetic-stdin\n",
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("synthetic-stdin\n");
+      expect(result.stderr).toBe("");
+    }
+
+    expect(launcher).not.toContain("export PS1=");
+    expect(launcher).not.toContain("export -n BASHOPTS SHELLOPTS");
+    expect(launcher).not.toContain("unset BASH_ENV ENV");
+  });
+
+  it("mounts an isolated SUT-owned tmp without exposing the host tmp tree", () => {
+    const createSut = requireRun(
+      "run_telegram",
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const launcher = extractHereDocument(createSut, "LAUNCHER");
+
+    expect(launcher).toContain('for masked_path in "$RUNNER_HOME" /var/tmp /dev/shm; do');
+    expect(launcher).toContain("set_launcher_stage mount-private-tmp");
+    expect(launcher).toContain('-o "mode=0700,uid=${SUT_UID},gid=${SUT_GID},nosuid,nodev,noexec"');
+    expect(launcher).toContain("openclaw-telegram-sut-tmp");
+    expect(launcher).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' /tmp)" == "directory:700:${SUT_UID}:${SUT_GID}"',
+    );
+    expect(launcher).not.toContain('for masked_path in "$RUNNER_HOME" /tmp');
   });
 });

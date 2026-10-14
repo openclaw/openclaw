@@ -10,28 +10,32 @@ import type {
   ShouldComputeCommandAuthorized,
 } from "../../auto-reply/command-detection.runtime-types.js";
 import type { ShouldHandleTextCommands } from "../../auto-reply/commands-registry.runtime-types.js";
-import type { DispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.types.js";
+import type { DispatchReplyFromConfig as CoreDispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type {
   BuildMentionRegexes,
   MatchesMentionPatterns,
   MatchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.types.js";
 import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
+import type { ChannelRuntimeContextRegistry } from "../../channels/plugins/channel-runtime-surface.types.js";
 import type { LoadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.types.js";
 import type { ResolveMarkdownTableMode } from "../../config/markdown-tables.types.js";
 import type {
   ReadSessionUpdatedAt,
   RecordSessionMetaFromInbound,
-  UpdateLastRoute,
 } from "../../config/sessions/runtime-types.js";
 import type {
   ReadChannelAllowFromStoreForAccount,
   RemoveChannelAllowFromStoreEntryForAccount,
   UpsertChannelPairingRequestForAccount,
 } from "../../pairing/pairing-store.types.js";
+import type { PublicReplyParams } from "../../plugin-sdk/reply-options.js";
 
 type DispatchReplyWithBufferedBlockDispatcher =
-  import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
+  import("../../plugin-sdk/reply-dispatch-runtime.js").DispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyFromConfig = (
+  params: PublicReplyParams<Parameters<CoreDispatchReplyFromConfig>[0]>,
+) => ReturnType<CoreDispatchReplyFromConfig>;
 type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
 
 type RuntimeThreadBindingLifecycleRecord =
@@ -42,39 +46,6 @@ type RuntimeThreadBindingLifecycleRecord =
       idleTimeoutMs?: number;
       maxAgeMs?: number;
     };
-
-type PluginRuntimeChannelContextKey = {
-  channelId: string;
-  accountId?: string | null;
-  capability: string;
-};
-
-type PluginRuntimeChannelContextEvent = {
-  type: "registered" | "unregistered";
-  key: {
-    channelId: string;
-    accountId?: string;
-    capability: string;
-  };
-  context?: unknown;
-};
-
-type PluginRuntimeChannelContextRegistry = {
-  register: (
-    params: PluginRuntimeChannelContextKey & {
-      context: unknown;
-      abortSignal?: AbortSignal;
-    },
-  ) => { dispose: () => void };
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Runtime context values are caller-typed by key.
-  get: <T = unknown>(params: PluginRuntimeChannelContextKey) => T | undefined;
-  watch: (params: {
-    channelId?: string;
-    accountId?: string | null;
-    capability?: string;
-    onEvent: (event: PluginRuntimeChannelContextEvent) => void;
-  }) => () => void;
-};
 
 export type PluginRuntimeChannel = {
   text: {
@@ -146,11 +117,16 @@ export type PluginRuntimeChannel = {
   session: {
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
+    /** @deprecated Use readSessionUpdatedAtAsync. Retained until the next Plugin SDK major. */
     readSessionUpdatedAt: ReadSessionUpdatedAt;
+    readSessionUpdatedAtAsync: (
+      ...params: Parameters<ReadSessionUpdatedAt>
+    ) => Promise<ReturnType<ReadSessionUpdatedAt>>;
     recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     recordInboundSession: RecordInboundSession;
-    updateLastRoute: UpdateLastRoute;
+    updateLastRoute: typeof import("../../plugin-sdk/session-store-runtime.js").updateLastRoute;
+    updateLastRouteWithAuthority: typeof import("../../plugin-sdk/session-store-runtime.js").updateLastRouteWithAuthority;
   };
   mentions: {
     buildMentionRegexes: BuildMentionRegexes;
@@ -183,21 +159,37 @@ export type PluginRuntimeChannel = {
     loadAdapter: LoadChannelOutboundAdapter;
   };
   inbound: {
+    /** Ingress policy and identity handoff bound to this channel's host instance. */
+    ingress: {
+      createResolver: typeof import("../../channels/message-access/runtime.js").createChannelIngressPolicyResolver;
+      resolve: typeof import("../../channels/message-access/runtime.js").resolveChannelIngressPolicy;
+      resolveStable: typeof import("../../channels/message-access/runtime.js").resolveStableChannelIngressPolicy;
+    };
     buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
-    run: typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
+    run: typeof import("../../plugin-sdk/channel-inbound.js").runChannelInboundEvent;
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
     runPreparedReply: typeof import("../../channels/turn/execution.js").runPreparedChannelTurn;
-    dispatch: typeof import("../../channels/turn/lifecycle.js").dispatchRoutedChannelTurn;
+    dispatch: typeof import("../../plugin-sdk/channel-inbound.js").dispatchChannelInboundTurn;
     /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
-    dispatchReply: typeof import("../../channels/turn/lifecycle.js").dispatchAssembledChannelTurn;
+    dispatchReply: typeof import("../../plugin-sdk/channel-inbound.js").dispatchChannelInboundReply;
   };
+  /** @deprecated Compatibility for shipped plugins; use `channel.inbound`. */
+  turn: PluginRuntimeChannel["inbound"];
   threadBindings: {
+    setIdleTimeoutBySessionKeyAsync: (
+      params: Parameters<PluginRuntimeChannel["threadBindings"]["setIdleTimeoutBySessionKey"]>[0],
+    ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
+    setMaxAgeBySessionKeyAsync: (
+      params: Parameters<PluginRuntimeChannel["threadBindings"]["setMaxAgeBySessionKey"]>[0],
+    ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
+    /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Retained through the next Plugin SDK major. */
     setIdleTimeoutBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;
       accountId?: string;
       idleTimeoutMs: number;
     }) => RuntimeThreadBindingLifecycleRecord[];
+    /** @deprecated Use setMaxAgeBySessionKeyAsync. Retained through the next Plugin SDK major. */
     setMaxAgeBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;
@@ -205,5 +197,5 @@ export type PluginRuntimeChannel = {
       maxAgeMs: number;
     }) => RuntimeThreadBindingLifecycleRecord[];
   };
-  runtimeContexts: PluginRuntimeChannelContextRegistry;
+  runtimeContexts: ChannelRuntimeContextRegistry;
 };

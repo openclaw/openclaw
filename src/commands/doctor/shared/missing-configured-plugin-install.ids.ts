@@ -5,18 +5,16 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
-import {
-  resolveOfficialExternalProviderContractPluginIds,
-  resolveOfficialExternalWebProviderContractPluginIdsForEnv,
-} from "../../../plugins/official-external-plugin-catalog.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
+import { resolveOfficialExternalProviderContractPluginIds } from "../../../plugins/official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import {
-  resolveWebSearchInstallCatalogEntriesForEnv,
-  resolveWebSearchInstallCatalogEntry,
-} from "../../../plugins/web-search-install-catalog.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+import {
+  collectConfiguredWebFetchPluginIds,
+  collectConfiguredWebSearchPluginIds,
+} from "./configured-provider-plugin-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
-import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
+import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-owners.js";
 
 function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
@@ -24,70 +22,6 @@ function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   }
   const pluginId = value.trim();
   if (pluginId) {
-    ids.add(pluginId);
-  }
-}
-
-function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
-  for (const runtime of collectConfiguredRuntimePluginIds(cfg)) {
-    addConfiguredPluginId(ids, runtime);
-  }
-}
-
-function addConfiguredMemoryEmbeddingProviderPluginIds(
-  ids: Set<string>,
-  cfg: OpenClawConfig,
-): void {
-  const configuredProviderIds = collectConfiguredMemoryEmbeddingProviderIds(cfg);
-  if (configuredProviderIds.size === 0) {
-    return;
-  }
-  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-    contract: "embeddingProviders",
-    providerIds: configuredProviderIds,
-  })) {
-    ids.add(pluginId);
-  }
-}
-
-function addConfiguredSpeechProviderPluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
-  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-    contract: "speechProviders",
-    providerIds: collectConfiguredSpeechProviderIds(cfg),
-  })) {
-    ids.add(pluginId);
-  }
-}
-
-function addConfiguredWebFetchProviderPluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
-  const webFetch = cfg.tools?.web?.fetch;
-  if (webFetch?.enabled === false) {
-    return;
-  }
-  const providerId = normalizeOptionalLowercaseString(webFetch?.provider);
-  if (!providerId) {
-    return;
-  }
-  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-    contract: "webFetchProviders",
-    providerIds: new Set([providerId]),
-  })) {
-    ids.add(pluginId);
-  }
-}
-
-function addEnvWebFetchProviderPluginIds(
-  ids: Set<string>,
-  cfg: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): void {
-  if (cfg.tools?.web?.fetch?.enabled === false) {
-    return;
-  }
-  for (const pluginId of resolveOfficialExternalWebProviderContractPluginIdsForEnv({
-    contract: "webFetchProviders",
-    env: env ?? process.env,
-  })) {
     ids.add(pluginId);
   }
 }
@@ -103,32 +37,41 @@ export function collectConfiguredPluginIds(
   }
   const entries = asNullableRecord(plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (asNullableRecord(entry)?.enabled === false) {
+    if (
+      asNullableRecord(entry)?.enabled === false ||
+      isNativeSessionCatalogOptOutOnly(pluginId, entry)
+    ) {
       continue;
     }
     addConfiguredPluginId(ids, pluginId);
   }
-  const searchProvider = cfg.tools?.web?.search?.provider;
-  if (cfg.tools?.web?.search?.enabled !== false && typeof searchProvider === "string") {
-    const installEntry = resolveWebSearchInstallCatalogEntry({ providerId: searchProvider });
-    if (installEntry?.pluginId) {
-      ids.add(installEntry.pluginId);
-    }
+  for (const pluginId of collectConfiguredWebSearchPluginIds(cfg, env ?? process.env, "selected")) {
+    ids.add(pluginId);
   }
-  if (cfg.tools?.web?.search?.enabled !== false) {
-    // Env-only web providers are valid auto-detect inputs and need their manifest installed first.
-    for (const entry of resolveWebSearchInstallCatalogEntriesForEnv(env ?? process.env)) {
-      ids.add(entry.pluginId);
-    }
+  for (const pluginId of collectConfiguredRuntimePluginIds(cfg, { env })) {
+    ids.add(pluginId);
   }
-  addConfiguredAgentRuntimePluginIds(ids, cfg);
   for (const pluginId of collectConfiguredProviderPluginIds({ cfg, env })) {
     ids.add(pluginId);
   }
-  addConfiguredMemoryEmbeddingProviderPluginIds(ids, cfg);
-  addConfiguredSpeechProviderPluginIds(ids, cfg);
-  addConfiguredWebFetchProviderPluginIds(ids, cfg);
-  addEnvWebFetchProviderPluginIds(ids, cfg, env);
+  const embeddingProviderIds = collectConfiguredMemoryEmbeddingProviderIds(cfg);
+  if (embeddingProviderIds.size > 0) {
+    for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+      contract: "embeddingProviders",
+      providerIds: embeddingProviderIds,
+    })) {
+      ids.add(pluginId);
+    }
+  }
+  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+    contract: "speechProviders",
+    providerIds: collectConfiguredSpeechProviderIds(cfg),
+  })) {
+    ids.add(pluginId);
+  }
+  for (const pluginId of collectConfiguredWebFetchPluginIds(cfg, env ?? process.env)) {
+    ids.add(pluginId);
+  }
   return ids;
 }
 
@@ -137,15 +80,13 @@ export function collectBlockedPluginIds(cfg: OpenClawConfig): Set<string> {
   const deny = cfg.plugins?.deny;
   if (Array.isArray(deny)) {
     for (const pluginId of deny) {
-      if (typeof pluginId === "string" && pluginId.trim()) {
-        ids.add(pluginId.trim());
-      }
+      addConfiguredPluginId(ids, pluginId);
     }
   }
   const entries = asNullableRecord(cfg.plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (pluginId.trim() && asNullableRecord(entry)?.enabled === false) {
-      ids.add(pluginId.trim());
+    if (asNullableRecord(entry)?.enabled === false) {
+      addConfiguredPluginId(ids, pluginId);
     }
   }
   return ids;

@@ -48,7 +48,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
     ```
 
     <Tip>
-    Keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent `auth-profiles.json`, sessions, and channel/provider state under `~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
+    Keep this VM **stateful**. OpenClaw stores `openclaw.json`, shared and per-agent SQLite auth stores, sessions, and channel/provider state under `~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
     </Tip>
 
   </Step>
@@ -173,9 +173,9 @@ From your local machine, create a patch file and pipe it to the VM:
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.6-sol" },
+      model: { primary: "openai/gpt-6-astra" },
       models: {
-        "openai/gpt-5.6-sol": { params: { fastMode: true } },
+        "openai/gpt-6-astra": { params: { fastMode: true } },
       },
     },
   },

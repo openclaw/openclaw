@@ -1,24 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Line tests cover group keys plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  resolveExactLineGroupConfigKey,
-  resolveLineGroupConfigEntry,
-  resolveLineGroupLookupIds,
-  resolveLineGroupsConfig,
-} from "./group-keys.js";
+import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
-
-describe("resolveLineGroupLookupIds", () => {
-  it("expands raw ids to both prefixed candidates", () => {
-    expect(resolveLineGroupLookupIds("abc123")).toEqual(["abc123", "group:abc123", "room:abc123"]);
-  });
-
-  it("preserves prefixed ids while also checking the raw id", () => {
-    expect(resolveLineGroupLookupIds("room:abc123")).toEqual(["abc123", "room:abc123"]);
-    expect(resolveLineGroupLookupIds("group:abc123")).toEqual(["abc123", "group:abc123"]);
-  });
-});
+import type { LineConfig } from "./types.js";
 
 describe("resolveLineGroupConfigEntry", () => {
   it("matches raw, prefixed, and wildcard group config entries", () => {
@@ -32,48 +16,43 @@ describe("resolveLineGroupConfigEntry", () => {
       requireMention: false,
     });
     expect(resolveLineGroupConfigEntry(groups, { roomId: "r1" })).toEqual({
+      requireMention: true,
       systemPrompt: "Room prompt",
     });
     expect(resolveLineGroupConfigEntry(groups, { groupId: "missing" })).toEqual({
       requireMention: true,
     });
   });
-});
 
-describe("account-scoped LINE groups", () => {
-  it("resolves the effective account-scoped groups map", () => {
-    const cfg = {
-      channels: {
-        line: {
-          groups: {
-            "*": { requireMention: true },
-          },
-          accounts: {
-            work: {
-              groups: {
-                "group:g1": { requireMention: false },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+  it("keeps the settings an operator only wrote on the wildcard", () => {
+    // A room entry that says nothing about mentions must not silently turn the
+    // wildcard's `requireMention: false` back into the mention-gated default.
+    const groups = {
+      "*": { requireMention: false, systemPrompt: "House rules" },
+      C1: { skills: ["deploy"] },
+    };
 
-    expect(resolveLineGroupsConfig(cfg, "work")).toEqual({
-      "group:g1": { requireMention: false },
+    expect(resolveLineGroupConfigEntry(groups, { groupId: "C1" })).toEqual({
+      requireMention: false,
+      systemPrompt: "House rules",
+      skills: ["deploy"],
     });
-    expect(
-      resolveExactLineGroupConfigKey({
-        groups: resolveLineGroupsConfig(cfg, "work"),
-        groupId: "g1",
-      }),
-    ).toBe("group:g1");
-    expect(
-      resolveExactLineGroupConfigKey({
-        groups: resolveLineGroupsConfig(cfg, "default"),
-        groupId: "g1",
-      }),
-    ).toBe(undefined);
+  });
+
+  it("resolves mentions the same way the channel reports them", () => {
+    // The inbound gate reads this entry while `/status` and the turn's activation
+    // directive read the scope tree. They answer the same question, so a room the
+    // wildcard opened must not be gated by one and open to the other.
+    const groups: NonNullable<LineConfig["groups"]> = {
+      "*": { requireMention: false },
+      C1: { systemPrompt: "team bot" },
+    };
+    const cfg = { channels: { line: { groups } } } as unknown as OpenClawConfig;
+
+    const entry = resolveLineGroupConfigEntry(groups, { groupId: "C1" });
+    expect(entry?.requireMention !== false).toBe(
+      resolveLineGroupRequireMention({ cfg, accountId: null, groupId: "C1" }),
+    );
   });
 });
 

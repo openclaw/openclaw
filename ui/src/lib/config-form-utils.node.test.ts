@@ -1,103 +1,83 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import {
-  cloneConfigObject,
+  hintForPath,
+  localizedHintForPath,
   removePathValue,
-  sanitizeRedactedFormForSubmit,
-  serializeConfigForm,
+  pruneEmptyConfigForm,
   setPathValue,
 } from "./config-form-utils.ts";
 
-function makeConfigWithProvider(): Record<string, unknown> {
-  return {
-    gateway: { auth: { token: "test-token" } },
-    models: {
-      providers: {
-        xai: {
-          baseUrl: "https://api.x.ai/v1",
-          models: [
-            {
-              id: "grok-4",
-              name: "Grok 4",
-              contextWindow: 131072,
-              maxTokens: 8192,
-              cost: { input: 0.5, output: 1, cacheRead: 0.1, cacheWrite: 0.2 },
-            },
-          ],
-        },
-      },
-    },
-  };
-}
-
-function getFirstXaiModel(payload: Record<string, unknown>): Record<string, unknown> {
-  const model = payload.models as Record<string, unknown>;
-  const providers = model.providers as Record<string, unknown>;
-  const xai = providers.xai as Record<string, unknown>;
-  const models = xai.models as Array<Record<string, unknown>>;
-  return models[0] ?? {};
-}
-
-function expectNumericModelCore(model: Record<string, unknown>) {
-  expect(typeof model.maxTokens).toBe("number");
-  expect(model.maxTokens).toBe(8192);
-  expect(typeof model.contextWindow).toBe("number");
-  expect(model.contextWindow).toBe(131072);
-}
-
-describe("form-utils preserves numeric types", () => {
-  it("serializeConfigForm preserves numbers in JSON output", () => {
-    const form = makeConfigWithProvider();
-    const raw = serializeConfigForm(form);
-    const parsed = JSON.parse(raw);
-    const model = parsed.models.providers.xai.models[0] as Record<string, unknown>;
-    const cost = model.cost as Record<string, unknown>;
-
-    expectNumericModelCore(model);
-    expect(typeof cost.input).toBe("number");
-    expect(cost.input).toBe(0.5);
-  });
-
-  it("cloneConfigObject + setPathValue preserves unrelated numeric fields", () => {
-    const form = makeConfigWithProvider();
-    const cloned = cloneConfigObject(form);
-    setPathValue(cloned, ["gateway", "auth", "token"], "new-token");
-    const first = getFirstXaiModel(cloned);
-
-    expectNumericModelCore(first);
-    expect(typeof first.cost).toBe("object");
-    expect(typeof (first.cost as Record<string, unknown>).input).toBe("number");
-  });
-});
-describe("sanitizeRedactedFormForSubmit", () => {
-  it("drops loaded redacted placeholders for paths missing from original raw config", () => {
-    const form = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          token: "__OPENCLAW_REDACTED__",
-        },
-      },
+describe("hintForPath", () => {
+  it("localizes the matched wildcard while preserving direct precedence and metadata", async () => {
+    const wildcard = {
+      label: "Plugin Enabled",
+      help: "Enable this plugin",
+      advanced: true,
+      order: 7,
     };
-    const originalForm = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          token: "__OPENCLAW_REDACTED__",
-        },
-      },
+    const direct = { label: "Specific plugin", sensitive: true };
+    const hints = {
+      "plugins.entries.*.enabled": wildcard,
+      "plugins.entries.specific.enabled": direct,
     };
-
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, { gateway: { mode: "remote" } }),
-    ).toEqual({
-      gateway: {
-        mode: "remote",
+    const key = configHintTranslationKey("plugins.entries.*.enabled", "label", wildcard.label);
+    i18n.registerTranslation("tr", {
+      configHints: {
+        "plugins%2Eentries%2E*%2Eenabled": { label: { [key.split(".").at(-1)!]: "Eklenti etkin" } },
       },
     });
+    await i18n.setLocale("tr");
+    try {
+      expect(localizedHintForPath(["plugins", "entries", "demo", "enabled"], hints)).toEqual({
+        ...wildcard,
+        label: "Eklenti etkin",
+      });
+      expect(localizedHintForPath(["plugins", "entries", "specific", "enabled"], hints)).toEqual(
+        direct,
+      );
+      expect(hintForPath(["plugins", "entries", "demo", "enabled"], hints)).toBe(wildcard);
+      expect(localizedHintForPath(["missing"], hints)).toBeUndefined();
+      expect(
+        localizedHintForPath(["plugins", "entries", "demo", "enabled"], {
+          "plugins.entries.*.enabled": { label: "Enable this plugin now" },
+        })?.label,
+      ).toBe("Enable this plugin now");
+    } finally {
+      await i18n.setLocale("en");
+    }
+    expect(localizedHintForPath(["plugins", "entries", "demo", "enabled"], hints)).toEqual(
+      wildcard,
+    );
   });
 
-  it("preserves loaded redacted placeholders that exist in original raw config", () => {
+  it("does not rescan wildcard hints for each path lookup", () => {
+    let catalogScans = 0;
+    const hints = new Proxy(
+      {
+        "plugins.entries.*.enabled": { label: "Plugin Enabled" },
+      },
+      {
+        ownKeys(target) {
+          catalogScans += 1;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    expect(hintForPath(["plugins", "entries", "voice-call", "enabled"], hints)?.label).toBe(
+      "Plugin Enabled",
+    );
+    expect(hintForPath(["plugins", "missing"], hints)).toBeUndefined();
+    expect(hintForPath(["channels", "missing"], hints)).toBeUndefined();
+    expect(catalogScans).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("pruneEmptyConfigForm", () => {
+  it("preserves loaded redacted placeholders from the authored original", () => {
     const form = {
       gateway: {
         mode: "remote",
@@ -106,13 +86,9 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, {
-        gateway: { mode: "remote", remote: { token: "__OPENCLAW_REDACTED__" } },
-      }),
-    ).toEqual(form);
+    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
   });
 
   it("keeps newly entered sentinel literals so gateway validation rejects them", () => {
@@ -129,30 +105,26 @@ describe("sanitizeRedactedFormForSubmit", () => {
       },
     };
 
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, { gateway: { remote: {} } })).toEqual(
-      form,
-    );
+    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
   });
 
-  it("prunes empty object parents when they are absent from original raw config", () => {
+  it("prunes newly empty objects while retaining authored empties and array positions", () => {
     const form = {
-      gateway: {
-        remote: {
-          nested: {
-            token: "__OPENCLAW_REDACTED__",
-          },
-        },
-      },
+      gateway: { remote: { nested: {} } },
+      authored: {},
+      items: [{ nested: {} }, "second"],
       ui: { theme: "dark" },
     };
-    const originalForm = cloneConfigObject(form);
+    const original = { authored: {}, ui: { theme: "dark" } };
 
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, { ui: { theme: "dark" } })).toEqual({
+    expect(pruneEmptyConfigForm(form, original)).toEqual({
+      authored: {},
+      items: [{}, "second"],
       ui: { theme: "dark" },
     });
   });
 
-  it("does not reindex arrays when a loaded scalar array sentinel is unrestorable", () => {
+  it("does not reindex arrays containing redacted sentinels", () => {
     const form = {
       channels: {
         slack: {
@@ -160,16 +132,12 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = cloneConfigObject(form);
+    const originalForm = structuredClone(form);
 
-    expect(
-      sanitizeRedactedFormForSubmit(form, originalForm, {
-        channels: { slack: { tokens: ["second-token"] } },
-      }),
-    ).toEqual(form);
+    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
   });
 
-  it("leaves the form unchanged when the original raw config has no parsed snapshot", () => {
+  it("leaves the form unchanged without an authored original", () => {
     const form = {
       gateway: {
         remote: {
@@ -177,9 +145,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
         },
       },
     };
-    const originalForm = cloneConfigObject(form);
-
-    expect(sanitizeRedactedFormForSubmit(form, originalForm, null)).toEqual(form);
+    expect(pruneEmptyConfigForm(form, null)).toBe(form);
   });
 });
 describe("prototype pollution prevention", () => {

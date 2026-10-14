@@ -1,6 +1,16 @@
-import type { JsonObject, JsonValue } from "./protocol-json.js";
+import type { CodexCursorPage, JsonObject, JsonValue } from "./protocol-json.js";
 
-/** Current Codex marketplace, app, skill, hook, and config wire contracts. */
+export type CodexExperimentalFeatureListParams = {
+  cursor?: string | null;
+  limit?: number | null;
+  threadId?: string | null;
+};
+
+export type CodexExperimentalFeatureListResponse = CodexCursorPage<{
+  name: string;
+  enabled: boolean;
+}>;
+
 export type CodexPluginSummary = {
   id: string;
   remotePluginId?: string | null;
@@ -12,6 +22,12 @@ export type CodexPluginSummary = {
   mustShowInstallationInterstitial?: boolean | null;
   authPolicy?: string;
   availability?: string;
+  disabledReason?:
+    | "disabled_by_admin"
+    | "plan_not_eligible"
+    | "required_app_unavailable"
+    | "unknown"
+    | null;
   interface?: JsonValue;
 };
 
@@ -55,9 +71,7 @@ export type CodexPluginInstalledResponse = {
   marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
 };
 
-export type CodexPluginListResponse = {
-  marketplaces: CodexPluginMarketplaceEntry[];
-  marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
+export type CodexPluginListResponse = CodexPluginInstalledResponse & {
   featuredPluginIds: string[];
 };
 
@@ -106,6 +120,8 @@ export type CodexAppInfo = {
   isAccessible: boolean;
   isEnabled: boolean;
   pluginDisplayNames: string[];
+  /** Present when app/read was requested with includeTools. */
+  toolSummaries?: CodexAppToolSummary[];
 };
 
 export type CodexAppsListParams = {
@@ -115,10 +131,7 @@ export type CodexAppsListParams = {
   forceRefetch?: boolean;
 };
 
-export type CodexAppsListResponse = {
-  data: CodexAppInfo[];
-  nextCursor?: string | null;
-};
+export type CodexAppsListResponse = CodexCursorPage<CodexAppInfo>;
 
 export type CodexInstalledApp = {
   id: string;
@@ -159,17 +172,13 @@ type CodexConnectorMetadata = {
 
 export type CodexAppsReadParams = {
   appIds: string[];
+  threadId?: string | null;
   includeTools?: boolean;
 };
 
 export type CodexAppsReadResponse = {
   apps: CodexConnectorMetadata[];
   missingAppIds: string[];
-};
-
-export type CodexSkillsListParams = {
-  cwds: string[];
-  forceReload?: boolean;
 };
 
 type CodexSkillScope = "user" | "repo" | "system" | "admin";
@@ -183,6 +192,7 @@ type CodexSkillMetadata = {
   path: string;
   scope: CodexSkillScope;
   enabled: boolean;
+  pluginId?: string | null;
 };
 
 type CodexSkillErrorInfo = {
@@ -200,23 +210,22 @@ export type CodexSkillsListResponse = {
   data: CodexSkillsListEntry[];
 };
 
-export type CodexHooksListParams = {
-  cwds: string[];
-};
-
-export type CodexHooksListResponse = {
-  data: JsonValue[];
-  nextCursor?: string | null;
-};
+export type CodexHooksListResponse = CodexCursorPage<JsonValue>;
 
 export type CodexConfigReadResponse = {
   config: JsonObject;
+  origins: Record<string, CodexConfigLayerMetadata | undefined>;
   layers?: JsonValue[] | null;
+};
+
+export type CodexConfigReadParams = {
+  includeLayers?: boolean;
+  cwd?: string | null;
 };
 
 type CodexConfigMergeStrategy = "replace" | "upsert";
 
-export type CodexConfigEdit = {
+type CodexConfigEdit = {
   keyPath: string;
   value: JsonValue;
   mergeStrategy: CodexConfigMergeStrategy;
@@ -235,6 +244,7 @@ export type CodexConfigBatchWriteParams = {
 };
 
 type CodexConfigLayerSource =
+  | { type: "packagedDefaults"; file: string }
   | { type: "mdm"; domain: string; key: string }
   | { type: "system"; file: string }
   | { type: "enterpriseManaged"; id: string; name: string }

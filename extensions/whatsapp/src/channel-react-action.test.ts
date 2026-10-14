@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Whatsapp tests cover channel react action plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleWhatsAppMessageAction } from "./channel-react-action.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
   handleWhatsAppAction: vi.fn(async () => ({ content: [{ type: "text", text: '{"ok":true}' }] })),
@@ -94,6 +94,28 @@ describe("whatsapp react action messageId resolution", () => {
     channels: { whatsapp: { actions: { reactions: true }, allowFrom: ["*"] } },
   } as OpenClawConfig;
 
+  function expectReactionForwarded(params: {
+    chatJid?: string;
+    messageId?: string;
+    emoji?: string;
+    participant?: string;
+  }) {
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      {
+        action: "react",
+        chatJid: "+1555",
+        messageId: "ctx-msg-42",
+        emoji: "👍",
+        remove: undefined,
+        participant: undefined,
+        accountId: "default",
+        fromMe: undefined,
+        ...params,
+      },
+      baseCfg,
+    );
+  }
+
   beforeEach(() => {
     hoisted.handleWhatsAppAction.mockClear();
     hoisted.resolveAuthorizedWhatsAppOutboundTarget.mockClear();
@@ -148,6 +170,79 @@ describe("whatsapp react action messageId resolution", () => {
       messageId: "msg-media-1",
       toJid: "1555@s.whatsapp.net",
     });
+  });
+
+  it.each([
+    {
+      sourceKey: "filePath",
+      source: "/tmp/generated-attachment.bin",
+      filenameKey: "filename",
+      filename: "Quarterly Report.pdf",
+    },
+    {
+      sourceKey: "mediaUrl",
+      source: "https://example.com/download?id=42",
+      filenameKey: "fileName",
+      filename: "Invoice.pdf",
+    },
+  ])(
+    "preserves the requested $filenameKey for an upload-file $sourceKey",
+    async ({ sourceKey, source, filenameKey, filename }) => {
+      await handleWhatsAppMessageAction({
+        action: "upload-file",
+        params: {
+          to: "+1555",
+          [sourceKey]: source,
+          [filenameKey]: filename,
+          forceDocument: true,
+        },
+        cfg: baseCfg,
+        accountId: "default",
+      });
+
+      expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+        "+1555",
+        "",
+        expect.objectContaining({ mediaUrl: source, fileName: filename }),
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "a local path's contentType",
+      source: { filePath: "/tmp/generated-attachment.bin" },
+      metadata: { contentType: "image/png" },
+      expectedContentType: "image/png",
+    },
+    {
+      name: "a URL's mimeType alias",
+      source: { mediaUrl: "https://example.com/video" },
+      metadata: { mimeType: "video/mp4" },
+      expectedContentType: "video/mp4",
+    },
+    {
+      name: "contentType before a URL's mimeType alias",
+      source: { mediaUrl: "https://example.com/document" },
+      metadata: { contentType: "application/pdf", mimeType: "image/png" },
+      expectedContentType: "application/pdf",
+    },
+  ])("preserves $name for upload-file", async ({ source, metadata, expectedContentType }) => {
+    await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: { to: "+1555", ...source, ...metadata },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "",
+      expect.objectContaining({
+        mediaUrl: source.filePath ?? source.mediaUrl,
+        contentType: expectedContentType,
+      }),
+    );
   });
 
   it("uses toolContext current chat for same-chat upload-file", async () => {
@@ -240,6 +335,74 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
+  it.each([
+    {
+      name: "the data URL",
+      metadata: {},
+      expectedContentType: "image/png",
+    },
+    {
+      name: "an explicit contentType",
+      metadata: { contentType: "application/pdf" },
+      expectedContentType: "application/pdf",
+    },
+    {
+      name: "an explicit mimeType alias",
+      metadata: { mimeType: "image/jpeg" },
+      expectedContentType: "image/jpeg",
+    },
+    {
+      name: "contentType before its mimeType alias",
+      metadata: { contentType: "application/pdf", mimeType: "image/jpeg" },
+      expectedContentType: "application/pdf",
+    },
+  ])(
+    "resolves upload-file buffer MIME metadata from $name",
+    async ({ metadata, expectedContentType }) => {
+      await handleWhatsAppMessageAction({
+        action: "upload-file",
+        params: {
+          to: "+1555",
+          buffer: `data:image/png;base64,${Buffer.from("image").toString("base64")}`,
+          ...metadata,
+        },
+        cfg: baseCfg,
+        accountId: "default",
+      });
+
+      expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+        "+1555",
+        "",
+        expect.objectContaining({
+          mediaPayload: expect.objectContaining({
+            buffer: Buffer.from("image"),
+            contentType: expectedContentType,
+          }),
+        }),
+      );
+    },
+  );
+
+  it("prefers the filename field over its fileName alias for URL uploads", async () => {
+    await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: {
+        to: "+1555",
+        mediaUrl: "https://example.com/download",
+        filename: "preferred.pdf",
+        fileName: "ignored.pdf",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "",
+      expect.objectContaining({ fileName: "preferred.pdf" }),
+    );
+  });
+
   it.each(["SGVsbG8=!", "data:text/plain,hello", "data:text/plain;base64"])(
     "rejects malformed upload-file buffer %s",
     async (buffer) => {
@@ -297,55 +460,6 @@ describe("whatsapp react action messageId resolution", () => {
     expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
 
-  it("uses explicit messageId when provided", async () => {
-    await handleWhatsAppMessageAction({
-      action: "react",
-      params: { messageId: "explicit-id", emoji: "👍", to: "+1555" },
-      cfg: baseCfg,
-      accountId: "default",
-    });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "explicit-id",
-        emoji: "👍",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
-  });
-
-  it("falls back to toolContext.currentMessageId when messageId omitted", async () => {
-    await handleWhatsAppMessageAction({
-      action: "react",
-      params: { emoji: "❤️", to: "+1555" },
-      cfg: baseCfg,
-      accountId: "default",
-      toolContext: {
-        currentChannelId: "whatsapp:+1555",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
-    });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "ctx-msg-42",
-        emoji: "❤️",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
-  });
-
   it("falls back to toolContext current chat for same-chat reactions", async () => {
     await handleWhatsAppMessageAction({
       action: "react",
@@ -358,19 +472,9 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "ctx-msg-42",
-        emoji: "❤️",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      emoji: "❤️",
+    });
   });
 
   it("converts numeric toolContext messageId to string", async () => {
@@ -385,19 +489,10 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: 12345,
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "12345",
-        emoji: "🎉",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      messageId: "12345",
+      emoji: "🎉",
+    });
   });
 
   it("throws ToolInputError when messageId missing and no toolContext", async () => {
@@ -406,22 +501,6 @@ describe("whatsapp react action messageId resolution", () => {
       params: { emoji: "👍", to: "+1555" },
       cfg: baseCfg,
       accountId: "default",
-    }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).name).toBe("ToolInputError");
-  });
-
-  it("skips context fallback when targeting a different chat", async () => {
-    const err = await handleWhatsAppMessageAction({
-      action: "react",
-      params: { emoji: "👍", to: "+9999" },
-      cfg: baseCfg,
-      accountId: "default",
-      toolContext: {
-        currentChannelId: "whatsapp:+1555",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).name).toBe("ToolInputError");
@@ -440,19 +519,10 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "12345@g.us",
-        messageId: "ctx-msg-42",
-        emoji: "👍",
-        remove: undefined,
-        participant: "123@lid",
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      chatJid: "12345@g.us",
+      participant: "123@lid",
+    });
   });
 
   it("keeps direct-chat reactions without an inferred participant", async () => {
@@ -468,19 +538,7 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "ctx-msg-42",
-        emoji: "👍",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({});
   });
 
   it("prefers explicit participant over inferred current-message participant", async () => {
@@ -500,19 +558,10 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "12345@g.us",
-        messageId: "ctx-msg-42",
-        emoji: "👍",
-        remove: undefined,
-        participant: "555@s.whatsapp.net",
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      chatJid: "12345@g.us",
+      participant: "555@s.whatsapp.net",
+    });
   });
 
   it("does not reuse the current-chat participant for cross-chat reactions", async () => {
@@ -546,19 +595,10 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "12345@g.us",
-        messageId: "older-msg-7",
-        emoji: "👍",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      chatJid: "12345@g.us",
+      messageId: "older-msg-7",
+    });
   });
 
   it("skips context fallback when source is another provider", async () => {

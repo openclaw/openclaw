@@ -1,23 +1,30 @@
 import Foundation
 
-final class CanvasFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
-    let watcher: SimpleFileWatcher
-    private let pollingWatcher: PollingDirectoryWatcher
-
-    init(url: URL, onChange: @escaping () -> Void) {
-        self.watcher = SimpleFileWatcher(CoalescingFSEventsWatcher(
-            paths: [url.path],
-            queueLabel: "ai.openclaw.canvaswatcher",
-            onChange: onChange))
-        self.pollingWatcher = PollingDirectoryWatcher(
-            url: url,
-            queueLabel: "ai.openclaw.canvaswatcher.poll",
-            onChange: onChange)
+final class CanvasFileWatcher: @unchecked Sendable {
+    private struct FileSignature: Equatable {
+        let modifiedAt: TimeInterval
+        let size: Int
     }
 
-    func start() {
-        self.startEventStream()
-        self.setPollingEnabled(true)
+    private let url: URL
+    private let queue = DispatchQueue(label: "ai.openclaw.canvaswatcher")
+    private let queueKey = DispatchSpecificKey<UInt8>()
+    private let watcher: CoalescingFSEventsWatcher
+    private let onChange: () -> Void
+    private var timer: DispatchSourceTimer?
+    private var lastSnapshot: [String: FileSignature] = [:]
+
+    init(url: URL, onChange: @escaping () -> Void) {
+        self.url = url
+        self.onChange = onChange
+        // Both producers can stop together from onChange without waiting on each other.
+        self.watcher = CoalescingFSEventsWatcher(paths: [url.path], queue: self.queue, onChange: onChange)
+        self.queue.setSpecific(key: self.queueKey, value: 1)
+    }
+
+    deinit {
+        self.stop()
+        self.queue.setSpecific(key: self.queueKey, value: nil)
     }
 
     func startEventStream() {
@@ -25,47 +32,13 @@ final class CanvasFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
     }
 
     func setPollingEnabled(_ enabled: Bool) {
-        if enabled {
-            self.pollingWatcher.start()
-        } else {
-            self.pollingWatcher.stop()
-        }
-    }
-
-    func stop() {
-        self.watcher.stop()
-        self.pollingWatcher.stop()
-    }
-
-    var isPolling: Bool {
-        self.pollingWatcher.isRunning
-    }
-}
-
-private final class PollingDirectoryWatcher: @unchecked Sendable {
-    private struct FileSignature: Equatable {
-        let modifiedAt: TimeInterval
-        let size: Int
-    }
-
-    private let url: URL
-    private let queue: DispatchQueue
-    private let onChange: () -> Void
-    private var timer: DispatchSourceTimer?
-    private var lastSnapshot: [String: FileSignature] = [:]
-
-    init(url: URL, queueLabel: String, onChange: @escaping () -> Void) {
-        self.url = url
-        self.queue = DispatchQueue(label: queueLabel)
-        self.onChange = onChange
-    }
-
-    deinit {
-        self.stop()
-    }
-
-    func start() {
-        self.queue.sync {
+        self.onQueue {
+            guard enabled else {
+                self.timer?.cancel()
+                self.timer = nil
+                self.lastSnapshot = [:]
+                return
+            }
             guard self.timer == nil else { return }
             self.lastSnapshot = self.snapshot()
 
@@ -80,20 +53,25 @@ private final class PollingDirectoryWatcher: @unchecked Sendable {
     }
 
     func stop() {
-        self.queue.sync {
-            self.timer?.cancel()
-            self.timer = nil
-            self.lastSnapshot = [:]
-        }
+        self.watcher.stop()
+        self.setPollingEnabled(false)
     }
 
-    var isRunning: Bool {
-        self.queue.sync {
+    var isPolling: Bool {
+        self.onQueue {
             self.timer != nil
         }
     }
 
+    private func onQueue<T>(_ action: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: self.queueKey) != nil {
+            return action()
+        }
+        return self.queue.sync(execute: action)
+    }
+
     private func poll() {
+        guard self.timer != nil else { return }
         let next = self.snapshot()
         guard next != self.lastSnapshot else { return }
         self.lastSnapshot = next

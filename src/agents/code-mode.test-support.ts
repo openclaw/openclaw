@@ -1,27 +1,49 @@
 import { expect, vi } from "vitest";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import type { CodeModeConfig as CodeModeToolsConfig } from "../config/types.tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
+import { normalizeCodeModeTimeoutResult } from "./code-mode-errors.js";
+import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js";
+import { runCodeModeExecutor } from "./code-mode-executor.js";
 import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
-import { activeRuns, removeExpiredRuns, resumingRunIds } from "./code-mode-state.js";
-import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
+import {
+  activeRuns,
+  disposeAllCodeModeRuns,
+  removeExpiredRuns,
+  resumingRunIds,
+} from "./code-mode-state.js";
 import { createCodeModeTools } from "./code-mode.js";
-import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+  type ToolSearchCatalogRef,
+  type ToolSearchToolContext,
+} from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+const directContinuations = new Set<CodeModeExecutorContinuation>();
 
 export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeReplayIdForToolCall,
   removeExpiredRuns,
-  normalizeCodeModeWorkerResult,
-  runCodeModeWorker,
+  normalizeCodeModeTimeoutResult,
+  runCodeModeExecutor: async (...args: Parameters<typeof runCodeModeExecutor>) => {
+    const result = await runCodeModeExecutor(...args);
+    if (result.status === "waiting") {
+      directContinuations.add(result.continuation);
+    }
+    return result;
+  },
   resolveCodeModeHeadlessConfig,
 };
 
-export function resetCodeModeTestState(): void {
-  testing.activeRuns.clear();
-  testing.resumingRunIds.clear();
+export async function resetCodeModeTestState(): Promise<void> {
+  await disposeAllCodeModeRuns();
+  await Promise.all([...directContinuations].map((continuation) => continuation.dispose()));
+  directContinuations.clear();
 }
 
 export function fakeTool(name: string, description: string): AnyAgentTool {
@@ -111,16 +133,80 @@ export function resultDetails(result: { details?: unknown }): Record<string, unk
   return result.details as Record<string, unknown>;
 }
 
+/** Compare public summaries to independently constructed, normalized guest data. */
+export function expectOriginalCodeModeMarker(marker: unknown, original: unknown): void {
+  expect(marker).toMatchObject({
+    truncated: true,
+    guidance: "Output truncated; rerun with narrower args.",
+    prefix: expect.any(String),
+    omittedBytes: expect.any(Number),
+  });
+  const { prefix, omittedBytes } = marker as { prefix: string; omittedBytes: number };
+  const serialized = JSON.stringify(original);
+  expect(serialized.startsWith(prefix), "summary must retain the original JSON prefix").toBe(true);
+  expect(omittedBytes).toBe(Buffer.byteLength(serialized) - Buffer.byteLength(prefix));
+  expect(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(prefix))).toBe(prefix);
+}
+
+export function expectCodeModeSharedBudget(
+  result: { output?: unknown; value?: unknown; error?: unknown },
+  maxBytes: number,
+): void {
+  let bytes = 0;
+  for (const field of ["output", "value", "error"] as const) {
+    if (!Object.hasOwn(result, field)) {
+      continue;
+    }
+    const value = result[field];
+    if (field === "output" && Array.isArray(value) && value.length === 0) {
+      continue;
+    }
+    bytes += Buffer.byteLength(JSON.stringify(value));
+  }
+  expect(bytes).toBeLessThanOrEqual(maxBytes);
+}
+
+export function createHeadlessCodeModeHarness(
+  tools: AnyAgentTool[] = [],
+  options: { swarmEnabled?: boolean; codeMode?: CodeModeToolsConfig } = {},
+): ToolSearchToolContext {
+  const config = {
+    tools: {
+      codeMode:
+        typeof options.codeMode === "object"
+          ? { enabled: false, timeoutMs: 60_000, ...options.codeMode }
+          : (options.codeMode ?? { enabled: false, timeoutMs: 60_000 }),
+      ...(options.swarmEnabled ? { swarm: true } : {}),
+    },
+  } as never;
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools });
+  return {
+    config,
+    runtimeConfig: config,
+    agentId: "main",
+    catalogRef,
+  };
+}
+
 export function createCodeModeHarness(
   params: {
     agentId?: string;
     catalogRef?: ToolSearchCatalogRef;
     codeModeSkills?: readonly CodeModeSkill[];
+    codeMode?: CodeModeToolsConfig;
     forceRestartSafeTools?: boolean;
   } = {},
 ) {
   const catalogRef = params.catalogRef ?? createToolSearchCatalogRef();
-  const config = { tools: { codeMode: true } } as never;
+  const config = {
+    tools: {
+      codeMode:
+        typeof params.codeMode === "object"
+          ? { enabled: true, ...params.codeMode }
+          : (params.codeMode ?? true),
+    },
+  };
   const ctx = {
     config,
     runtimeConfig: config,
@@ -140,18 +226,23 @@ export async function runUntilCompleted(params: {
   execTool: AnyAgentTool;
   waitTool: AnyAgentTool;
   code: string;
-  language?: "javascript" | "typescript";
   restartSafe?: boolean;
 }) {
-  // Code Mode may return a waiting state before completion; tests poll through
-  // the public wait tool instead of reaching into activeRuns.
-  let details = resultDetails(
+  const details = resultDetails(
     await params.execTool.execute("code-call-1", {
       code: params.code,
-      language: params.language,
       restartSafe: params.restartSafe,
     }),
   );
+  return await waitUntilCompleted({ details, waitTool: params.waitTool });
+}
+
+export async function waitUntilCompleted(params: {
+  details: Record<string, unknown>;
+  waitTool: AnyAgentTool;
+}) {
+  // Resume the existing run through public waits; never replay its actions.
+  let details = params.details;
   for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
     const runId = details.runId;
     expect(typeof runId).toBe("string");

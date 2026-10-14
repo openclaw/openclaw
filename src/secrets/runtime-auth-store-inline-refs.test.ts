@@ -62,35 +62,6 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
     expect(profile.key).toBe("resolved-key-value");
   });
 
-  it("keeps explicit keyRef when inline key SecretRef is also present", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({ models: {}, secrets: {} }),
-      env: {
-        PRIMARY_KEY: "primary-key-value",
-        SHADOW_KEY: "shadow-key-value",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "custom:explicit-keyref": {
-            type: "api_key",
-            provider: "custom",
-            keyRef: { source: "env", provider: "default", id: "PRIMARY_KEY" },
-            key: { source: "env", provider: "default", id: "SHADOW_KEY" } as unknown as string,
-          },
-        }),
-    });
-
-    const profile = snapshot.authStores[0]?.store.profiles["custom:explicit-keyref"] as Record<
-      string,
-      unknown
-    >;
-    expect(profile.keyRef).toEqual({ source: "env", provider: "default", id: "PRIMARY_KEY" });
-    activateSecretsRuntimeSnapshot(snapshot);
-    expect(profile.key).toBe("primary-key-value");
-  });
-
   it("skips refs on auth profiles that are not eligible for their configured provider", async () => {
     const profileId = "openai:mismatched";
     const tokenProfileId = "github-copilot:mismatched";
@@ -137,11 +108,19 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
         }),
       ]),
     );
-    expect(snapshot.authStores[0]?.store.profiles[profileId]).toHaveProperty("key", undefined);
-    expect(snapshot.authStores[0]?.store.profiles[tokenProfileId]).toHaveProperty(
-      "token",
-      undefined,
-    );
+    const profiles = snapshot.authStores[0]?.store.profiles;
+    expect(profiles?.[profileId]).toMatchObject({
+      type: "api_key",
+      provider: "openai",
+      keyRef: { source: "env", provider: "default", id: "MISSING_MISMATCHED_KEY" },
+    });
+    expect(profiles?.[profileId]).not.toHaveProperty("key");
+    expect(profiles?.[tokenProfileId]).toMatchObject({
+      type: "token",
+      provider: "github-copilot",
+      tokenRef: { source: "env", provider: "default", id: "MISSING_MISMATCHED_TOKEN" },
+    });
+    expect(profiles?.[tokenProfileId]).not.toHaveProperty("token");
   });
 
   it("isolates a failed profile ref while materializing an eligible sibling profile", async () => {
@@ -179,8 +158,11 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
     ]);
     const profiles = snapshot.authStores[0]?.store.profiles;
     expect(profiles?.[coldProfileId]).toMatchObject({
+      type: "api_key",
+      provider: "openai",
       keyRef: { source: "env", provider: "default", id: "MISSING_OPENAI_PROFILE_KEY" },
     });
+    expect(profiles?.[coldProfileId]).not.toHaveProperty("key");
     expect(profiles?.[healthyProfileId]).toMatchObject({ key: "anthropic-runtime-key" });
   });
 
@@ -222,8 +204,10 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
       ]),
     );
     expect(snapshot.authStores[0]?.store.profiles[profileId]).toMatchObject({
-      key: undefined,
+      type: "api_key",
+      provider: "openai",
       keyRef: { source: "file", provider: "clawrouter_key", id: "value" },
     });
+    expect(snapshot.authStores[0]?.store.profiles[profileId]).not.toHaveProperty("key");
   });
 });

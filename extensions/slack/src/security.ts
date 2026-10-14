@@ -1,5 +1,6 @@
-// Slack plugin module implements security behavior.
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createConditionalWarningCollector,
   createOpenProviderConfiguredRouteWarningCollector,
@@ -10,7 +11,7 @@ import {
   resolveSlackAccountDmPolicy,
   type ResolvedSlackAccount,
 } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
+import { slackIngressIdentity } from "./monitor/ingress-identity.js";
 
 const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount>({
   channelKey: "slack",
@@ -21,6 +22,7 @@ const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount
     allowFrom: resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId }),
   }),
   policyPathSuffix: "dmPolicy",
+  classifyEntryAuthentication: identityEntryAuthenticationClassifier(slackIngressIdentity),
   normalizeEntry: (raw) =>
     raw
       .trim()
@@ -50,7 +52,7 @@ const collectSlackSecurityWarnings =
 const collectSlackSecurityFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectSlackSecurityWarnings,
   checkId: "channels.slack.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Slack security warning",
 });
 

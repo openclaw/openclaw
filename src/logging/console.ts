@@ -1,7 +1,8 @@
-// Console logging helpers format and write messages to console streams.
 import util from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
+import { exitAfterSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { isVerbose } from "../global-state.js";
 import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
@@ -61,24 +62,14 @@ function resolveConsoleSettings(): ConsoleSettings {
   return { level, style };
 }
 
-function consoleSettingsChanged(a: ConsoleSettings | null, b: ConsoleSettings) {
-  if (!a) {
-    return true;
-  }
-  return a.level !== b.level || a.style !== b.style;
-}
-
 export function getConsoleSettings(): ConsoleLoggerSettings {
-  const settings = resolveConsoleSettings();
   const cached = loggingState.cachedConsoleSettings as ConsoleSettings | null;
-  if (!cached || consoleSettingsChanged(cached, settings)) {
-    loggingState.cachedConsoleSettings = settings;
+  if (cached) {
+    return cached;
   }
-  return loggingState.cachedConsoleSettings as ConsoleSettings;
-}
-
-export function getResolvedConsoleSettings(): ConsoleLoggerSettings {
-  return getConsoleSettings();
+  const settings = resolveConsoleSettings();
+  loggingState.cachedConsoleSettings = settings;
+  return settings;
 }
 
 // Route all console output (including tslog console writes) to stderr.
@@ -113,20 +104,12 @@ export function setConsoleTimestampPrefix(enabled: boolean): void {
   loggingState.consoleTimestampPrefix = enabled;
 }
 
-function normalizeConsoleSubsystem(subsystem?: string | null): string | null {
-  if (typeof subsystem !== "string") {
-    return null;
-  }
-  const normalized = subsystem.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
 export function shouldLogSubsystemToConsole(subsystem?: string | null): boolean {
   const filter = loggingState.consoleSubsystemFilter;
   if (!filter || filter.length === 0) {
     return true;
   }
-  const normalizedSubsystem = normalizeConsoleSubsystem(subsystem);
+  const normalizedSubsystem = normalizeOptionalString(subsystem);
   if (!normalizedSubsystem) {
     return false;
   }
@@ -143,14 +126,12 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already open",
 ] as const;
 
+// Node's default warning printer prefixes its single console.error call. Its
+// internal caller proves ownership so matching application errors stay ERROR.
+const NODE_PROCESS_WARNING_PREFIX = `(${process.release.name}:${process.pid}) `;
+
 function shouldSuppressConsoleMessage(message: string): boolean {
-  if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
-    return true;
-  }
-  if (isVerbose()) {
-    return false;
-  }
-  return false;
+  return SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix));
 }
 
 function isEpipeError(err: unknown): boolean {
@@ -189,37 +170,38 @@ function writeFormattedConsoleOutput(params: {
   args: unknown[];
   formatted: string;
   write: (...args: unknown[]) => void;
-  traceWrite: (...args: unknown[]) => void;
   caller?: (...args: unknown[]) => void;
 }) {
-  const trimmed = stripAnsi(params.formatted).trimStart();
   const consoleStyle = getConsoleSettings().style;
-  const shouldPrefixTimestamp =
-    consoleStyle !== "json" &&
-    loggingState.consoleTimestampPrefix &&
-    trimmed.length > 0 &&
-    !hasTimestampPrefix(trimmed);
-  const timestamp = shouldPrefixTimestamp ? formatConsoleTimestamp(consoleStyle) : "";
-  const jsonMessage = consoleStyle === "json" ? stripAnsi(params.formatted) : "";
-  const jsonMeta =
-    consoleStyle === "json" && params.level === "trace" && params.caller
-      ? { stack: stripAnsi(captureConsoleTraceStack(params.formatted, params.caller)) }
+  const trimmed =
+    consoleStyle !== "json" && loggingState.consoleTimestampPrefix
+      ? stripAnsi(params.formatted).trimStart()
+      : "";
+  const timestamp =
+    trimmed && !hasTimestampPrefix(trimmed) ? formatConsoleTimestamp(consoleStyle) : "";
+  const stack =
+    params.level === "trace" && params.caller
+      ? captureConsoleTraceStack(params.formatted, params.caller)
       : undefined;
   try {
-    const redacted = redactSensitiveText(params.formatted);
-    const line =
+    const rendered =
       consoleStyle === "json"
-        ? formatJsonConsoleLine({ level: params.level, message: jsonMessage, meta: jsonMeta })
-        : timestamp
-          ? `${timestamp} ${redacted}`
-          : redacted;
+        ? formatJsonConsoleLine({
+            level: params.level,
+            message: stripAnsi(params.formatted),
+            meta: stack === undefined ? undefined : { stack: stripAnsi(stack) },
+          })
+        : redactSensitiveText(stack ?? params.formatted);
+    const line = timestamp ? `${timestamp} ${rendered}` : rendered;
+    clearActiveProgressLine();
     if (loggingState.forceConsoleToStderr) {
       process.stderr.write(`${line}\n`);
-    } else if (consoleStyle === "json") {
-      // Node and Bun implement console.trace() through this.error(). Use the raw error
-      // sink so the structured trace does not re-enter as an error.
-      (params.level === "trace" ? params.traceWrite : params.write).call(console, line);
-    } else if (!timestamp && params.args.length === 0) {
+    } else if (
+      consoleStyle !== "json" &&
+      !timestamp &&
+      params.args.length === 0 &&
+      stack === undefined
+    ) {
       params.write.apply(console, params.args as []);
     } else {
       params.write.call(console, line);
@@ -238,7 +220,6 @@ export function writeRootConsoleLine(method: "log" | "error", line: string): boo
   if (!rawConsole) {
     return false;
   }
-  clearActiveProgressLine();
   if (shouldSuppressConsoleMessage(line)) {
     return true;
   }
@@ -248,7 +229,6 @@ export function writeRootConsoleLine(method: "log" | "error", line: string): boo
     args: [line],
     formatted: line,
     write: rawConsole[method],
-    traceWrite: rawConsole.error,
   });
   return true;
 }
@@ -277,8 +257,7 @@ export function enableConsoleCapture(): void {
           // stdout/stderr broken means the process is orphaned (e.g. the parent
           // service restarted and closed the journal pipe). Exit cleanly instead
           // of spinning in a tight loop where every log attempt re-triggers EPIPE.
-          const exitCode = process.exitCode;
-          process.exit(exitCode !== undefined && exitCode !== 0 && exitCode !== "0" ? exitCode : 0);
+          exitAfterSignalExitBarriers(process.exitCode ?? 0);
           return;
         }
         throw err;
@@ -286,21 +265,12 @@ export function enableConsoleCapture(): void {
     }
   }
 
-  let logger: ReturnType<typeof getLogger> | null = null;
-  const getLoggerLazy = () => {
-    if (!logger) {
-      logger = getLogger();
-    }
-    return logger;
-  };
-
   const original = {
     log: console.log,
     info: console.info,
     warn: console.warn,
     error: console.error,
     debug: console.debug,
-    trace: console.trace,
   };
   loggingState.rawConsole = {
     log: original.log,
@@ -309,37 +279,39 @@ export function enableConsoleCapture(): void {
     error: original.error,
   };
 
-  const forward = (level: LogLevel, orig: (...args: unknown[]) => void) => {
+  const forward = (
+    level: Exclude<LogLevel, "fatal" | "silent">,
+    orig: (...args: unknown[]) => void,
+  ) => {
     const forwardedConsoleCall = (...args: unknown[]) => {
       const formatted = util.format(...args);
+      let routedLevel = level;
+      if (
+        level === "error" &&
+        formatted.startsWith(NODE_PROCESS_WARNING_PREFIX) &&
+        typeof util.getCallSites === "function"
+      ) {
+        const caller = util.getCallSites(2, { sourceMap: false })[1];
+        if (
+          caller?.functionName === "writeOut" &&
+          caller.scriptName === "node:internal/process/warning"
+        ) {
+          routedLevel = "warn";
+        }
+      }
       if (shouldSuppressConsoleMessage(formatted)) {
         return;
       }
       try {
-        const resolvedLogger = getLoggerLazy();
-        // Map console levels to file logger
-        if (level === "trace") {
-          resolvedLogger.trace(formatted);
-        } else if (level === "debug") {
-          resolvedLogger.debug(formatted);
-        } else if (level === "info") {
-          resolvedLogger.info(formatted);
-        } else if (level === "warn") {
-          resolvedLogger.warn(formatted);
-        } else if (level === "error" || level === "fatal") {
-          resolvedLogger.error(formatted);
-        } else {
-          resolvedLogger.info(formatted);
-        }
+        getLogger()[routedLevel](formatted);
       } catch {
         // never block console output on logging failures
       }
       writeFormattedConsoleOutput({
-        level,
+        level: routedLevel,
         args,
         formatted,
         write: orig,
-        traceWrite: original.error,
         caller: forwardedConsoleCall,
       });
     };
@@ -351,5 +323,7 @@ export function enableConsoleCapture(): void {
   console.warn = forward("warn", original.warn);
   console.error = forward("error", original.error);
   console.debug = forward("debug", original.debug);
-  console.trace = forward("trace", original.trace);
+  // Native trace delegates to console.error; write the prepared stack directly
+  // so capture owns exactly one TRACE file record in every console style.
+  console.trace = forward("trace", original.error);
 }

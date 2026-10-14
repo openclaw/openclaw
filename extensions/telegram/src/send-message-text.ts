@@ -1,68 +1,42 @@
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedTelegramAccount } from "./accounts.js";
-import { createTelegramChunkDeliveryTracker } from "./chunk-delivery.js";
+import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
-import {
-  getTelegramRichRawApi,
-  removeTelegramRichNativeQuoteParam,
-  TELEGRAM_RICH_TEXT_LIMIT,
-  toTelegramRichMessageContextParams,
-  type TelegramRichMessageContextParams,
-} from "./rich-message.js";
+import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
   logTelegramOutboundSendOk,
   resolveAcceptedReplyToMessageId,
-  resolveTelegramMessageIdOrThrow,
   sendLogger,
   toAcceptedThreadScopedParams,
-  withTelegramNativeQuoteFallback,
   type TelegramApi,
   type TelegramThreadScopedParams,
 } from "./send-context.js";
-import type {
-  TelegramSendMessageParams,
-  TelegramSendOpts,
-  TelegramSendResult,
-} from "./send-message-types.js";
-import type { OpenClawConfig } from "./send.runtime.js";
+import type { TelegramSendOpts, TelegramSendResult } from "./send-message-types.js";
+import type { reportTelegramProviderDelivery } from "./send-outbound.js";
+import type { TelegramPreparedSender } from "./send-prepared.js";
 import { recordSentMessage } from "./sent-message-cache.js";
-import {
-  deliverTelegramTextPage,
-  planTelegramTextDeliveryPages,
-} from "./telegram-text-delivery.js";
+import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
+import { resolveTelegramTextChunkLimit } from "./text-chunk-limit.js";
+
+export type TelegramDeliveryReporter = (
+  params: Omit<
+    Parameters<typeof reportTelegramProviderDelivery>[0],
+    "successfulSendThread" | "onDeliveryResult"
+  >,
+) => Promise<TelegramSendResult>;
 
 type SendTextOptions = {
   replyToAlreadyUsed?: boolean;
   beforeFirstAccepted?: () => Promise<void>;
 };
-
-function buildTelegramTextSendReceipt(params: {
-  results: readonly TelegramSendResult[];
-  replyToMessageId?: number;
-}) {
-  if (params.results.length === 0) {
-    return undefined;
-  }
-  if (params.results.length === 1) {
-    return params.results[0]?.receipt;
-  }
-  const receipt = createMessageReceiptFromOutboundResults({
-    results: params.results,
-    kind: "text",
-    ...(typeof params.replyToMessageId === "number"
-      ? { replyToId: String(params.replyToMessageId) }
-      : {}),
-  });
-  receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
-  return receipt;
-}
 
 export function createTelegramTextSender(config: {
   cfg: OpenClawConfig;
@@ -72,14 +46,7 @@ export function createTelegramTextSender(config: {
   chatId: string;
   opts: TelegramSendOpts;
   replyMarkup: ReturnType<typeof buildInlineKeyboard>;
-  reportDelivery: (
-    messageId: string | number,
-    deliveredChatId: string | number,
-    message: TelegramMessageLike,
-    meta?: TelegramSendResult["meta"],
-    kind?: "text" | "media",
-    onPrepared?: (delivery: TelegramSendResult) => void,
-  ) => Promise<TelegramSendResult>;
+  reportDelivery: TelegramDeliveryReporter;
   recordDeliveredPromptContext: (
     params: Omit<
       Parameters<typeof recordOutboundMessageForPromptContext>[0],
@@ -89,11 +56,9 @@ export function createTelegramTextSender(config: {
   ) => Promise<void>;
   singleUseReplyTo: boolean;
   buildThreadParams: (includeReplyTo: boolean) => Record<string, unknown>;
-  requestWithChatNotFound: <T>(fn: () => Promise<T>, label: string) => Promise<T>;
+  sender: TelegramPreparedSender;
   textMode: "markdown" | "html";
   tableMode: MarkdownTableMode;
-  renderHtmlText: (value: string) => string;
-  linkPreviewOptions: { is_disabled: boolean } | undefined;
   useRichMessages: boolean;
 }) {
   const {
@@ -108,42 +73,20 @@ export function createTelegramTextSender(config: {
     recordDeliveredPromptContext,
     singleUseReplyTo,
     buildThreadParams,
-    requestWithChatNotFound,
+    sender,
     textMode,
     tableMode,
-    renderHtmlText,
-    linkPreviewOptions,
     useRichMessages,
   } = config;
 
-  const shouldIncludeReply = (index: number, count: number, alreadyUsed: boolean) =>
-    !alreadyUsed && (!singleUseReplyTo || (count === 1 && index === 0));
-  const buildTextParams = (
-    index: number,
-    count: number,
-    finalPart: boolean,
-    alreadyUsed: boolean,
-  ) => {
-    const thread = buildThreadParams(shouldIncludeReply(index, count, alreadyUsed));
-    return Object.keys(thread).length || (finalPart && replyMarkup)
-      ? { ...thread, ...(finalPart && replyMarkup ? { reply_markup: replyMarkup } : {}) }
-      : undefined;
-  };
-  const buildRichParams = (
-    index: number,
-    count: number,
-    finalPart: boolean,
-    alreadyUsed: boolean,
-  ) => {
-    const thread = toTelegramRichMessageContextParams(
-      buildThreadParams(shouldIncludeReply(index, count, alreadyUsed)),
-    );
-    return Object.keys(thread).length || (finalPart && replyMarkup)
-      ? { ...thread, ...(finalPart && replyMarkup ? { reply_markup: replyMarkup } : {}) }
-      : undefined;
-  };
+  const linkPreviewOptions =
+    account.config.linkPreview === false ? { is_disabled: true } : undefined;
 
-  const createTextDelivery = (context: string, beforeFirstAccepted?: () => Promise<void>) => {
+  return async (
+    rawText: string,
+    context: string,
+    options: SendTextOptions = {},
+  ): Promise<TelegramSendResult> => {
     type PendingChunk = {
       result: TelegramMessageLike;
       messageId: number;
@@ -153,16 +96,23 @@ export function createTelegramTextSender(config: {
       hasInlineKeyboard: boolean;
     };
 
-    let lastMessageId = "";
-    let lastChatId = chatId;
-    let lastAcceptedParams:
-      | TelegramThreadScopedParams
-      | TelegramRichMessageContextParams
-      | undefined;
+    const start = sender.parts.length;
     let acceptedReplyToMessageId: number | undefined;
-    const messageIds: string[] = [];
     const deliveryResults: TelegramSendResult[] = [];
-    let sentChunkCount = 0;
+    const buildReceipt = () => {
+      if (deliveryResults.length < 2) {
+        return deliveryResults[0]?.receipt;
+      }
+      const receipt = createMessageReceiptFromOutboundResults({
+        results: deliveryResults,
+        kind: "text",
+        ...(typeof acceptedReplyToMessageId === "number"
+          ? { replyToId: String(acceptedReplyToMessageId) }
+          : {}),
+      });
+      receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+      return receipt;
+    };
     let pendingChunk: PendingChunk | undefined;
     let finalMeta: TelegramSendResult["meta"] | undefined;
 
@@ -193,12 +143,11 @@ export function createTelegramTextSender(config: {
         finalPart,
       );
       if (keyboardError !== undefined) {
-        // finish() routes this through tracker.fail(), which preserves the
+        // Finalization routes this through sender.fail(), which preserves the
         // accepted message IDs in a partial-delivery error.
-        if (keyboardError instanceof Error) {
-          throw keyboardError;
-        }
-        throw new Error(formatErrorMessage(keyboardError));
+        throw keyboardError instanceof Error
+          ? keyboardError
+          : new Error(formatErrorMessage(keyboardError));
       }
     };
 
@@ -210,96 +159,128 @@ export function createTelegramTextSender(config: {
       }
     };
 
-    const record = async (params: {
-      result: TelegramMessageLike;
-      acceptedParams?: TelegramThreadScopedParams | TelegramRichMessageContextParams;
-      plainText: string;
-      hasInlineKeyboard: boolean;
-    }) => {
-      const messageId = resolveTelegramMessageIdOrThrow(params.result, context);
-      // Preserve Telegram's accepted identity before fallible observers run so
-      // partial errors retain every provider-visible delivery fact.
-      lastMessageId = String(messageId);
-      lastChatId = String(params.result.chat?.id ?? chatId);
-      lastAcceptedParams = params.acceptedParams;
+    const record = async (params: Omit<PendingChunk, "reportChatId">) => {
+      const { messageId } = params;
       acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(params.acceptedParams);
-      messageIds.push(lastMessageId);
-      if (sentChunkCount === 0) {
-        await beforeFirstAccepted?.();
+      if (sender.parts.length === start + 1) {
+        await options.beforeFirstAccepted?.();
       }
-      sentChunkCount += 1;
-      recordSentMessage(chatId, messageId, cfg, {
+      await recordSentMessage(chatId, messageId, cfg, {
         accountId: account.accountId,
         agentId: ownerAgentId,
       });
-      await reportDelivery(
+      await reportDelivery({
         messageId,
-        params.result?.chat?.id ?? chatId,
-        params.result,
-        {
+        fallbackChatId: params.result?.chat?.id ?? chatId,
+        message: params.result,
+        meta: {
           telegramDeliveredText: params.plainText,
           telegramHasInlineKeyboard: params.hasInlineKeyboard,
         },
-        "text",
-        (delivery) => deliveryResults.push(delivery),
-      );
+        kind: "text",
+        onPrepared: (delivery) => deliveryResults.push(delivery),
+      });
       const previousChunk = pendingChunk;
       pendingChunk = {
-        result: params.result,
-        messageId,
-        acceptedParams: params.acceptedParams,
-        plainText: params.plainText,
+        ...params,
         reportChatId: params.result?.chat?.id ?? chatId,
-        hasInlineKeyboard: params.hasInlineKeyboard,
       };
       if (previousChunk) {
         await flushChunk(previousChunk, false);
       }
     };
 
-    const finish = async (operation: string): Promise<TelegramSendResult> => {
+    const partialDeliveryResult = () => {
+      const receipt = buildReceipt();
+      return receipt ? { receipt } : {};
+    };
+
+    const tracking = {
+      invalidate: () => opts.promptContextProjectionPlan?.cursor.invalidate(),
+      onRejected: (error: unknown) =>
+        logVerbose(
+          `telegram ${context} text chunk rejected; continuing: ${formatErrorMessage(error)}`,
+        ),
+      onSilentSkip: (error: unknown) =>
+        logVerbose(
+          `telegram ${context} text chunk rendered empty; skipping: ${formatErrorMessage(error)}`,
+        ),
+      partialDeliveryResult,
+    };
+    const alreadyUsed = options.replyToAlreadyUsed === true;
+    const maxChars = Math.min(
+      opts.textLimit ?? Number.POSITIVE_INFINITY,
+      resolveTelegramTextChunkLimit({
+        cfg,
+        accountId: account.accountId,
+        ...(textMode === "html" ? { formatting: { parseMode: "HTML" } } : {}),
+      }),
+    );
+    const pages = planTelegramTextDeliveryPages({
+      text:
+        textMode === "html" ? renderTelegramHtmlText(rawText, { textMode, tableMode }) : rawText,
+      maxChars,
+      tableMode,
+      chunkMode: opts.chunkMode ?? resolveChunkMode(cfg, "telegram", account.accountId),
+      richMessages: useRichMessages,
+      skipEntityDetection: account.config.linkPreview === false,
+      ...(textMode === "html" ? { textMode: "html" as const } : {}),
+      warn: (message) => sendLogger.warn(message),
+    });
+    try {
+      await sender.sendText({
+        pages,
+        context,
+        tracking,
+        drainFallback: true,
+        observe: record,
+        preparePage: (index) => ({
+          requestParams: (fallback) => {
+            const count = Math.max(pages.length, fallback?.count ?? pages.length);
+            const includeReply = !alreadyUsed && (!singleUseReplyTo || count === 1);
+            const finalPart =
+              index === pages.length - 1 && (!fallback || fallback.index === fallback.count - 1);
+            return {
+              ...buildThreadParams(includeReply),
+              ...(finalPart && replyMarkup ? { reply_markup: replyMarkup } : {}),
+              ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+              ...(opts.silent === true ? { disable_notification: true } : {}),
+            };
+          },
+        }),
+      });
       await flushPending(true);
+      const parts = sender.parts.slice(start);
+      const last = parts.at(-1);
+      const lastMessageId = last ? String(last.messageId) : "";
+      const lastChatId = String(last?.result.chat?.id ?? chatId);
       if (lastMessageId) {
         logTelegramOutboundSendOk({
           accountId: account.accountId,
           chatId: lastChatId,
           messageId: lastMessageId,
-          operation,
+          operation: useRichMessages ? "sendRichMessage" : "sendMessage",
           deliveryKind: "text",
-          messageThreadId: lastAcceptedParams?.message_thread_id,
+          messageThreadId: toAcceptedThreadScopedParams(last?.acceptedParams)?.message_thread_id,
           replyToMessageId: opts.replyToMessageId,
           silent: opts.silent,
-          chunkCount: messageIds.length,
+          chunkCount: parts.length,
         });
       }
-      const receipt = buildTelegramTextSendReceipt({
-        results: deliveryResults,
-        replyToMessageId: acceptedReplyToMessageId,
-      });
+      const receipt = buildReceipt();
       return {
         messageId: lastMessageId,
         chatId: lastChatId,
         ...(receipt ? { receipt } : {}),
         ...(finalMeta ? { meta: finalMeta } : {}),
       };
-    };
-
-    const partialDeliveryResult = () => {
-      const receipt = buildTelegramTextSendReceipt({
-        results: deliveryResults,
-        replyToMessageId: acceptedReplyToMessageId,
-      });
-      return {
-        messageIds: [...messageIds],
-        ...(receipt ? { receipt } : {}),
-        visibleReplySent: true as const,
-      };
-    };
-
-    const fail = async (
-      error: unknown,
-      throwAfterAccepted: (error: unknown) => never,
-    ): Promise<never> => {
+    } catch (error) {
+      // Terminal/ambiguous failures escape chunk rejection before its invalidate
+      // branch; the projection cursor must not claim clean custody for pages
+      // that never landed (main's pre-centralization outer-catch contract).
+      if (isChannelPartialDeliveryError(error) || !isTelegramEmptyContentError(error)) {
+        opts.promptContextProjectionPlan?.cursor.invalidate();
+      }
       try {
         await flushPending(false);
       } catch (flushError) {
@@ -307,199 +288,7 @@ export function createTelegramTextSender(config: {
           `telegram ${context} delivery bookkeeping cleanup failed: ${formatErrorMessage(flushError)}`,
         );
       }
-      return throwAfterAccepted(error);
-    };
-
-    return { record, finish, fail, partialDeliveryResult };
-  };
-
-  const requestText = async (
-    text: string,
-    params: TelegramSendMessageParams | undefined,
-    html: boolean,
-    label = "message",
-  ) => {
-    const requestParams: TelegramSendMessageParams = {
-      ...params,
-      ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-      ...(opts.silent === true ? { disable_notification: true } : {}),
-      ...(html ? { parse_mode: "HTML" as const } : {}),
-    };
-    const sent = await withTelegramNativeQuoteFallback({
-      label,
-      requestParams,
-      request: async (effectiveParams, requestLabel) => {
-        await opts.onPlatformSendDispatch?.();
-        return await requestWithChatNotFound(
-          () =>
-            Object.keys(effectiveParams).length
-              ? api.sendMessage(chatId, text, effectiveParams)
-              : api.sendMessage(chatId, text),
-          requestLabel,
-        );
-      },
-    });
-    return {
-      result: sent.result,
-      acceptedParams: toAcceptedThreadScopedParams(sent.acceptedParams),
-    };
-  };
-
-  const sendChunkedText = async (
-    rawText: string,
-    context: string,
-    options: SendTextOptions = {},
-  ): Promise<TelegramSendResult> => {
-    const delivery = createTextDelivery(context, options.beforeFirstAccepted);
-    const tracker = createTelegramChunkDeliveryTracker({
-      invalidate: () => opts.promptContextProjectionPlan?.cursor.invalidate(),
-      onRejected: (error) =>
-        logVerbose(
-          `telegram ${context} text chunk rejected; continuing: ${formatErrorMessage(error)}`,
-        ),
-      isSilentSkip: isTelegramEmptyContentError,
-      onSilentSkip: (error) =>
-        logVerbose(
-          `telegram ${context} text chunk rendered empty; skipping: ${formatErrorMessage(error)}`,
-        ),
-      partialDeliveryResult: delivery.partialDeliveryResult,
-    });
-    const alreadyUsed = options.replyToAlreadyUsed === true;
-    const maxChars = useRichMessages
-      ? Math.min(
-          resolveTextChunkLimit(cfg, "telegram", account.accountId, {
-            fallbackLimit: TELEGRAM_RICH_TEXT_LIMIT,
-          }),
-          TELEGRAM_RICH_TEXT_LIMIT,
-        )
-      : 4000;
-    const pages = planTelegramTextDeliveryPages({
-      text: textMode === "html" ? renderHtmlText(rawText) : rawText,
-      maxChars,
-      tableMode,
-      richMessages: useRichMessages,
-      skipEntityDetection: account.config.linkPreview === false,
-      ...(textMode === "html" ? { textMode: "html" as const } : {}),
-      warn: (message) => sendLogger.warn(message),
-    });
-    try {
-      for (let index = 0; index < pages.length; index += 1) {
-        const page = pages[index]!;
-        const lastPage = index === pages.length - 1;
-        const recordAccepted = (
-          sent: {
-            result: TelegramMessageLike;
-            acceptedParams?: TelegramThreadScopedParams | TelegramRichMessageContextParams;
-          },
-          plainText: string,
-          finalPart: boolean,
-        ) =>
-          tracker.recordAccepted(sent, ({ result, acceptedParams }) =>
-            delivery.record({
-              result,
-              acceptedParams,
-              plainText,
-              hasInlineKeyboard: finalPart && Boolean(replyMarkup),
-            }),
-          );
-        try {
-          await deliverTelegramTextPage({
-            page,
-            context,
-            warn: (message) => sendLogger.warn(message),
-            sender: {
-              sendPlain: async (plainText, fallback, label) => {
-                const fallbackCount = fallback?.count ?? pages.length;
-                const fallbackIndex = fallback
-                  ? pages.length === 1
-                    ? fallback.index
-                    : index
-                  : index;
-                const finalPart = lastPage && (!fallback || fallback.index === fallback.count - 1);
-                const requestPlain = () =>
-                  requestText(
-                    plainText,
-                    buildTextParams(
-                      fallbackIndex,
-                      Math.max(pages.length, fallbackCount),
-                      finalPart,
-                      alreadyUsed,
-                    ),
-                    false,
-                    label,
-                  );
-                if (fallback) {
-                  let sent: Awaited<ReturnType<typeof requestPlain>> | undefined;
-                  await tracker.attempt(
-                    async () => (sent = await requestPlain()),
-                    ({ result, acceptedParams }) =>
-                      delivery.record({
-                        result,
-                        acceptedParams,
-                        plainText,
-                        hasInlineKeyboard: finalPart && Boolean(replyMarkup),
-                      }),
-                  );
-                  return sent;
-                }
-                const sent = await requestPlain();
-                await recordAccepted(sent, plainText, finalPart);
-                return sent;
-              },
-              sendHtml: async (htmlText) => {
-                const sent = await requestText(
-                  htmlText,
-                  buildTextParams(index, pages.length, lastPage, alreadyUsed),
-                  true,
-                );
-                await recordAccepted(sent, page.plainText, lastPage);
-                return sent;
-              },
-              sendRich: async (richMessage) => {
-                const requestParams = buildRichParams(index, pages.length, lastPage, alreadyUsed);
-                const sent = await withTelegramNativeQuoteFallback<TelegramMessageLike>({
-                  label: "richMessage",
-                  requestParams: requestParams ?? {},
-                  removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
-                  request: async (effectiveParams, label) => {
-                    await opts.onPlatformSendDispatch?.();
-                    return await requestWithChatNotFound(
-                      () =>
-                        getTelegramRichRawApi(api).sendRichMessage({
-                          chat_id: chatId,
-                          rich_message: richMessage,
-                          ...effectiveParams,
-                          ...(opts.silent === true ? { disable_notification: true } : {}),
-                        }),
-                      label,
-                    );
-                  },
-                });
-                const accepted = {
-                  result: sent.result,
-                  acceptedParams: toTelegramRichMessageContextParams(sent.acceptedParams),
-                };
-                await recordAccepted(accepted, page.plainText, lastPage);
-                return accepted;
-              },
-            },
-          });
-        } catch (error) {
-          tracker.reject(error);
-        }
-      }
-      tracker.finish();
-      return await delivery.finish(useRichMessages ? "sendRichMessage" : "sendMessage");
-    } catch (error) {
-      // Terminal/ambiguous failures escape tracker.reject before its invalidate
-      // branch; the projection cursor must not claim clean custody for pages
-      // that never landed (main's pre-centralization outer-catch contract).
-      if (!isTelegramEmptyContentError(error)) {
-        opts.promptContextProjectionPlan?.cursor.invalidate();
-      }
-      return await delivery.fail(error, tracker.fail);
+      return sender.fail(error, start, partialDeliveryResult());
     }
   };
-
-  return { sendChunkedText };
 }

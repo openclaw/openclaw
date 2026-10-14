@@ -1,4 +1,4 @@
-// Matrix plugin module implements group mentions behavior.
+import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
@@ -7,7 +7,6 @@ import {
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { buildMatrixRoomScopeTree, resolveMatrixRoomScopePath } from "./matrix/monitor/rooms.js";
 import { normalizeMatrixResolvableTarget } from "./matrix/target-ids.js";
-import type { ChannelGroupContext } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 function resolveMatrixGroupScope(params: ChannelGroupContext) {
@@ -16,8 +15,8 @@ function resolveMatrixGroupScope(params: ChannelGroupContext) {
     accountId: params.accountId,
   });
   const tree = buildMatrixRoomScopeTree(matrixConfig.groups ?? matrixConfig.rooms);
-  const roomId = normalizeMatrixResolvableTarget(params.groupId?.trim() ?? "");
-  const groupChannel = normalizeMatrixResolvableTarget(params.groupChannel?.trim() ?? "");
+  const roomId = normalizeMatrixResolvableTarget(params.groupId ?? "");
+  const groupChannel = normalizeMatrixResolvableTarget(params.groupChannel ?? "");
   return {
     tree,
     path: resolveMatrixRoomScopePath({ tree, roomId, aliases: groupChannel ? [groupChannel] : [] }),

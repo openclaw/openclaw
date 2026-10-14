@@ -38,14 +38,50 @@ struct GatewayErrorsTests {
         #expect(!unrelated.isAuthorizationFailure)
     }
 
-    @Test func `bootstrap token invalid is non recoverable`() {
-        let error = GatewayConnectAuthError(
-            message: "setup code expired",
-            detailCode: GatewayConnectAuthDetailCode.authBootstrapTokenInvalid.rawValue,
-            canRetryWithDeviceToken: false)
+    @Test func `terminal auth errors are non recoverable`() {
+        for detail in [
+            GatewayConnectAuthDetailCode.authBootstrapTokenInvalid,
+            .authVerifiedUserRequired,
+        ] {
+            let error = GatewayConnectAuthError(
+                message: "authentication failed",
+                detailCode: detail.rawValue,
+                canRetryWithDeviceToken: false)
 
-        #expect(error.isNonRecoverable)
-        #expect(error.detail == .authBootstrapTokenInvalid)
+            #expect(error.isNonRecoverable)
+            #expect(error.detail == detail)
+        }
+    }
+
+    @Test(arguments: [
+        (
+            GatewayConnectAuthDetailCode.authBootstrapTokenInvalid,
+            GatewayConnectionProblem.Kind.bootstrapTokenInvalid,
+            "Setup code no longer valid", "Scan QR again"),
+        (
+            GatewayConnectAuthDetailCode.authDeviceTokenMismatch,
+            GatewayConnectionProblem.Kind.deviceTokenMismatch,
+            "This device's saved device token is no longer valid", "Repair pairing"),
+    ])
+    func `invalid device credentials keep distinct actionable problems`(
+        detail: GatewayConnectAuthDetailCode,
+        kind: GatewayConnectionProblem.Kind,
+        title: String,
+        action: String) throws
+    {
+        let error = GatewayConnectAuthError(
+            message: "authentication failed",
+            detailCode: detail.rawValue,
+            canRetryWithDeviceToken: false)
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+
+        #expect(problem.kind == kind)
+        #expect(problem.titlePresentation == .localized(title))
+        #expect(problem.actionLabelPresentation == .localized(action))
+        #expect(problem.needsCredentialUpdate)
+        #expect(!problem.needsPairingApproval)
+        #expect(!problem.retryable)
+        #expect(problem.pauseReconnect)
     }
 
     @Test func `connect auth error preserves structured metadata`() {
@@ -171,6 +207,27 @@ struct GatewayErrorsTests {
         #expect(problem == Self.transportProblem(
             kind: .connectionRefused,
             technicalDetails: "connection refused"))
+    }
+
+    @Test(arguments: [
+        ("INVALID_REQUEST", 3, 4...4, true),
+        ("INVALID_REQUEST", 3, 3...4, false),
+        ("INVALID_REQUEST", 5, 3...4, true),
+        ("PROTOCOL_MISMATCH", 4, 4...4, true),
+        ("AUTH_TOKEN_MISSING", 5, 4...4, false),
+    ])
+    func `protocol mismatch respects the advertised role range`(
+        detailCode: String,
+        expected: Int,
+        supported: ClosedRange<Int>,
+        mismatch: Bool)
+    {
+        let error = GatewayConnectAuthError(
+            message: "rejected",
+            detailCode: detailCode,
+            canRetryWithDeviceToken: false,
+            expectedProtocol: expected)
+        #expect(error.isProtocolMismatch(supportedProtocols: supported) == mismatch)
     }
 
     @Test func `protocol mismatch maps older app to update problem`() {

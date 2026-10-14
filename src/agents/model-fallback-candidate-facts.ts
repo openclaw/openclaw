@@ -15,56 +15,39 @@ import type {
   CandidatePreTransportReadiness,
   ModelFallbackAuthRuntime,
 } from "./model-fallback-attempt.js";
-import { resolveCandidatePreTransportReadiness } from "./model-fallback-attempt.js";
+import {
+  resolveCandidatePreTransportReadiness,
+  resolveFallbackAuthScope,
+} from "./model-fallback-attempt.js";
 import type { ModelFallbackCandidate } from "./model-fallback.types.js";
 
 type CandidateAuthFacts = {
-  /** Ordered auth profiles for this candidate, user-locked profile first. */
+  /** Every ordered profile for the provider, used for subscription reprobes. */
+  orderedProfileIds: string[] | undefined;
+  /** Profiles subject to provider auth cooldown; unset when the route owns its auth. */
   profileIds: string[] | undefined;
   /** Scope used to key the session skip cache. */
   authScope: string | undefined;
-  userLockedEligible: boolean;
 };
 
-type CandidateAuthFactsParams = {
+/**
+ * Resolves auth profile order and skip-cache scope for one candidate.
+ *
+ * Read-only on purpose: the circuit gate calls this for candidates it only
+ * inspects. The runner performs the mutating subscription reprobe itself with
+ * `orderedProfileIds` right before it attempts the candidate.
+ */
+export function resolveCandidateAuthFacts(params: {
   cfg: OpenClawConfig | undefined;
   authRuntime: ModelFallbackAuthRuntime | null;
   authStore: AuthProfileStore | null;
   candidate: ModelFallbackCandidate;
   userLockedAuthProfileId?: string;
   skipsProviderAuthCooldown: boolean;
-  /**
-   * Re-probing mutates shared auth state, so only the runner (which is about
-   * to attempt the candidate) may request it. The circuit gate inspects later
-   * candidates speculatively and must stay side-effect free.
-   */
-  reprobeBlockedProfiles: boolean;
-  agentDir?: string;
-};
-
-function resolveAuthScope(params: {
-  userLockedAuthProfileId?: string;
-  profileIds?: readonly string[];
-}): string | undefined {
-  if (params.userLockedAuthProfileId) {
-    return params.userLockedAuthProfileId;
-  }
-  // resolveAuthProfileOrder places the profile selected for this model first.
-  return params.profileIds?.find((id) => id.trim())?.trim();
-}
-
-function promoteUserLockedProfile(profileIds: string[], userLockedAuthProfileId: string): string[] {
-  return [
-    userLockedAuthProfileId,
-    ...profileIds.filter((profileId) => profileId !== userLockedAuthProfileId),
-  ];
-}
-
-/** Resolves auth profile order and skip-cache scope for one candidate. */
-export function resolveCandidateAuthFacts(params: CandidateAuthFactsParams): CandidateAuthFacts {
+}): CandidateAuthFacts {
   const { authRuntime, authStore, candidate, userLockedAuthProfileId } = params;
   if (!authRuntime || !authStore) {
-    return { profileIds: undefined, authScope: undefined, userLockedEligible: false };
+    return { orderedProfileIds: undefined, profileIds: undefined, authScope: undefined };
   }
   const userLockedEligible =
     userLockedAuthProfileId !== undefined &&
@@ -73,38 +56,50 @@ export function resolveCandidateAuthFacts(params: CandidateAuthFactsParams): Can
       store: authStore,
       provider: candidate.provider,
       profileId: userLockedAuthProfileId,
+      includePendingOAuthRefresh: true,
     }).eligible;
-
-  let profileIds: string[] | undefined;
-  if (!params.skipsProviderAuthCooldown) {
-    const orderedProfileIds = authRuntime.resolveAuthProfileOrder({
-      cfg: params.cfg,
-      store: authStore,
-      provider: candidate.provider,
-      forModel: candidate.model,
-    });
-    profileIds =
-      userLockedEligible && userLockedAuthProfileId
-        ? promoteUserLockedProfile(orderedProfileIds, userLockedAuthProfileId)
-        : orderedProfileIds;
-    if (params.reprobeBlockedProfiles) {
-      authRuntime.maybeReprobeWhamBlockedProfiles({
-        store: authStore,
-        profileIds,
-        agentDir: params.agentDir,
-        forModel: candidate.model,
-      });
-    }
+  let orderedProfileIds = authRuntime.resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store: authStore,
+    provider: candidate.provider,
+    forModel: candidate.model,
+    includePendingOAuthRefresh: true,
+  });
+  if (userLockedEligible && userLockedAuthProfileId) {
+    orderedProfileIds = [...new Set([userLockedAuthProfileId, ...orderedProfileIds])];
   }
-
+  const profileIds = params.skipsProviderAuthCooldown ? undefined : orderedProfileIds;
   return {
+    orderedProfileIds,
     profileIds,
-    authScope: resolveAuthScope({
+    authScope: resolveFallbackAuthScope({
       userLockedAuthProfileId: userLockedEligible ? userLockedAuthProfileId : undefined,
       profileIds,
     }),
-    userLockedEligible,
   };
+}
+
+/**
+ * Facts for the candidate the runner is about to attempt. Adds the mutating
+ * subscription reprobe, which only the attempting path may run.
+ */
+export async function resolveAttemptAuthFacts(
+  params: Parameters<typeof resolveCandidateAuthFacts>[0] & { agentDir?: string },
+): Promise<CandidateAuthFacts & { quotaRequiresAuthPreparation: boolean }> {
+  const facts = resolveCandidateAuthFacts(params);
+  const { authRuntime, authStore } = params;
+  if (!authRuntime || !authStore || !facts.orderedProfileIds) {
+    return { ...facts, quotaRequiresAuthPreparation: false };
+  }
+  const quota = await authRuntime.maybeReprobeWhamBlockedProfiles({
+    store: authStore,
+    profileIds: facts.orderedProfileIds,
+    agentDir: params.agentDir,
+    cfg: params.cfg,
+    forModel: params.candidate.model,
+  });
+  // Normal auth selection owns remaining profiles and declared direct credentials.
+  return { ...facts, quotaRequiresAuthPreparation: quota?.requiresAuthPreparation === true };
 }
 
 /**

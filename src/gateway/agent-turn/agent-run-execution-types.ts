@@ -1,0 +1,60 @@
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MediaFact } from "../../media/media-facts.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
+import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
+import type { PreparedAgentRunDispatch } from "./agent-run-admission-types.js";
+import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
+
+export type StartAgentRunExecutionParams = {
+  assertContextCurrent?: () => void;
+  prepared: PreparedAgentRunDispatch;
+  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
+  request: AgentRunRequest;
+  cfg: OpenClawConfig;
+  cfgForAgent?: OpenClawConfig;
+  sessionEntry?: SessionEntry;
+  resolvedSessionKey?: string;
+  requestedSessionKey?: string;
+  resolvedSessionId?: string;
+  agentId?: string;
+  activeSessionAgentId: string;
+  delivery: AgentDeliveryPhaseResult;
+  isNewSession: boolean;
+  isRawModelRun: boolean;
+  isOneShotModelRun: boolean;
+  isRestartRecoveryResumeRun: boolean;
+  suppressVisibleSessionEffects: boolean;
+  images: Array<{ type: "image"; data: string; mimeType: string }>;
+  imageOrder: PromptImageOrderEntry[];
+  media: MediaFact[];
+  inputProvenance?: InputProvenance;
+  runId: string;
+  agentDedupeKeys: readonly string[];
+  swarmExecutionLane?: CommandLaneConfiguration;
+  spawnedBy?: string;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  bestEffortDeliver: boolean;
+  lifecycleGeneration: string;
+  effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  preserveUserFacingSessionModelState: boolean;
+  sessionEffects?: "visible" | "internal";
+  skipAgentInitialSessionTouch: boolean;
+  restoredCronContinuation?: RestoredCronContinuation;
+  canUseInternalRuntimeHandoff: boolean;
+  client: AgentTurnPrincipal | null;
+  context: AgentTurnContext;
+  io: AgentTurnIo;
+  releaseCronContinuationClaimWithRecovery: (
+    outcome?: { terminalOutcome: AgentRunTerminalOutcome },
+    onRecovered?: () => void,
+  ) => Promise<boolean>;
+};

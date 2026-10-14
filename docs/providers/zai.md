@@ -7,7 +7,8 @@ title: "Z.AI"
 ---
 
 Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and
-uses API keys for authentication. Create your API key in the Z.AI console.
+uses API keys for authentication. Create your API key in the
+[Z.AI console](https://z.ai/manage-apikey/apikey-list).
 OpenClaw uses the `zai` provider with a Z.AI API key.
 
 | Property | Value                                        |
@@ -32,7 +33,7 @@ openclaw plugins install @openclaw/zai-provider
 
 <Tabs>
   <Tab title="Auto-detect endpoint">
-    **Best for:** most users. OpenClaw probes supported Z.AI endpoints with your API key and applies the correct base URL automatically.
+    **Best for:** most users. OpenClaw checks supported Z.AI endpoints with your API key and applies the correct base URL automatically.
 
     <Steps>
       <Step title="Run onboarding">
@@ -92,7 +93,7 @@ Z.AI also publishes the Anthropic-compatible Coding Plan base URL
 OpenAI Chat Completions endpoints above; the Anthropic URL is for clients that
 speak Anthropic Messages directly.
 
-`zai-api-key` auto-detects one of these four by probing your key against each
+`zai-api-key` auto-detects one of these four by checking your key against each
 endpoint's chat-completions API, checking general endpoints (`zai-global`,
 then `zai-cn`) before Coding Plan endpoints (`zai-coding-global`, then
 `zai-coding-cn`), and stopping at the first endpoint that accepts a request.
@@ -163,20 +164,22 @@ listing can show known GLM rows without loading provider runtime:
 openclaw models list --all --provider zai
 ```
 
-The manifest-backed catalog currently includes:
+The manifest-backed catalog includes:
 
-| Model ref          | Notes                                             |
-| ------------------ | ------------------------------------------------- |
-| `zai/glm-5.3`      | Coding Plan default; 1,048,576-token context      |
-| `zai/glm-5.2`      | General API default; 1M context                   |
-| `zai/glm-5-turbo`  | OpenClaw-optimized text model; 200K context       |
-| `zai/glm-5v-turbo` | Multimodal coding model; 200K context             |
-| `zai/glm-5.1`      | Deprecated; hidden unless configured; use GLM-5.2 |
+| Model ref           | Notes                                              |
+| ------------------- | -------------------------------------------------- |
+| `zai/glm-5.3`       | Coding Plan default; 1,048,576-token context       |
+| `zai/glm-5.3-flash` | Multimodal text and image model; 1,048,576 context |
+| `zai/glm-5.2`       | General API default; 1M context                    |
+| `zai/glm-5-turbo`   | OpenClaw-optimized text model; 200K context        |
+| `zai/glm-5v-turbo`  | Multimodal coding model; 200K context              |
+| `zai/glm-5.1`       | Deprecated; hidden unless configured; use GLM-5.2  |
 
 Pay-as-you-go catalog rows follow Z.AI's current
-[API pricing](https://docs.z.ai/guides/overview/pricing). GLM-5.3 is currently a
-Coding Plan model, so its local catalog cost is zero; Coding Plan subscriptions
-use plan quota instead of per-token billing. See the live
+[API pricing](https://docs.z.ai/guides/overview/pricing). GLM-5.3 Flash uses
+its pay-as-you-go list prices even when temporary discounts are available.
+GLM-5.3 is currently a Coding Plan model, so its local catalog cost is zero;
+Coding Plan subscriptions use plan quota instead of per-token billing. See the live
 [subscription page](https://z.ai/subscribe) for plan pricing and availability.
 
 <Tip>
@@ -193,14 +196,44 @@ GLM-5.3. Run
 installed version.
 </Note>
 
+## Video generation
+
+The same plugin and `ZAI_API_KEY` (or `Z_AI_API_KEY`) support the
+[video generation tool](/tools/video-generation) with `zai/cogvideox-3`.
+It accepts text prompts or one PNG/JPEG image, including local files sent
+as data URIs (maximum 5 MB). Video references are unsupported.
+
+Durations normalize to 5 or 10 seconds. Size and aspect-ratio hints map to
+the nearest supported size: `1280x720`, `720x1280`, `1024x1024`,
+`1920x1080`, `1080x1920`, `2048x1080`, or `3840x2160`.
+Output defaults to 720P landscape without audio; `audio: true` enables sound.
+Use `providerOptions.quality` (`speed` or `quality`) and `providerOptions.fps`
+(`30` or `60`) for further control.
+
+Video uses the configured global or China region's general `/api/paas/v4`
+endpoint. Coding Plan chat endpoints map to the general video endpoint in
+the same region; video requires API access and billing for that endpoint.
+
+```json5
+{
+  agents: {
+    defaults: {
+      mediaModels: {
+        video: { primary: "zai/cogvideox-3" },
+      },
+    },
+  },
+}
+```
+
 ## Thinking levels
 
 <Tabs>
-  <Tab title="GLM-5.3">
+  <Tab title="GLM-5.3 and Flash">
     Levels: `low`, `high`, and `max` (default `max`). OpenClaw maps these to
-    Z.AI's `reasoning_effort` request field. An explicit `off` setting sends
-    `thinking: { type: "disabled" }`; Z.AI treats disabled thinking as its
-    lightweight `low` effort rather than disabling reasoning entirely.
+    Z.AI's `reasoning_effort` request field. An explicit `off` setting maps to
+    `reasoning_effort: "low"` because GLM-5.3 models do not support disabling
+    reasoning entirely.
   </Tab>
   <Tab title="GLM-5.2">
     Full range: `off`, `low`, `high`, `max` (default `off`). OpenClaw maps
@@ -289,7 +322,7 @@ Setting thinking to `off` avoids responses that spend the output budget on
 
   <Accordion title="Auth details">
     - Z.AI uses Bearer auth with your API key.
-    - The `zai-api-key` onboarding choice auto-detects the matching Z.AI endpoint by probing supported endpoints with your key.
+    - The `zai-api-key` onboarding choice auto-detects the matching Z.AI endpoint by checking supported endpoints with your key.
     - Use the explicit regional choices (`zai-coding-global`, `zai-coding-cn`, `zai-global`, `zai-cn`) when you want to force a specific API surface.
     - The legacy env var `Z_AI_API_KEY` is still accepted; OpenClaw copies it to `ZAI_API_KEY` at startup if `ZAI_API_KEY` is unset.
 

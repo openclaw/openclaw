@@ -19,10 +19,10 @@ export function createSessionObserverPreamblePublisher(params: {
   setTimeoutFn: typeof setTimeout;
   clearTimeoutFn: typeof clearTimeout;
   isCurrent: (state: SessionObserverState) => boolean;
+  preparePublication?: (state: SessionObserverState, publish: () => void) => void | Promise<void>;
   publish: (state: SessionObserverState, digest: SessionObserverDigest) => void;
 }) {
   const entries = new Map<SessionObserverState, PreambleEntry>();
-  const generations = new WeakMap<SessionObserverState, number>();
 
   const clear = (state: SessionObserverState): void => {
     const entry = entries.get(state);
@@ -32,8 +32,11 @@ export function createSessionObserverPreamblePublisher(params: {
     entries.delete(state);
   };
 
-  const publish = (state: SessionObserverState, entry: PreambleEntry): void => {
+  const publishPrepared = (state: SessionObserverState, entry: PreambleEntry): void => {
     entry.timer = undefined;
+    if (entries.get(state) !== entry) {
+      return;
+    }
     if (!params.isCurrent(state)) {
       clear(state);
       return;
@@ -47,6 +50,8 @@ export function createSessionObserverPreamblePublisher(params: {
     const digest: SessionObserverDigest = {
       sessionKey: state.sessionKey,
       agentId: state.agentId,
+      ...(state.sessionId ? { sessionId: state.sessionId } : {}),
+      ...(state.lifecycleRevision ? { lifecycleRevision: state.lifecycleRevision } : {}),
       runId: state.runId,
       revision: state.revision,
       updatedAt: Math.max(entry.updatedAt, (previous?.updatedAt ?? -1) + 1),
@@ -65,9 +70,15 @@ export function createSessionObserverPreamblePublisher(params: {
     entry.published = true;
     params.publish(state, digest);
   };
+  const publish = (state: SessionObserverState, entry: PreambleEntry): void | Promise<void> => {
+    if (params.preparePublication) {
+      return params.preparePublication(state, () => publishPrepared(state, entry));
+    }
+    publishPrepared(state, entry);
+  };
 
   return {
-    handle(state: SessionObserverState, event: SessionObserverEvent): boolean {
+    handle(state: SessionObserverState, event: SessionObserverEvent): boolean | Promise<boolean> {
       if (event.stream !== "item" || event.data.kind !== "preamble") {
         return false;
       }
@@ -93,9 +104,6 @@ export function createSessionObserverPreamblePublisher(params: {
         published: false,
         updatedAt: event.ts,
       };
-      if (previousHeadline !== headline) {
-        generations.set(state, (generations.get(state) ?? 0) + 1);
-      }
       state.lastPreambleHeadline = headline;
       entry.headline = headline;
       entry.updatedAt = event.ts;
@@ -106,26 +114,25 @@ export function createSessionObserverPreamblePublisher(params: {
         if (entry.timer) {
           params.clearTimeoutFn(entry.timer);
         }
-        publish(state, entry);
+        const pending = publish(state, entry);
+        if (pending) {
+          return pending.then(() => true);
+        }
       } else if (!entry.timer) {
-        entry.timer = params.setTimeoutFn(
-          () => publish(state, entry),
-          PREAMBLE_PUBLISH_INTERVAL_MS - elapsed,
-        );
+        entry.timer = params.setTimeoutFn(() => {
+          void publish(state, entry);
+        }, PREAMBLE_PUBLISH_INTERVAL_MS - elapsed);
         entry.timer.unref?.();
       }
       return true;
     },
-    generation(state: SessionObserverState): number {
-      return generations.get(state) ?? 0;
-    },
-    flush(state: SessionObserverState): void {
+    flush(state: SessionObserverState): void | Promise<void> {
       const entry = entries.get(state);
       if (entry) {
         if (entry.timer) {
           params.clearTimeoutFn(entry.timer);
         }
-        publish(state, entry);
+        return publish(state, entry);
       }
     },
     clear,

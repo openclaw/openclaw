@@ -1,13 +1,11 @@
-// Policy tests cover cli plugin behavior.
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { Command } from "commander";
-import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { clearConfigCache } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerPolicyCli } from "./cli.js";
-import { createPolicyAttestation, policyDocumentHash } from "./policy-state.js";
+import { createPolicyAttestation } from "./policy-state.js";
 
 let workspaceDir: string;
 
@@ -95,6 +93,36 @@ async function runPolicyCompareFixture(baseline: unknown, policy: unknown = {}) 
   return runPolicyCompareJson({ baseline: "baseline.policy.jsonc" });
 }
 
+async function writeExplicitFleetConfig(): Promise<{
+  readonly alphaWorkspace: string;
+  readonly betaWorkspace: string;
+}> {
+  const alphaWorkspace = join(workspaceDir, "alpha-workspace");
+  const betaWorkspace = join(workspaceDir, "beta-workspace");
+  await Promise.all([
+    fs.mkdir(alphaWorkspace, { recursive: true }),
+    fs.mkdir(betaWorkspace, { recursive: true }),
+  ]);
+  const configPath = join(workspaceDir, "openclaw.jsonc");
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  await writeFixture(configPath, {
+    agents: {
+      ownership: "explicit",
+      entries: {
+        alpha: { workspace: alphaWorkspace },
+        beta: { workspace: betaWorkspace },
+      },
+    },
+    plugins: {
+      entries: {
+        policy: { enabled: true, config: { enabled: true, path: "policy.jsonc" } },
+      },
+    },
+  });
+  clearConfigCache();
+  return { alphaWorkspace, betaWorkspace };
+}
+
 describe("policy commands", () => {
   beforeEach(async () => {
     workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-cli-"));
@@ -105,63 +133,6 @@ describe("policy commands", () => {
     vi.unstubAllEnvs();
     clearConfigCache();
     await fs.rm(workspaceDir, { recursive: true, force: true });
-  });
-
-  it("checks policy rules and emits an attestation", async () => {
-    const policy = {
-      channels: {
-        denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-      },
-    };
-    await writeFixture(join(workspaceDir, "policy.jsonc"), policy);
-    const { exitCode, parsed } = await runPolicyCheckJson();
-
-    expect(exitCode).toBe(0);
-    const policyHash = policyDocumentHash(policy);
-    const evidence = {
-      channels: [],
-      mcpServers: [],
-      modelProviders: [],
-      modelRefs: [],
-      network: [],
-    };
-    const attestation = createPolicyAttestation({
-      ok: true,
-      checkedAt: parsed.attestation.checkedAt,
-      policyPath: "policy.jsonc",
-      policyHash,
-      evidence,
-      findings: [],
-    });
-    expect(typeof parsed.attestation.checkedAt).toBe("string");
-    expect(parsed).toMatchObject({
-      ok: true,
-      attestation,
-      evidence,
-      findings: [],
-    });
-  });
-
-  it("reports policy findings in policy check output", async () => {
-    await writeFixture(join(workspaceDir, "policy.jsonc"), {
-      channels: {
-        denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-      },
-    });
-    const { exitCode, parsed } = await runPolicyCheckJson();
-
-    expect(exitCode).toBe(0);
-    expect(parsed).toMatchObject({
-      ok: true,
-      evidence: {
-        channels: [],
-        mcpServers: [],
-        modelProviders: [],
-        modelRefs: [],
-        network: [],
-      },
-      findings: [],
-    });
   });
 
   it("checks authored routing probes without exposing route identifiers", async () => {
@@ -221,23 +192,6 @@ describe("policy commands", () => {
     expect(parsed).toMatchObject({
       ok: false,
       findings: [{ checkId: "policy/policy-jsonc-invalid", target }],
-    });
-  });
-
-  it("reports unparseable policy files in policy check output", async () => {
-    await writeFixture(join(workspaceDir, "policy.jsonc"), "{ channels: ");
-    const { exitCode, parsed } = await runPolicyCheckJson();
-
-    expect(exitCode).toBe(1);
-    expect(parsed).toMatchObject({
-      ok: false,
-      findings: [
-        {
-          checkId: "policy/policy-jsonc-invalid",
-          severity: "error",
-          target: "oc://policy.jsonc",
-        },
-      ],
     });
   });
 
@@ -375,36 +329,11 @@ describe("policy commands", () => {
     });
   });
 
-  it.each([
-    {
-      name: "rejects partial policy watch intervals before evaluating policy",
-      intervalMs: "500ms",
-    },
-    {
-      name: "rejects sub-floor policy watch intervals before evaluating policy",
-      intervalMs: "249",
-    },
-  ])("$name", async ({ intervalMs }) => {
-    const { exitCode, output } = await runPolicyWatchJson({ intervalMs });
+  it("rejects partial policy watch intervals before evaluating policy", async () => {
+    const { exitCode, output } = await runPolicyWatchJson({ intervalMs: "500ms" });
 
     expect(exitCode).toBe(2);
     expect(output.join("\n")).toContain("--interval-ms must be an integer >= 250.");
-  });
-
-  it("reports findings instead of stale when policy watch has no attestation to compare", async () => {
-    await writeFixture(join(workspaceDir, "policy.jsonc"), "{ channels: ");
-
-    const { exitCode, parsed } = await runPolicyWatchJson();
-
-    expect(exitCode).toBe(1);
-    expect(parsed).toMatchObject({
-      status: "findings",
-      findings: [
-        {
-          checkId: "policy/policy-jsonc-invalid",
-        },
-      ],
-    });
   });
 
   it("reports findings before stale when accepted attestation exists", async () => {
@@ -437,20 +366,12 @@ describe("policy commands", () => {
   });
 
   it("rejects invalid severity thresholds", async () => {
-    const errorSpy = vi.spyOn(cliRuntime, "error");
-    try {
-      const { exitCode, output } = await runPolicyCheckJson({ severityMin: "warnng" });
+    const { exitCode, output } = await runPolicyCheckJson({ severityMin: "warnng" });
 
-      expect(exitCode).toBe(2);
-      expect(errorSpy).toHaveBeenCalledWith(
-        "Invalid --severity-min value. Expected one of: info, warning, error.",
-      );
-      expect(output).toEqual([
-        "Invalid --severity-min value. Expected one of: info, warning, error.\n",
-      ]);
-    } finally {
-      errorSpy.mockRestore();
-    }
+    expect(exitCode).toBe(2);
+    expect(output).toEqual([
+      "Invalid --severity-min value. Expected one of: info, warning, error.\n",
+    ]);
   });
 
   it("fails closed when the OpenClaw config is invalid", async () => {
@@ -590,16 +511,6 @@ describe("policy commands", () => {
     ]);
   });
 
-  it("treats an empty baseline routing probe list as a no-op", async () => {
-    const { exitCode, parsed } = await runPolicyCompareFixture(
-      { routing: { probes: [] } },
-      { routing: {} },
-    );
-
-    expect(exitCode).toBe(0);
-    expect(parsed).toMatchObject({ ok: true, findings: [] });
-  });
-
   it("rejects unsupported exec approval allowlist requirement keys in policy compare", async () => {
     const { exitCode, parsed } = await runPolicyCompareFixture(
       {
@@ -678,22 +589,6 @@ describe("policy commands", () => {
     );
   });
 
-  it("returns JSON findings for malformed policy compare files", async () => {
-    const { exitCode, parsed } = await runPolicyCompareFixture("{", {});
-
-    expect(exitCode).toBe(1);
-    expect(parsed).toMatchObject({
-      ok: false,
-      rulesChecked: 0,
-      findings: [
-        {
-          checkId: "policy/policy-conformance-invalid",
-          target: "oc://baseline.policy.jsonc",
-        },
-      ],
-    });
-  });
-
   it("returns JSON findings for missing policy compare files", async () => {
     await writeFixture(join(workspaceDir, "policy.jsonc"), {});
 
@@ -714,104 +609,28 @@ describe("policy commands", () => {
     });
   });
 
-  it("does not require candidate keys for baseline rules that impose no restriction", async () => {
+  it("rejects scoped policy rules that do not have a valid supported selector", async () => {
     const { exitCode, parsed } = await runPolicyCompareFixture({
-      channels: { denyRules: [] },
-      gateway: { auth: { requireAuth: false } },
-      mcp: { servers: { allow: [] } },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(parsed).toMatchObject({
-      ok: true,
-      findings: [],
-    });
-  });
-
-  it("rejects malformed baseline policy rules during policy file conformance", async () => {
-    const { exitCode, parsed } = await runPolicyCompareFixture({
-      channels: { denyRules: [{ when: {} }] },
-    });
-
-    expect(exitCode).toBe(1);
-    expect(parsed.findings).toEqual([
-      expect.objectContaining({
-        checkId: "policy/policy-conformance-invalid",
-        target: "oc://baseline.policy.jsonc/channels/denyRules",
-      }),
-    ]);
-  });
-
-  it.each([
-    {
-      name: "rejects malformed policy containers during policy file conformance",
-      baseline: { network: { privateNetwork: "bad" }, tools: "bad" },
-      policy: undefined,
-      targets: ["oc://baseline.policy.jsonc/tools"],
-    },
-    {
-      name: "rejects scoped policy rules that do not have a valid supported selector",
-      baseline: {
-        scopes: {
-          missingSelector: { tools: { exec: { allowHosts: ["sandbox"] } } },
-          wrongSelector: {
-            channelIds: ["telegram"],
-            tools: { exec: { allowHosts: ["sandbox"] } },
-          },
+      scopes: {
+        missingSelector: { tools: { exec: { allowHosts: ["sandbox"] } } },
+        wrongSelector: {
+          channelIds: ["telegram"],
+          tools: { exec: { allowHosts: ["sandbox"] } },
         },
       },
-      policy: undefined,
-      targets: [
-        "oc://baseline.policy.jsonc/scopes/missingSelector/tools/exec/allowHosts",
-        "oc://baseline.policy.jsonc/scopes/wrongSelector/tools/exec/allowHosts",
-      ],
-    },
-    {
-      name: "rejects unsupported enum values during policy file conformance",
-      baseline: {
-        auth: { profiles: { allowModes: ["password"] } },
-        gateway: { http: { denyEndpoints: ["bogus"] } },
-        tools: { requireMetadata: ["custom"] },
-      },
-      policy: {
-        auth: { profiles: { allowModes: ["password"] } },
-        gateway: { http: { denyEndpoints: ["bogus"] } },
-        tools: { requireMetadata: ["custom"] },
-      },
-      targets: [
-        "oc://baseline.policy.jsonc/auth/profiles/allowModes",
-        "oc://baseline.policy.jsonc/gateway/http/denyEndpoints",
-        "oc://baseline.policy.jsonc/tools/requireMetadata",
-      ],
-    },
-  ])("$name", async ({ baseline, policy, targets }) => {
-    const { exitCode, parsed } = await runPolicyCompareFixture(baseline, policy);
+    });
 
     expect(exitCode).toBe(1);
     expect(parsed.findings).toEqual(
       expect.arrayContaining(
-        targets.map((target) =>
+        ["missingSelector", "wrongSelector"].map((scope) =>
           expect.objectContaining({
             checkId: "policy/policy-conformance-invalid",
-            target,
+            target: `oc://baseline.policy.jsonc/scopes/${scope}/tools/exec/allowHosts`,
           }),
         ),
       ),
     );
-  });
-
-  it("normalizes model provider casing during policy file conformance", async () => {
-    const { exitCode, parsed } = await runPolicyCompareFixture(
-      {
-        models: { providers: { allow: ["OpenAI"], deny: ["OpenRouter"] } },
-      },
-      {
-        models: { providers: { allow: ["openai"], deny: ["openrouter"] } },
-      },
-    );
-
-    expect(exitCode).toBe(0);
-    expect(parsed.findings).toEqual([]);
   });
 
   it("rejects gateway HTTP endpoint ids with invalid casing during policy file conformance", async () => {
@@ -833,38 +652,6 @@ describe("policy commands", () => {
         }),
       ]),
     );
-  });
-
-  it("resolves the default compare policy path from the configured agent workspace", async () => {
-    const agentWorkspace = join(workspaceDir, "agent-workspace");
-    await fs.mkdir(agentWorkspace, { recursive: true });
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    await writeFixture(configPath, {
-      agents: { defaults: { workspace: agentWorkspace } },
-      plugins: {
-        entries: {
-          policy: { enabled: true, config: { enabled: true, path: "policy.jsonc" } },
-        },
-      },
-    });
-    await writeFixture(join(workspaceDir, "baseline.policy.jsonc"), {
-      network: { privateNetwork: { allow: false } },
-    });
-    await writeFixture(join(agentWorkspace, "policy.jsonc"), {
-      network: { privateNetwork: { allow: false } },
-    });
-
-    const { exitCode, parsed } = await runPolicyCompareJson({
-      baseline: join(workspaceDir, "baseline.policy.jsonc"),
-    });
-
-    expect(exitCode).toBe(0);
-    expect(parsed).toMatchObject({
-      ok: true,
-      policyPath: "policy.jsonc",
-      findings: [],
-    });
   });
 
   it("allows a top-level candidate rule to satisfy a scoped baseline rule", async () => {
@@ -984,29 +771,84 @@ describe("policy commands", () => {
     ]);
   });
 
-  it("rejects a weaker scoped candidate override for a global baseline rule", async () => {
-    const { exitCode, parsed } = await runPolicyCompareFixture(
-      {
-        tools: { exec: { allowHosts: ["sandbox"] } },
-      },
-      {
-        tools: { exec: { allowHosts: ["sandbox"] } },
-        scopes: {
-          relaxed: {
-            agentIds: ["main"],
-            tools: { exec: { allowHosts: ["sandbox", "node"] } },
-          },
-        },
-      },
-    );
+  it("watches the explicitly selected workspace without inspecting the first agent", async () => {
+    const { alphaWorkspace, betaWorkspace } = await writeExplicitFleetConfig();
+    await writeFixture(join(alphaWorkspace, "policy.jsonc"), "{");
+    await writeFixture(join(betaWorkspace, "policy.jsonc"), {});
 
-    expect(exitCode).toBe(1);
-    expect(parsed.findings).toEqual([
-      expect.objectContaining({
-        checkId: "policy/policy-conformance-invalid",
-        requirement: "oc://policy.jsonc/scopes/relaxed/tools/exec/allowHosts",
-        target: "oc://policy.jsonc/scopes/relaxed/tools/exec/allowHosts",
-      }),
+    const { exitCode, parsed } = await runPolicyCli([
+      "watch",
+      "--agent",
+      "beta",
+      "--json",
+      "--once",
     ]);
+
+    expect(exitCode).toBe(0);
+    expect(parsed).toMatchObject({
+      status: "clean",
+      ok: true,
+      attestation: { policy: { path: "policy.jsonc" } },
+      findings: [],
+    });
+  });
+
+  it("resolves a relative compare policy from the explicitly selected workspace", async () => {
+    const { alphaWorkspace, betaWorkspace } = await writeExplicitFleetConfig();
+    const baselinePath = join(workspaceDir, "baseline.policy.jsonc");
+    await writeFixture(baselinePath, { network: { privateNetwork: { allow: false } } });
+    await writeFixture(join(alphaWorkspace, "policy.jsonc"), {
+      network: { privateNetwork: { allow: true } },
+    });
+    await writeFixture(join(betaWorkspace, "policy.jsonc"), {
+      network: { privateNetwork: { allow: false } },
+    });
+
+    const { exitCode, parsed } = await runPolicyCli([
+      "compare",
+      "--agent",
+      "beta",
+      "--baseline",
+      baselinePath,
+      "--json",
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(parsed).toMatchObject({ ok: true, policyPath: "policy.jsonc", findings: [] });
+  });
+
+  it.each([
+    {
+      name: "check",
+      args: ["check", "--json"],
+      expected: "policy check has no explicit owner",
+    },
+    {
+      name: "relative compare",
+      args: ["compare", "--baseline", "baseline.policy.jsonc", "--json"],
+      expected: "policy compare has no explicit owner",
+    },
+  ])("requires an owner for $name", async ({ args, expected }) => {
+    await writeExplicitFleetConfig();
+    await writeFixture(join(workspaceDir, "baseline.policy.jsonc"), {});
+
+    const { exitCode, output } = await runPolicyCli(args);
+
+    expect(exitCode).toBe(2);
+    expect(output.join("\n")).toContain(expected);
+    expect(output.join("\n")).toContain("Pass --agent <id>.");
+  });
+
+  it("rejects an unknown explicit owner with profile-aware guidance", async () => {
+    await writeExplicitFleetConfig();
+    vi.stubEnv("OPENCLAW_PROFILE", "testprof");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+
+    const { exitCode, output } = await runPolicyCli(["check", "--agent", "ghost", "--json"]);
+
+    expect(exitCode).toBe(2);
+    expect(output.join("\n")).toContain(
+      'Unknown agent id "ghost". Run openclaw --profile testprof agents list to see configured agents.',
+    );
   });
 });

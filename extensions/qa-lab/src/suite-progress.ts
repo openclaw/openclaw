@@ -10,7 +10,7 @@ type QaSuiteProgressScenario = {
 };
 
 type QaSuiteProgressResult = {
-  scenarioId: string;
+  scenarioIndex: number;
   result: {
     name: string;
     status: "pass" | "fail" | "skip";
@@ -31,16 +31,12 @@ export function createQaSuiteProgressController(params: {
   scenarios: readonly QaSuiteProgressScenario[];
   startedAt: string;
 }) {
-  const outcomes = new Map<string, QaLabScenarioOutcome>(
-    params.scenarios.map((scenario) => [
-      scenario.id,
-      {
-        id: scenario.id,
-        name: scenario.title,
-        status: "pending" as const,
-      },
-    ]),
-  );
+  // Positions belong to this captured schedule; labels may repeat.
+  const outcomes: QaLabScenarioOutcome[] = params.scenarios.map((scenario) => ({
+    id: scenario.id,
+    name: scenario.title,
+    status: "pending",
+  }));
 
   const emit = (status: QaLabScenarioRun["status"], finishedAt?: string) => {
     params.lab.setScenarioRun({
@@ -48,38 +44,50 @@ export function createQaSuiteProgressController(params: {
       status,
       startedAt: params.startedAt,
       ...(finishedAt ? { finishedAt } : {}),
-      scenarios: params.scenarios.map((scenario) => cloneOutcome(outcomes.get(scenario.id)!)),
+      scenarios: outcomes.map(cloneOutcome),
     });
   };
 
   const updateResult = (entry: QaSuiteProgressResult, finishedAt?: string) => {
-    const current = outcomes.get(entry.scenarioId);
+    const current = outcomes[entry.scenarioIndex];
     if (!current) {
       return;
     }
-    outcomes.set(entry.scenarioId, {
+    outcomes[entry.scenarioIndex] = {
       ...current,
       name: entry.result.name,
       status: entry.result.status,
       ...(entry.result.details ? { details: entry.result.details } : {}),
       ...(entry.result.steps ? { steps: entry.result.steps } : {}),
       ...(finishedAt ? { finishedAt } : {}),
-    });
+    };
   };
 
   return {
     start() {
       emit("running");
     },
-    markRunning(scenarioIds: readonly string[]) {
+    markRunning(scenarioIndexes: readonly number[]) {
       const startedAt = new Date().toISOString();
-      for (const scenarioId of scenarioIds) {
-        const current = outcomes.get(scenarioId);
+      for (const scenarioIndex of scenarioIndexes) {
+        const current = outcomes[scenarioIndex];
         if (!current || current.status !== "pending") {
           continue;
         }
-        outcomes.set(scenarioId, { ...current, status: "running", startedAt });
+        outcomes[scenarioIndex] = { ...current, status: "running", startedAt };
       }
+      emit("running");
+    },
+    recordScenarioResult(scenarioIndex: number, result: QaSuiteProgressResult["result"]) {
+      // Runner outcomes retain catalog titles and assign even empty details.
+      // Aggregate results below instead merge names/details from child reports.
+      outcomes[scenarioIndex] = {
+        ...outcomes[scenarioIndex]!,
+        status: result.status,
+        details: result.details,
+        steps: result.steps,
+        finishedAt: new Date().toISOString(),
+      };
       emit("running");
     },
     recordResults(entries: readonly QaSuiteProgressResult[]) {
@@ -89,30 +97,26 @@ export function createQaSuiteProgressController(params: {
       }
       emit("running");
     },
-    createPartitionLab(scenarioIds: readonly string[]): QaLabServerHandle {
-      const partitionIds = new Set(scenarioIds);
+    createPartitionLab(scenarioIndexes: readonly number[]): QaLabServerHandle {
       return {
         ...params.lab,
         setScenarioRun(next) {
           if (!next) {
             return;
           }
-          for (const nextOutcome of next.scenarios) {
-            if (!partitionIds.has(nextOutcome.id)) {
+          // The parent supplied this exact ordered child schedule. A child's
+          // repeated labels cannot update another scheduled instance.
+          for (const [offset, nextOutcome] of next.scenarios.entries()) {
+            const index = scenarioIndexes[offset];
+            const current = index === undefined ? undefined : outcomes[index];
+            if (index === undefined || !current || current.id !== nextOutcome.id) {
               continue;
             }
-            const current = outcomes.get(nextOutcome.id);
-            if (!current) {
-              continue;
-            }
-            outcomes.set(nextOutcome.id, {
-              ...current,
-              ...nextOutcome,
-            });
+            outcomes[index] = { ...current, ...nextOutcome };
           }
           emit("running");
         },
-        // Child partition reports are incomplete. The unified owner publishes one aggregate.
+        // Child reports are partial; the unified owner publishes the aggregate.
         setLatestReport() {},
       };
     },

@@ -1,4 +1,3 @@
-// Discord plugin module implements retry behavior.
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -36,6 +35,10 @@ export type DiscordRetryRunner = <T>(
   options?: { safety: DiscordRetrySafety },
 ) => Promise<T>;
 
+function collectDiscordErrorCandidates(error: unknown) {
+  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]);
+}
+
 function readDiscordErrorStatus(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -50,10 +53,7 @@ function readDiscordErrorStatus(err: unknown): number | undefined {
 }
 
 export function classifyDiscordDeliveryFailure(error: unknown): DiscordDeliveryFailure {
-  const candidates = collectErrorGraphCandidates(error, (current) => [
-    current.cause,
-    current.error,
-  ]);
+  const candidates = collectDiscordErrorCandidates(error);
 
   // An HTTP response proves the request reached Discord, even with a nested transport error.
   for (const candidate of candidates) {
@@ -102,7 +102,7 @@ export function recordDiscordMessageCreateAmbiguity(error: unknown): void {
 }
 
 export function hasDiscordMessageCreateAmbiguity(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+  return collectDiscordErrorCandidates(error).some(
     (candidate) =>
       candidate !== null &&
       typeof candidate === "object" &&
@@ -110,41 +110,33 @@ export function hasDiscordMessageCreateAmbiguity(error: unknown): boolean {
   );
 }
 
+export function canFallbackDiscordWebhookSend(error: unknown): boolean {
+  if (hasDiscordMessageCreateAmbiguity(error)) {
+    return false;
+  }
+  const failure = classifyDiscordDeliveryFailure(error);
+  return failure === "rejected" || failure === "pre-connect";
+}
+
 function hasDiscordRateLimitRejection(error: unknown): boolean {
   return (
     error instanceof RateLimitError ||
-    collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+    collectDiscordErrorCandidates(error).some(
       (candidate) => readDiscordErrorStatus(candidate) === 429,
     )
   );
 }
 
-function isRetryableDiscordTransientError(error: unknown): boolean {
+function isRetryableDiscordError(
+  error: unknown,
+  safety: DiscordRetrySafety = "idempotent",
+): boolean {
   const failure = classifyDiscordDeliveryFailure(error);
   return (
-    failure === "ambiguous" || failure === "pre-connect" || hasDiscordRateLimitRejection(error)
-  );
-}
-
-function isRetryableDiscordPreConnectError(error: unknown): boolean {
-  const failure = classifyDiscordDeliveryFailure(error);
-  return (
-    failure === "pre-connect" || (failure === "rejected" && hasDiscordRateLimitRejection(error))
-  );
-}
-
-function resolveDiscordRetryPredicate(safety: DiscordRetrySafety) {
-  return safety === "non-idempotent-create"
-    ? isRetryableDiscordPreConnectError
-    : isRetryableDiscordTransientError;
-}
-
-function isRetryableDiscordGatewayTransportError(err: unknown): boolean {
-  if (!isRetryableDiscordTransientError(err) || err instanceof RateLimitError) {
-    return false;
-  }
-  return !collectErrorGraphCandidates(err, (current) => [current.cause, current.error]).some(
-    (candidate) => readDiscordErrorStatus(candidate) !== undefined,
+    failure === "pre-connect" ||
+    (safety === "non-idempotent-create"
+      ? failure === "rejected" && hasDiscordRateLimitRejection(error)
+      : failure === "ambiguous" || hasDiscordRateLimitRejection(error))
   );
 }
 
@@ -163,7 +155,7 @@ export function createDiscordRetryRunner(params: {
       : retryConfig.attempts;
 
   return <T>(fn: () => Promise<T>, label?: string, options?: { safety: DiscordRetrySafety }) => {
-    const isRetryable = resolveDiscordRetryPredicate(options?.safety ?? "idempotent");
+    const safety = options?.safety ?? "idempotent";
     let observedGatewayDisconnect = false;
     const runRequest = async () => {
       if (params.signal?.aborted) {
@@ -180,9 +172,14 @@ export function createDiscordRetryRunner(params: {
       }
     };
     const shouldRetry = (err: unknown, attempt: number) =>
-      isRetryable(err) &&
+      isRetryableDiscordError(err, safety) &&
       (attempt < retryConfig.attempts ||
-        (observedGatewayDisconnect && isRetryableDiscordGatewayTransportError(err)));
+        (observedGatewayDisconnect &&
+          isRetryableDiscordError(err) &&
+          !(err instanceof RateLimitError) &&
+          !collectDiscordErrorCandidates(err).some(
+            (candidate) => readDiscordErrorStatus(candidate) !== undefined,
+          )));
     const retryAfterMs = (err: unknown) =>
       err instanceof RateLimitError ? err.retryAfter * 1000 : undefined;
     const signal = params.signal;

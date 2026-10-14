@@ -51,30 +51,20 @@ function assertPreparedDispatchLifecycle<TDispatchResult>(
   turn: PreparedChannelTurn<TDispatchResult>,
   turnAdoptionLifecycle: RunChannelTurnParams<unknown>["turnAdoptionLifecycle"],
 ): void {
+  if (!turnAdoptionLifecycle) {
+    return;
+  }
   const lifecycle = turn.runDispatchLifecycle;
   if (!lifecycle) {
     throw new Error(
       "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
     );
   }
-  if (turnAdoptionLifecycle && lifecycle.turnAdoptionLifecycle !== turnAdoptionLifecycle) {
+  if (lifecycle.turnAdoptionLifecycle !== turnAdoptionLifecycle) {
     throw new Error(
       "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
     );
   }
-}
-
-function emit(params: {
-  log?: (event: ChannelTurnLogEvent) => void;
-  event: Omit<ChannelTurnLogEvent, "channel" | "accountId">;
-  channel: string;
-  accountId?: string;
-}) {
-  params.log?.({
-    channel: params.channel,
-    accountId: params.accountId,
-    ...params.event,
-  });
 }
 
 function resolveDroppedHistorySender(input: NormalizedTurnInput, preflight: PreflightFacts) {
@@ -84,20 +74,10 @@ function resolveDroppedHistorySender(input: NormalizedTurnInput, preflight: Pref
     (typeof input.raw === "object" &&
     input.raw &&
     "sender" in input.raw &&
-    typeof (input.raw as { sender?: unknown }).sender === "string"
-      ? (input.raw as { sender: string }).sender
+    typeof input.raw.sender === "string"
+      ? input.raw.sender
       : undefined) ??
     "unknown"
-  );
-}
-
-function resolveDroppedHistoryBody(input: NormalizedTurnInput, preflight: PreflightFacts) {
-  return (
-    preflight.message?.bodyForAgent ??
-    preflight.message?.body ??
-    preflight.message?.rawBody ??
-    input.textForAgent ??
-    input.rawText
   );
 }
 
@@ -114,7 +94,12 @@ export async function recordDroppedChannelTurnHistory(params: {
   if (!history || history.limit <= 0 || !(history.recordOnDrop || admission.recordHistory)) {
     return;
   }
-  const body = resolveDroppedHistoryBody(params.input, params.preflight);
+  const body =
+    params.preflight.message?.bodyForAgent ??
+    params.preflight.message?.body ??
+    params.preflight.message?.rawBody ??
+    params.input.textForAgent ??
+    params.input.rawText;
   const entry =
     body.trim().length > 0
       ? {
@@ -160,28 +145,26 @@ export async function runChannelTurn<
 >(
   params: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
 ): Promise<ChannelTurnResult<TDispatchResult>> {
-  emit({
-    ...params,
-    event: { stage: "ingest", event: "start" },
-  });
+  const emit = (event: Omit<ChannelTurnLogEvent, "channel">) => {
+    params.log?.({
+      channel: params.channel,
+      accountId: params.accountId,
+      ...event,
+    });
+  };
+  emit({ stage: "ingest", event: "start" });
   const input = await params.adapter.ingest(params.raw);
   if (!input) {
     const admission: ChannelTurnAdmission = { kind: "drop", reason: "ingest-null" };
     emit({
-      ...params,
-      event: {
-        stage: "ingest",
-        event: "drop",
-        admission: admission.kind,
-        reason: admission.reason,
-      },
+      stage: "ingest",
+      event: "drop",
+      admission: admission.kind,
+      reason: admission.reason,
     });
     return { admission, dispatched: false };
   }
-  emit({
-    ...params,
-    event: { stage: "ingest", event: "done", messageId: input.id },
-  });
+  emit({ stage: "ingest", event: "done", messageId: input.id });
 
   const eventClass = (await params.adapter.classify?.(input)) ?? DEFAULT_EVENT_CLASS;
   if (!eventClass.canStartAgentTurn) {
@@ -190,14 +173,11 @@ export async function runChannelTurn<
       reason: `event:${eventClass.kind}`,
     };
     emit({
-      ...params,
-      event: {
-        stage: "classify",
-        event: "handled",
-        messageId: input.id,
-        admission: admission.kind,
-        reason: admission.reason,
-      },
+      stage: "classify",
+      event: "handled",
+      messageId: input.id,
+      admission: admission.kind,
+      reason: admission.reason,
     });
     return { admission, dispatched: false };
   }
@@ -215,14 +195,11 @@ export async function runChannelTurn<
       admission: preflightAdmission,
     });
     emit({
-      ...params,
-      event: {
-        stage: "preflight",
-        event: preflightAdmission.kind === "handled" ? "handled" : "drop",
-        messageId: input.id,
-        admission: preflightAdmission.kind,
-        reason: preflightAdmission.reason,
-      },
+      stage: "preflight",
+      event: preflightAdmission.kind === "handled" ? "handled" : "drop",
+      messageId: input.id,
+      admission: preflightAdmission.kind,
+      reason: preflightAdmission.reason,
     });
     return { admission: preflightAdmission, dispatched: false };
   }
@@ -231,18 +208,32 @@ export async function runChannelTurn<
   const isRoutedTurn = "route" in unresolved && !("runDispatch" in unresolved);
   const resolved = assembleResolvedChannelTurn(unresolved);
   emit({
-    ...params,
     accountId: resolved.accountId ?? params.accountId,
-    event: {
-      stage: "assemble",
-      event: "done",
-      messageId: input.id,
-      sessionKey: resolved.routeSessionKey,
-      admission: resolved.admission?.kind ?? "dispatch",
-    },
+    stage: "assemble",
+    event: "done",
+    messageId: input.id,
+    sessionKey: resolved.routeSessionKey,
+    admission: resolved.admission?.kind ?? "dispatch",
   });
 
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
+  const emitFinalize = (event: { event: "done" | "error"; error?: unknown }) =>
+    emit({
+      accountId: resolved.accountId ?? params.accountId,
+      stage: "finalize",
+      messageId: input.id,
+      sessionKey: resolved.routeSessionKey,
+      admission: admission.kind,
+      ...event,
+    });
+  const dispatchContext = {
+    admission,
+    log: params.log,
+    messageId: input.id,
+  };
+  const assembledDispatchContext = params.turnAdoptionLifecycle
+    ? { ...dispatchContext, turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+    : dispatchContext;
   let result: ChannelTurnResult<TDispatchResult>;
   try {
     if ("runDispatch" in resolved) {
@@ -252,28 +243,16 @@ export async function runChannelTurn<
       "runDispatch" in resolved
         ? await runPreparedChannelTurn({
             ...resolved,
-            admission,
-            log: params.log,
-            messageId: input.id,
+            ...dispatchContext,
           })
         : isRoutedTurn
           ? await dispatchRoutedChannelTurn({
               ...(unresolved as ChannelTurnPlan<ChannelTurnDeliveryAdapter>),
-              admission,
-              log: params.log,
-              messageId: input.id,
-              ...(params.turnAdoptionLifecycle
-                ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
-                : {}),
+              ...assembledDispatchContext,
             })
           : await dispatchAssembledChannelTurn({
               ...(resolved as AssembledChannelTurn),
-              admission,
-              log: params.log,
-              messageId: input.id,
-              ...(params.turnAdoptionLifecycle
-                ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
-                : {}),
+              ...assembledDispatchContext,
             })
     ) as ChannelTurnResult<TDispatchResult>;
     result = dispatchResult.dispatched ? { ...dispatchResult, admission } : dispatchResult;
@@ -289,46 +268,15 @@ export async function runChannelTurn<
     } catch {
       // Preserve the original dispatch error.
     }
-    emit({
-      ...params,
-      accountId: resolved.accountId ?? params.accountId,
-      event: {
-        stage: "finalize",
-        event: "done",
-        messageId: input.id,
-        sessionKey: resolved.routeSessionKey,
-        admission: admission.kind,
-      },
-    });
+    emitFinalize({ event: "done" });
     throw err;
   }
 
   try {
     await params.adapter.onFinalize?.(result);
-    emit({
-      ...params,
-      accountId: resolved.accountId ?? params.accountId,
-      event: {
-        stage: "finalize",
-        event: "done",
-        messageId: input.id,
-        sessionKey: resolved.routeSessionKey,
-        admission: admission.kind,
-      },
-    });
+    emitFinalize({ event: "done" });
   } catch (err) {
-    emit({
-      ...params,
-      accountId: resolved.accountId ?? params.accountId,
-      event: {
-        stage: "finalize",
-        event: "error",
-        messageId: input.id,
-        sessionKey: resolved.routeSessionKey,
-        admission: admission.kind,
-        error: err,
-      },
-    });
+    emitFinalize({ event: "error", error: err });
     throw err;
   }
 

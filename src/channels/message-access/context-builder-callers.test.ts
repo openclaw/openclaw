@@ -9,10 +9,7 @@ const CALLERS = [
   ["extensions/feishu/src/bot.ts", "channelIngress:"],
   ["extensions/feishu/src/comment-handler.ts", "channelIngress:"],
   ["extensions/googlechat/src/monitor.ts", "channelIngress: access.channelIngress"],
-  [
-    "extensions/imessage/src/monitor/inbound-processing.ts",
-    "channelIngress: decision.channelIngress",
-  ],
+  ["extensions/imessage/src/monitor/inbound-processing.ts", "channelIngress,"],
   ["extensions/irc/src/inbound.ts", "channelIngress: access"],
   ["extensions/line/src/bot-message-context.ts", "channelIngress: params.channelIngress"],
   ["extensions/matrix/src/matrix/monitor/handler-context.ts", "channelIngress,"],
@@ -27,7 +24,7 @@ const CALLERS = [
   ["extensions/telegram/src/bot-message-context.session.ts", "channelIngress,"],
   ["extensions/tlon/src/monitor/index.ts", "channelIngress,"],
   ["extensions/twitch/src/monitor.ts", "channelIngress,"],
-  ["extensions/whatsapp/src/auto-reply/monitor/prepared-inbound.ts", '| "channelIngress"'],
+  ["extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts", "channelIngress,"],
   ["extensions/zalo/src/monitor.ts", "channelIngress,"],
   ["extensions/zalouser/src/monitor.ts", "channelIngress: accessDecision"],
   ["src/channels/direct-dm.ts", "channelIngress: params.channelIngress"],
@@ -99,14 +96,17 @@ const HOST_BUILDERS = [
     "ctx.buildContext ?? buildChannelInboundEventContext",
   ],
   ["extensions/sms/src/inbound.ts", "params.channelRuntime.inbound.buildContext"],
-  ["extensions/synology-chat/src/inbound-event.ts", "resolved.rt.channel.inbound.buildContext"],
+  ["extensions/synology-chat/src/inbound-event.ts", "rt.channel.inbound.buildContext"],
   [
     "extensions/telegram/src/bot-message-context.session.ts",
     "sessionRuntime.buildChannelInboundEventContext",
   ],
   ["extensions/tlon/src/monitor/index.ts", "core.channel.inbound.buildContext"],
-  ["extensions/twitch/src/monitor.ts", "core.channel.inbound.buildContext"],
-  ["extensions/whatsapp/src/auto-reply/monitor/prepared-inbound.ts", "params.buildContext({"],
+  ["extensions/twitch/src/monitor.ts", "channelRuntime.inbound.buildContext"],
+  [
+    "extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts",
+    "params.buildContext ?? buildChannelInboundEventContext",
+  ],
   ["extensions/zalo/src/monitor.ts", "core.channel.inbound.buildContext"],
   ["extensions/zalouser/src/monitor.ts", "core.channel.inbound.buildContext"],
   [
@@ -153,12 +153,12 @@ const SCOPED_BUILDER_HANDOFFS = [
   [
     "discord",
     "extensions/discord/src/monitor/provider.ts",
-    'opts.channelRuntime as PluginRuntime["channel"] | undefined',
+    "buildContext: pluginChannelRuntime?.inbound.buildContext",
   ],
   [
     "imessage",
     "extensions/imessage/src/monitor/monitor-provider.ts",
-    'opts.channelRuntime as PluginRuntime["channel"] | undefined',
+    "buildContext: pluginChannelRuntime?.inbound.buildContext",
   ],
   [
     "line",
@@ -181,7 +181,7 @@ const SCOPED_BUILDER_HANDOFFS = [
   [
     "telegram-webhook",
     "extensions/telegram/src/monitor.ts",
-    'opts.channelRuntime as PluginRuntime["channel"] | undefined',
+    "buildContext: pluginChannelRuntime?.inbound.buildContext",
   ],
   ["telegram-webhook", "extensions/telegram/src/webhook.ts", "buildContext: opts.buildContext"],
   [
@@ -198,7 +198,7 @@ const SCOPED_BUILDER_HANDOFFS = [
   [
     "whatsapp",
     "extensions/whatsapp/src/auto-reply/monitor.ts",
-    'tuning.channelRuntime as PluginRuntime["channel"] | undefined',
+    "buildContext: pluginChannelRuntime?.inbound.buildContext",
   ],
   [
     "whatsapp",
@@ -235,12 +235,6 @@ describe("channel context builder caller inventory", () => {
     }
     expect(source("extensions/signal/src/monitor.ts")).toContain(
       "channelRuntime: opts.channelRuntime",
-    );
-    expect(source("extensions/telegram/src/monitor.ts")).toContain(
-      'opts.channelRuntime as PluginRuntime["channel"] | undefined',
-    );
-    expect(source("extensions/whatsapp/src/auto-reply/monitor.ts")).toContain(
-      'tuning.channelRuntime as PluginRuntime["channel"] | undefined',
     );
   });
 

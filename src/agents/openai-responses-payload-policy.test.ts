@@ -4,64 +4,11 @@ import {
 } from "@openclaw/ai/transports";
 /**
  * Regression coverage for OpenAI Responses payload policy.
- * Verifies store, prompt-cache, compaction, service-tier, and reasoning mutations.
+ * Verifies storage consent, proxy compatibility, compaction, and reasoning mutations.
  */
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 
 describe("openai responses payload policy", () => {
-  it("forces store for native OpenAI responses payloads but keeps disable mode for transport defaults", () => {
-    const model = {
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 8192,
-    } satisfies Model<"openai-responses">;
-
-    const providerPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-      storeMode: "provider-policy",
-    });
-    expect(providerPolicy.explicitStore).toBe(true);
-    expect(providerPolicy.allowsServiceTier).toBe(true);
-
-    const disablePolicy = resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "disable" });
-    expect(disablePolicy.explicitStore).toBe(false);
-    expect(disablePolicy.allowsServiceTier).toBe(true);
-  });
-
-  it("couples native Responses server compaction to provider-managed store", () => {
-    const model = {
-      id: "gpt-5.4",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      contextWindow: 200_000,
-    } satisfies Pick<
-      Model<"openai-responses">,
-      "api" | "baseUrl" | "contextWindow" | "id" | "provider"
-    >;
-    const payload = {} satisfies Record<string, unknown>;
-
-    applyOpenAIResponsesPayloadPolicy(
-      payload,
-      resolveOpenAIResponsesPayloadPolicy(model, {
-        enableServerCompaction: true,
-        storeMode: "provider-policy",
-      }),
-    );
-
-    expect(payload).toEqual({
-      store: true,
-      context_management: [{ type: "compaction", compact_threshold: 140_000 }],
-    });
-  });
-
   it("does not coerce partial context windows for compaction thresholds", () => {
     const model = {
       id: "gpt-5.4",
@@ -89,31 +36,6 @@ describe("openai responses payload policy", () => {
     expect(payload).toEqual({
       store: true,
       context_management: [{ type: "compaction", compact_threshold: 80_000 }],
-    });
-  });
-
-  it("accepts plus-signed responses compaction thresholds", () => {
-    const payload = {} satisfies Record<string, unknown>;
-
-    applyOpenAIResponsesPayloadPolicy(
-      payload,
-      resolveOpenAIResponsesPayloadPolicy(
-        {
-          api: "openai-responses",
-          provider: "openai",
-          baseUrl: "https://api.openai.com/v1",
-        },
-        {
-          enableServerCompaction: true,
-          extraParams: { responsesCompactThreshold: "+120000" },
-          storeMode: "provider-policy",
-        },
-      ),
-    );
-
-    expect(payload).toEqual({
-      store: true,
-      context_management: [{ type: "compaction", compact_threshold: 120_000 }],
     });
   });
 
@@ -171,111 +93,35 @@ describe("openai responses payload policy", () => {
     });
   });
 
-  it("strips disabled reasoning payloads on native OpenAI responses models that do not support none", () => {
-    const payload = {
-      reasoning: {
-        effort: "none",
-      },
-    } satisfies Record<string, unknown>;
-
-    applyOpenAIResponsesPayloadPolicy(
-      payload,
-      resolveOpenAIResponsesPayloadPolicy(
-        {
-          api: "openai-responses",
-          provider: "openai",
-          id: "gpt-5",
-          baseUrl: "https://api.openai.com/v1",
+  it.each([
+    { compat: undefined, keepsNone: false },
+    { compat: { supportedReasoningEfforts: ["none", "low", "high"] }, keepsNone: true },
+  ])(
+    "uses explicit proxy effort capabilities to retain none=$keepsNone",
+    ({ compat, keepsNone }) => {
+      const payload = {
+        reasoning: {
+          effort: "none",
         },
-        { storeMode: "disable" },
-      ),
-    );
+      } satisfies Record<string, unknown>;
 
-    expect(payload).toEqual({
-      store: false,
-    });
-  });
+      applyOpenAIResponsesPayloadPolicy(
+        payload,
+        resolveOpenAIResponsesPayloadPolicy(
+          {
+            api: "openai-responses",
+            provider: "openai",
+            id: "gpt-5.6-luna",
+            baseUrl: "https://proxy.example.com/v1",
+            compat,
+          },
+          { storeMode: "disable" },
+        ),
+      );
 
-  it("strips disabled reasoning payloads for proxy-like OpenAI responses routes", () => {
-    const payload = {
-      reasoning: {
-        effort: "none",
-      },
-    } satisfies Record<string, unknown>;
-
-    applyOpenAIResponsesPayloadPolicy(
-      payload,
-      resolveOpenAIResponsesPayloadPolicy(
-        {
-          api: "openai-responses",
-          provider: "openai",
-          baseUrl: "https://proxy.example.com/v1",
-        },
-        { storeMode: "disable" },
-      ),
-    );
-
-    expect(payload).not.toHaveProperty("reasoning");
-  });
-
-  it("emits store false for native OpenAI Codex responses disable mode", () => {
-    const policy = resolveOpenAIResponsesPayloadPolicy(
-      {
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-      { storeMode: "disable" },
-    );
-
-    expect(policy.explicitStore).toBe(false);
-    expect(policy.allowsServiceTier).toBe(true);
-    expect(policy.shouldStripStore).toBe(false);
-  });
-
-  it("emits store false for aliased native OpenAI Codex responses disable mode", () => {
-    const policy = resolveOpenAIResponsesPayloadPolicy(
-      {
-        api: "openclaw-openai-chatgpt-responses-transport",
-        provider: "openai",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-      { storeMode: "disable" },
-    );
-
-    expect(policy.explicitStore).toBe(false);
-    expect(policy.allowsServiceTier).toBe(true);
-    expect(policy.shouldStripStore).toBe(false);
-  });
-
-  it("preserves native Azure payload policy after managed transport aliasing", () => {
-    const payload = {
-      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
-    } satisfies Record<string, unknown>;
-
-    applyOpenAIResponsesPayloadPolicy(
-      payload,
-      resolveOpenAIResponsesPayloadPolicy(
-        {
-          api: "openclaw-azure-openai-responses-transport",
-          provider: "azure-openai-responses",
-          baseUrl: "https://example.openai.azure.com/openai/v1",
-          contextWindow: 200_000,
-        },
-        {
-          enableServerCompaction: true,
-          extraParams: { responsesServerCompaction: true },
-          storeMode: "provider-policy",
-        },
-      ),
-    );
-
-    expect(payload).toEqual({
-      store: true,
-      context_management: [{ type: "compaction", compact_threshold: 140_000 }],
-      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
-    });
-  });
+      expect(payload.reasoning).toEqual(keepsNone ? { effort: "none" } : undefined);
+    },
+  );
 
   it("strips status from input items for custom openai-responses endpoints", () => {
     const model = {
@@ -328,51 +174,64 @@ describe("openai responses payload policy", () => {
     );
   });
 
-  it.each([
-    {
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-    },
-    {
-      api: "azure-openai-responses",
-      provider: "azure-openai",
-      baseUrl: "https://example.openai.azure.com/openai/v1",
-    },
-    {
-      api: "azure-openai-responses",
-      provider: "azure",
-      baseUrl: "https://example.cognitiveservices.azure.com/openai/v1",
-    },
-    {
-      api: "azure-openai-responses",
-      provider: "azure",
-      baseUrl: "https://example.services.ai.azure.com/projects/demo/openai/v1",
-    },
-    {
-      api: "azure-openai-responses",
-      provider: "azure",
-      baseUrl: "https://example.api.cognitive.microsoft.com/openai/v1",
-    },
-  ])("preserves status for native $provider Responses endpoints", (route) => {
-    const model = {
-      ...route,
-      id: "native-model",
-    };
-    const policy = resolveOpenAIResponsesPayloadPolicy(model);
-    expect(policy.shouldStripInputStatus).toBe(false);
+  it("never promotes store for a custom endpoint without the explicit continuation opt-in", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "omniroute",
+        baseUrl: "https://omniroute.example.com/v1",
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+    expect(policy.explicitStore).toBeUndefined();
+  });
 
-    const payload = {
-      input: [
+  it("promotes store for a custom endpoint once the operator opts a model in explicitly", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "omniroute",
+        baseUrl: "https://omniroute.example.com/v1",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(true);
+    expect(policy.explicitStore).toBe(true);
+  });
+
+  it.each(["https://proxy.example.com/v1"])(
+    "honors explicit no-store for an opted-in model at %s",
+    (baseUrl) => {
+      const policy = resolveOpenAIResponsesPayloadPolicy(
         {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: "Hello", annotations: [] }],
-          status: "completed",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl,
+          compat: { supportsResponsesContinuation: true },
         },
-      ],
-    };
-    applyOpenAIResponsesPayloadPolicy(payload, policy);
-    expect((payload.input[0] as Record<string, unknown>).status).toBe("completed");
+        { storeMode: "disable" },
+      );
+      const payload = { store: true };
+      applyOpenAIResponsesPayloadPolicy(payload, policy);
+      expect(policy.explicitContinuationOptIn).toBe(true);
+      expect(payload.store).toBe(false);
+    },
+  );
+
+  it("never lets the continuation opt-in flip ChatGPT/Codex store:false to true", () => {
+    // The broad Responses API predicate includes ChatGPT, whose no-store contract is separate.
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "disable" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+    expect(policy.explicitStore).toBe(false);
   });
 });

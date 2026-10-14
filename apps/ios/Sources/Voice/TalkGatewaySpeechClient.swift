@@ -1,8 +1,6 @@
-import AVFoundation
 import Foundation
 import OpenClawKit
 import OpenClawProtocol
-import OSLog
 
 struct TalkGatewaySpeechAudio: Equatable {
     enum PlaybackMode: Equatable {
@@ -22,19 +20,16 @@ struct TalkGatewaySpeechAudio: Equatable {
         let outputFormat = self.outputFormat?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        let isHeaderlessAudio = if let outputFormat {
-            outputFormat.hasPrefix("raw-") ||
-                outputFormat.hasPrefix("raw_") ||
-                outputFormat == "pcm" ||
-                outputFormat == "mulaw" ||
-                outputFormat == "alaw" ||
-                outputFormat.hasPrefix("mulaw_") ||
-                outputFormat.hasPrefix("ulaw_") ||
-                outputFormat.hasPrefix("alaw_")
-        } else {
-            false
-        }
-        if let outputFormat, isHeaderlessAudio {
+        if let outputFormat,
+           outputFormat.hasPrefix("raw-") ||
+           outputFormat.hasPrefix("raw_") ||
+           outputFormat == "pcm" ||
+           outputFormat == "mulaw" ||
+           outputFormat == "alaw" ||
+           outputFormat.hasPrefix("mulaw_") ||
+           outputFormat.hasPrefix("ulaw_") ||
+           outputFormat.hasPrefix("alaw_")
+        {
             // talk.speak does not expose the sample rate needed to play headerless audio.
             // Keep these codecs out of AVAudioPlayer until that protocol metadata exists.
             return .unsupportedRaw(codec: outputFormat)
@@ -97,10 +92,7 @@ final class TalkGatewaySpeechClient: TalkGatewaySpeechSynthesizing {
             normalize: directive?.normalize,
             language: directive?.language,
             latencytier: directive?.latencyTier)
-        let paramsData = try JSONEncoder().encode(params)
-        guard let paramsJSON = String(data: paramsData, encoding: .utf8) else {
-            throw TalkGatewaySpeechError.invalidRequest
-        }
+        let paramsJSON = try String(bytes: JSONEncoder().encode(params), encoding: .utf8)!
         let responseData = try await request(
             "talk.speak",
             paramsJSON,
@@ -133,15 +125,9 @@ extension TalkBufferedAudioPlaying {
 extension TalkBufferedAudioPlayer: TalkBufferedAudioPlaying {}
 
 private enum TalkGatewaySpeechError: LocalizedError {
-    case invalidRequest
     case emptyAudio
 
     var errorDescription: String? {
-        switch self {
-        case .invalidRequest:
-            "Failed to encode talk.speak request"
-        case .emptyAudio:
-            "Gateway talk.speak returned empty audio"
-        }
+        "Gateway talk.speak returned empty audio"
     }
 }

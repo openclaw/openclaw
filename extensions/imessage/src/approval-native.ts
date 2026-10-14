@@ -1,7 +1,5 @@
-// Imessage plugin module implements approval native behavior.
-import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
 import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
@@ -52,7 +50,7 @@ function isIMessageApprovalTransportEnabled(params: {
   return resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
 }
 
-const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
+const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync({
   channel: "imessage",
   channelLabel: "iMessage",
   authorizeActorAction: (params) => imessageApprovalAuth.authorizeActorAction(params),
@@ -87,8 +85,9 @@ const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
     },
   },
   createNativeRuntime: (routing) =>
-    createLazyChannelApprovalNativeRuntimeAdapter({
-      eventKinds: ["exec", "plugin"],
+    createLazyChannelApprovalNativeRuntimeAdapterAsync({
+      capabilityBoundary: true,
+      eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId, context }) =>
         Boolean(context) &&
         routing.canAnyApprovalPotentiallyRouteToChannel({
@@ -96,12 +95,11 @@ const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
           accountId,
           nativeSessionOnly: true,
         }),
-      shouldHandle: ({ cfg, accountId, context, approvalKind, request }) =>
+      shouldHandle: async ({ cfg, accountId, context, approvalKind, request }) =>
         Boolean(context) &&
         routing.shouldHandleApprovalRequest({ cfg, accountId, approvalKind, request }),
       load: async () =>
-        (await import("./approval-handler.runtime.js"))
-          .imessageApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+        (await import("./approval-handler.runtime.js")).imessageApprovalNativeRuntime,
     }),
 });
 const imessageApprovalRouting = imessageApproval.routing;
@@ -200,16 +198,6 @@ export function shouldSuppressLocalIMessageExecApprovalPrompt(params: {
   });
 }
 
-function appendIMessageReactionHint(params: {
-  text?: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  return addApprovalReactionHintToText({
-    text: params.text ?? "",
-    allowedDecisions: params.allowedDecisions,
-  });
-}
-
 function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(params.request.request);
   const command = resolveExecApprovalCommandDisplay(params.request.request).commandText;
@@ -225,13 +213,14 @@ function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest;
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
+    scope: params.request.request.scope ?? undefined,
     sessionKey: params.request.request.sessionKey ?? null,
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
   });
   return {
     ...payload,
-    text: appendIMessageReactionHint({
+    text: addApprovalReactionHintToText({
       text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
       allowedDecisions,
     }),
@@ -254,7 +243,7 @@ function buildIMessagePluginPendingPayload(params: {
   });
   return {
     ...payload,
-    text: appendIMessageReactionHint({
+    text: addApprovalReactionHintToText({
       text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
       allowedDecisions,
     }),

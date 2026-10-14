@@ -1,6 +1,5 @@
 // Browser tests cover agent.act hook current-tab navigation guard behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { toBrowserErrorResponse } from "../errors.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const chromeMcpMocks = vi.hoisted(() => ({
@@ -38,7 +37,7 @@ const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js
 
 function createProfileContext(options?: {
   attachOnly?: boolean;
-  driver?: "openclaw" | "extension";
+  driver?: "openclaw" | "extension" | "existing-session";
   tabUrl?: string;
 }) {
   return {
@@ -65,7 +64,6 @@ function createRouteContext(
 ) {
   return {
     forProfile: () => profileCtx,
-    mapTabError: vi.fn(toBrowserErrorResponse),
     state: () => ({
       resolved: {
         actionTimeoutMs: 60_000,
@@ -153,7 +151,10 @@ describe("agent act hook current URL guard", () => {
       });
 
       expect(response.statusCode).toBe(400);
-      expect(response.body).toEqual({ error: expect.stringMatching(/blocked|private/i) });
+      expect(response.body).toEqual({
+        error: "browser navigation blocked by policy",
+        reason: "navigation_blocked",
+      });
       expect(profileCtx.ensureTabAvailable).toHaveBeenCalledOnce();
       for (const sideEffect of sideEffects) {
         expect(sideEffect).not.toHaveBeenCalled();
@@ -161,7 +162,11 @@ describe("agent act hook current URL guard", () => {
     },
   );
 
-  it("keeps file chooser path handoff local for extension-backed profiles", async () => {
+  it("sends extension-backed uploads as byte payloads, not local path handoff", async () => {
+    // A Chrome Web Store-installed extension cannot grant its chrome.debugger client local file
+    // access (no "Allow access to file URLs" switch), so DOM.setFileInputFiles with a path is
+    // rejected. Extension profiles must therefore hand the file over as bytes (browserFilesystemLocal
+    // false) exactly like attach-only and remote-CDP profiles.
     const profileCtx = createProfileContext({
       driver: "extension",
       tabUrl: "http://127.0.0.1:8080/upload",
@@ -178,9 +183,64 @@ describe("agent act hook current URL guard", () => {
     expect(response.body).toEqual({ ok: true });
     expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({
-        browserFilesystemLocal: true,
+        browserFilesystemLocal: false,
+        uploadPathsFallbackOnPayloadLimit: true,
         ref: "upload-button",
         paths: ["/tmp/upload.txt"],
+      }),
+    );
+  });
+
+  it("keeps non-extension profiles on the rejecting payload branch at the size cap", async () => {
+    // Attach-only and remote-CDP browsers genuinely run on a different filesystem, so a
+    // path handoff there cannot deliver the gateway's file; only extension-backed browsers
+    // (the user's local Chrome) keep the path fallback for oversized uploads.
+    const profileCtx = createProfileContext({
+      attachOnly: true,
+      tabUrl: "http://127.0.0.1:8080/upload",
+    });
+
+    const response = await callHook({
+      path: "/hooks/file-chooser",
+      body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
+      profileCtx,
+      allowPrivateNetwork: true,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browserFilesystemLocal: false,
+        uploadPathsFallbackOnPayloadLimit: false,
+        ref: "upload-button",
+        paths: ["/tmp/upload.txt"],
+      }),
+    );
+  });
+
+  it.each([
+    { targeting: { ref: "upload-button" }, paths: ["first.txt"] },
+    { targeting: { inputRef: "upload-button" }, paths: ["first.txt", "second.txt"] },
+  ])("uploads every resolved file through Chrome MCP: $paths", async ({ targeting, paths }) => {
+    const resolvedPaths = paths.map((file) => `/tmp/openclaw/uploads/${file}`);
+    pathMocks.resolveExistingUploadPaths.mockResolvedValueOnce({ ok: true, paths: resolvedPaths });
+    const response = await callHook({
+      path: "/hooks/file-chooser",
+      body: { paths, ...targeting },
+      profileCtx: createProfileContext({
+        driver: "existing-session",
+        tabUrl: "http://127.0.0.1:8080/upload",
+      }),
+      allowPrivateNetwork: true,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(chromeMcpMocks.uploadChromeMcpFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetId: "tab-1",
+        uid: "upload-button",
+        filePaths: resolvedPaths,
       }),
     );
   });

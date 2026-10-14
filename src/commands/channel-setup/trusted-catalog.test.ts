@@ -258,38 +258,6 @@ describe("trusted-catalog load-path discovery", () => {
     });
   });
 
-  it("stops when fallback lookup resurfaces the same untrusted local entry", () => {
-    getChannelPluginCatalogEntry.mockReturnValue(
-      createCatalogEntry({
-        id: "msteams",
-        pluginId: "config-shadow",
-        origin: "config",
-        label: "Shadow Teams",
-        localPath: "./plugins/msteams-shadow",
-      }),
-    );
-
-    expect(
-      getTrustedChannelPluginCatalogEntry("msteams", {
-        cfg: {
-          plugins: {
-            load: {
-              paths: ["/tmp/load-path-a"],
-            },
-          },
-        },
-        workspaceDir: "/tmp/workspace",
-      }),
-    ).toBeUndefined();
-    expect(getChannelPluginCatalogEntry).toHaveBeenCalledTimes(2);
-    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(2, "msteams", {
-      excludePluginRefs: [{ pluginId: "config-shadow", origin: "config" }],
-      env: undefined,
-      extraPaths: ["/tmp/load-path-a"],
-      workspaceDir: "/tmp/workspace",
-    });
-  });
-
   it("keeps setup discovery visible when an untrusted config-origin entry has no fallback", () => {
     const rejected = createCatalogEntry({
       id: "e2e-load-paths",

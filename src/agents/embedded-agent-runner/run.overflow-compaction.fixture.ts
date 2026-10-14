@@ -3,6 +3,7 @@
  */
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./run/attempt-result.js";
 import { buildAttemptReplayMetadata } from "./run/attempt-terminal-evidence.js";
@@ -12,6 +13,22 @@ const DEFAULT_OVERFLOW_ERROR_MESSAGE =
 
 export function makeOverflowError(message: string = DEFAULT_OVERFLOW_ERROR_MESSAGE): Error {
   return new Error(message);
+}
+
+type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
+  observability: Pick<AgentRuntimePlan["observability"], "harnessId">;
+};
+
+export function makeMockRuntimePlan(): MockRuntimePlan {
+  return {
+    auth: {
+      authProfileProviderForAuth: "openai",
+      providerForAuth: "openai",
+    },
+    observability: {
+      harnessId: "codex",
+    },
+  };
 }
 
 export function makeCompactionSuccess(params: {

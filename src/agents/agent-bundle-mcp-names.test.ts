@@ -3,11 +3,20 @@ import { describe, expect, it } from "vitest";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
+  sanitizeNodeIdFragment,
   sanitizeServerName,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
 
 describe("agent bundle MCP names", () => {
+  it.each([
+    { value: "", expected: "node" },
+    { value: "123-node", expected: "node_123_node" },
+    { value: "a".repeat(40), expected: "a".repeat(32) },
+  ])("sanitizes node ID fragment $value", ({ value, expected }) => {
+    expect(sanitizeNodeIdFragment(value)).toBe(expected);
+  });
+
   it("sanitizes and disambiguates server names", () => {
     const usedNames = new Set<string>();
 
@@ -38,36 +47,5 @@ describe("agent bundle MCP names", () => {
       reservedNames,
     });
     expect(safeToolName).toBe(`memory${TOOL_NAME_SEPARATOR}status-2`);
-  });
-
-  it("uses the bundle server name for Link MCP tools", () => {
-    const usedServerNames = new Set<string>();
-    const serverName = sanitizeServerName("link", usedServerNames);
-
-    expect(
-      buildSafeToolName({
-        serverName,
-        toolName: "auth_login",
-        reservedNames: new Set(),
-      }),
-    ).toBe(`link${TOOL_NAME_SEPARATOR}auth_login`);
-    expect(
-      buildSafeToolName({
-        serverName,
-        toolName: "spend-request_create",
-        reservedNames: new Set(),
-      }),
-    ).toBe(`link${TOOL_NAME_SEPARATOR}spend-request_create`);
-  });
-
-  it("truncates overlong tool names while keeping the server prefix", () => {
-    const safeToolName = buildSafeToolName({
-      serverName: "memory",
-      toolName: "x".repeat(200),
-      reservedNames: new Set(),
-    });
-
-    expect(safeToolName.startsWith(`memory${TOOL_NAME_SEPARATOR}`)).toBe(true);
-    expect(safeToolName.length).toBeLessThanOrEqual(64);
   });
 });

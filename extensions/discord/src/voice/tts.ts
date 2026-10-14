@@ -1,44 +1,30 @@
-// Discord plugin module implements tts behavior.
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
 
-type VoiceReplyAudioResult =
-  | {
-      status: "ok";
-      mode: "file";
-      audioPath: string;
-      speakText: string;
-    }
-  | {
-      status: "ok";
-      mode: "stream";
-      audioStream: ReadableStream<Uint8Array>;
-      release?: () => Promise<void>;
-      speakText: string;
-    }
-  | {
-      status: "empty";
-    }
-  | {
-      status: "failed";
-      error?: string;
-    };
-
 export async function transcribeVoiceAudio(params: {
   cfg: OpenClawConfig;
   agentId: string;
   filePath: string;
-}): Promise<string | undefined> {
+}) {
   const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
     filePath: params.filePath,
     cfg: params.cfg,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
     mime: "audio/wav",
   });
-  return normalizeOptionalString(result.text);
+  return {
+    text: normalizeOptionalString(result.text),
+    processing: result.decision?.attachmentProcessing?.[0],
+    unavailable:
+      result.decision?.outcome === "skipped" &&
+      result.decision.attachmentDispositions?.[0]?.kind === "no-model" &&
+      result.decision.attachmentProcessing?.[0] === "omitted" &&
+      result.decision.attachments.length > 0 &&
+      result.decision.attachments.every((attachment) => attachment.attempts.length === 0),
+  };
 }
 
 export async function synthesizeVoiceReplyAudio(params: {
@@ -46,7 +32,7 @@ export async function synthesizeVoiceReplyAudio(params: {
   override?: TtsConfig;
   replyText: string;
   speakerLabel: string;
-}): Promise<VoiceReplyAudioResult> {
+}) {
   const runtime = getDiscordRuntime();
   const prepared = await runtime.tts.prepareTtsRequest({
     cfg: params.cfg,
@@ -57,33 +43,45 @@ export async function synthesizeVoiceReplyAudio(params: {
   const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
   const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, params.speakerLabel);
   if (!speakText) {
-    return { status: "empty" };
+    return { status: "empty" as const };
   }
-  const streamResult = await runtime.tts.textToSpeechStream?.({
+  const request = {
     text: speakText,
     cfg: prepared.cfg,
     channel: "discord",
     overrides: directive.overrides,
+  };
+  const streamResult = await runtime.tts.textToSpeechStream?.({
+    ...request,
     disableFallback: true,
   });
   if (streamResult?.success && streamResult.audioStream) {
     return {
-      status: "ok",
-      mode: "stream",
+      status: "ok" as const,
+      mode: "stream" as const,
       audioStream: streamResult.audioStream,
       release: streamResult.release,
       speakText,
     };
   }
+  const streamFailure =
+    streamResult && !streamResult.success
+      ? streamResult.attempts?.findLast((attempt) => attempt.outcome === "failed")
+      : undefined;
 
-  const result = await runtime.tts.textToSpeech({
-    text: speakText,
-    cfg: prepared.cfg,
-    channel: "discord",
-    overrides: directive.overrides,
-  });
+  const result = await runtime.tts.textToSpeech(request);
   if (!result.success || !result.audioPath) {
-    return { status: "failed", error: result.error ?? "unknown error" };
+    return { status: "failed" as const, error: result.error ?? "unknown error" };
   }
-  return { status: "ok", mode: "file", audioPath: result.audioPath, speakText };
+  return {
+    status: "ok" as const,
+    mode: "file" as const,
+    audioPath: result.audioPath,
+    speakText,
+    ...(streamFailure
+      ? {
+          streamFailure: { provider: streamFailure.provider, reasonCode: streamFailure.reasonCode },
+        }
+      : {}),
+  };
 }

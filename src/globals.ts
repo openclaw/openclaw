@@ -1,4 +1,3 @@
-// Re-exports global CLI flag state used across command modules.
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose } from "./global-state.js";
 import { getLogger, isFileLogLevelEnabled } from "./logging/logger.js";

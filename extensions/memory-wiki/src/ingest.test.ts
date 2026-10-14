@@ -3,19 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { describe, expect, it, vi } from "vitest";
+import { deferred } from "./deferred.test-helpers.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 describe("ingestMemoryWikiSource", () => {
   it("copies a local text file into sources markdown", async () => {
@@ -75,6 +68,34 @@ hello from source
     );
   });
 
+  it("ingests a source with many backtick runs without losing its content", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-backticks-");
+    const inputPath = path.join(rootDir, "backticks.txt");
+    const content = "`x".repeat(1_000_000) + "\n````\n";
+    await fs.writeFile(inputPath, content, "utf8");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+
+    const result = await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    expect(result).toMatchObject({
+      pagePath: "sources/backticks.md",
+      bytes: 2_000_006,
+      created: true,
+    });
+    expect(result.indexUpdatedFiles.length).toBeGreaterThan(0);
+    const page = await fs.readFile(path.join(config.vault.path, result.pagePath), "utf8");
+    expect(page).toContain(
+      ["## Content", "`````text", content, "`````", "", "## Notes"].join("\n"),
+    );
+    await expect(fs.readFile(path.join(config.vault.path, "index.md"), "utf8")).resolves.toContain(
+      "[backticks](sources/backticks.md)",
+    );
+  });
+
   it("queues behind a held vault mutation instead of writing mid-transaction", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-lock-");
     const inputPath = path.join(rootDir, "meeting-notes.txt");
@@ -95,12 +116,15 @@ hello from source
     const ingestQueued = deferred();
     const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
       ?.value as KeyedAsyncQueue["enqueue"];
-    const enqueueSpy = vi
-      .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-      .mockImplementation(function (this: KeyedAsyncQueue, key, task, hooks) {
-        ingestQueued.resolve();
-        return originalEnqueue.call(this, key, task, hooks);
-      });
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function (
+      this: KeyedAsyncQueue,
+      key,
+      task,
+      hooks,
+    ) {
+      ingestQueued.resolve();
+      return originalEnqueue.call(this, key, task, hooks);
+    });
     let ingest: ReturnType<typeof ingestMemoryWikiSource> | undefined;
     try {
       ingest = ingestMemoryWikiSource({

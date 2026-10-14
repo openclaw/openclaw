@@ -1,12 +1,20 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 
 export const page = definePage({
   ...routePageSpec("cron"),
+  loaderDeps: (_context, { search }) => search,
+  loader: (_context, { deps }) => deps,
   component: () =>
-    import("./cron-page.ts").then(() => ({
+    import("./cron-page.tsx").then((module) => ({
       header: true,
-      render: () => html`<openclaw-cron-page></openclaw-cron-page>`,
+      renderSolid: (props: SolidRouteProps) =>
+        createComponent(module.CronPageBridge, {
+          get routeSearch() {
+            return typeof props.data === "string" ? props.data : "";
+          },
+        }),
     })),
 });

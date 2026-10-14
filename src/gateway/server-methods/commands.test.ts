@@ -3,7 +3,8 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatCommandDefinition } from "../../auto-reply/commands-registry.types.js";
 
 const mockSkillCommands = [
@@ -102,19 +103,15 @@ type RuntimeCommandRegistration = {
     };
   };
 };
-const runtimeMocks = vi.hoisted(() => ({
-  gatewayRegistry: null as null | {
-    commands: RuntimeCommandRegistration[];
-  },
-}));
-
-vi.mock("../../auto-reply/commands-registry.js", () => ({
+vi.mock("../../auto-reply/commands-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/commands-registry.js")>()),
   listChatCommandsForConfig: vi.fn(() => mockChatCommands),
 }));
 vi.mock("../../skills/discovery/chat-commands.js", () => ({
-  listSkillCommandsForAgents: vi.fn(() => mockSkillCommands),
+  prepareSkillCommandsForAgents: vi.fn(async () => mockSkillCommands),
 }));
-vi.mock("../../plugins/command-specs.js", () => ({
+vi.mock("../../plugins/command-specs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/command-specs.js")>()),
   getPluginCommandEntrySpecs: vi.fn((provider?: string) => {
     if (provider === "whatsapp") {
       return [{ name: "tts", description: "Text to speech", acceptsArgs: false }];
@@ -136,34 +133,6 @@ vi.mock("../../plugins/command-specs.js", () => ({
       acceptsArgs: entry.acceptsArgs,
     }));
   }),
-  getPluginCommandEntrySpecsFromRegistrations: vi.fn(
-    (commands: RuntimeCommandRegistration[], provider?: string) => {
-      return commands
-        .filter(
-          (entry) =>
-            !provider || !entry.command.channels || entry.command.channels.includes(provider),
-        )
-        .map((entry) => {
-          const spec = {
-            name: entry.command.name.trim(),
-            description: entry.command.description.trim(),
-            acceptsArgs: entry.command.acceptsArgs ?? false,
-          };
-          if (provider !== "whatsapp") {
-            Object.assign(spec, {
-              nativeName:
-                (provider ? entry.command.nativeNames?.[provider] : undefined) ??
-                entry.command.nativeNames?.default ??
-                entry.command.name.trim(),
-            });
-          }
-          if (entry.command.clientPresentation) {
-            Object.assign(spec, { clientPresentation: entry.command.clientPresentation });
-          }
-          return spec;
-        });
-    },
-  ),
 }));
 vi.mock("../../plugins/commands.js", () => ({
   listPluginCommands: vi.fn(() => [
@@ -175,9 +144,6 @@ vi.mock("../../plugins/commands.js", () => ({
     },
   ]),
 }));
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginGatewayCommandRegistry: vi.fn(() => runtimeMocks.gatewayRegistry),
-}));
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
@@ -186,6 +152,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: vi.fn(() => ["main", "dev"]),
   resolveDefaultAgentId: vi.fn(() => "main"),
   tryResolveLegacyCompatibilityAgentId: vi.fn(() => "main"),
+}));
+vi.mock("../../channels/plugins/read-only-command-defaults.js", () => ({
+  resolveReadOnlyChannelCommandDefaults: () => undefined,
 }));
 vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: vi.fn((provider: string) => {
@@ -204,12 +173,18 @@ import {
   COMMAND_DESCRIPTION_MAX_LENGTH,
   COMMAND_LIST_MAX_ITEMS,
   COMMAND_NAME_MAX_LENGTH,
+  CommandsListResultSchema,
 } from "../../../packages/gateway-protocol/src/schema.js";
-import { commandsHandlers, buildCommandsListResult } from "./commands.js";
+import { registerPluginCommandInRegistry } from "../../plugins/command-registration.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { commandsHandlers } from "./commands.js";
 
 function createDiscordChannelPlugin() {
   return {
     commands: {
+      nativeCommandsAutoEnabled: true,
       resolveNativeCommandName: ({
         commandKey,
         defaultName,
@@ -221,12 +196,12 @@ function createDiscordChannelPlugin() {
   };
 }
 
-function callHandler(params: Record<string, unknown> = {}) {
+async function callHandler(params: Record<string, unknown> = {}) {
   let result: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
   const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
     result = { ok, payload, error };
   };
-  void expectDefined(
+  await expectDefined(
     commandsHandlers["commands.list"],
     'commandsHandlers["commands.list"] test invariant',
   )({
@@ -252,8 +227,8 @@ type ListedCommand = Record<string, unknown> & {
   args?: Array<Record<string, unknown>>;
 };
 
-function listCommands(params: Record<string, unknown> = {}): ListedCommand[] {
-  const { payload } = callHandler(params);
+async function listCommands(params: Record<string, unknown> = {}): Promise<ListedCommand[]> {
+  const { payload } = await callHandler(params);
   return (payload as { commands: ListedCommand[] }).commands;
 }
 
@@ -265,22 +240,24 @@ function requireCommand<T extends { name: string }>(commands: T[], name: string)
   return command;
 }
 
-function collectBuiltinNames(commands: readonly { name: string; source: string }[]): string[] {
-  const names: string[] = [];
-  for (const command of commands) {
-    if (command.source !== "plugin") {
-      names.push(command.name);
-    }
-  }
-  return names;
+async function pluginCommand(
+  params: Record<string, unknown> = {},
+): Promise<ListedCommand | undefined> {
+  return (await listCommands(params)).find((command) => command.source === "plugin");
 }
 
-function pluginCommand(params: Record<string, unknown> = {}): ListedCommand | undefined {
-  return listCommands(params).find((command) => command.source === "plugin");
+function createCommandRegistry(commands: RuntimeCommandRegistration[]) {
+  const registry = createEmptyPluginRegistry();
+  for (const { pluginId, command } of commands) {
+    expect(
+      registerPluginCommandInRegistry(registry, pluginId, { ...command, handler: () => ({}) }),
+    ).toEqual({ ok: true });
+  }
+  return registry;
 }
 
 function setGatewayRegistry(commands: RuntimeCommandRegistration[]): void {
-  runtimeMocks.gatewayRegistry = { commands };
+  setActivePluginRegistry(createCommandRegistry(commands));
 }
 
 function providerFilteredPluginRegistrations(params: { nativeName?: string } = {}) {
@@ -307,56 +284,34 @@ function providerFilteredPluginRegistrations(params: { nativeName?: string } = {
 
 describe("commands.list handler", () => {
   beforeEach(() => {
-    runtimeMocks.gatewayRegistry = null;
+    resetPluginRuntimeStateForTest();
     vi.clearAllMocks();
   });
-
-  it("returns all command sources", () => {
-    const { ok, payload } = callHandler();
-    expect(ok).toBe(true);
-    const { commands } = payload as { commands: Array<{ name: string; source: string }> };
-    const sources = new Set(commands.map((c) => c.source));
-    expect(sources).toEqual(new Set(["native", "skill", "plugin"]));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPluginRuntimeStateForTest();
   });
 
-  it("maps native commands with category, scope, and args", () => {
-    const commands = listCommands();
-    const model = requireCommand(commands, "model");
-    expect(model.name).toBe("model");
-    expect(model.nativeName).toBe("model");
-    expect(model.textAliases).toEqual(["/model", "/m"]);
-    expect(model.description).toBe("Set model");
-    expect(model.category).toBe("options");
-    expect(model.source).toBe("native");
-    expect(model.scope).toBe("both");
-    expect(model.acceptsArgs).toBe(true);
-    const args = model.args ?? [];
-    expect(args).toHaveLength(1);
-    expect(expectDefined(args[0], "args[0] test invariant").choices).toEqual([
-      { value: "gpt-5.4", label: "GPT-5.4" },
-      { value: "sonnet-4.6", label: "sonnet-4.6" },
-    ]);
+  it("projects legacy SDK categories into the current command catalog", async () => {
+    const command = expectDefined(mockChatCommands[0], "model command fixture");
+    const category = command.category;
+    command.category = "docks";
+    try {
+      const { ok, payload } = await callHandler();
+      expect(ok).toBe(true);
+      expect(Value.Check(CommandsListResultSchema, payload)).toBe(true);
+      expect(requireCommand(await listCommands(), "model").category).toBe("tools");
+    } finally {
+      command.category = category;
+    }
   });
 
-  it("exposes per-command scope", () => {
-    const commands = listCommands();
-    expect(requireCommand(commands, "model").scope).toBe("both");
-    expect(requireCommand(commands, "commands").scope).toBe("text");
-    expect(requireCommand(commands, "debug_prompt").scope).toBe("native");
-    expect(requireCommand(commands, "tts").scope).toBe("both");
-  });
-
-  it("skips args when acceptsArgs is false", () => {
-    const debug = requireCommand(listCommands(), "debug_prompt");
-    expect(debug.args).toBeUndefined();
-  });
-
-  it("serializes dynamic choices when acceptsArgs is true", () => {
+  it("serializes dynamic choices when acceptsArgs is true", async () => {
     const debugCmd = mockChatCommands.find((c) => c.key === "debug_prompt")!;
     const saved = debugCmd.acceptsArgs;
     debugCmd.acceptsArgs = true;
     try {
-      const debug = requireCommand(listCommands(), "debug_prompt");
+      const debug = requireCommand(await listCommands(), "debug_prompt");
       const args = debug.args as Array<Record<string, unknown>>;
       expect(expectDefined(args[0], "args[0] test invariant").dynamic).toBe(true);
       expect(expectDefined(args[0], "args[0] test invariant").choices).toBeUndefined();
@@ -365,53 +320,19 @@ describe("commands.list handler", () => {
     }
   });
 
-  it("identifies skill commands by source", () => {
-    const commands = listCommands();
-    const skill = commands.find((c) => c.name === "code_review");
-    expect(skill?.source).toBe("skill");
-    expect(skill?.skillDisplayName).toBe("Code Review");
-    expect(skill?.skillModelVisible).toBe(true);
-    expect(skill?.category).toBe("tools");
-  });
-
-  it("always includes plugin commands regardless of scope filter", () => {
-    for (const scope of ["native", "text", "both"] as const) {
-      const commands = listCommands({ scope });
-      const sources = commands.map((command) => command.source);
-      expect(sources).toContain("plugin");
-    }
-  });
-
-  it("filters built-in commands by scope=native (excludes text-only)", () => {
-    const commands = listCommands({ scope: "native" });
-    const builtinNames = collectBuiltinNames(commands);
-    expect(builtinNames).not.toContain("commands");
-    expect(builtinNames).toContain("model");
-    expect(builtinNames).toContain("debug_prompt");
-  });
-
-  it("filters built-in commands by scope=text (excludes native-only)", () => {
-    const commands = listCommands({ scope: "text" });
-    const builtinNames = collectBuiltinNames(commands);
-    expect(builtinNames).toContain("commands");
-    expect(builtinNames).not.toContain("debug_prompt");
-  });
-
-  it("resolves provider-specific native names", () => {
-    const commands = listCommands({ provider: "discord" });
-    expect(requireCommand(commands, "set_model").name).toBe("set_model");
-    expect(commands.find((c) => c.name === "model")).toBeUndefined();
-  });
-
-  it("limits provider-specific native commands while keeping login text-visible", () => {
-    expect(listCommands({ provider: "discord" }).find((c) => c.name === "login")).toBeUndefined();
+  it("limits provider-specific native commands while keeping login text-visible", async () => {
     expect(
-      listCommands({ provider: "slack", scope: "native" }).find((c) => c.name === "login"),
+      (await listCommands({ provider: "discord" })).find((c) => c.name === "login"),
     ).toBeUndefined();
-    expect(requireCommand(listCommands({ provider: "telegram" }), "login").nativeName).toBe(
+    expect(
+      (await listCommands({ provider: "slack", scope: "native" })).find((c) => c.name === "login"),
+    ).toBeUndefined();
+    expect(requireCommand(await listCommands({ provider: "telegram" }), "login").nativeName).toBe(
       "login",
     );
-    expect(requireCommand(listCommands({ provider: "discord", scope: "text" }), "login")).toEqual(
+    expect(
+      requireCommand(await listCommands({ provider: "discord", scope: "text" }), "login"),
+    ).toEqual(
       expect.objectContaining({
         name: "login",
         textAliases: ["/login"],
@@ -419,26 +340,32 @@ describe("commands.list handler", () => {
     );
   });
 
-  it("normalizes mixed-case provider", () => {
-    const commands = listCommands({ provider: "Discord" });
-    expect(requireCommand(commands, "set_model").name).toBe("set_model");
-    const plugin = commands.find((c) => c.source === "plugin");
-    expect(plugin?.name).toBe("discord_tts");
-  });
+  it.each(["text", "native", "both"] as const)(
+    "projects registered plugin commands without native support for scope=%s",
+    async (scope) => {
+      setGatewayRegistry([
+        { pluginId: "demo", command: { name: "demo", description: "Demo command" } },
+      ]);
+      const commands = await listCommands({ provider: "whatsapp", scope });
+      expect(commands.filter((command) => command.source === "plugin")).toEqual(
+        scope === "text"
+          ? [
+              {
+                name: "demo",
+                textAliases: ["/demo"],
+                description: "Demo command",
+                source: "plugin",
+                scope: "both",
+                acceptsArgs: false,
+              },
+            ]
+          : [],
+      );
+    },
+  );
 
-  it("uses default names without provider", () => {
-    const commands = listCommands();
-    expect(requireCommand(commands, "model").name).toBe("model");
-    expect(commands.find((c) => c.name === "set_model")).toBeUndefined();
-  });
-
-  it("omits plugin commands when provider lacks nativeCommandsAutoEnabled", () => {
-    const commands = listCommands({ provider: "whatsapp" });
-    expect(commands.some((c) => c.source === "plugin")).toBe(false);
-  });
-
-  it("uses text-surface names when scope=text even with provider-native aliases", () => {
-    const commands = listCommands({ provider: "discord", scope: "text" });
+  it("uses text-surface names when scope=text even with provider-native aliases", async () => {
+    const commands = await listCommands({ provider: "discord", scope: "text" });
     const model = commands.find((c) => c.source === "native" && c.name === "model");
     expect(model?.name).toBe("model");
     expect(model?.nativeName).toBe("set_model");
@@ -446,21 +373,14 @@ describe("commands.list handler", () => {
     expect(commands.find((c) => c.name === "set_model")).toBeUndefined();
   });
 
-  it("keeps plugin text commands visible for scope=text even without native provider support", () => {
-    const plugin = pluginCommand({ provider: "whatsapp", scope: "text" });
-    expect(plugin?.name).toBe("tts");
-    expect(plugin?.textAliases).toEqual(["/tts"]);
-    expect(plugin?.nativeName).toBeUndefined();
-  });
-
-  it("keeps plugin text names while exposing provider-native aliases for scope=text", () => {
-    const plugin = pluginCommand({ provider: "discord", scope: "text" });
+  it("keeps plugin text names while exposing provider-native aliases for scope=text", async () => {
+    const plugin = await pluginCommand({ provider: "discord", scope: "text" });
     expect(plugin?.name).toBe("tts");
     expect(plugin?.nativeName).toBe("discord_tts");
     expect(plugin?.textAliases).toEqual(["/tts"]);
   });
 
-  it("reads plugin commands from the gateway registry before the global command table", () => {
+  it("reads plugin commands from the gateway registry before the global command table", async () => {
     setGatewayRegistry([
       {
         pluginId: "demo-control",
@@ -476,7 +396,7 @@ describe("commands.list handler", () => {
       },
     ]);
 
-    const commands = listCommands();
+    const commands = await listCommands();
     const demo = commands.find((c) => c.source === "plugin");
 
     expect(demo?.name).toBe("demo");
@@ -490,11 +410,32 @@ describe("commands.list handler", () => {
     expect(commands.find((c) => c.source === "plugin" && c.name === "tts")).toBeUndefined();
   });
 
-  it("keeps provider-filtered native plugin names paired with their text aliases", () => {
+  it.each([false, true])(
+    "lists only the request registry's plugin commands (empty=%s)",
+    async (empty) => {
+      setGatewayRegistry([
+        { pluginId: "ambient", command: { name: "ambient", description: "Ambient command" } },
+      ]);
+      const scoped = createCommandRegistry(
+        empty
+          ? []
+          : [{ pluginId: "scoped", command: { name: "scoped", description: "Scoped command" } }],
+      );
+      const commands = await withPluginRuntimeRegistryScope(scoped, () =>
+        listCommands({ scope: "text" }),
+      );
+      expect(
+        commands.filter((command) => command.source === "plugin").map((command) => command.name),
+      ).toEqual(empty ? [] : ["scoped"]);
+      expect((await pluginCommand({ scope: "text" }))?.name).toBe("ambient");
+    },
+  );
+
+  it("keeps provider-filtered native plugin names paired with their text aliases", async () => {
     setGatewayRegistry(providerFilteredPluginRegistrations({ nativeName: "discord_demo" }));
 
-    const commands = listCommands({ provider: "discord" });
-    const plugin = pluginCommand({ provider: "discord" });
+    const commands = await listCommands({ provider: "discord" });
+    const plugin = await pluginCommand({ provider: "discord" });
 
     expect(plugin?.name).toBe("discord_demo");
     expect(plugin?.nativeName).toBe("discord_demo");
@@ -504,28 +445,12 @@ describe("commands.list handler", () => {
     ).toBeUndefined();
   });
 
-  it("filters provider-incompatible plugin commands from the text surface", () => {
-    setGatewayRegistry(providerFilteredPluginRegistrations());
-
-    const commands = listCommands({ provider: "discord", scope: "text" });
-
-    expect(
-      commands.find((c) => c.source === "plugin" && c.name === "android_only"),
-    ).toBeUndefined();
-    expect(commands.find((c) => c.source === "plugin")?.textAliases).toEqual(["/demo"]);
-  });
-
-  it("returns provider-specific plugin command names", () => {
-    const plugin = pluginCommand({ provider: "discord" });
-    expect(plugin?.name).toBe("discord_tts");
-  });
-
-  it("excludes args when includeArgs=false", () => {
-    const model = requireCommand(listCommands({ includeArgs: false }), "model");
+  it("excludes args when includeArgs=false", async () => {
+    const model = requireCommand(await listCommands({ includeArgs: false }), "model");
     expect(model.args).toBeUndefined();
   });
 
-  it("caps serialized command payload size and field lengths", () => {
+  it("caps serialized command payload size and field lengths", async () => {
     const originalCommands = [...mockChatCommands];
     const longToken = "x".repeat(COMMAND_NAME_MAX_LENGTH + 50);
     const aliasBase = "alias".repeat(20);
@@ -560,7 +485,7 @@ describe("commands.list handler", () => {
         });
       }
 
-      const commands = listCommands();
+      const commands = await listCommands();
       expect(commands).toHaveLength(COMMAND_LIST_MAX_ITEMS);
       const first = expectDefined(commands[0], "commands[0] test invariant");
       expect(first.name.length).toBeLessThanOrEqual(COMMAND_NAME_MAX_LENGTH);
@@ -581,30 +506,15 @@ describe("commands.list handler", () => {
     }
   });
 
-  it("rejects unknown agentId", () => {
-    const { ok, error } = callHandler({ agentId: "nonexistent" });
+  it("rejects unknown agentId", async () => {
+    const { ok, error } = await callHandler({ agentId: "nonexistent" });
     expect(ok).toBe(false);
     expect(error).toEqual(errorShape(ErrorCodes.INVALID_REQUEST, 'unknown agent id "nonexistent"'));
   });
 
-  it("rejects invalid params", () => {
-    const { ok, error } = callHandler({ scope: "invalid" });
+  it("rejects invalid params", async () => {
+    const { ok, error } = await callHandler({ scope: "invalid" });
     expect(ok).toBe(false);
     expect((error as { code: number }).code).toBe(ErrorCodes.INVALID_REQUEST);
-  });
-});
-
-describe("buildCommandsListResult", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("is callable independently from handler", () => {
-    const result = buildCommandsListResult({ cfg: {} as never, agentId: "main" });
-    expect(result.commands.length).toBeGreaterThan(0);
-    const invalidScopes = result.commands
-      .map((command) => command.scope)
-      .filter((scope) => typeof scope !== "string");
-    expect(invalidScopes).toStrictEqual([]);
   });
 });

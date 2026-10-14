@@ -1,13 +1,10 @@
-/**
- * Shared web-search provider helpers.
- *
- * Handles provider config, credential normalization, guarded endpoint calls, caching, and filters.
- */
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { createProviderErrorTextRedactor, ProviderHttpError } from "../provider-http-errors.js";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
@@ -20,40 +17,19 @@ import {
 } from "./web-shared.js";
 import type { CacheEntry } from "./web-shared.js";
 
-type WebGuardedFetchModule = Pick<
-  typeof import("./web-guarded-fetch.js"),
-  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
->;
+const loadWebGuardedFetch = createLazyPromise(() => import("./web-guarded-fetch.js"));
 
-const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
-  () => import("./web-guarded-fetch.js"),
-);
+type WebSearchEndpointOptions = {
+  url: string;
+  timeoutSeconds: number;
+  init: RequestInit;
+  signal?: AbortSignal;
+};
 
-async function loadTrustedWebToolsEndpoint(): Promise<
-  WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
-> {
-  return (await webGuardedFetchLoader.load()).withTrustedWebToolsEndpoint;
-}
-
-async function loadSelfHostedWebToolsEndpoint(): Promise<
-  WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
-> {
-  return (await webGuardedFetchLoader.load()).withSelfHostedWebToolsEndpoint;
-}
-
-export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { search?: infer Search }
-    ? Search
-    : never
-  : never) &
+export type SearchConfigRecord = NonNullable<
+  NonNullable<OpenClawConfig["tools"]>["web"]
+>["search"] &
   Record<string, unknown>;
-
-type UnsupportedWebSearchFilterName =
-  | "country"
-  | "language"
-  | "freshness"
-  | "date_after"
-  | "date_before";
 
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
@@ -68,65 +44,27 @@ export function resolveSearchCacheTtlMs(searchConfig?: SearchConfigRecord): numb
 }
 
 export function resolveSearchCount(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
-  return clamped;
+  return resolveIntegerOption(value, fallback, { min: 1, max: MAX_SEARCH_COUNT });
 }
 
 export function readConfiguredSecretString(value: unknown, path: string): string | undefined {
   return normalizeSecretInput(normalizeResolvedSecretInputString({ value, path })) || undefined;
 }
 
-export function readProviderEnvValue(envVars: string[]): string | undefined {
-  for (const envVar of envVars) {
-    const value = normalizeSecretInput(process.env[envVar]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 export async function withTrustedWebSearchEndpoint<T>(
-  params: {
-    url: string;
-    timeoutSeconds: number;
-    init: RequestInit;
-    signal?: AbortSignal;
-  },
+  params: WebSearchEndpointOptions,
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
-  return withTrustedWebToolsEndpoint(
-    {
-      url: params.url,
-      init: params.init,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-    },
-    async ({ response }) => run(response),
-  );
+  const { withTrustedWebToolsEndpoint } = await loadWebGuardedFetch();
+  return withTrustedWebToolsEndpoint(params, async ({ response }) => run(response));
 }
 
 export async function withSelfHostedWebSearchEndpoint<T>(
-  params: {
-    url: string;
-    timeoutSeconds: number;
-    init: RequestInit;
-    signal?: AbortSignal;
-  },
+  params: WebSearchEndpointOptions,
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const withSelfHostedWebToolsEndpoint = await loadSelfHostedWebToolsEndpoint();
-  return withSelfHostedWebToolsEndpoint(
-    {
-      url: params.url,
-      init: params.init,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-    },
-    async ({ response }) => run(response),
-  );
+  const { withSelfHostedWebToolsEndpoint } = await loadWebGuardedFetch();
+  return withSelfHostedWebToolsEndpoint(params, async ({ response }) => run(response));
 }
 
 export async function postTrustedWebToolsJson<T>(
@@ -142,57 +80,60 @@ export async function postTrustedWebToolsJson<T>(
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
-  return withTrustedWebToolsEndpoint(
+  const headers = new Headers(params.extraHeaders);
+  headers.set("Accept", "application/json");
+  headers.set("Authorization", `Bearer ${params.apiKey}`);
+  headers.set("Content-Type", "application/json");
+  return withTrustedWebSearchEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
       init: {
         method: "POST",
-        headers: {
-          ...params.extraHeaders,
-          Accept: "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify(params.body),
       },
     },
-    async ({ response }) => {
+    async (response) => {
       if (!response.ok) {
-        const detail = await readResponseText(response, {
-          maxBytes: params.maxErrorBytes ?? 64_000,
+        return await throwWebSearchApiError(response, params.errorLabel, {
+          headers,
+          maxBytes: params.maxErrorBytes,
+          signal: params.signal,
         });
-        throw new Error(
-          `${params.errorLabel} API error (${response.status}): ${detail.text || response.statusText}`,
-        );
       }
       return await parseResponse(response);
     },
   );
 }
 
-export async function throwWebSearchApiError(res: Response, providerLabel: string): Promise<never> {
-  const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-  const detail = detailResult.text;
-  throw new Error(`${providerLabel} API error (${res.status}): ${detail || res.statusText}`);
+export async function throwWebSearchApiError(
+  res: Response,
+  providerLabel: string,
+  request?: { headers: HeadersInit; maxBytes?: number; signal?: AbortSignal },
+): Promise<never> {
+  const detail = await readResponseText(res, { maxBytes: request?.maxBytes ?? 64_000 });
+  // Best-effort error-body reads must not turn caller cancellation into a provider failure.
+  request?.signal?.throwIfAborted();
+  const redact = createProviderErrorTextRedactor({
+    headers: new Headers(request?.headers),
+    defaultAuthHeader: "Authorization",
+    defaultAuthPrefix: "Bearer ",
+  });
+  const message = redact(detail.text || res.statusText, {
+    truncated: Boolean(detail.text) && detail.truncated,
+  });
+  throw new ProviderHttpError(`${providerLabel} API error (${res.status}): ${message}`, {
+    status: res.status,
+  });
 }
 
 export function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(url ?? "")?.hostname;
 }
 
-const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
-const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
 
 type WebSearchFreshnessProvider = "brave" | "perplexity";
 type WebSearchRecencyFreshness = "day" | "week" | "month" | "year";
@@ -205,18 +146,17 @@ export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pm: "month",
   py: "year",
 };
-const RECENCY_TO_FRESHNESS: Record<string, string> = {
-  day: "pd",
-  week: "pw",
-  month: "pm",
-  year: "py",
-};
+const RECENCY_TO_FRESHNESS: Record<string, string> = Object.fromEntries(
+  Object.entries(FRESHNESS_TO_RECENCY).map(([freshness, recency]) => [recency, freshness]),
+);
+const BRAVE_FRESHNESS_SHORTCUTS = new Set(Object.keys(FRESHNESS_TO_RECENCY));
+const PERPLEXITY_RECENCY_VALUES = new Set(Object.values(FRESHNESS_TO_RECENCY));
 
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const PERPLEXITY_DATE_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 
 function isValidIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  if (!ISO_DATE_PATTERN.test(value)) {
     return false;
   }
   const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
@@ -245,19 +185,16 @@ export function isoToPerplexityDate(iso: string): string | undefined {
 /** Accepts ISO dates plus Perplexity `M/D/YYYY` dates and returns canonical ISO dates. */
 export function normalizeToIsoDate(value: string): string | undefined {
   const trimmed = value.trim();
-  if (ISO_DATE_PATTERN.test(trimmed)) {
+  const match = trimmed.match(PERPLEXITY_DATE_PATTERN);
+  if (!match) {
     return isValidIsoDate(trimmed) ? trimmed : undefined;
   }
-  const match = trimmed.match(PERPLEXITY_DATE_PATTERN);
-  if (match) {
-    const [, month, day, year] = match;
-    if (year === undefined || month === undefined || day === undefined) {
-      return undefined;
-    }
-    const iso = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-    return isValidIsoDate(iso) ? iso : undefined;
+  const [, month, day, year] = match;
+  if (year === undefined || month === undefined || day === undefined) {
+    return undefined;
   }
-  return undefined;
+  const iso = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  return isValidIsoDate(iso) ? iso : undefined;
 }
 
 /** Parses optional date range filters and returns provider-facing validation errors. */
@@ -390,14 +327,7 @@ export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessPro
     };
   }
 
-  const parsedDateRange = parseIsoDateRange({
-    rawDateAfter: params.rawDateAfter,
-    rawDateBefore: params.rawDateBefore,
-    invalidDateAfterMessage: params.invalidDateAfterMessage,
-    invalidDateBeforeMessage: params.invalidDateBeforeMessage,
-    invalidDateRangeMessage: params.invalidDateRangeMessage,
-    docs,
-  });
+  const parsedDateRange = parseIsoDateRange(params);
   if ("error" in parsedDateRange) {
     return parsedDateRange;
   }
@@ -410,54 +340,27 @@ export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessPro
     : parsedDateRange;
 }
 
-/** Reads a search cache payload and marks it so provider responses can disclose cache hits. */
-export function readCachedSearchPayload(cacheKey: string): Record<string, unknown> | undefined {
-  const cached = readCache(SEARCH_CACHE, cacheKey);
+/** Reads a marked search payload; omitted TTL preserves the stored-expiry SDK contract. */
+export function readCachedSearchPayload(
+  cacheKey: string,
+  ttlMs?: number,
+): Record<string, unknown> | undefined {
+  const cached = readCache(SEARCH_CACHE, cacheKey, ttlMs);
   return cached ? { ...cached.value, cached: true } : undefined;
 }
 
-/** Builds a normalized cache key from provider-specific search dimensions. */
 export function buildSearchCacheKey(parts: Array<string | number | boolean | undefined>): string {
   return normalizeCacheKey(
     parts.map((part) => (part === undefined ? "default" : String(part))).join(":"),
   );
 }
 
-/** Stores one provider search payload with its provider-selected TTL. */
 export function writeCachedSearchPayload(
   cacheKey: string,
   payload: Record<string, unknown>,
   ttlMs: number,
 ): void {
   writeCache(SEARCH_CACHE, cacheKey, payload, ttlMs);
-}
-
-function readUnsupportedSearchFilter(
-  params: Record<string, unknown>,
-): UnsupportedWebSearchFilterName | undefined {
-  for (const name of ["country", "language", "freshness", "date_after", "date_before"] as const) {
-    const value = params[name];
-    if (typeof value === "string" && value.trim()) {
-      return name;
-    }
-  }
-
-  return undefined;
-}
-
-function describeUnsupportedSearchFilter(name: UnsupportedWebSearchFilterName): string {
-  switch (name) {
-    case "country":
-      return "country filtering";
-    case "language":
-      return "language filtering";
-    case "freshness":
-      return "freshness filtering";
-    case "date_after":
-    case "date_before":
-      return "date_after/date_before filtering";
-  }
-  throw new Error("Unsupported web search filter");
 }
 
 export function buildUnsupportedSearchFilterResponse(
@@ -471,14 +374,16 @@ export function buildUnsupportedSearchFilterResponse(
       docs: string;
     }
   | undefined {
-  const unsupported = readUnsupportedSearchFilter(params);
+  const unsupported = ["country", "language", "freshness", "date_after", "date_before"].find(
+    (name) => typeof params[name] === "string" && params[name].trim(),
+  );
   if (!unsupported) {
     return undefined;
   }
 
-  const label = describeUnsupportedSearchFilter(unsupported);
-  const supportedLabel =
-    unsupported === "date_after" || unsupported === "date_before" ? "date filtering" : label;
+  const isDateFilter = unsupported === "date_after" || unsupported === "date_before";
+  const label = isDateFilter ? "date_after/date_before filtering" : `${unsupported} filtering`;
+  const supportedLabel = isDateFilter ? "date filtering" : label;
 
   return {
     error: unsupported.startsWith("date_")

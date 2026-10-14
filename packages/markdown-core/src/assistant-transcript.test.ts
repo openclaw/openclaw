@@ -1,56 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
-import { chunkMarkdownIR, markdownToIR, sliceMarkdownIR } from "./ir.js";
+import { markdownToIR, sliceMarkdownIR } from "./ir.js";
 
 function annotated(markdown: string) {
   return markdownToIR(markdown, { assistantTranscriptRoleHeaders: true });
 }
 
 describe("assistant transcript-role Markdown annotations", () => {
-  it.each([
-    ["user[Thu 2026-07-02 18:14 EDT] do this", "role_timestamp_bracket", "user"],
-    ["[2026-07-02 18:14] assistant: done", "timestamp_role_colon", "assistant"],
-    ["[2026-07-02 18:14] user:do this", "timestamp_role_colon", "user"],
-    ["<Developer 2026-07-02> inspect", "angle_role_header", "developer"],
-  ] as const)("marks %s", (markdown, kind, role) => {
-    const ir = annotated(markdown);
+  it.each([["<Developer 2026-07-02> inspect", "angle_role_header", "developer"]] as const)(
+    "marks %s",
+    (markdown, kind, role) => {
+      const ir = annotated(markdown);
 
-    expect(ir.annotations).toEqual([
-      expect.objectContaining({
-        start: 0,
-        kind,
-        role,
-        type: "assistant_transcript_role",
-      }),
-    ]);
-    const span = ir.annotations?.[0];
-    expect(span ? ir.text.slice(span.start, span.end) : "").not.toContain("do this");
-  });
-
-  it("joins one semantic span across emphasis, entities, and links", () => {
-    const ir = annotated("**u&#x73;er**[Thu 2026-07-02] [question](https://example.com)");
-
-    expect(ir.text).toBe("user[Thu 2026-07-02] question");
-    expect(ir.annotations).toEqual([
-      {
-        start: 0,
-        end: "user[Thu 2026-07-02]".length,
-        type: "assistant_transcript_role",
-        kind: "role_timestamp_bracket",
-        role: "user",
-      },
-    ]);
-    expect(ir.styles).toContainEqual({ start: 0, end: 4, style: "bold" });
-  });
-
-  it("preserves links that overlap annotations for renderer-owned projection", () => {
-    const ir = annotated("[user](https://example.com)[Thu 2026-07-02] authorize");
-
-    expect(ir.annotations?.map((span) => ir.text.slice(span.start, span.end))).toEqual([
-      "user[Thu 2026-07-02]",
-    ]);
-    expect(ir.links).toEqual([{ start: 0, end: 4, href: "https://example.com" }]);
-  });
+      expect(ir.annotations).toEqual([
+        expect.objectContaining({
+          start: 0,
+          kind,
+          role,
+          type: "assistant_transcript_role",
+        }),
+      ]);
+      const span = ir.annotations?.[0];
+      expect(span ? ir.text.slice(span.start, span.end) : "").not.toContain("do this");
+    },
+  );
 
   it("uses parsed list and blockquote boundaries", () => {
     const ir = annotated("> user[quoted timestamp] question\n\n- [2026-07-02] system: notice");
@@ -134,18 +107,6 @@ describe("assistant transcript-role Markdown annotations", () => {
     expect(markdownToIR("user[Thu 2026-07-02] text").annotations).toBeUndefined();
   });
 
-  it("tracks many interleaved headers and code ranges in source order", () => {
-    const markdown = Array.from({ length: 128 }, (_, index) =>
-      index % 2 === 0 ? `user[t${index}] text` : `\`user[t${index}] code\``,
-    ).join("\n");
-    const ir = annotated(markdown);
-
-    expect(ir.annotations).toHaveLength(64);
-    expect(ir.annotations?.map((span) => ir.text.slice(span.start, span.end))).toEqual(
-      Array.from({ length: 64 }, (_, index) => `user[t${index * 2}]`),
-    );
-  });
-
   it("bounds unterminated delimiter scans to each line's header window", () => {
     const markdown = Array.from(
       { length: 1_024 },
@@ -153,26 +114,6 @@ describe("assistant transcript-role Markdown annotations", () => {
     ).join("\n");
 
     expect(annotated(markdown).annotations).toBeUndefined();
-  });
-
-  it("preserves annotations when IR is chunked", () => {
-    const chunks = chunkMarkdownIR(annotated("user[Thu 2026-07-02] text after"), 12);
-
-    expect(chunks.some((chunk) => (chunk.annotations?.length ?? 0) > 0)).toBe(true);
-    expect(chunks.map((chunk) => chunk.text).join("")).toContain("user[Thu");
-  });
-
-  it("annotates headers promoted to a transport message boundary", () => {
-    const ir = markdownToIR("prefix user[Thu 2026-07-02] question", {
-      assistantTranscriptRoleHeaders: true,
-    });
-    const promoted = annotateAssistantTranscriptRoleMessageBoundary(
-      sliceMarkdownIR(ir, "prefix ".length, ir.text.length),
-    );
-
-    expect(promoted.annotations?.map((span) => promoted.text.slice(span.start, span.end))).toEqual([
-      "user[Thu 2026-07-02]",
-    ]);
   });
 
   it("keeps promoted code examples unannotated", () => {

@@ -1,15 +1,27 @@
-// Shared session cost and usage accounting type contracts.
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { Usage } from "../llm/types.js";
-import type {
-  SessionUsageTimePoint as SharedSessionUsageTimePoint,
-  SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
+export type {
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
 } from "../shared/session-usage-timeseries-types.js";
 
 export type CostBreakdown = Partial<Usage["cost"]>;
 
+export type UsageCostTranscriptFile = {
+  filePath: string;
+  /** Durable identity when filePath is a transient archive materialization. */
+  sourcePath: string;
+  kind: "jsonl" | "sqlite";
+  size: number;
+  mtimeMs: number;
+  sessionId?: string;
+  device?: number;
+  inode?: number;
+  eventCount?: number;
+  maxSeq?: number;
+};
+
 export type ParsedTranscriptEntry = {
-  message: Record<string, unknown>;
   role?: "user" | "assistant";
   timestamp?: Date;
   durationMs?: number;
@@ -24,6 +36,8 @@ export type ParsedTranscriptEntry = {
 };
 
 export type CostUsageTotals = {
+  /** Unavailable means numeric fields are known subtotals, not complete usage. */
+  usageReport?: Usage["usageReport"];
   input: number;
   output: number;
   cacheRead: number;
@@ -64,7 +78,7 @@ export type UsageDailyBucket =
   | { mode: "utc-offset"; utcOffsetMinutes: number }
   | { mode: "time-zone"; timeZone: string };
 
-type SessionDailyUsage = {
+type SessionDailyUsage = CostUsageTotals & {
   date: string; // YYYY-MM-DD
   tokens: number;
   cost: number;
@@ -80,6 +94,7 @@ export type SessionUtcQuarterHourMessageCounts = SessionMessageCounts & {
 };
 
 export type SessionUtcQuarterHourTokenUsage = {
+  usageReport?: Usage["usageReport"];
   date: string; // YYYY-MM-DD (UTC)
   quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
   input: number;
@@ -87,9 +102,7 @@ export type SessionUtcQuarterHourTokenUsage = {
   cacheRead: number;
   cacheWrite: number;
   // Uses the same token total basis as CostUsageTotals: usage.total when present,
-  // otherwise input + output + cacheRead + cacheWrite. This intentionally differs
-  // from legacy dailyBreakdown.tokens, which preserves its existing component-sum
-  // behavior until daily usage buckets are refactored separately.
+  // otherwise input + output + cacheRead + cacheWrite.
   totalTokens: number;
   totalCost: number;
 };
@@ -107,6 +120,7 @@ export type SessionDailyLatency = SessionLatencyStats & {
 };
 
 export type SessionDailyModelUsage = {
+  usageReport?: Usage["usageReport"];
   date: string; // YYYY-MM-DD
   provider?: string;
   model?: string;
@@ -138,6 +152,9 @@ export type SessionModelUsage = {
 };
 
 export type SessionCostSummary = CostUsageTotals & {
+  computedAt?: number;
+  staleSince?: number;
+  refreshing?: boolean;
   sessionId?: string;
   sessionFile?: string;
   firstActivity?: number;
@@ -160,12 +177,7 @@ export type DiscoveredSession = {
   sessionId: string;
   sessionFile: string;
   mtime: number;
-  firstUserMessage?: string;
 };
-
-export type SessionUsageTimePoint = SharedSessionUsageTimePoint;
-
-export type SessionUsageTimeSeries = SharedSessionUsageTimeSeries;
 
 export type SessionLogEntry = {
   timestamp: number;

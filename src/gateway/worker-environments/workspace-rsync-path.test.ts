@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { prepareLocalWorkspaceRsyncReceiver } from "./tunnel.test-support.js";
 import {
   createWorkerWorkspaceRsyncReceiverPathFactory,
   WORKER_WORKSPACE_RSYNC_DESTINATION,
@@ -39,13 +39,7 @@ describe.skipIf(process.platform === "win32")("workspace rsync receiver path", (
     const nonce = "b".repeat(32);
     const receiverEntryPath = workerWorkspaceRsyncReceiverEntryPath(BUNDLE_HASH);
     const receiverEntry = path.join(canonicalHome, receiverEntryPath);
-    await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
-    const tsxApi = import.meta.resolve("tsx/esm/api");
-    const sourceEntry = pathToFileURL(path.resolve("src/worker/workspace-rsync-receiver.ts")).href;
-    await fs.writeFile(
-      receiverEntry,
-      `import { tsImport } from ${JSON.stringify(tsxApi)};\nawait tsImport(${JSON.stringify(sourceEntry)}, import.meta.url);\n`,
-    );
+    await prepareLocalWorkspaceRsyncReceiver(receiverEntry);
 
     const resolvedRsync = await runCommandWithTimeout(["sh", "-c", "command -v rsync"], {
       timeoutMs: 10_000,

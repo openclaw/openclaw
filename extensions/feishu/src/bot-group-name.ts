@@ -1,7 +1,4 @@
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
 import { getChatInfo } from "./chat.js";
 import { createFeishuClient } from "./client.js";
@@ -11,38 +8,19 @@ const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000;
 const GROUP_NAME_CACHE_MAX_SIZE = 500;
 
 function evictGroupNameCache(): void {
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined) {
-    feishuGroupNameCache.clear();
-    return;
-  }
+  const now = Date.now();
   for (const [key, value] of feishuGroupNameCache) {
-    const expiresAt = asDateTimestampMs(value.expiresAt);
-    if (expiresAt === undefined || expiresAt <= now) {
+    if (value.expiresAt <= now) {
       feishuGroupNameCache.delete(key);
     }
   }
 
-  const excess = feishuGroupNameCache.size - GROUP_NAME_CACHE_MAX_SIZE;
-  if (excess <= 0) {
-    return;
-  }
-  let removed = 0;
-  for (const key of feishuGroupNameCache.keys()) {
-    if (removed >= excess) {
-      break;
-    }
-    feishuGroupNameCache.delete(key);
-    removed++;
-  }
+  pruneMapToMaxSize(feishuGroupNameCache, GROUP_NAME_CACHE_MAX_SIZE);
 }
 
 function setCacheEntry(key: string, name: string): void {
-  const expiresAt = resolveExpiresAtMsFromDurationMs(GROUP_NAME_CACHE_TTL_MS);
   feishuGroupNameCache.delete(key);
-  if (expiresAt !== undefined) {
-    feishuGroupNameCache.set(key, { name, expiresAt });
-  }
+  feishuGroupNameCache.set(key, { name, expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS });
 }
 
 export async function resolveGroupName(params: {
@@ -58,9 +36,7 @@ export async function resolveGroupName(params: {
   const cacheKey = `${account.accountId}:${chatId}`;
   const cached = feishuGroupNameCache.get(cacheKey);
   if (cached) {
-    const now = asDateTimestampMs(Date.now());
-    const expiresAt = asDateTimestampMs(cached.expiresAt);
-    if (now !== undefined && expiresAt !== undefined && expiresAt > now) {
+    if (cached.expiresAt > Date.now()) {
       return cached.name || undefined;
     }
     feishuGroupNameCache.delete(cacheKey);

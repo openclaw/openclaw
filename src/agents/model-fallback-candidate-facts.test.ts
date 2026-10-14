@@ -30,7 +30,6 @@ function makeAuthRuntime(profileIds: string[]): ModelFallbackAuthRuntime {
     resolveAuthProfileOrder: () => profileIds,
     resolveAuthProfileEligibility: () => ({ eligible: true }),
     isProfileInCooldown: () => false,
-    maybeReprobeWhamBlockedProfiles: () => undefined,
   } as unknown as ModelFallbackAuthRuntime;
 }
 
@@ -117,7 +116,6 @@ describe("model fallback candidate facts", () => {
         authStore: AUTH_STORE,
         candidate: FALLBACK,
         skipsProviderAuthCooldown: false,
-        reprobeBlockedProfiles: false,
       });
 
       expect(facts.profileIds).toEqual(["profile-a", "profile-b"]);
@@ -132,12 +130,10 @@ describe("model fallback candidate facts", () => {
         candidate: FALLBACK,
         userLockedAuthProfileId: "profile-b",
         skipsProviderAuthCooldown: false,
-        reprobeBlockedProfiles: false,
       });
 
       expect(facts.profileIds).toEqual(["profile-b", "profile-a"]);
       expect(facts.authScope).toBe("profile-b");
-      expect(facts.userLockedEligible).toBe(true);
     });
   });
 

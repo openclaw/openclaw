@@ -19,7 +19,7 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - src/gateway/agent-turn/agent-dedupe.ts
-    - src/gateway/server-methods/agent-wait.ts
+    - src/gateway/server-methods/agent.ts
     - test/e2e/qa-lab/runtime/agent-session-dedup-reconnect.e2e.test.ts
   execution:
     kind: vitest

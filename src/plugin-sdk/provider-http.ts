@@ -11,6 +11,7 @@ export {
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
   createProviderHttpError,
+  ProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
   formatProviderErrorPayload,
@@ -24,25 +25,38 @@ export {
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";
 export {
+  readProviderResponseErrorText,
+  redactProviderResponseErrorText,
+} from "../agents/provider-request-header-redaction.js";
+export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   fetchWithTimeout,
   fetchWithTimeoutGuarded,
   normalizeBaseUrl,
+  pollProviderOperation,
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,
   postTranscriptionRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
   resolveAudioTranscriptionUploadFileName,
   requireTranscriptionText,
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
+export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
+export {
+  runHttpTlsPreflight,
+  type HttpTlsPreflightOptions,
+  type HttpTlsPreflightResult,
+} from "../infra/http-tls-preflight.js";
 export type {
   ProviderOperationDeadline,
   ProviderOperationTimeoutMs,
@@ -74,7 +88,7 @@ export type {
   ProviderRequestProxyOverride,
   ProviderRequestTlsOverride,
   ProviderRequestTransportOverrides,
-} from "../agents/provider-request-config.js";
+} from "../agents/provider-request-config.types.js";
 export { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 export {
   resolveProviderEndpoint,

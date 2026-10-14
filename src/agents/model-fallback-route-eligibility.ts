@@ -6,7 +6,6 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { shouldUseTransientCooldownProbeSlot } from "./failover-policy.js";
 import type { FailoverReason } from "./failover/signal.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
-import { sameModelCandidate } from "./model-fallback-attempt.js";
 import {
   isCandidateSessionSkipped,
   resolveCandidateAuthFacts,
@@ -19,6 +18,7 @@ import {
 } from "./model-fallback-circuit.js";
 import { resolveCooldownDecision, resolveProbeThrottleKey } from "./model-fallback-cooldown.js";
 import type { ModelFallbackCandidate } from "./model-fallback.types.js";
+import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -38,6 +38,7 @@ type ModelCircuitGateContext = {
   cooldownProbeUsedProviders: ReadonlySet<string>;
   authRuntime: ModelFallbackAuthRuntime | null;
   authStore: AuthProfileStore | null;
+  operatorModelPolicy?: PreparedOperatorModelPolicy;
 };
 
 type ModelCircuitGateResult =
@@ -97,9 +98,9 @@ function cooldownBlocksCandidate(
   const decision = resolveCooldownDecision({
     candidate: later,
     isPrimary: later.routeOrigin === "requested",
-    requestedModel: params.requestedCandidate
-      ? sameModelCandidate(later, params.requestedCandidate)
-      : false,
+    requestedModel:
+      later.provider === params.requestedCandidate?.provider &&
+      later.model === params.requestedCandidate.model,
     hasFallbackCandidates: params.hasFallbackCandidates,
     now: params.now,
     probeThrottleKey: resolveProbeThrottleKey(later.provider, params.agentDir),
@@ -119,7 +120,10 @@ function cooldownBlocksCandidate(
 /** True when this candidate could actually reach provider transport. */
 function candidateCanReachTransport(params: LaterCandidateParams): boolean {
   const { later } = params;
-  if (params.tlsFailedProviders.has(later.provider)) {
+  if (
+    params.tlsFailedProviders.has(later.provider) ||
+    params.operatorModelPolicy?.allows(later) === false
+  ) {
     return false;
   }
   // The harness preflight is async and mutates runtime state, so only its
@@ -145,8 +149,6 @@ function candidateCanReachTransport(params: LaterCandidateParams): boolean {
     candidate: later,
     userLockedAuthProfileId: params.userLockedAuthProfileId,
     skipsProviderAuthCooldown: readiness.skipsProviderAuthCooldown,
-    reprobeBlockedProfiles: false,
-    agentDir: params.agentDir,
   });
   if (
     isCandidateSessionSkipped({
@@ -164,8 +166,9 @@ function candidateCanReachTransport(params: LaterCandidateParams): boolean {
 /**
  * A later candidate justifies skipping an open circuit only when it can
  * actually reach transport. A structural array entry is not enough: the
- * session skip-cache, provider cooldown, an unverified harness preflight, or
- * a TLS exclusion can reject it before any provider call, which would turn
+ * session skip-cache, provider cooldown, an unverified harness preflight, a
+ * TLS exclusion, or the operator model policy can reject it before any
+ * provider call, which would turn
  * the skip into a failed turn with zero attempts. This mirrors the same
  * pre-transport gates the main fallback loop applies.
  */

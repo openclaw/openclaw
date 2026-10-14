@@ -7,16 +7,24 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { captureEnv } from "../test-utils/env.js";
 import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
 
 /** Runs a models-config test with an isolated temp HOME and no session cleanup. */
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   // Models-config tests do not exercise session persistence; skip draining
   // unrelated session lock state during temp-home teardown.
-  return withTempHomeBase(fn, {
-    prefix: "openclaw-models-",
-    skipSessionCleanup: true,
-  });
+  return withTempHomeBase(
+    async (home) => {
+      try {
+        return await fn(home);
+      } finally {
+        await closeOpenClawAgentDatabasesAsync(home);
+      }
+    },
+    { prefix: "openclaw-models-", skipSessionCleanup: true },
+  );
 }
 
 /** Installs before/after hooks that reset config, plugin, env, and fetch state. */
@@ -24,14 +32,12 @@ export function installModelsConfigTestHooks(opts?: {
   restoreFetch?: boolean;
   resetPluginLoaderState?: boolean;
 }) {
-  let previousHome: string | undefined;
-  let previousOpenClawAgentDir: string | undefined;
+  let environment: ReturnType<typeof captureEnv> | undefined;
   const originalFetch = globalThis.fetch;
   const shouldResetPluginLoaderState = opts?.resetPluginLoaderState !== false;
 
   beforeEach(() => {
-    previousHome = process.env.HOME;
-    previousOpenClawAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    environment = captureEnv(["HOME", "OPENCLAW_AGENT_DIR"]);
     delete process.env.OPENCLAW_AGENT_DIR;
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -42,12 +48,8 @@ export function installModelsConfigTestHooks(opts?: {
   });
 
   afterEach(() => {
-    process.env.HOME = previousHome;
-    if (previousOpenClawAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousOpenClawAgentDir;
-    }
+    environment?.restore();
+    environment = undefined;
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     if (shouldResetPluginLoaderState) {
@@ -60,24 +62,13 @@ export function installModelsConfigTestHooks(opts?: {
   });
 }
 
-/** Temporarily clears or overrides a set of environment variables for one async test body. */
+/** Restores selected environment variables after one async test body. */
 export async function withTempEnv<T>(vars: string[], fn: () => Promise<T>): Promise<T> {
-  const previous: Record<string, string | undefined> = {};
-  for (const envVar of vars) {
-    previous[envVar] = process.env[envVar];
-  }
-
+  const environment = captureEnv(vars);
   try {
     return await fn();
   } finally {
-    for (const envVar of vars) {
-      const value = previous[envVar];
-      if (value === undefined) {
-        delete process.env[envVar];
-      } else {
-        process.env[envVar] = value;
-      }
-    }
+    environment.restore();
   }
 }
 

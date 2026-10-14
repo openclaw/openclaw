@@ -1,37 +1,31 @@
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
-import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
+import type { EmbeddedAgentRunResult } from "../types.js";
+import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import { resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalTimeout,
+  isEmbeddedRunTimeoutFinal,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
-import { copyAttemptDeliveryState } from "./terminal-resolution.js";
+import type { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export function resolveEmbeddedRunTerminalTimeout(input: {
-  timedOutDuringPrompt: boolean;
-  hasSuccessfulFinalAssistantAfterPromptTimeout: boolean;
-  shouldSurfaceCodexCompletionTimeout: boolean;
+  terminalPrepared: ReturnType<typeof prepareEmbeddedRunTerminal>;
   attempt: EmbeddedRunAttemptResult;
-  hasPartialAssistantTextAfterPromptTimeout: boolean;
-  payloads: EmbeddedAgentRunResult["payloads"];
-  payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
   terminalState: EmbeddedRunTerminalState;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
   startedAtMs: number;
-  agentMeta: EmbeddedAgentMeta;
-  finalAssistantVisibleText?: string;
-  finalAssistantRawText?: string;
-  attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
-  failureSignal: EmbeddedAgentRunResult["meta"]["failureSignal"];
 }): EmbeddedAgentRunResult | undefined {
+  const timeoutFinal = isEmbeddedRunTimeoutFinal(input.attempt);
   if (
-    !input.timedOutDuringPrompt ||
-    input.hasSuccessfulFinalAssistantAfterPromptTimeout ||
-    (!input.shouldSurfaceCodexCompletionTimeout && hasMessagingToolDeliveryEvidence(input.attempt))
+    !input.terminalPrepared.timedOutDuringPrompt ||
+    (!timeoutFinal &&
+      (input.terminalPrepared.hasSuccessfulFinalAssistantAfterPromptTimeout ||
+        hasMessagingToolDeliveryEvidence(input.attempt)))
   ) {
     return undefined;
   }
@@ -41,7 +35,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   const defaultTimeoutText = idleTimedOut
     ? "The model did not produce a response before the model idle timeout. " +
       "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
-      "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole agent run."
+      "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend a model attempt budget."
     : "Request timed out before a response was generated. " +
       "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
   const timeoutText = input.attempt.promptTimeoutOutcome?.message?.trim() || defaultTimeoutText;
@@ -50,9 +44,9 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   const livenessState =
     input.attempt.promptTimeoutOutcome?.livenessState ??
     resolveRunLivenessState({
-      payloadCount: input.hasPartialAssistantTextAfterPromptTimeout
+      payloadCount: input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout
         ? 0
-        : (input.payloads?.length ?? 0),
+        : (input.terminalPrepared.payloads?.length ?? 0),
       aborted: terminalAborted,
       timedOut: terminalTimedOut,
       attempt: input.attempt,
@@ -70,31 +64,37 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState, ...timeoutAttribution });
   return {
     payloads: [
-      ...(input.hasPartialAssistantTextAfterPromptTimeout ? [] : input.payloadsWithToolMedia || []),
+      ...(input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout && !timeoutFinal
+        ? []
+        : input.terminalPrepared.payloadsWithToolMedia || []),
       { text: timeoutText, isError: true },
     ],
     meta: {
+      modelFallbackStopReason: "agent_run_terminal_timeout",
       durationMs: Date.now() - input.startedAtMs,
-      agentMeta: input.agentMeta,
+      agentMeta: input.terminalPrepared.agentMeta,
       aborted: terminalAborted,
       systemPromptReport: input.attempt.systemPromptReport,
       finalPromptText: input.attempt.finalPromptText,
-      finalAssistantVisibleText: input.finalAssistantVisibleText,
-      finalAssistantRawText: input.finalAssistantRawText,
+      finalAssistantVisibleText: input.terminalPrepared.finalAssistantVisibleText,
+      finalAssistantRawText: input.terminalPrepared.finalAssistantRawText,
       replayInvalid,
       livenessState,
       ...timeoutAttribution,
-      ...(input.shouldSurfaceCodexCompletionTimeout
-        ? {
-            error: {
-              kind: "incomplete_turn" as const,
-              message: timeoutText,
-              fallbackSafe: false,
-            },
-          }
+      // Recovery and eligible fallback already ran. Keep this final timeout out
+      // of successful settlement and prevent earlier tool errors from reopening replay.
+      error: {
+        kind: "incomplete_turn",
+        message: timeoutText,
+        fallbackSafe: false,
+      },
+      toolSummary: input.terminalPrepared.attemptToolSummary,
+      ...(input.terminalPrepared.failureSignal
+        ? { failureSignal: input.terminalPrepared.failureSignal }
         : {}),
-      toolSummary: input.attemptToolSummary,
-      ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+      ...(input.terminalPrepared.terminalToolFailure
+        ? { terminalToolFailure: input.terminalPrepared.terminalToolFailure }
+        : {}),
       agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
     },
     ...copyAttemptDeliveryState(input.attempt),

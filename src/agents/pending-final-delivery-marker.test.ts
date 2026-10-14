@@ -3,24 +3,35 @@ import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { persistPendingFinalDeliveryMarker } from "./pending-final-delivery-marker.js";
 
-const state = vi.hoisted(() => ({ persistAgentSession: vi.fn() }));
+const state = vi.hoisted(() => ({ applySessionEntryReplacements: vi.fn() }));
 
-vi.mock("./command/attempt-execution.shared.js", () => ({
-  persistAgentSession: (...args: unknown[]) => state.persistAgentSession(...args),
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  applySessionEntryReplacements: (...args: unknown[]) =>
+    state.applySessionEntryReplacements(...args),
 }));
 
 describe("persistPendingFinalDeliveryMarker", () => {
   beforeEach(() => {
-    state.persistAgentSession
-      .mockReset()
-      .mockImplementation(async (params: { entry: SessionEntry }) => params.entry);
+    state.applySessionEntryReplacements.mockReset();
   });
 
   it("owns a multi-payload command delivery as one durable batch", async () => {
     const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-    const payloads = [{ text: "first" }, { text: "second" }];
+    state.applySessionEntryReplacements.mockImplementation(
+      async (
+        params: Parameters<
+          typeof import("../config/sessions/session-accessor.js").applySessionEntryReplacements
+        >[0],
+      ) => (await params.update([{ sessionKey: "agent:main:main", entry }])).result,
+    );
+    const payloads = [
+      { text: "first" },
+      { text: "internal reasoning", isReasoning: true },
+      { text: "second" },
+    ];
 
     const result = await persistPendingFinalDeliveryMarker({
+      agentId: "main",
       deliver: true,
       sessionStore: { main: entry },
       sessionKey: "main",
@@ -33,6 +44,10 @@ describe("persistPendingFinalDeliveryMarker", () => {
       runOwnedSessionId: "session-1",
     });
 
+    expect(result.sessionEntry?.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "first\n\nsecond",
+    });
     expect(result.sessionEntry?.pendingFinalDelivery?.deliveries).toEqual([
       { id: expect.any(String), state: "prepared" },
     ]);
@@ -41,6 +56,6 @@ describe("persistPendingFinalDeliveryMarker", () => {
       payloads.map(
         (payload) => getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion?.deliveryId,
       ),
-    ).toEqual([deliveryId, deliveryId]);
+    ).toEqual([deliveryId, undefined, deliveryId]);
   });
 });

@@ -1,9 +1,11 @@
 /** Runner-only support types and state for model fallback execution. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import type {
   ModelFallbackErrorHandler,
   ModelFallbackResultClassifier,
   ModelFallbackRunFn,
+  ModelFallbackRuntimeContext,
   ModelFallbackStepHandler,
 } from "./model-fallback-attempt.js";
 import type {
@@ -13,21 +15,13 @@ import type {
 import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import { suspendSession, type SessionSuspensionParams } from "./session-suspension.js";
 
-export type RunWithModelFallbackParams<T> = {
+export type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
   runId?: string;
   sessionId?: string;
-  agentId?: string;
-  sessionKey?: string;
   userLockedAuthProfileId?: string;
-  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
-  prepareAgentHarnessRuntime?: (params: {
-    provider: string;
-    model: string;
-    agentHarnessRuntimeOverride?: string;
-  }) => Promise<void> | void;
   prepareCandidateChain?: (candidates: readonly ModelFallbackCandidate[]) => Promise<void> | void;
   lane?: string;
   agentDir?: string;
@@ -39,16 +33,13 @@ export type RunWithModelFallbackParams<T> = {
   onFallbackStep?: ModelFallbackStepHandler;
   classifyResult?: ModelFallbackResultClassifier<T>;
   /** Return false when a thrown attempt committed work that must not be replayed. */
-  canFallbackAfterError?: (params: {
-    provider: string;
-    model: string;
-    error: unknown;
-    attempt: number;
-    total: number;
-  }) => boolean | Promise<boolean>;
+  canFallbackAfterError?: (
+    attempt: Parameters<ModelFallbackErrorHandler>[0],
+  ) => boolean | Promise<boolean>;
   mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
   skipAuthProfileRuntime?: boolean;
   abortSignal?: AbortSignal;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 } & ModelManifestNormalizationContext;
 
 export type DeferredSessionSuspensionState = {

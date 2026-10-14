@@ -111,9 +111,11 @@ describe("Gateway HTTP API product proof", () => {
       );
       resetConfigRuntimeState();
 
+      testState.agentConfig = { systemAgent: { agentId: "main" } };
       testState.agentsConfig = {
+        ownership: "explicit",
         entries: {
-          main: { default: true, tools: { allow: ["agents_list"] } },
+          main: { tools: { allow: ["agents_list"] } },
           beta: {},
         },
       };
@@ -221,7 +223,7 @@ describe("Gateway HTTP API product proof", () => {
           sessionKey: "main",
         }),
       });
-      expect(tool.response.status).toBe(200);
+      expect(tool.response.status, JSON.stringify(tool.body)).toBe(200);
       expect(tool.body.ok).toBe(true);
       expect(tool.body.result).toEqual(
         expect.objectContaining({
@@ -266,7 +268,11 @@ describe("Gateway HTTP API product proof", () => {
         body: JSON.stringify({ text: "Gateway HTTP QA wake", mode: "next-heartbeat" }),
       });
       expect(authenticatedWake.response.status).toBe(200);
-      expect(authenticatedWake.body).toEqual({ ok: true, mode: "next-heartbeat" });
+      expect(authenticatedWake.body).toEqual({
+        ok: true,
+        mode: "next-heartbeat",
+        eventOutcome: "queued",
+      });
       expect(peekSystemEventEntries(mainSessionKey).map((event) => event.text)).toEqual([
         "Gateway HTTP QA wake",
       ]);

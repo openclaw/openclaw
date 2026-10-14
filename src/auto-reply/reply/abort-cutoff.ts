@@ -1,4 +1,4 @@
-// Resolves abort cutoff markers used to stop stale reply streams.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { MsgContext } from "../templating.js";
@@ -10,32 +10,28 @@ export type AbortCutoff = {
 
 type SessionAbortCutoffEntry = Pick<SessionEntry, "abortCutoffMessageSid" | "abortCutoffTimestamp">;
 
+function buildAbortCutoff(
+  messageSid: string | undefined,
+  rawTimestamp: unknown,
+): AbortCutoff | undefined {
+  const timestamp = asFiniteNumber(rawTimestamp);
+  return messageSid || timestamp !== undefined ? { messageSid, timestamp } : undefined;
+}
+
 export function resolveAbortCutoffFromContext(ctx: MsgContext): AbortCutoff | undefined {
-  const messageSid =
-    normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid);
-  const timestamp =
-    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
-  if (!messageSid && timestamp === undefined) {
-    return undefined;
-  }
-  return { messageSid, timestamp };
+  return buildAbortCutoff(
+    normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid),
+    ctx.Timestamp,
+  );
 }
 
 export function readAbortCutoffFromSessionEntry(
   entry: SessionAbortCutoffEntry | undefined,
 ): AbortCutoff | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  const messageSid = normalizeOptionalString(entry.abortCutoffMessageSid);
-  const timestamp =
-    typeof entry.abortCutoffTimestamp === "number" && Number.isFinite(entry.abortCutoffTimestamp)
-      ? entry.abortCutoffTimestamp
-      : undefined;
-  if (!messageSid && timestamp === undefined) {
-    return undefined;
-  }
-  return { messageSid, timestamp };
+  return buildAbortCutoff(
+    normalizeOptionalString(entry?.abortCutoffMessageSid),
+    entry?.abortCutoffTimestamp,
+  );
 }
 
 export function hasAbortCutoff(entry: SessionAbortCutoffEntry | undefined): boolean {
@@ -50,13 +46,12 @@ export function applyAbortCutoffToSessionEntry(
   entry.abortCutoffTimestamp = cutoff?.timestamp;
 }
 
-function toNumericMessageSid(value: string | undefined): bigint | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed || !/^\d+$/.test(trimmed)) {
+function toNumericMessageSid(value: string): bigint | undefined {
+  if (!/^\d+$/.test(value)) {
     return undefined;
   }
   try {
-    return BigInt(trimmed);
+    return BigInt(value);
   } catch {
     return undefined;
   }
@@ -80,15 +75,9 @@ export function shouldSkipMessageByAbortCutoff(params: {
       return true;
     }
   }
-  if (
-    typeof params.cutoffTimestamp === "number" &&
-    Number.isFinite(params.cutoffTimestamp) &&
-    typeof params.timestamp === "number" &&
-    Number.isFinite(params.timestamp)
-  ) {
-    return params.timestamp <= params.cutoffTimestamp;
-  }
-  return false;
+  const cutoffTimestamp = asFiniteNumber(params.cutoffTimestamp);
+  const timestamp = asFiniteNumber(params.timestamp);
+  return cutoffTimestamp !== undefined && timestamp !== undefined && timestamp <= cutoffTimestamp;
 }
 
 export function shouldPersistAbortCutoff(params: {

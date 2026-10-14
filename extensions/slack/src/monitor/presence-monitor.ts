@@ -1,8 +1,9 @@
-// Slack plugin module polls selected participants and routes away-to-active transitions.
 import { type WebClient, WebAPIRateLimitedError } from "@slack/web-api";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackTarget } from "../target-parsing.js";
@@ -28,6 +29,7 @@ type PresenceObservation = { presence: "active" } | { presence: "away"; firstObs
 
 type PresenceTarget = {
   key: string;
+  isPolicyCurrent: () => boolean;
   teamId?: string;
   mode: Exclude<SlackPresenceEventsMode, "off">;
   prompt: string | undefined;
@@ -44,25 +46,11 @@ type PresenceTarget = {
 type SlackPresenceClient = Pick<WebClient["users"], "getPresence">;
 type PresenceSubject = { teamId?: string; userId: string };
 
-type SlackPresenceMonitor = {
-  observe: (prepared: PreparedSlackMessage) => void;
-  pollOnce: () => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 function resolveMode(
   channelConfig: SlackPresenceEventsConfig | undefined,
   accountConfig: SlackPresenceEventsConfig | undefined,
 ): SlackPresenceEventsMode {
   return channelConfig?.mode ?? accountConfig?.mode ?? "off";
-}
-
-function resolvePrompt(
-  channelConfig: SlackPresenceEventsConfig | undefined,
-  accountConfig: SlackPresenceEventsConfig | undefined,
-): string | undefined {
-  return channelConfig?.prompt ?? accountConfig?.prompt;
 }
 
 export function hasSlackPresenceEventsEnabled(params: {
@@ -147,7 +135,7 @@ function resolveObservedTarget(params: {
     key: `${teamId ? `team:${teamId}:` : ""}${channelId}${targetSuffix}`,
     ...(teamId ? { teamId } : {}),
     mode,
-    prompt: resolvePrompt(prepared.channelConfig?.presenceEvents, params.accountConfig),
+    prompt: prepared.channelConfig?.presenceEvents?.prompt ?? params.accountConfig?.prompt,
     channelId,
     threadId,
     to: formatSlackTarget({
@@ -158,6 +146,7 @@ function resolveObservedTarget(params: {
     }),
     sessionKey: prepared.route.sessionKey,
     agentId: prepared.route.agentId,
+    isPolicyCurrent: prepared.ctx.isRuntimePolicyCurrent,
     participants: new Map([[userId, params.nowMs]]),
     lastActivityAtMs: params.nowMs,
     autoEligibleKind,
@@ -165,59 +154,62 @@ function resolveObservedTarget(params: {
 }
 
 export function createSlackPresenceMonitor(params: {
+  scheduler: PluginServiceSchedulerV1;
   accountId: string;
   accountConfig?: SlackPresenceEventsConfig;
   client?: SlackPresenceClient;
   resolveClient?: (teamId?: string) => SlackPresenceClient;
-  cooldownStore: PluginStateSyncKeyedStore<number>;
+  cooldownStore: PluginStateKeyedStore<number>;
   log?: (message: string) => void;
   error?: (message: string) => void;
-  nowMs?: () => number;
   enqueue?: typeof enqueueRoutedSystemEvent;
   wake?: typeof requestHeartbeat;
-}): SlackPresenceMonitor {
+}) {
   const resolveClient = params.resolveClient ?? (() => params.client);
   if (!params.client && !params.resolveClient) {
     throw new Error("Slack presence monitor requires a client or client resolver");
   }
   const targets = new Map<string, PresenceTarget>();
   const presenceByUser = new Map<string, PresenceObservation>();
-  const nowMs = params.nowMs ?? Date.now;
+  const nowMs = params.scheduler.now;
   const enqueue = params.enqueue ?? enqueueRoutedSystemEvent;
   const wake = params.wake ?? requestHeartbeat;
   let pollOffset = 0;
-  let timer: NodeJS.Timeout | undefined;
-  let activePoll: Promise<void> | undefined;
+  const scheduler = params.scheduler.scope();
+  let started = false;
   const rateLimitedUntilByWorkspace = new Map<string, number>();
-  let stopped = false;
+
+  const collectEligibleSubjects = () => {
+    const subjects = new Map<string, PresenceSubject>();
+    for (const target of targets.values()) {
+      if (!isTargetEligible(target)) {
+        continue;
+      }
+      for (const userId of target.participants.keys()) {
+        const subject = { teamId: target.teamId, userId };
+        subjects.set(presenceSubjectKey(subject), subject);
+      }
+    }
+    return subjects;
+  };
 
   const pruneTargets = (now: number) => {
     for (const [key, target] of targets) {
-      if (now - target.lastActivityAtMs >= SLACK_PRESENCE_TARGET_TTL_MS) {
+      if (
+        !target.isPolicyCurrent() ||
+        now - target.lastActivityAtMs >= SLACK_PRESENCE_TARGET_TTL_MS
+      ) {
         targets.delete(key);
       }
     }
-    while (targets.size > SLACK_PRESENCE_MAX_TARGETS) {
-      const oldestKey = targets.keys().next().value;
-      if (typeof oldestKey !== "string") {
-        break;
-      }
-      targets.delete(oldestKey);
-    }
-    const eligibleUsers = new Set(
-      Array.from(targets.values())
-        .filter(isTargetEligible)
-        .flatMap((target) =>
-          Array.from(target.participants.keys()).map((userId) =>
-            presenceSubjectKey({ teamId: target.teamId, userId }),
-          ),
-        ),
-    );
+    pruneMapToMaxSize(targets, SLACK_PRESENCE_MAX_TARGETS);
+    const eligibleSubjects = collectEligibleSubjects();
     for (const userId of presenceByUser.keys()) {
-      if (!eligibleUsers.has(userId)) {
+      if (!eligibleSubjects.has(userId)) {
         presenceByUser.delete(userId);
       }
     }
+    return eligibleSubjects;
   };
 
   const observe = (prepared: PreparedSlackMessage) => {
@@ -229,7 +221,7 @@ export function createSlackPresenceMonitor(params: {
       accountConfig: params.accountConfig,
       nowMs: now,
     });
-    if (!observed) {
+    if (!observed || !observed.isPolicyCurrent()) {
       return;
     }
     const current = targets.get(observed.key);
@@ -251,20 +243,23 @@ export function createSlackPresenceMonitor(params: {
     pruneTargets(now);
   };
 
-  const emitTransition = (
+  const emitTransition = async (
     subject: PresenceSubject,
     awayObservation: { observedAwayAtMs: number; observedActiveAtMs: number },
   ) => {
     const { teamId, userId } = subject;
-    const target = Array.from(targets.values())
-      .filter(
-        (candidate) =>
-          candidate.teamId === teamId &&
-          candidate.participants.has(userId) &&
-          isTargetEligible(candidate),
-      )
-      .toSorted((a, b) => (b.participants.get(userId) ?? 0) - (a.participants.get(userId) ?? 0))[0];
-    if (!target) {
+    const resolveTarget = () =>
+      Array.from(targets.values())
+        .filter(
+          (candidate) =>
+            candidate.teamId === teamId &&
+            candidate.participants.has(userId) &&
+            isTargetEligible(candidate),
+        )
+        .toSorted(
+          (a, b) => (b.participants.get(userId) ?? 0) - (a.participants.get(userId) ?? 0),
+        )[0];
+    if (!resolveTarget()) {
       return;
     }
     const workspaceKey = teamId ?? "workspace";
@@ -272,7 +267,7 @@ export function createSlackPresenceMonitor(params: {
     const now = awayObservation.observedActiveAtMs;
     let reserved: boolean;
     try {
-      reserved = params.cooldownStore.registerIfAbsent(cooldownKey, now, {
+      reserved = await params.cooldownStore.registerIfAbsent(cooldownKey, now, {
         ttlMs: SLACK_PRESENCE_GREETING_COOLDOWN_MS,
       });
     } catch (err) {
@@ -280,6 +275,12 @@ export function createSlackPresenceMonitor(params: {
       return;
     }
     if (!reserved) {
+      return;
+    }
+    pruneTargets(nowMs());
+    const target = scheduler.signal.aborted ? undefined : resolveTarget();
+    if (!target) {
+      await params.cooldownStore.deleteIfEqual?.(cooldownKey, now);
       return;
     }
     const queued = enqueue(formatSlackPresenceEvent(target, userId, awayObservation), target, {
@@ -292,7 +293,7 @@ export function createSlackPresenceMonitor(params: {
       },
     });
     if (!queued) {
-      params.cooldownStore.delete(cooldownKey);
+      await params.cooldownStore.deleteIfEqual?.(cooldownKey, now);
       return;
     }
     wake({
@@ -311,18 +312,7 @@ export function createSlackPresenceMonitor(params: {
 
   const performPoll = async () => {
     const now = nowMs();
-    pruneTargets(now);
-    const candidatesByKey = new Map<string, PresenceSubject>();
-    for (const target of targets.values()) {
-      if (!isTargetEligible(target)) {
-        continue;
-      }
-      for (const userId of target.participants.keys()) {
-        const subject = { teamId: target.teamId, userId };
-        candidatesByKey.set(presenceSubjectKey(subject), subject);
-      }
-    }
-    const candidates = Array.from(candidatesByKey.entries())
+    const candidates = Array.from(pruneTargets(now).entries())
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([, subject]) => subject);
     if (candidates.length === 0) {
@@ -334,7 +324,7 @@ export function createSlackPresenceMonitor(params: {
       (_, index) => candidates[(pollOffset + index) % candidates.length],
     ).filter((subject): subject is PresenceSubject => Boolean(subject));
     for (const subject of selected) {
-      if (stopped) {
+      if (scheduler.signal.aborted) {
         return;
       }
       const { teamId, userId } = subject;
@@ -357,7 +347,7 @@ export function createSlackPresenceMonitor(params: {
             message: `Slack presence request timed out after ${SLACK_PRESENCE_REQUEST_TIMEOUT_MS}ms`,
           },
         );
-        if (stopped) {
+        if (scheduler.signal.aborted) {
           return;
         }
         consumed = true;
@@ -379,13 +369,13 @@ export function createSlackPresenceMonitor(params: {
             : { presence: "active" };
         presenceByUser.set(subjectKey, observation);
         if (previous?.presence === "away" && next === "active") {
-          emitTransition(subject, {
+          await emitTransition(subject, {
             observedAwayAtMs: previous.firstObservedAtMs,
             observedActiveAtMs: observedAtMs,
           });
         }
       } catch (err) {
-        if (stopped) {
+        if (scheduler.signal.aborted) {
           return;
         }
         if (err instanceof WebAPIRateLimitedError) {
@@ -408,42 +398,22 @@ export function createSlackPresenceMonitor(params: {
     }
   };
 
-  const pollOnce = (): Promise<void> => {
-    if (stopped) {
-      return Promise.resolve();
-    }
-    if (activePoll) {
-      return activePoll;
-    }
-    const run = performPoll().finally(() => {
-      if (activePoll === run) {
-        activePoll = undefined;
-      }
-    });
-    activePoll = run;
-    return run;
-  };
-
   return {
     observe,
-    pollOnce,
     start: () => {
-      if (timer) {
+      if (started || scheduler.signal.aborted) {
         return;
       }
-      stopped = false;
+      started = true;
       params.log?.(`slack presence polling enabled for account ${params.accountId}`);
-      timer = setInterval(() => void pollOnce(), SLACK_PRESENCE_POLL_INTERVAL_MS);
-      timer.unref?.();
+      scheduler.schedule({
+        id: "presence",
+        delayMs: SLACK_PRESENCE_POLL_INTERVAL_MS,
+        everyMs: SLACK_PRESENCE_POLL_INTERVAL_MS,
+        run: performPoll,
+      });
     },
-    stop: async () => {
-      stopped = true;
-      if (timer) {
-        clearInterval(timer);
-        timer = undefined;
-      }
-      await activePoll;
-    },
+    stop: () => scheduler.stop(),
   };
 }
 

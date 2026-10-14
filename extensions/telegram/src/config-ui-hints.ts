@@ -1,7 +1,28 @@
 import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
+const observedGroupHistoryHint = {
+  help: "Automatic observed-message context uses a default of 50 and a maximum of 200 messages; 0 disables automatic injection. The JSON integer maximum selects the 50-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+};
+const observedDmHistoryHint = {
+  help: "Automatic observed-DM context uses a default of 10 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 10-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+};
+const botThreadMentionHint = {
+  label: "Telegram Bot Topic Mention Requirement",
+  help: "Override mention gating in forum topics created by this bot. False allows unmentioned messages; true requires a mention even for replies to the bot. Topic settings override group settings. Omit to preserve existing behavior. Unknown or evicted topic ownership keeps the normal policy. Telegram privacy mode must allow ordinary group messages; sender and visible-reply policies still apply.",
+};
+
 export const telegramChannelConfigUiHints = {
+  historyLimit: observedGroupHistoryHint,
+  "accounts.*.historyLimit": observedGroupHistoryHint,
+  dmHistoryLimit: observedDmHistoryHint,
+  "accounts.*.dmHistoryLimit": observedDmHistoryHint,
+  "dms.*.historyLimit": observedDmHistoryHint,
+  "accounts.*.dms.*.historyLimit": observedDmHistoryHint,
+  "groups.*.requireMentionInBotThreads": botThreadMentionHint,
+  "groups.*.topics.*.requireMentionInBotThreads": botThreadMentionHint,
+  "accounts.*.groups.*.requireMentionInBotThreads": botThreadMentionHint,
+  "accounts.*.groups.*.topics.*.requireMentionInBotThreads": botThreadMentionHint,
   "": {
     label: "Telegram",
     help: "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",
@@ -13,6 +34,10 @@ export const telegramChannelConfigUiHints = {
   botToken: {
     label: "Telegram Bot Token",
     help: "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
+  },
+  joinIntro: {
+    label: "Telegram Group Join Introduction",
+    help: "Send one room-aware introduction when the bot joins an allowed group or supergroup (default: true). Telegram cannot provide message history from before the bot joined.",
   },
   ...createChannelConfigUiHints({
     channelLabel: "Telegram",
@@ -47,7 +72,7 @@ export const telegramChannelConfigUiHints = {
   }),
   richMessages: {
     label: "Telegram Rich Messages",
-    help: "Opt into Bot API 10.2 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
+    help: "Opt into Bot API 10.3 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",
@@ -111,11 +136,11 @@ export const telegramChannelConfigUiHints = {
   },
   "threadBindings.enabled": {
     label: "Telegram Thread Binding Enabled",
-    help: "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
+    help: "Enable Telegram conversation-bound session spawning, routing, and delivery. Manage bindings with /agents and /session unbind|idle|max-age. Overrides session.threadBindings.enabled when set.",
   },
   "threadBindings.idleHours": {
     label: "Telegram Thread Binding Idle Timeout (hours)",
-    help: "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+    help: "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle expiry (default: 24). Overrides session.threadBindings.idleHours when set.",
   },
   "threadBindings.maxAgeHours": {
     label: "Telegram Thread Binding Max Age (hours)",
@@ -123,10 +148,10 @@ export const telegramChannelConfigUiHints = {
   },
   "threadBindings.spawnSessions": {
     label: "Telegram Thread-Bound Session Spawn",
-    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-bind Telegram current conversations when supported.",
+    help: "Allow /acp spawn --thread to bind Telegram topics when supported. Agent sessions_spawn(thread=true) never binds a Telegram conversation; it needs a channel that opens a separate thread.",
   },
   "threadBindings.defaultSpawnContext": {
     label: "Telegram Thread Spawn Context",
-    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork". Telegram cannot host agent-spawned thread sessions, so this has no effect for Telegram requests.',
   },
 } satisfies Record<string, ChannelConfigUiHint>;

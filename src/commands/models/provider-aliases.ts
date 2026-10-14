@@ -1,4 +1,3 @@
-/** Provider alias canonicalization for model catalog rows. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -16,15 +15,6 @@ type ProviderAliasSource = {
 };
 
 const sourcePeerModelCatalogCache = new Map<string, PluginManifestModelCatalog | null>();
-
-function listManifestPlugins(params: ProviderAliasSource): readonly PluginManifestRecord[] {
-  return (
-    params.metadataSnapshot?.manifestRegistry.plugins ??
-    loadPluginManifestRegistryCore({
-      config: params.cfg,
-    }).plugins
-  );
-}
 
 function resolveSourcePeerPluginRoot(
   plugin: Pick<PluginManifestRecord, "id" | "origin" | "rootDir">,
@@ -57,24 +47,13 @@ function loadSourcePeerModelCatalog(
     return cached ?? undefined;
   }
   const sourceRoot = resolveSourcePeerPluginRoot(plugin);
-  if (!sourceRoot) {
-    sourcePeerModelCatalogCache.set(cacheKey, null);
-    return undefined;
-  }
   // Bundled dist manifests can omit source-only alias metadata during local
   // development; read the peer source manifest to keep list output canonical.
-  const loaded = loadPluginManifest(sourceRoot, false);
-  if (!loaded.ok || loaded.manifest.id !== plugin.id) {
-    sourcePeerModelCatalogCache.set(cacheKey, null);
-    return undefined;
-  }
-  const modelCatalog = loaded.manifest.modelCatalog ?? null;
+  const loaded = sourceRoot ? loadPluginManifest(sourceRoot, false) : undefined;
+  const modelCatalog =
+    loaded?.ok && loaded.manifest.id === plugin.id ? (loaded.manifest.modelCatalog ?? null) : null;
   sourcePeerModelCatalogCache.set(cacheKey, modelCatalog);
   return modelCatalog ?? undefined;
-}
-
-function hasModelCatalogAliases(modelCatalog: PluginManifestModelCatalog | undefined): boolean {
-  return Object.keys(modelCatalog?.aliases ?? {}).length > 0;
 }
 
 function collectModelCatalogAliases(
@@ -92,16 +71,21 @@ function collectModelCatalogAliases(
 
 function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string, string> {
   const aliases = new Map<string, string>();
-  for (const plugin of listManifestPlugins(params)) {
+  const plugins =
+    params.metadataSnapshot?.manifestRegistry.plugins ??
+    loadPluginManifestRegistryCore({ config: params.cfg }).plugins;
+  for (const plugin of plugins) {
     collectModelCatalogAliases(aliases, plugin.modelCatalog);
-    if (!hasModelCatalogAliases(plugin.modelCatalog) && plugin.origin === "bundled") {
+    if (
+      Object.keys(plugin.modelCatalog?.aliases ?? {}).length === 0 &&
+      plugin.origin === "bundled"
+    ) {
       collectModelCatalogAliases(aliases, loadSourcePeerModelCatalog(plugin));
     }
   }
   return aliases;
 }
 
-/** Builds provider/ref canonicalizers from manifest model-catalog aliases. */
 export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAliasSource): {
   provider: (provider: string) => string;
   ref: <TRef extends { provider: string }>(ref: TRef) => TRef;
@@ -118,20 +102,4 @@ export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAli
       return canonicalProvider === ref.provider ? ref : { ...ref, provider: canonicalProvider };
     },
   };
-}
-
-/** Canonicalizes a provider id through manifest model-catalog aliases. */
-export function canonicalizeModelCatalogProviderAlias(
-  provider: string,
-  params: ProviderAliasSource,
-): string {
-  return createModelCatalogProviderAliasCanonicalizer(params).provider(provider);
-}
-
-/** Canonicalizes the provider field on a model reference. */
-export function canonicalizeModelCatalogProviderRef<TRef extends { provider: string }>(
-  ref: TRef,
-  params: ProviderAliasSource,
-): TRef {
-  return createModelCatalogProviderAliasCanonicalizer(params).ref(ref);
 }

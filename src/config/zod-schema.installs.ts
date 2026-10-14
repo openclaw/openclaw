@@ -1,4 +1,3 @@
-// Defines install-related Zod schema fragments for config parsing.
 import { z } from "zod";
 
 const InstallSourceSchema = z.union([
@@ -9,9 +8,6 @@ const InstallSourceSchema = z.union([
   z.literal("git"),
 ]);
 
-const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
-
-/** Zod object shape for persisted generic install records. */
 const InstallRecordShape = {
   source: InstallSourceSchema,
   spec: z.string().optional(),
@@ -60,10 +56,32 @@ const InstallRecordShape = {
   gitCommit: z.string().optional(),
 } as const;
 
-export const PluginInstallRecordShape = {
+const InstallRecordSchema = z.object(InstallRecordShape);
+export type InstallRecordBase = z.infer<typeof InstallRecordSchema>;
+
+export const StrictPluginInstallRecordSchema = z.object({
   ...InstallRecordShape,
-  source: PluginInstallSourceSchema,
+  source: z.union([InstallSourceSchema, z.literal("marketplace")]),
   marketplaceName: z.string().optional(),
   marketplaceSource: z.string().optional(),
   marketplacePlugin: z.string().optional(),
-} as const;
+  acceptedSurface: z
+    .strictObject({
+      channels: z.array(z.string().min(1)),
+      providers: z.array(z.string().min(1)),
+      tools: z.array(z.string().min(1)),
+      contracts: z.array(z.string().min(1)),
+      hooks: z.array(z.string().min(1)),
+      mcpServers: z.array(z.string().min(1)),
+      cliCommands: z.array(z.string().min(1)),
+      cliBackends: z.array(z.string().min(1)),
+      skills: z.array(z.string().min(1)),
+      dangerousConfigFlags: z.array(z.string().min(1)),
+    })
+    .optional(),
+  acceptedSurfaceHash: z.string().optional(),
+  acceptedSurfaceAt: z.string().optional(),
+  acceptedSurfaceIntegrity: z.string().optional(),
+} as const);
+export type PluginInstallRecord = z.infer<typeof StrictPluginInstallRecordSchema>;
+export type PluginAcceptedDeclaredSurface = NonNullable<PluginInstallRecord["acceptedSurface"]>;

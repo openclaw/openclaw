@@ -4,7 +4,38 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 
+type BuildContextParams = Parameters<
+  ReturnType<typeof createPluginRuntimeMock>["channel"]["inbound"]["buildContext"]
+>[0];
+
+function buildGroupContext(params: Pick<BuildContextParams, "supplemental" | "extra">) {
+  return createPluginRuntimeMock().channel.inbound.buildContext({
+    channel: "test",
+    from: "test:user:u1",
+    sender: { id: "u1" },
+    conversation: {
+      kind: "group",
+      id: "room-1",
+      routePeer: { kind: "group", id: "room-1" },
+    },
+    route: { agentId: "main", routeSessionKey: "agent:main:test:group:room-1" },
+    reply: { to: "test:room:room-1", originatingTo: "test:room:room-1" },
+    message: { rawBody: "hello", envelopeFrom: "User One" },
+    ...params,
+  });
+}
+
 describe("createPluginRuntimeMock", () => {
+  it.each(["inbound", "turn"] as const)("reflects %s overrides through both aliases", (surface) => {
+    const overrides = createPluginRuntimeMock().channel.inbound;
+    const runtime = createPluginRuntimeMock({
+      channel: { [surface]: { run: overrides.run, dispatch: overrides.dispatch } },
+    });
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(runtime.channel.turn.run).toBe(overrides.run);
+    expect(runtime.channel.turn.dispatch).toBe(overrides.dispatch);
+  });
+
   it("clones the initializer callback input and applies its final extension patch", async () => {
     const runtime = createPluginRuntimeMock();
     const pluginExtensions = { codex: { marker: "original" } };
@@ -48,6 +79,7 @@ describe("createPluginRuntimeMock", () => {
       }),
     });
 
+    expect(debouncer.shouldBuffer("message")).toBe(false);
     expect(debouncer.cancelKey("key")).toBe(false);
     expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
   });
@@ -78,7 +110,7 @@ describe("createPluginRuntimeMock", () => {
     unsubscribe();
   });
 
-  it("exposes channel inbound helpers without the removed turn aliases", async () => {
+  it("runs channel events through the inbound runtime", async () => {
     const channel = "test";
 
     const input = vi.fn((raw: { id: string }) => ({
@@ -105,7 +137,8 @@ describe("createPluginRuntimeMock", () => {
         reply: { dispatchReplyWithBufferedBlockDispatcher },
       },
     });
-    expect("turn" in runtime.channel).toBe(false);
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(runtime.channel.turn.dispatch).toBe(runtime.channel.inbound.dispatch);
     const resolveTurn = vi.fn(async () => ({
       cfg: {},
       channel,
@@ -153,7 +186,7 @@ describe("createPluginRuntimeMock", () => {
     );
   });
 
-  it("uses merged channel overrides when dispatching an inbound turn", async () => {
+  it("dispatch uses merged channel overrides", async () => {
     const resolveStorePath = vi.fn(() => "/tmp/override-sessions.json");
     const recordInboundSession = vi.fn(async () => undefined);
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
@@ -343,30 +376,22 @@ describe("createPluginRuntimeMock", () => {
     );
   });
 
-  it("routes untrusted group prompt facts into untrusted structured context", () => {
-    const runtime = createPluginRuntimeMock();
+  it("keeps defined canonical overrides ahead of legacy overrides", () => {
+    const legacy = createPluginRuntimeMock().channel.inbound;
+    const canonical = createPluginRuntimeMock().channel.inbound;
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        turn: { run: legacy.run, dispatch: legacy.dispatch },
+        inbound: { run: undefined, dispatch: canonical.dispatch },
+      },
+    });
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(runtime.channel.turn.run).toBe(legacy.run);
+    expect(runtime.channel.turn.dispatch).toBe(canonical.dispatch);
+  });
 
-    const ctx = runtime.channel.inbound.buildContext({
-      channel: "test",
-      from: "test:user:u1",
-      sender: { id: "u1" },
-      conversation: {
-        kind: "group",
-        id: "room-1",
-        routePeer: { kind: "group", id: "room-1" },
-      },
-      route: {
-        agentId: "main",
-        routeSessionKey: "agent:main:test:group:room-1",
-      },
-      reply: {
-        to: "test:room:room-1",
-        originatingTo: "test:room:room-1",
-      },
-      message: {
-        rawBody: "hello",
-        envelopeFrom: "User One",
-      },
+  it("routes untrusted group prompt facts into untrusted structured context", () => {
+    const ctx = buildGroupContext({
       supplemental: {
         channelStructuredContext: [
           {
@@ -409,29 +434,7 @@ describe("createPluginRuntimeMock", () => {
   });
 
   it("preserves deprecated structured context beside group prompt facts", () => {
-    const runtime = createPluginRuntimeMock();
-
-    const ctx = runtime.channel.inbound.buildContext({
-      channel: "test",
-      from: "test:user:u1",
-      sender: { id: "u1" },
-      conversation: {
-        kind: "group",
-        id: "room-1",
-        routePeer: { kind: "group", id: "room-1" },
-      },
-      route: {
-        agentId: "main",
-        routeSessionKey: "agent:main:test:group:room-1",
-      },
-      reply: {
-        to: "test:room:room-1",
-        originatingTo: "test:room:room-1",
-      },
-      message: {
-        rawBody: "hello",
-        envelopeFrom: "User One",
-      },
+    const ctx = buildGroupContext({
       supplemental: {
         untrustedGroupSystemPrompt: "room guidance",
       },
@@ -460,29 +463,7 @@ describe("createPluginRuntimeMock", () => {
   });
 
   it("keeps explicitly empty channel structured context ahead of the deprecated alias", () => {
-    const runtime = createPluginRuntimeMock();
-
-    const ctx = runtime.channel.inbound.buildContext({
-      channel: "test",
-      from: "test:user:u1",
-      sender: { id: "u1" },
-      conversation: {
-        kind: "group",
-        id: "room-1",
-        routePeer: { kind: "group", id: "room-1" },
-      },
-      route: {
-        agentId: "main",
-        routeSessionKey: "agent:main:test:group:room-1",
-      },
-      reply: {
-        to: "test:room:room-1",
-        originatingTo: "test:room:room-1",
-      },
-      message: {
-        rawBody: "hello",
-        envelopeFrom: "User One",
-      },
+    const ctx = buildGroupContext({
       extra: {
         ChannelStructuredContext: [],
         UntrustedStructuredContext: [{ label: "stale", payload: {} }],

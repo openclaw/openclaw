@@ -1,20 +1,36 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import {
+  listMessageReceiptSourceTargets,
+  resolveMessageReceiptPrimaryId,
+} from "../channels/message/receipt.js";
+import type { MessageReceipt } from "../channels/message/types.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { MessagePollResult, MessageSendResult } from "../infra/outbound/message.js";
+import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
+  sourceReplyDelivered?: true;
   primaryPlatformMessageId?: string;
+  deliveredTargets?: string[];
   partialDelivery: boolean;
   createdThreadIds: string[];
 };
 
 const NON_DELIVERY_IDS = new Set(["skipped", "suppressed"]);
+const NON_DELIVERY_STATUSES = new Set(["failed", ...NON_DELIVERY_IDS]);
 const STATUSES = new Set(["settled", "suppressed", "dryRun", "failed"]);
-const PLUGIN_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
+const PLUGIN_ENVELOPE_KEYS = [
+  "details",
+  "payload",
+  "result",
+  "results",
+  "sendResult",
+  "toolResult",
+];
 
 const EMPTY_DELIVERY_FACT: Pick<
   EmbeddedMessageDeliveryFact,
@@ -33,50 +49,98 @@ function deliveryId(value: unknown): string | undefined {
   return id && !NON_DELIVERY_IDS.has(id.toLowerCase()) ? id : undefined;
 }
 
-function normalizeStatus(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().toLowerCase() : undefined;
+function projectReceiptDelivery(delivery?: {
+  receipt?: MessageReceipt;
+  messageId?: string;
+  pollId?: string;
+}): EmbeddedMessageDeliveryFact {
+  const receipt = delivery?.receipt;
+  const primaryPlatformMessageId = [
+    receipt ? resolveMessageReceiptPrimaryId(receipt) : undefined,
+    delivery?.messageId,
+    delivery?.pollId,
+    ...(receipt?.parts.map((part) => part.platformMessageId) ?? []),
+  ]
+    .map(deliveryId)
+    .find(Boolean);
+  const createdThreadIds = [
+    receipt?.threadId,
+    ...(receipt?.parts.map((part) => part.threadId) ?? []),
+  ].flatMap((id) => (typeof id === "string" && id.trim() ? [id.trim()] : []));
+  return {
+    status: primaryPlatformMessageId ? "settled" : "failed",
+    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
+    partialDelivery: false,
+    createdThreadIds: [...new Set(createdThreadIds)],
+  };
 }
+
+type PluginEnvelopePredicate = (
+  record: Record<string, unknown>,
+  status: string | undefined,
+) => boolean;
 
 function visitPluginEnvelope(
   value: unknown,
-  predicate: (record: Record<string, unknown>) => boolean,
+  predicate: PluginEnvelopePredicate,
   depth = 0,
 ): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (depth > 4) {
     return false;
   }
   if (Array.isArray(value)) {
     return value.some((item) => visitPluginEnvelope(item, predicate, depth + 1));
   }
-  const record = asOptionalRecord(value);
-  if (!record) {
+  if (!isRecord(value)) {
     return false;
   }
-  if (predicate(record)) {
+  const status =
+    normalizeMessageDeliveryStatus(value.deliveryStatus) ??
+    normalizeMessageDeliveryStatus(value.status);
+  if (predicate(value, status)) {
     return true;
   }
-  if (typeof record.text === "string") {
-    const parsed = safeParseJsonRecord(record.text);
+  if (typeof value.text === "string") {
+    const parsed = safeParseJsonRecord(value.text);
     if (parsed && visitPluginEnvelope(parsed, predicate, depth + 1)) {
       return true;
     }
   }
   if (
-    Array.isArray(record.content) &&
-    record.content.some((item) => visitPluginEnvelope(item, predicate, depth + 1))
+    Array.isArray(value.content) &&
+    value.content.some((item) => visitPluginEnvelope(item, predicate, depth + 1))
   ) {
     return true;
   }
-  return PLUGIN_ENVELOPE_KEYS.some((key) => visitPluginEnvelope(record[key], predicate, depth + 1));
+  return PLUGIN_ENVELOPE_KEYS.some((key) => visitPluginEnvelope(value[key], predicate, depth + 1));
 }
 
 const PLUGIN_SIGNALS = {
-  dryRun: (record: Record<string, unknown>) =>
-    record.dryRun === true || normalizeStatus(record.status) === "dry_run",
-  partial: (record: Record<string, unknown>) =>
+  dryRun: (record: Record<string, unknown>, status: string | undefined) =>
+    record.dryRun === true ||
+    status === "dry_run" ||
+    normalizeMessageDeliveryStatus(record.status) === "dry_run",
+  failure: (record: Record<string, unknown>) =>
+    record.ok === false ||
+    record.success === false ||
+    record.isError === true ||
+    record.delivered === false ||
+    record.complete === false ||
+    Boolean(record.error) ||
+    [record.status, record.deliveryStatus].some((value) => {
+      const status = normalizeMessageDeliveryStatus(value);
+      return (
+        status === "error" ||
+        status === "incomplete" ||
+        status === "partial_failed" ||
+        status === "dry_run" ||
+        (status !== undefined && NON_DELIVERY_STATUSES.has(status))
+      );
+    }),
+  partial: (record: Record<string, unknown>, status: string | undefined) =>
     record.sentBeforeError === true ||
     record.visibleReplySent === true ||
-    normalizeStatus(record.status) === "partial_failed",
+    status === "partial_failed",
   conversation: (record: Record<string, unknown>) =>
     [
       record.topicId,
@@ -84,16 +148,15 @@ const PLUGIN_SIGNALS = {
       record.messageThreadId,
       asOptionalRecord(record.thread)?.id,
     ].some((id) => hasNonEmptyString(id) || (typeof id === "number" && Number.isFinite(id))),
-  nonDelivery: (record: Record<string, unknown>) => {
-    const id = normalizeStatus(record.messageId);
+  nonDelivery: (record: Record<string, unknown>, status: string | undefined) => {
+    const id = normalizeMessageDeliveryStatus(record.messageId);
     return (
       (id !== undefined && NON_DELIVERY_IDS.has(id)) ||
-      normalizeStatus(record.status) === "suppressed"
+      (status !== undefined && NON_DELIVERY_STATUSES.has(status))
     );
   },
-  noOp: (record: Record<string, unknown>) => {
+  noOp: (record: Record<string, unknown>, status: string | undefined) => {
     const removed = record.removed;
-    const status = normalizeStatus(record.status);
     return (
       removed === null ||
       removed === false ||
@@ -110,41 +173,47 @@ const PLUGIN_SIGNALS = {
       status === "not_found"
     );
   },
-  delivery: (record: Record<string, unknown>) => {
-    const message = asOptionalRecord(record.message);
-    const ids = [record.messageId, record.pollId, message?.id]
-      .map(normalizeStatus)
-      .filter((id): id is string => Boolean(id));
-    return (
-      ids.some((id) => !NON_DELIVERY_IDS.has(id)) ||
-      normalizeStatus(record.status) === "sent" ||
-      normalizeStatus(record.text) === "sent"
-    );
-  },
+  delivery: (record: Record<string, unknown>, status: string | undefined): boolean =>
+    PLUGIN_SIGNALS.deliveryId(record) ||
+    status === "sent" ||
+    normalizeMessageDeliveryStatus(record.text) === "sent",
   deliveryId: (record: Record<string, unknown>) =>
     [record.messageId, record.pollId, asOptionalRecord(record.message)?.id]
-      .map(normalizeStatus)
+      .map(normalizeMessageDeliveryStatus)
       .some((id) => Boolean(id && !NON_DELIVERY_IDS.has(id))),
   ok: (record: Record<string, unknown>) =>
-    record.ok === true || normalizeStatus(record.text) === "ok",
-} satisfies Record<string, (record: Record<string, unknown>) => boolean>;
+    record.ok === true || normalizeMessageDeliveryStatus(record.text) === "ok",
+} satisfies Record<string, PluginEnvelopePredicate>;
 
 export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SIGNALS): boolean {
   return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
 }
 
-function readPluginDeliveryId(value: unknown): string | undefined {
-  let found: string | undefined;
+function readPluginDeliveryIdentity(value: unknown) {
+  let primaryPlatformMessageId: string | undefined;
+  const deliveredTargets = new Set<string>();
   visitPluginEnvelope(value, (record) => {
-    found = [record.messageId, record.pollId, asOptionalRecord(record.message)?.id]
+    primaryPlatformMessageId ??= [
+      record.messageId,
+      record.pollId,
+      asOptionalRecord(record.message)?.id,
+    ]
       .map(deliveryId)
       .find(Boolean);
-    return found !== undefined;
+    for (const target of listMessageReceiptSourceTargets(record)) {
+      deliveredTargets.add(target);
+    }
+    return false;
   });
-  return found;
+  return {
+    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
+    ...(deliveredTargets.size ? { deliveredTargets: [...deliveredTargets] } : {}),
+  };
 }
 
-function projectPluginPayload(value: unknown): EmbeddedMessageDeliveryFact | undefined {
+export function projectPluginMessageDeliveryFact(
+  value: unknown,
+): EmbeddedMessageDeliveryFact | undefined {
   if (pluginEnvelopeHas(value, "dryRun")) {
     return { status: "dryRun", ...EMPTY_DELIVERY_FACT };
   }
@@ -154,16 +223,15 @@ function projectPluginPayload(value: unknown): EmbeddedMessageDeliveryFact | und
   if (pluginEnvelopeHas(value, "nonDelivery")) {
     return { status: "suppressed", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "noOp")) {
+  if (pluginEnvelopeHas(value, "noOp") || pluginEnvelopeHas(value, "failure")) {
     return { status: "failed", ...EMPTY_DELIVERY_FACT };
   }
   if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {
     return undefined;
   }
-  const primaryPlatformMessageId = readPluginDeliveryId(value);
   return {
     status: "settled",
-    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
+    ...readPluginDeliveryIdentity(value),
     ...EMPTY_DELIVERY_FACT,
   };
 }
@@ -179,7 +247,7 @@ export function pluginBroadcastHasDelivery(value: unknown): boolean {
           return false;
         }
         return [entry.payload, entry.toolResult].some(
-          (payload) => projectPluginPayload(payload)?.status === "settled",
+          (payload) => projectPluginMessageDeliveryFact(payload)?.status === "settled",
         );
       }),
   );
@@ -187,20 +255,7 @@ export function pluginBroadcastHasDelivery(value: unknown): boolean {
 
 function projectSend(result: MessageSendResult): EmbeddedMessageDeliveryFact {
   const delivery = result.result;
-  const receipt = delivery && "receipt" in delivery ? delivery.receipt : undefined;
-  const primaryPlatformMessageId = [
-    receipt?.primaryPlatformMessageId,
-    delivery?.messageId,
-    delivery && "pollId" in delivery ? delivery.pollId : undefined,
-    ...(receipt?.platformMessageIds ?? []),
-    ...(receipt?.parts.map((part) => part.platformMessageId) ?? []),
-  ]
-    .map(deliveryId)
-    .find(Boolean);
-  const createdThreadIds = [
-    receipt?.threadId,
-    ...(receipt?.parts.map((part) => part.threadId) ?? []),
-  ].flatMap((id) => (typeof id === "string" && id.trim() ? [id.trim()] : []));
+  const fact = projectReceiptDelivery(delivery);
   const partialDelivery =
     result.deliveryStatus === "partial_failed" || result.sentBeforeError === true;
   const nonDeliveryId =
@@ -212,31 +267,30 @@ function projectSend(result: MessageSendResult): EmbeddedMessageDeliveryFact {
       ? "settled"
       : result.deliveryStatus === "suppressed" || nonDeliveryId
         ? "suppressed"
-        : result.deliveryStatus === "sent" || primaryPlatformMessageId
+        : result.deliveryStatus === "sent" || fact.primaryPlatformMessageId
           ? "settled"
           : "failed";
-  return {
-    status,
-    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
-    partialDelivery,
-    createdThreadIds: [...new Set(createdThreadIds)],
-  };
+  return { ...fact, status, partialDelivery };
 }
 
 function projectPoll(result: MessagePollResult): EmbeddedMessageDeliveryFact {
-  const primaryPlatformMessageId =
-    deliveryId(result.result?.messageId) ?? deliveryId(result.result?.pollId);
-  return {
-    status: result.dryRun ? "dryRun" : primaryPlatformMessageId ? "settled" : "failed",
-    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
-    partialDelivery: false,
-    createdThreadIds: [],
-  };
+  const fact = projectReceiptDelivery(result.result);
+  return result.dryRun ? { ...fact, status: "dryRun" } : fact;
 }
 
 export function projectEmbeddedMessageDeliveryFact(
   result: MessageActionResult,
+  currentSourceReply = false,
 ): EmbeddedMessageDeliveryFact | undefined {
+  const payloadDelivery = result.dryRun
+    ? undefined
+    : projectPluginMessageDeliveryFact(result.payload);
+  const partialDelivery = payloadDelivery?.partialDelivery ? payloadDelivery : undefined;
+  if (currentSourceReply && result.handledBy === "plugin") {
+    return result.dryRun
+      ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
+      : projectPluginMessageDeliveryFact(result.payload);
+  }
   if (result.kind === "send") {
     return result.handledBy === "core" && result.sendResult
       ? projectSend(result.sendResult)
@@ -246,15 +300,15 @@ export function projectEmbeddedMessageDeliveryFact(
             partialDelivery: false,
             createdThreadIds: [],
           }
-        : undefined;
+        : partialDelivery;
   }
   if (result.kind === "poll") {
     return result.handledBy === "core" && result.pollResult
       ? projectPoll(result.pollResult)
-      : undefined;
+      : partialDelivery;
   }
   if (result.kind !== "broadcast") {
-    return undefined;
+    return partialDelivery;
   }
   const entries = result.payload.results.map((entry) => ({
     entry,
@@ -265,13 +319,18 @@ export function projectEmbeddedMessageDeliveryFact(
       : entry.sentBeforeError
         ? { status: "settled" as const, partialDelivery: true, createdThreadIds: [] }
         : entry.ok
-          ? projectPluginPayload(entry.payload)
+          ? projectPluginMessageDeliveryFact(entry.payload)
           : undefined,
   }));
   const facts = entries.flatMap(({ fact }) => (fact ? [fact] : []));
   const settled = facts.find((fact) => fact.status === "settled");
-  if (settled || entries.some(({ entry, fact }) => entry.ok && !entry.result && !fact)) {
-    return settled;
+  if (settled) {
+    return entries.some(({ entry }) => !entry.ok) && !settled.partialDelivery
+      ? { ...settled, partialDelivery: true }
+      : settled;
+  }
+  if (entries.some(({ entry, fact }) => entry.ok && !entry.result && !fact)) {
+    return undefined;
   }
   return (
     facts.find((fact) => fact.status === "suppressed") ??
@@ -280,6 +339,14 @@ export function projectEmbeddedMessageDeliveryFact(
       partialDelivery: false,
       createdThreadIds: [],
     }
+  );
+}
+
+export function hasAcceptedBroadcastDelivery(result: MessageActionResult): boolean {
+  return (
+    !result.dryRun &&
+    result.kind === "broadcast" &&
+    result.payload.results.some((entry) => entry.ok || entry.sentBeforeError)
   );
 }
 
@@ -296,6 +363,37 @@ export function attachEmbeddedMessageDeliveryFact(
     return { ...result, details: rest };
   }
   return { ...result, details: { ...details, messageDelivery: fact } };
+}
+
+export function isDeliveredCoreCurrentChannelWidgetResult(params: {
+  coreBuiltinToolNames?: ReadonlySet<string>;
+  sourceReplyDeliveryMode?: string;
+  toolName: string;
+  result: unknown;
+  isToolError: boolean;
+}): boolean {
+  if (
+    params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    params.toolName !== "show_widget" ||
+    params.isToolError ||
+    params.coreBuiltinToolNames?.has("show_widget") !== true
+  ) {
+    return false;
+  }
+  const details = asOptionalRecord(asOptionalRecord(params.result)?.details);
+  const presentation = asOptionalRecord(details?.presentation);
+  const receipt = asOptionalRecord(presentation?.receipt);
+  if (details?.kind !== "widget" || presentation?.target !== "current_channel") {
+    return false;
+  }
+  const receiptIds = [
+    receipt?.primaryPlatformMessageId,
+    ...(Array.isArray(receipt?.platformMessageIds) ? receipt.platformMessageIds : []),
+    ...(Array.isArray(receipt?.parts)
+      ? receipt.parts.map((part) => asOptionalRecord(part)?.platformMessageId)
+      : []),
+  ];
+  return receiptIds.some((id) => hasNonEmptyString(id));
 }
 
 export function readEmbeddedMessageDeliveryFact(
@@ -318,6 +416,9 @@ export function readEmbeddedMessageDeliveryFact(
   }
   return {
     status: fact.status,
+    ...(fact.status === "settled" && !fact.partialDelivery && fact.sourceReplyDelivered === true
+      ? { sourceReplyDelivered: true as const }
+      : {}),
     ...(fact.primaryPlatformMessageId
       ? { primaryPlatformMessageId: fact.primaryPlatformMessageId }
       : {}),

@@ -1,27 +1,47 @@
-import { html, nothing } from "lit";
-import { icons } from "../../../components/icons.ts";
-import {
-  formatRawProviderLabel,
-  providerDisplayLabel,
-  renderProviderBrandIcon,
-} from "../../../components/provider-icon.ts";
+import { formatRawProviderLabel, providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
+import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
+
+registerModelControlsEnglish();
 
 export type ChatModelPickerOption = {
   agentRuntimeId?: string;
+  /** Null is an unknown configured base; undefined is an ordinary model-only row. Both clear a prior pin. */
+  agentRuntime?: string | null;
+  /** Only explicit alternatives pin a runtime; configured base rows follow current routing. */
+  runtimeOverride?: string;
   commitValue: string;
   contextTokens?: number;
   contextWindow?: number;
   disabled?: boolean;
+  unavailableReason?: ModelRuntimeEntry["unavailableReason"];
   isDefault: boolean;
   label: string;
   provider: string;
+  /** Hosted-catalog recommendation; the rest of its provider collapses under "All models". */
+  recommended?: boolean;
   supportsTools?: boolean;
   value: string;
 };
 
-function formatModelContextMeta(option: ChatModelPickerOption): string {
+export function modelPickerOptionKey(option: ChatModelPickerOption): string {
+  return JSON.stringify([option.value, option.agentRuntime ?? null]);
+}
+
+export function isModelPickerOptionSelected(
+  option: ChatModelPickerOption,
+  value: string,
+  agentRuntime?: string,
+): boolean {
+  return (
+    (option.value === value || (option.isDefault && value === "")) &&
+    (option.agentRuntime === undefined || (option.agentRuntime ?? undefined) === agentRuntime)
+  );
+}
+
+export function formatModelContextMeta(option: ChatModelPickerOption): string {
   const active = option.contextTokens;
   const maximum = option.contextWindow;
   if (active && maximum && active !== maximum) {
@@ -34,30 +54,14 @@ function formatModelContextMeta(option: ChatModelPickerOption): string {
 }
 
 export type ChatModelPickerTargetGroup = {
+  errorLabel: string;
   id: string;
   label: string;
   options: readonly { label: string; value: string }[];
+  status: "loading" | "ready" | "error";
 };
 
-// Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,
-// which cannot be imported here (it drags terminal sanitizers into the bundle).
-const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  "claude-cli": "Claude CLI",
-  codex: "Codex",
-  "codex-cli": "Codex",
-  "google-gemini-cli": "Gemini CLI",
-  openclaw: "OpenClaw",
-};
-
-function formatAgentRuntimeLabel(id: string): string {
-  const normalized = id.trim().toLowerCase();
-  return (
-    AGENT_RUNTIME_LABELS[normalized] ??
-    `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
-  );
-}
-
-function formatModelLabel(option: ChatModelPickerOption): string {
+export function formatModelLabel(option: ChatModelPickerOption): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
     providerDisplayLabel(option.provider),
@@ -66,120 +70,32 @@ function formatModelLabel(option: ChatModelPickerOption): string {
     if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {
       return option.label.slice(prefix.length + 1);
     }
+    // Grouped rows already carry the provider as the section heading, so a
+    // catalog name that repeats it as a trailing "(Provider)" reads twice.
+    const suffix = ` (${prefix.toLowerCase()})`;
+    if (option.label.toLowerCase().endsWith(suffix)) {
+      return option.label.slice(0, option.label.length - suffix.length);
+    }
   }
   return option.label;
 }
 
-export function renderChatModelProviderIcon(provider: string) {
-  return renderProviderBrandIcon(provider, { className: "chat-controls__provider-icon" });
-}
-
-export function renderChatModelPickerOption(params: {
+export type ChatModelPickerOptionProps = {
   disabled: boolean;
   entry: ChatModelPickerOption;
   index: number;
   selectedModelValue: string;
-  onHighlight: (row: HTMLButtonElement) => void;
+  selectedAgentRuntime?: string;
+  sessionModelPinned: boolean;
   onSelect: (entry: ChatModelPickerOption, event: MouseEvent) => void;
-}) {
-  const selected =
-    params.entry.value === params.selectedModelValue ||
-    (params.entry.isDefault && params.selectedModelValue === "");
-  const modelLabel = formatModelLabel(params.entry);
-  const modelMeta = [
-    formatModelContextMeta(params.entry),
-    params.entry.supportsTools === false ? t("chat.modelControls.chatOnly") : "",
-    params.entry.agentRuntimeId ? formatAgentRuntimeLabel(params.entry.agentRuntimeId) : "",
-    params.entry.disabled ? t("modelSetup.candidates.signInNeeded") : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  return html`
-    <button
-      class="chat-controls__inline-select-option chat-controls__model-option ${selected
-        ? "chat-controls__inline-select-option--selected"
-        : ""}"
-      data-chat-model-option=${params.entry.value}
-      data-chat-model-default=${params.entry.isDefault ? "true" : nothing}
-      data-chat-model-index=${params.index}
-      data-chat-model-name=${modelLabel.toLocaleLowerCase()}
-      data-chat-model-provider-label=${providerDisplayLabel(
-        params.entry.provider,
-      ).toLocaleLowerCase()}
-      role="option"
-      aria-selected=${selected ? "true" : "false"}
-      type="button"
-      ?disabled=${params.disabled || params.entry.disabled}
-      @mouseenter=${(event: MouseEvent) =>
-        params.onHighlight(event.currentTarget as HTMLButtonElement)}
-      @click=${(event: MouseEvent) => params.onSelect(params.entry, event)}
-    >
-      <span class="chat-controls__model-option-provider">
-        ${renderChatModelProviderIcon(params.entry.provider)}
-      </span>
-      <span class="chat-controls__model-option-copy">
-        <span class="chat-controls__model-option-title">
-          <span class="chat-controls__model-option-name">${modelLabel}</span>
-          ${params.entry.isDefault
-            ? html`<span
-                class="chat-controls__model-state-label chat-controls__model-state-label--default"
-                >${t("chat.modelControls.default")}</span
-              >`
-            : nothing}
-        </span>
-        ${modelMeta
-          ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
-          : nothing}
-      </span>
-      <span class="chat-controls__model-option-action">
-        ${selected
-          ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
-              >${icons.check}</span
-            >`
-          : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`}
-      </span>
-    </button>
-  `;
-}
+  onModelSetup?: () => void;
+};
 
-export function renderChatModelPickerTargetOption(params: {
+export type ChatModelPickerTargetOptionProps = {
   disabled: boolean;
   entry: ChatModelPickerTargetGroup["options"][number];
   groupId: string;
   groupLabel: string;
   index: number;
-  onHighlight: (row: HTMLButtonElement) => void;
   onSelect: (groupId: string, value: string, event: MouseEvent) => void;
-}) {
-  return html`
-    <button
-      class="chat-controls__inline-select-option chat-controls__model-option"
-      data-chat-model-option=${`target:${params.groupId}:${params.entry.value}`}
-      data-chat-model-target=${params.entry.value}
-      data-chat-model-index=${params.index}
-      data-chat-model-name=${params.entry.label.toLocaleLowerCase()}
-      data-chat-model-provider-label=${params.groupLabel.toLocaleLowerCase()}
-      role="option"
-      aria-selected="false"
-      type="button"
-      ?disabled=${params.disabled}
-      @mouseenter=${(event: MouseEvent) =>
-        params.onHighlight(event.currentTarget as HTMLButtonElement)}
-      @click=${(event: MouseEvent) => params.onSelect(params.groupId, params.entry.value, event)}
-    >
-      <span
-        class="chat-controls__model-option-provider chat-controls__target-icon"
-        aria-hidden="true"
-        >${icons.terminal}</span
-      >
-      <span class="chat-controls__model-option-copy">
-        <span class="chat-controls__model-option-title">
-          <span class="chat-controls__model-option-name">${params.entry.label}</span>
-        </span>
-      </span>
-      <span class="chat-controls__model-option-action">
-        <kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>
-      </span>
-    </button>
-  `;
-}
+};

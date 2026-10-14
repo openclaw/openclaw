@@ -67,6 +67,7 @@ vi.mock("../../media/outbound-attachment.js", () => ({
 vi.mock("./agent-runner-failure-reply.js", () => ({
   buildEmptyInteractiveReplyPayload: vi.fn(() => undefined),
   buildKnownAgentRunFailureReplyPayload: vi.fn(() => undefined),
+  markPostCompactionModelFailurePayload: (_failure: true | undefined, payload: unknown) => payload,
 }));
 
 vi.mock("./agent-runner-execution.js", () => ({
@@ -78,7 +79,7 @@ vi.mock("./agent-runner-memory.js", () => ({
     sessionEntry,
     outcome: "skipped",
   }),
-  runPreflightCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
+  runSessionCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
     sessionEntry,
 }));
 
@@ -101,12 +102,11 @@ vi.mock("./queue.js", async () => {
   };
 });
 
-vi.mock("./session-run-accounting.js", () => ({
-  incrementRunCompactionCount: async () => undefined,
-  persistRunSessionUsage: async () => undefined,
+vi.mock("./session-updates.js", () => ({
+  incrementCompactionCount: async () => undefined,
 }));
 
-const { runReplyAgent } = await import("./agent-runner.js");
+const { runReplyAgent } = await import("./agent-runner-run.js");
 
 type AgentTurnExecutionResult = Awaited<
   ReturnType<typeof import("./agent-runner-execution.js").executeAgentTurn>
@@ -165,70 +165,9 @@ describe("runReplyAgent final MEDIA replies", () => {
     refreshQueuedFollowupSessionMock.mockReset();
     scheduleFollowupDrainMock.mockReset();
 
-    executeAgentTurnMock.mockImplementation(async (params: unknown) => {
-      const { buildReplyPayloads } = await vi.importActual<
-        typeof import("./agent-runner-payloads.js")
-      >("./agent-runner-payloads.js");
-      const runnerParams = params as {
-        replyMediaContext?: {
-          normalizePayload?: (payload: {
-            text?: string;
-            mediaUrl?: string;
-            mediaUrls?: string[];
-          }) => Promise<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
-        };
-      };
-      const normalizeMediaPaths = runnerParams.replyMediaContext?.normalizePayload;
-      if (!normalizeMediaPaths) {
-        throw new Error("runReplyAgent did not pass replyMediaContext to the agent turn");
-      }
-      const { replyPayloads } = await buildReplyPayloads({
-        payloads: [{ text: "here is the chart\nMEDIA:./out/generated.png" }],
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
-        blockStreamingEnabled: false,
-        blockReplyPipeline: null,
-        replyToMode: "all",
-        replyToChannel: "telegram",
-        currentMessageId: "msg-1",
-        messageProvider: "telegram",
-        originatingChannel: "telegram",
-        originatingTo: "chat-1",
-        accountId: "default",
-        normalizeMediaPaths,
-      });
-      const payload = replyPayloads[0];
-      if (!payload) {
-        throw new Error("expected parsed reply payload");
-      }
-      return {
-        runId: "media-test",
-        outcome: { kind: "rejected", payload },
-      } satisfies AgentTurnExecutionResult;
-    });
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl)),
     }));
-  });
-
-  it("normalizes final MEDIA directives through runReplyAgent", async () => {
-    const result = await runReplyAgent(makeRunReplyAgentParams());
-
-    expect(Array.isArray(result)).toBe(false);
-    if (!result || Array.isArray(result)) {
-      throw new Error("expected single reply payload");
-    }
-    expect(result).toMatchObject({
-      text: "here is the chart",
-      mediaUrl: "/tmp/outbound-media/generated.png",
-      mediaUrls: ["/tmp/outbound-media/generated.png"],
-    });
-    expect(executeAgentTurnMock).toHaveBeenCalledOnce();
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
-      path.join("/tmp/workspace", "out", "generated.png"),
-      5 * 1024 * 1024,
-      { mediaAccess: expect.objectContaining({ workspaceDir: "/tmp/workspace" }) },
-    );
   });
 
   it("uses one runReplyAgent media context for block and final MEDIA replies", async () => {

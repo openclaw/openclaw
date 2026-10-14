@@ -4,15 +4,17 @@
  * This module turns normalized MCP server config into stdio, SSE, or
  * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
  */
+import { StringDecoder } from "node:string_decoder";
 import type { SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import {
   buildMcpHttpFetch,
+  buildMcpOAuthHttpFetch,
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
@@ -35,32 +37,63 @@ type ResolvedMcpTransport = {
   detachStderr?: () => void;
 };
 
+const MAX_MCP_STDERR_LINE_BYTES = 8 * 1024;
+
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
-  if (!stderr || typeof stderr.on !== "function") {
+  if (!stderr) {
     return undefined;
   }
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  let truncated = false;
+  let progressTimer: ReturnType<typeof setTimeout> | undefined;
+  const emit = (text: string) => {
+    const tail = truncateUtf8Suffix(text, MAX_MCP_STDERR_LINE_BYTES);
+    const message = `${truncated || tail !== text ? "[stderr line truncated] " : ""}${tail}`.trim();
+    truncated = false;
+    if (message) {
+      logDebug(`bundle-mcp:${serverName}: ${message}`);
+    }
+  };
+  const flushProgress = () => {
+    progressTimer = undefined;
+    const text = pending;
+    pending = "";
+    emit(text);
+  };
   const onData = (chunk: Buffer | string) => {
-    const message =
-      normalizeOptionalString(typeof chunk === "string" ? chunk : String(chunk)) ?? "";
-    if (!message) {
-      return;
+    const decoded = decoder.write(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    const lines = (pending + decoded).split(/[\r\n]/);
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      emit(line);
     }
-    for (const line of message.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        logDebug(`bundle-mcp:${serverName}: ${trimmed}`);
-      }
+    const tail = truncateUtf8Suffix(pending, MAX_MCP_STDERR_LINE_BYTES);
+    truncated ||= tail !== pending;
+    pending = tail;
+    // No-newline progress must stay visible even under continuous writes. Flush
+    // complete characters within 250ms; only finalization ends the UTF-8 decoder.
+    if (pending && !progressTimer) {
+      progressTimer = setTimeout(flushProgress, 250);
+      progressTimer.unref();
+    } else if (!pending) {
+      clearTimeout(progressTimer);
+      progressTimer = undefined;
     }
+  };
+  const finalize = () => {
+    stderr.off("data", onData);
+    stderr.off("end", finalize);
+    stderr.off("close", finalize);
+    clearTimeout(progressTimer);
+    pending += decoder.end();
+    flushProgress();
   };
   stderr.on("data", onData);
-  return () => {
-    if (typeof stderr.off === "function") {
-      stderr.off("data", onData);
-    } else if (typeof stderr.removeListener === "function") {
-      stderr.removeListener("data", onData);
-    }
-  };
+  stderr.on("end", finalize);
+  stderr.on("close", finalize);
+  return finalize;
 }
 
 type SseEventSourceFetch = NonNullable<
@@ -104,6 +137,13 @@ export function resolveMcpTransport(
   if (!resolved) {
     return null;
   }
+  const metadata = {
+    description: resolved.description,
+    transportType: resolved.transportType,
+    connectionTimeoutMs: resolved.connectionTimeoutMs,
+    requestTimeoutMs: resolved.requestTimeoutMs,
+    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+  };
   if (resolved.kind === "stdio") {
     const transport = new OpenClawStdioClientTransport({
       command: resolved.command,
@@ -115,11 +155,7 @@ export function resolveMcpTransport(
     });
     return {
       transport,
-      description: resolved.description,
-      transportType: "stdio",
-      connectionTimeoutMs: resolved.connectionTimeoutMs,
-      requestTimeoutMs: resolved.requestTimeoutMs,
-      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      ...metadata,
       detachStderr: attachStderrLogging(serverName, transport),
     };
   }
@@ -165,8 +201,17 @@ export function resolveMcpTransport(
       ? withMcpOAuthBearer({
           fetchFn: resourceFetch,
           // Protected-resource discovery lives at the resource origin and may
-          // require the same routing headers. Cross-origin auth calls stay scrubbed.
-          authFetchFn: resourceFetch,
+          // require the same routing headers. Resource requests intentionally retain
+          // redirect-body replay for MCP compatibility, while credential-bearing
+          // auth redirects use the stricter fail-closed policy.
+          authFetchFn: buildMcpOAuthHttpFetch({
+            sslVerify: resolved.sslVerify,
+            clientCert: resolved.clientCert,
+            clientKey: resolved.clientKey,
+            resourceUrl: resolved.url,
+            timeoutMs: resolved.requestTimeoutMs,
+            headers,
+          }),
           identity: oauthIdentity,
           config: resolved.oauth,
         })
@@ -177,11 +222,7 @@ export function resolveMcpTransport(
         requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
         fetch: httpFetch,
       }),
-      description: resolved.description,
-      transportType: "streamable-http",
-      connectionTimeoutMs: resolved.connectionTimeoutMs,
-      requestTimeoutMs: resolved.requestTimeoutMs,
-      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      ...metadata,
     };
   }
   const sseHeaders: Record<string, string> = { ...headers };
@@ -194,10 +235,6 @@ export function resolveMcpTransport(
         fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
       },
     }),
-    description: resolved.description,
-    transportType: "sse",
-    connectionTimeoutMs: resolved.connectionTimeoutMs,
-    requestTimeoutMs: resolved.requestTimeoutMs,
-    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+    ...metadata,
   };
 }

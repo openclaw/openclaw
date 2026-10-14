@@ -1,8 +1,9 @@
 {
   "id": "voice-call",
+  "categories": ["voice"],
   "doctorContract": {
     "resolveSessionStoreAgentIds": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "voice-call-calls-jsonl-to-plugin-state" }, { "id": "voice-call-sqlite-schema" }]
   },
   "name": "Voice Call",
   "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
@@ -48,6 +49,11 @@
     "numbers": {
       "label": "Per-number Routing",
       "help": "Inbound overrides keyed by dialed E.164 number.",
+      "advanced": true
+    },
+    "callbacks": {
+      "label": "Realtime Callbacks",
+      "help": "Accept recent outbound recipients as callbacks only when realtime voice is enabled.",
       "advanced": true
     },
     "telnyx.apiKey": {
@@ -149,6 +155,11 @@
       "label": "Realtime Stream Path",
       "advanced": true
     },
+    "realtime.idleHangupMs": {
+      "label": "Realtime Speech Idle Hangup (ms)",
+      "help": "Ends an active realtime call after neither side speaks for this long. Unset disables speech-idle hangup.",
+      "advanced": true
+    },
     "realtime.instructions": {
       "label": "Realtime Instructions",
       "advanced": true
@@ -242,7 +253,7 @@
     },
     "agentId": {
       "label": "Response Agent ID",
-      "help": "Agent workspace used for voice response generation. Defaults to \"main\".",
+      "help": "Agent used for voice responses and session storage. Defaults to the sole configured agent; set explicitly for a multi-agent fleet.",
       "advanced": true
     },
     "sessionScope": {
@@ -263,6 +274,75 @@
       "advanced": true
     }
   },
+  "configGroups": [
+    {
+      "id": "phone-provider",
+      "title": "Phone provider",
+      "order": 10,
+      "properties": ["enabled", "provider", "telnyx", "twilio", "plivo", "fromNumber"]
+    },
+    {
+      "id": "inbound-calls",
+      "title": "Inbound calls",
+      "order": 20,
+      "properties": ["inboundPolicy", "allowFrom", "inboundGreeting", "numbers", "callbacks"]
+    },
+    {
+      "id": "outbound-calls",
+      "title": "Outbound calls",
+      "order": 30,
+      "properties": ["toNumber", "outbound", "reports", "live", "voicemail"]
+    },
+    {
+      "id": "call-limits",
+      "title": "Call limits",
+      "order": 40,
+      "properties": [
+        "maxDurationSeconds",
+        "staleCallReaperSeconds",
+        "silenceTimeoutMs",
+        "transcriptTimeoutMs",
+        "ringTimeoutMs",
+        "maxConcurrentCalls"
+      ]
+    },
+    {
+      "id": "webhook-connection",
+      "title": "Webhook connection",
+      "order": 50,
+      "properties": ["serve", "publicUrl", "tailscale", "tunnel"]
+    },
+    {
+      "id": "webhook-security",
+      "title": "Webhook security",
+      "order": 60,
+      "properties": ["webhookSecurity", "skipSignatureVerification"]
+    },
+    {
+      "id": "speech-and-audio",
+      "title": "Speech and audio",
+      "order": 70,
+      "properties": ["streaming", "realtime", "tts"]
+    },
+    {
+      "id": "agent-responses",
+      "title": "Agent responses",
+      "order": 80,
+      "properties": [
+        "agentId",
+        "sessionScope",
+        "responseModel",
+        "responseSystemPrompt",
+        "responseTimeoutMs"
+      ]
+    },
+    {
+      "id": "call-logs",
+      "title": "Call logs",
+      "order": 90,
+      "properties": ["store"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -382,6 +462,200 @@
           "notifyHangupDelaySec": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "reports": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "includeTranscript": {
+            "type": "boolean",
+            "default": true
+          },
+          "summaryModel": {
+            "type": "string",
+            "minLength": 1
+          },
+          "inboundSessionKey": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "live": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "transcript": {
+            "type": "boolean",
+            "default": false
+          },
+          "minIntervalMs": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 5000
+          }
+        }
+      },
+      "callbacks": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Accept recent outbound recipients as callbacks only when realtime voice is enabled.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "windowMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 60
+          },
+          "greeting": {
+            "type": "string",
+            "minLength": 1
+          },
+          "brief": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Optional task, facts, identity and permissions for a single call; maximum 8000 JSON characters.",
+            "properties": {
+              "task": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "context": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "language": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "identity": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "introduction": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "disclose": {
+                        "type": "string",
+                        "enum": [
+                          "volunteer",
+                          "when-asked"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "introduction"
+                    ]
+                  }
+                ]
+              },
+              "disclosures": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "approvals": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "voicemailMessage": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "successCriteria": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "maxDurationSeconds": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "voicemail": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "machineDetectionSpeechThresholdMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 6000,
+            "default": 6000,
+            "description": "Twilio speech length threshold in milliseconds; the higher default tolerates longer human greetings."
+          },
+          "machineDetectionSpeechEndThresholdMs": {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 5000,
+            "default": 1200,
+            "description": "Twilio silence after speech that ends a greeting, in milliseconds."
+          },
+          "machineDetectionSilenceTimeoutMs": {
+            "type": "integer",
+            "minimum": 2000,
+            "maximum": 10000,
+            "default": 5000,
+            "description": "Twilio initial silence timeout before an unknown result, in milliseconds."
+          },
+          "machineDetectionTimeoutMs": {
+            "type": "integer",
+            "minimum": 3000,
+            "maximum": 59000,
+            "multipleOf": 1000,
+            "default": 30000,
+            "description": "Twilio detection timeout in milliseconds, in whole seconds; sent as MachineDetectionTimeout seconds."
+          },
+          "holdOpeningMaxMs": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30000,
+            "description": "Maximum realtime opening hold with no AMD classification, in milliseconds."
+          },
+          "detection": {
+            "type": "string",
+            "enum": [
+              "off",
+              "twilio"
+            ],
+            "default": "off"
+          },
+          "onMachine": {
+            "type": "string",
+            "enum": [
+              "leave-message",
+              "hang-up"
+            ],
+            "default": "leave-message"
           }
         }
       },
@@ -534,6 +808,10 @@
           },
           "streamPath": {
             "type": "string"
+          },
+          "idleHangupMs": {
+            "type": "integer",
+            "minimum": 1
           },
           "instructions": {
             "type": "string"

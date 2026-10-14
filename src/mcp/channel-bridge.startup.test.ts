@@ -52,7 +52,7 @@ vi.mock("../gateway/client.js", () => ({
   },
 }));
 
-vi.mock("../gateway/client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: vi.fn(async (client: { start: () => void }) => {
     client.start();
     return {
@@ -97,17 +97,19 @@ describe("OpenClawChannelBridge startup", () => {
     await bridge.close();
   });
 
-  it("waits through retryable Gateway startup until hello succeeds", async () => {
+  it("waits for the Gateway hello before completing startup", async () => {
     mockState.autoHello = false;
     const bridge = new OpenClawChannelBridge({} as never, {
       claudeChannelMode: "off",
       verbose: false,
     });
 
-    const started = bridge.start();
+    const onStarted = vi.fn();
+    const started = bridge.start().then(onStarted);
     await vi.waitFor(() => {
       expect(mockState.clientOptions).not.toBeNull();
     });
+    expect(onStarted).not.toHaveBeenCalled();
     expect(mockState.clientOptions?.notifyOnStartupRetry).not.toBe(true);
 
     const onHelloOk = mockState.clientOptions?.onHelloOk;

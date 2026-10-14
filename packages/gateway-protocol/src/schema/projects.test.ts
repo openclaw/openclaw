@@ -54,6 +54,7 @@ describe("project protocol schemas", () => {
             description: "Personal AI assistant",
             cloneUrl: "https://github.com/openclaw/openclaw.git",
             webUrl: "https://github.com/openclaw/openclaw",
+            defaultBranch: "main",
             private: false,
           },
         ],
@@ -81,6 +82,12 @@ describe("project protocol schemas", () => {
             source: "registered",
           },
         ],
+        defaultRepository: {
+          identity: "acme/private-repo",
+          url: "https://ghe.example.test/acme/private-repo.git",
+          ref: "main",
+          profileId: "example-azure",
+        },
         recents: [
           { kind: "project", projectId: "openclaw", displayName: "OpenClaw" },
           { kind: "folder", folder: "/repo/scratch", displayName: "scratch" },
@@ -117,8 +124,18 @@ describe("project protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts projectId as an additive sessions.create parameter", () => {
+  it("accepts bounded project identity and remote URL as additive sessions.create parameters", () => {
     expect(validateSessionsCreateParams({ agentId: "main", projectId: "openclaw" })).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", projectId: "" })).toBe(false);
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        projectGitUrl: "https://github.com/openclaw/openclaw.git",
+      }),
+    ).toBe(true);
+    expect(validateSessionsCreateParams({ agentId: "main", projectGitUrl: "" })).toBe(false);
+    expect(
+      validateSessionsCreateParams({ agentId: "main", projectGitUrl: "x".repeat(2_049) }),
+    ).toBe(false);
   });
 });

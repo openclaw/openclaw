@@ -1,5 +1,8 @@
-// Tavily plugin module implements tavily client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  parseDateStringTimestampMs,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -9,6 +12,7 @@ import {
   resolveCacheTtlMs,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { assertPluginCapabilitySecretAvailable } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
@@ -17,6 +21,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_TAVILY_BASE_URL,
+  TAVILY_API_KEY_CONFIG_PATH,
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
   resolveTavilyExtractTimeoutSeconds,
@@ -40,7 +45,7 @@ const TAVILY_EXTRACT_MAX_RESULTS = 20;
 const TAVILY_RESULT_URL_MAX_CHARS = 2_048;
 const TAVILY_PUBLISHED_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
-export type TavilySearchParams = {
+type TavilySearchParams = {
   cfg?: OpenClawConfig;
   query: string;
   searchDepth?: string;
@@ -54,7 +59,7 @@ export type TavilySearchParams = {
   signal?: AbortSignal;
 };
 
-export type TavilyExtractParams = {
+type TavilyExtractParams = {
   cfg?: OpenClawConfig;
   urls: string[];
   query?: string;
@@ -81,6 +86,26 @@ function normalizeTavilyResultUrl(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function normalizeTavilyPublishedDate(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 31) {
+    return undefined;
+  }
+  if (TAVILY_PUBLISHED_DATE_RE.test(value)) {
+    // Preserve accepted timestamp suffixes while rejecting impossible calendar dates.
+    const calendarDate = value.slice(0, 10);
+    const timestamp = parseDateStringTimestampMs(calendarDate);
+    return timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate)
+      ? value
+      : undefined;
+  }
+  // Tavily news dates use RFC-style GMT. Exact round-tripping rejects prose,
+  // relative ages, and invalid calendar dates before emitting an unwrapped field.
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toUTCString() === value
+    ? date.toISOString()
+    : undefined;
 }
 
 function resolveEndpoint(baseUrl: string, pathname: string): string {
@@ -120,34 +145,24 @@ async function postTavilyJson(params: {
       ...(params.signal ? { signal: params.signal } : {}),
     },
     async (response) =>
-      readTavilyJsonResponse(response, params.errorLabel, {
+      readProviderJsonResponse<Record<string, unknown>>(response, params.errorLabel, {
         maxBytes: params.responseMaxBytes,
       }),
   );
-}
-
-async function readTavilyJsonResponse(
-  response: Response,
-  label: string,
-  opts?: { maxBytes?: number },
-): Promise<Record<string, unknown>> {
-  return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
 }
 
 export async function runTavilySearch(
   params: TavilySearchParams,
 ): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
+  assertPluginCapabilitySecretAvailable(TAVILY_API_KEY_CONFIG_PATH);
   const apiKey = resolveTavilyApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
       "web_search (tavily) needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.",
     );
   }
-  const count =
-    typeof params.maxResults === "number" && Number.isFinite(params.maxResults)
-      ? Math.max(1, Math.min(20, Math.floor(params.maxResults)))
-      : DEFAULT_SEARCH_COUNT;
+  const count = resolveIntegerOption(params.maxResults, DEFAULT_SEARCH_COUNT, { min: 1, max: 20 });
   const timeoutSeconds = resolveTavilySearchTimeoutSeconds(params.timeoutSeconds);
   const baseUrl = resolveTavilyBaseUrl(params.cfg);
 
@@ -165,7 +180,11 @@ export async function runTavilySearch(
       excludeDomains: params.excludeDomains,
     }),
   );
-  const cached = readCache(SEARCH_CACHE, cacheKey);
+  const cacheTtlMs = resolveCacheTtlMs(
+    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
+    DEFAULT_CACHE_TTL_MINUTES,
+  );
+  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
@@ -173,25 +192,13 @@ export async function runTavilySearch(
   const body: Record<string, unknown> = {
     query: params.query,
     max_results: count,
+    ...(params.searchDepth ? { search_depth: params.searchDepth } : {}),
+    ...(params.topic ? { topic: params.topic } : {}),
+    ...(params.includeAnswer ? { include_answer: true } : {}),
+    ...(params.timeRange ? { time_range: params.timeRange } : {}),
+    ...(params.includeDomains?.length ? { include_domains: params.includeDomains } : {}),
+    ...(params.excludeDomains?.length ? { exclude_domains: params.excludeDomains } : {}),
   };
-  if (params.searchDepth) {
-    body.search_depth = params.searchDepth;
-  }
-  if (params.topic) {
-    body.topic = params.topic;
-  }
-  if (params.includeAnswer) {
-    body.include_answer = true;
-  }
-  if (params.timeRange) {
-    body.time_range = params.timeRange;
-  }
-  if (params.includeDomains?.length) {
-    body.include_domains = params.includeDomains;
-  }
-  if (params.excludeDomains?.length) {
-    body.exclude_domains = params.excludeDomains;
-  }
 
   const start = Date.now();
   const payload = await postTavilyJson({
@@ -222,11 +229,7 @@ export async function runTavilySearch(
     if (!url) {
       return [];
     }
-    const published =
-      typeof entry.published_date === "string" &&
-      TAVILY_PUBLISHED_DATE_RE.test(entry.published_date)
-        ? entry.published_date
-        : undefined;
+    const published = normalizeTavilyPublishedDate(entry.published_date);
     return [
       {
         title: typeof entry.title === "string" ? wrapBoundedSearchContent(entry.title) : "",
@@ -258,12 +261,7 @@ export async function runTavilySearch(
     result.truncated = true;
   }
 
-  writeCache(
-    SEARCH_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
+  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
   return result;
 }
 
@@ -271,6 +269,7 @@ export async function runTavilyExtract(
   params: TavilyExtractParams,
 ): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
+  assertPluginCapabilitySecretAvailable(TAVILY_API_KEY_CONFIG_PATH);
   const apiKey = resolveTavilyApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
@@ -296,19 +295,13 @@ export async function runTavilyExtract(
     return { ...cached.value, cached: true };
   }
 
-  const body: Record<string, unknown> = { urls: params.urls };
-  if (params.query) {
-    body.query = params.query;
-  }
-  if (params.extractDepth) {
-    body.extract_depth = params.extractDepth;
-  }
-  if (params.chunksPerSource) {
-    body.chunks_per_source = params.chunksPerSource;
-  }
-  if (params.includeImages) {
-    body.include_images = true;
-  }
+  const body: Record<string, unknown> = {
+    urls: params.urls,
+    ...(params.query ? { query: params.query } : {}),
+    ...(params.extractDepth ? { extract_depth: params.extractDepth } : {}),
+    ...(params.chunksPerSource ? { chunks_per_source: params.chunksPerSource } : {}),
+    ...(params.includeImages ? { include_images: true } : {}),
+  };
 
   const start = Date.now();
   const payload = await postTavilyJson({
@@ -410,8 +403,3 @@ export async function runTavilyExtract(
   );
   return result;
 }
-
-export const testing = {
-  readTavilyJsonResponse,
-  resolveEndpoint,
-};

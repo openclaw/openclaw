@@ -1,34 +1,18 @@
+import type { APIMessageTopLevelComponent } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
-import { buildDiscordMessageRequest } from "./send.message-request.js";
+import { serializePayload } from "./internal/discord.js";
 
 describe("buildDiscordMessageRequest", () => {
-  it("enforces a supplied nonce across retries", () => {
-    const body = buildDiscordMessageRequest({
-      endpoint: "create-message",
-      text: "hello",
-      nonce: "stable-create-nonce",
-    });
+  it.each([
+    { name: "content", content: "forbidden" },
+    { name: "embeds", embeds: [{ title: "forbidden" }] },
+  ])("rejects legacy $name alongside raw Components V2", ({ content, embeds }) => {
+    const components: APIMessageTopLevelComponent[] = [
+      { type: 17, components: [{ type: 10, content: "Choose an action" }] },
+    ];
 
-    expect(body).toMatchObject({
-      content: "hello",
-      nonce: "stable-create-nonce",
-      enforce_nonce: true,
-    });
-  });
-
-  it("adds a nonce for each logical create", () => {
-    const body = buildDiscordMessageRequest({ endpoint: "create-message", text: "hello" });
-
-    expect(body).toMatchObject({
-      content: "hello",
-      enforce_nonce: true,
-    });
-    expect(body.nonce).toMatch(/^[0-9a-f]{24}$/);
-  });
-
-  it("omits create-message nonce fields from forum thread starters", () => {
-    const body = buildDiscordMessageRequest({ endpoint: "forum-thread", text: "hello" });
-
-    expect(body).toEqual({ content: "hello" });
+    expect(() => serializePayload({ content, embeds, components })).toThrow(
+      "Discord Components V2 payloads cannot include content or embeds",
+    );
   });
 });

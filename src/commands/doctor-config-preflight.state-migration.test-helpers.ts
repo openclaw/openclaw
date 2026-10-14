@@ -1,3 +1,16 @@
+export function makePreflightConfigSnapshot(config: Record<string, unknown>) {
+  return {
+    exists: true,
+    valid: true,
+    config,
+    sourceConfig: config,
+    parsed: config,
+    legacyIssues: [],
+    warnings: [],
+    issues: [],
+  };
+}
+
 export type StateMigrationResult = {
   migrated: boolean;
   skipped: boolean;
@@ -6,7 +19,12 @@ export type StateMigrationResult = {
   notices?: string[];
 };
 
+export function makeStateMigrationResult(changes: string[], migrated = true): StateMigrationResult {
+  return { migrated, skipped: false, changes, warnings: [] };
+}
+
 type StartupConvergenceWarning = {
+  kind?: "load" | "repair";
   pluginId?: string;
   reason: string;
   message: string;
@@ -16,7 +34,11 @@ type StartupConvergenceWarning = {
 export type StartupSmokeFailure = {
   pluginId: string;
   installPath?: string;
-  reason: "missing-install-path" | "missing-main-entry" | "unreadable-package-json";
+  reason:
+    | "missing-install-path"
+    | "missing-main-entry"
+    | "missing-package-json"
+    | "unreadable-package-json";
   detail: string;
 };
 
@@ -28,19 +50,6 @@ export type StartupConvergenceResult = {
   smokeFailures: StartupSmokeFailure[];
   installRecords: Record<string, unknown>;
 };
-
-export const stateCheckpointOptions = {
-  migrateState: true,
-  migrateLegacyConfig: false,
-  invalidConfigNote: false,
-  requireStateMigrationCheckpoint: true,
-} as const;
-
-export const startupCheckpointOptions = {
-  migrateLegacyConfig: false,
-  invalidConfigNote: false,
-  requireStartupMigrationCheckpoint: true,
-} as const;
 
 export function makeStartupConvergenceResult(
   overrides: Partial<StartupConvergenceResult> = {},

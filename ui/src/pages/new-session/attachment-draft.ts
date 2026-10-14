@@ -1,24 +1,19 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
-import { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachments.ts";
+import {
+  releaseChatAttachmentPayloads,
+  releaseDisplacedChatAttachmentPayloads,
+} from "../chat/attachment-payload-store.ts";
+import { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachment-reads.ts";
 
 export class NewSessionAttachmentDraft {
   attachments: ChatAttachment[] = [];
-  private readonly reads: ChatAttachmentReadLifecycle;
+  readonly reads: ChatAttachmentReadLifecycle;
 
   constructor(
     private readonly notify: () => void,
     private readonly onUserChange: () => void,
   ) {
     this.reads = new ChatAttachmentReadLifecycle(notify);
-  }
-
-  get pendingReads(): number {
-    return this.reads.pendingReads;
-  }
-
-  get readSignal() {
-    return this.reads.readSignal;
   }
 
   replace(attachments: ChatAttachment[]) {
@@ -28,33 +23,22 @@ export class NewSessionAttachmentDraft {
   }
 
   restore(attachments: ChatAttachment[]) {
+    releaseDisplacedChatAttachmentPayloads(this.attachments, [attachments]);
     this.attachments = attachments;
     this.notify();
   }
 
-  updatePending(readSignal: AbortSignal, delta: 1 | -1) {
-    this.reads.updatePending(readSignal, delta);
-  }
-
-  abortReads() {
-    this.reads.abortReads();
-  }
-
   take(): ChatAttachment[] {
-    this.abortReads();
+    this.reads.abortReads();
     const attachments = this.attachments;
     this.attachments = [];
     this.notify();
     return attachments;
   }
 
-  reset(options: { release: boolean }) {
-    this.abortReads();
-    if (options.release) {
-      releaseChatAttachmentPayloads(this.attachments);
-    }
-    this.attachments = [];
-    this.notify();
+  reset() {
+    this.reads.abortReads();
+    this.clearAfterSubmit(true);
   }
 
   clearAfterSubmit(release: boolean) {
