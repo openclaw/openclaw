@@ -91,6 +91,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
     stableStringify(execution.conversationToolPolicy ?? null),
     execution.senderE164 ?? "",
     execution.senderIsOwner === true,
+    Boolean(run.createChannelCronAuthority),
     execution.execOverrides?.host ?? "",
     execution.execOverrides?.security ?? "",
     execution.execOverrides?.ask ?? "",
@@ -270,6 +271,7 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "sourceTurnId"
+  | "createChannelCronAuthority"
   | "operatorAuthority"
   | "personalBootstrapEligible"
   | "currentInboundEventKind"
@@ -389,6 +391,7 @@ export function collectRuntimeMetadata(
   ];
   return {
     sourceTurnId: authoritySource?.sourceTurnId,
+    createChannelCronAuthority: authoritySource?.createChannelCronAuthority,
     operatorAuthority: authoritySource?.operatorAuthority,
     ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
       ? { personalBootstrapEligible: true }
@@ -460,6 +463,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
   return {
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
+    createChannelCronAuthority: source.createChannelCronAuthority,
     admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
     personalBootstrapEligible: source.personalBootstrapEligible,
