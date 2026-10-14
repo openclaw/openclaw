@@ -157,6 +157,13 @@
   overflow: hidden;
 }
 
+@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-main__conversation {
+    /* Inline menus keep their original space without shifting the transcript. */
+    --chat-composer-min-height: 112px;
+  }
+}
+
 .chat-footer {
   position: relative;
   display: flex;
