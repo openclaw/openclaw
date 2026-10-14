@@ -393,25 +393,35 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
             )?.[1];
           }
         }
+        let repaired = false;
         if (needsIntegrityCheck) {
           if (!remote) {
             continue;
           }
-          if (params.retryDeferred) {
-            // Explicit repair can recover unpromised live/index objects before admission.
+          // A snapshot needs every blob locally; pack maintenance does not.
+          // Native fsck accepts promised omissions but still checks pack checksums.
+          const verify = () =>
+            withContentGitSlot(
+              () => requireGit(repoRoot, ["fsck", "--full", "--no-dangling"], options),
+              params.signal,
+            );
+          try {
+            await verify();
+          } catch (error) {
+            assertCurrent();
+            if (!params.retryDeferred) {
+              throw error;
+            }
+            // Recover unpromised live/index objects only on explicit retry.
             stage = "objects";
             await withContentGitSlot(
               () => repairWorktreeObjects(repoRoot, remote, params),
               params.signal,
             );
+            repaired = true;
             stage = "packs";
+            await verify();
           }
-          // A snapshot needs every blob locally; pack maintenance does not.
-          // Native fsck accepts promised omissions but still checks pack checksums.
-          await withContentGitSlot(
-            () => requireGit(repoRoot, ["fsck", "--full", "--no-dangling"], options),
-            params.signal,
-          );
         }
         // Repair lookup before traversing objects: interrupted writers can leave
         // the MIDX referring to pack files that no longer exist.
@@ -419,7 +429,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
         stage = "objects";
         // Only an explicit repair pass may fetch. Successful batches remain in
         // Git if interrupted; the next retry inventories only what is missing.
-        if (params.retryDeferred && remote && !needsIntegrityCheck) {
+        if (params.retryDeferred && remote && !repaired) {
           await withContentGitSlot(
             () => repairWorktreeObjects(repoRoot, remote, params),
             params.signal,

@@ -164,7 +164,7 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   }
 });
 
-it.each(["promised", "unpromised", "checksum"] as const)(
+it.each(["promised", "promised-retry", "unpromised", "checksum"] as const)(
   "maintains deferred partial-clone packs only when missing objects are promised (%s)",
   async (damage) => {
     const root = tempDirs.make("worktree-partial-clone-deferral-");
@@ -197,6 +197,14 @@ it.each(["promised", "unpromised", "checksum"] as const)(
     for (const record of records) {
       await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
       await fs.writeFile(path.join(record.path, "missing.txt"), "omitted blob\n");
+    }
+    if (damage === "promised-retry") {
+      // Persist the snapshot failure before explicitly retrying with an offline remote.
+      await new ManagedWorktreeService({
+        env,
+        now: () => IDLE_GC_MS + 2,
+        getConfig: () => ({}),
+      }).gc();
     }
     const directory = path.join(repo, ".git", "objects", "pack");
     const objects: string[] = [];
@@ -245,19 +253,19 @@ it.each(["promised", "unpromised", "checksum"] as const)(
         now: () => IDLE_GC_MS + 2,
         getConfig: () => ({}),
       });
-      const result = await service.gc();
+      const result = await service.gc({ retryDeferred: damage === "promised-retry" });
       expect(result.removed).toEqual([]);
       expect(result.failedCount).toBe(1);
       expect(result.deferredCount).toBe(1);
       const after = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
-      expect(after.length).toBe(damage === "promised" ? 1 : before.length);
+      expect(after.length).toBe(damage.startsWith("promised") ? 1 : before.length);
       for (const record of records) {
         expect(await fs.readFile(path.join(record.path, "missing.txt"), "utf8")).toBe(
           "omitted blob\n",
         );
         expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
       }
-      if (damage === "promised") {
+      if (damage.startsWith("promised")) {
         expect(await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"])).toBe(
           missing,
         );
@@ -268,7 +276,9 @@ it.each(["promised", "unpromised", "checksum"] as const)(
         ).not.toContain("missing");
         await requireGit(repo, ["multi-pack-index", "verify"]);
       }
-      expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+      if (damage !== "promised-retry") {
+        expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+      }
       if (damage === "unpromised") {
         await requireGit(repo, ["remote", "set-url", "origin", source]);
         const repaired = await service.gc({ retryDeferred: true });
