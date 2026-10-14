@@ -277,6 +277,36 @@ select a registered project or enter the correct repository path. Select
 **Start in a new worktree** again to continue; no child session is started for
 an invalid source folder.
 
+## Composer predictions
+
+Enable **Settings → Labs → Composer predictions** to try optional next-message
+suggestions. The experiment is off by default. After a reply finishes in the
+active conversation, OpenClaw can make one additional model request and show a
+possible follow-up as muted text in an empty composer. It may show no suggestion.
+It does not predict on every keystroke. Each active browser tab can make its own
+prediction request. Read-only, imported, and incognito conversations do not show
+predictions.
+
+Press **Tab** or select **Use suggestion** to copy the suggestion into your draft.
+This never sends it: you can edit or undo it before sending normally. **Escape**,
+**Dismiss suggestion**, or typing your own message dismisses it. Suggestions are
+not saved as messages or collaborator drafts until you accept them. Switching
+conversations, hiding the page, or starting another turn discards pending results.
+
+The Labs model selector offers:
+
+- **Utility model** (default): use the agent's configured utility model. A fast,
+  inexpensive model is usually the best fit for this short, optional task.
+- **Conversation model**: use the model selected for this conversation.
+- **Default model**: use the agent's configured default model, ignoring the
+  conversation's model override.
+
+Predictions use bounded recent text from the current conversation in an isolated,
+tool-free request. They cannot run tools, retrieve memory, or send messages. An
+unavailable selected model skips the suggestion rather than silently switching
+to another model. Enabling the experiment can add model usage and cost; existing
+model configuration, provider credentials, and session access rules still apply.
+
 ## Composer capability menu
 
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
