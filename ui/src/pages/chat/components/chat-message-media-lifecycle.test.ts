@@ -191,10 +191,7 @@ describe("chat media resource lifecycle", () => {
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
       oldImage.resolve({ url: "data:image/png;base64,b2xk" });
       await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(http ? 0 : 1);
-      if (!http) {
-        expect(fetchMock.mock.calls[0]?.[0]).toBe(imageSource);
-      }
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(http ? [] : [imageSource]);
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
 
       options.connectionEpoch = 2;
@@ -205,10 +202,9 @@ describe("chat media resource lifecycle", () => {
         { sessionKey: "second-session", artifactId, variant: "thumbnail" },
         { sessionKey: "second-session", artifactId, variant: "thumbnail" },
       ]);
-      expect(fetchMock).toHaveBeenCalledTimes(http ? 0 : 2);
-      if (!http) {
-        expect(fetchMock.mock.calls[1]?.[0]).toBe(imageSource);
-      }
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
+        http ? [] : [imageSource, imageSource],
+      );
       render(null, container);
     },
   );

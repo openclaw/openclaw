@@ -347,7 +347,7 @@ describe("attachment sidebar source ownership", () => {
     expect(container.querySelector("img.chat-message-image")?.getAttribute("alt")).toBe(
       "Renamed vector",
     );
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([source]);
     svg.label = "vector.svg";
     await svg.updateComplete;
     expect(container.querySelector("iframe")).toBeNull();
