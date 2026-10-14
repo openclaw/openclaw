@@ -1,22 +1,13 @@
+import type {
+  ColdLoadProbeInput,
+  createColdLoadFrameProbe,
+} from "./control-ui-cold-load-probe-init.ts";
+
 /** Serialized after the mock Gateway, before application modules execute. */
-export function installColdLoadProbes(input: {
-  latencyMs: number;
-  frameGapMs: number;
-  events: Array<{ event: string; payload: unknown }>;
-  liveEvents?: Array<{
-    atMs: number;
-    kind: string;
-    event: string;
-    payload: unknown;
-    history?: { text?: string; message?: unknown };
-  }>;
-  liveHistory?: {
-    sessionId: string;
-    sessionInfo: unknown;
-    messages: unknown[];
-    inFlightRun: { runId: string; text: string; startedAt: number; events: unknown[] };
-  };
-}) {
+export function installColdLoadProbes(
+  input: ColdLoadProbeInput,
+  createFrameProbe: typeof createColdLoadFrameProbe,
+) {
   Reflect.set(Error, "stackTraceLimit", 40);
   const updates = new Map<string, { count: number; ms: number }>();
   const rpcs: Array<{
@@ -41,10 +32,8 @@ export function installColdLoadProbes(input: {
   const liveUpdates = new Map<string, Map<string, { count: number; ms: number }>>();
   const liveStacks = new Map<string, number>();
   const liveOrigins = new Map<string, number>();
-  let liveInvalidatorOwner:
-    | { requestSessionDataUpdate: (...args: unknown[]) => unknown }
-    | undefined;
-  let originalLiveInvalidator: ((...args: unknown[]) => unknown) | undefined;
+  let liveInvalidatorOwner: SessionDataProbeOwner | undefined;
+  let originalLiveInvalidator: ProbeMethod | undefined;
   type SessionDataProbeOwner = {
     requestSessionDataUpdate: (...args: unknown[]) => unknown;
   };
@@ -87,61 +76,10 @@ export function installColdLoadProbes(input: {
   const chatOwners = new Map<HTMLElement, ChatOwnerRecord>();
   const chatLifecycle = new Map<string, Map<string, Map<string, { count: number; ms: number }>>>();
   const chatProducerStacks = new Map<string, number>();
-  type LiveDeliveryOrigin = {
-    index: number;
-    kind: string;
-    event: string;
-    plannedAtMs: number;
-    queuedAtMs: number;
-    deliveredAtMs: number;
-  };
-  type FrameOrigin = {
-    id: number;
-    frameId: number;
-    scheduledAtMs: number;
-    schedulingStack: string;
-    delivery: LiveDeliveryOrigin | null;
-    parentId: number | null;
-  };
-  let activeLiveDelivery: LiveDeliveryOrigin | null = null;
-  let activeFrameOrigin: FrameOrigin | null = null;
-  const frameOrigins = new Map<number, FrameOrigin>();
-  const frameProbe = {
-    original: window.requestAnimationFrame,
-    request(this: Window, callback: FrameRequestCallback): number {
-      if (frameOrigins.size >= 5000) {
-        throw new Error("Live frame scheduling origin limit exceeded");
-      }
-      const origin: FrameOrigin = {
-        id: frameOrigins.size + 1,
-        frameId: 0,
-        scheduledAtMs: performance.now() - liveStartedAt,
-        schedulingStack: new Error().stack?.split("\n").slice(2, 18).join(" <- ") ?? "",
-        delivery: activeLiveDelivery,
-        parentId: activeFrameOrigin?.id ?? null,
-      };
-      origin.frameId = frameProbe.original.call(this, function (this: unknown, timestamp: number) {
-        const previous = activeFrameOrigin;
-        activeFrameOrigin = liveStartedAt && !liveFinishedAt ? origin : null;
-        try {
-          callback.call(this, timestamp);
-        } finally {
-          activeFrameOrigin = previous;
-        }
-      });
-      frameOrigins.set(origin.id, origin);
-      return origin.frameId;
-    },
-    install() {
-      // oxlint-disable-next-line typescript/unbound-method -- Installed as a window method; forwards that receiver to the native frame owner.
-      window.requestAnimationFrame = frameProbe.request;
-    },
-    restore() {
-      if (window.requestAnimationFrame === frameProbe.request) {
-        window.requestAnimationFrame = frameProbe.original;
-      }
-    },
-  };
+  const frameProbe = createFrameProbe(() => ({
+    startedAt: liveStartedAt,
+    finishedAt: liveFinishedAt,
+  }));
   const chatRequests = new Map<
     number,
     { tag: string; producer: string; frameOriginId: number | null }
@@ -215,7 +153,7 @@ export function installColdLoadProbes(input: {
           tag: record.host.localName,
           producer: key,
           // Null includes callbacks queued before live instrumentation; never infer their caller.
-          frameOriginId: activeFrameOrigin?.id ?? null,
+          frameOriginId: frameProbe.currentOriginId(),
         });
         record.pendingRequests.set(id, key);
         record.queuedRequests.set(id, key);
@@ -370,8 +308,7 @@ export function installColdLoadProbes(input: {
         ),
         producerStacks: Object.fromEntries(chatProducerStacks),
         requests: Object.fromEntries(chatRequests),
-        frameOrigins: Object.fromEntries(frameOrigins),
-        frameOriginCoverage: "captured-live-schedules-only; pre-live-frames-have-null-origin",
+        ...frameProbe.read(),
         passes: chatPasses,
         pendingProducers: [...chatOwners.values()].map((record) => ({
           tag: record.host.localName,
@@ -474,15 +411,6 @@ export function installColdLoadProbes(input: {
   let emittingLiveEvent:
     | { index: number; kind: string; event: string; plannedAtMs: number; queuedAtMs: number }
     | undefined;
-  const liveDeliveries: Array<{
-    index: number;
-    kind: string;
-    event: string;
-    plannedAtMs: number;
-    queuedAtMs: number;
-    deliveredAtMs: number;
-    gapMs: number | null;
-  }> = [];
   const patchedRequests = new WeakSet<object>();
   const patched = new WeakSet<object>();
   const define = customElements.define.bind(customElements);
@@ -620,21 +548,10 @@ export function installColdLoadProbes(input: {
               ? { ...liveEvent, deliveredAtMs: performance.now() - liveStartedAt }
               : null;
             if (delivery) {
-              const previous = liveDeliveries.at(-1);
-              liveDeliveries.push({
-                ...delivery,
-                gapMs: previous ? delivery.deliveredAtMs - previous.deliveredAtMs : null,
-              });
               liveKind = delivery.kind;
               liveEvents.set(delivery.kind, (liveEvents.get(delivery.kind) ?? 0) + 1);
             }
-            const previousDelivery = activeLiveDelivery;
-            activeLiveDelivery = delivery;
-            try {
-              dispatch(event);
-            } finally {
-              activeLiveDelivery = previousDelivery;
-            }
+            frameProbe.withDelivery(delivery, () => dispatch(event));
             lastActivity = performance.now();
           },
           Math.max(0, nextFrameAt - performance.now()),
@@ -770,17 +687,7 @@ export function installColdLoadProbes(input: {
         elapsedMs: (liveFinishedAt || performance.now()) - liveStartedAt,
         sentEvents: [...liveEvents.values()].reduce((sum, count) => sum + count, 0),
         events: Object.fromEntries(liveEvents),
-        deliveryCadence: {
-          events: liveDeliveries,
-          adjacentGapThresholdMs: 16,
-          shortAdjacentGaps: liveDeliveries.filter(
-            (delivery) => delivery.gapMs !== null && delivery.gapMs < 16,
-          ).length,
-          maxLatenessMs: Math.max(
-            0,
-            ...liveDeliveries.map((delivery) => delivery.deliveredAtMs - delivery.plannedAtMs),
-          ),
-        },
+        deliveryCadence: frameProbe.readDeliveryCadence(),
         updates: Object.fromEntries(
           [...liveUpdates].map(([kind, tags]) => [kind, Object.fromEntries(tags)]),
         ),

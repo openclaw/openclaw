@@ -16,7 +16,9 @@ import type { SolidController } from "../lit/solid-controller-host.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   discardEmptyChildSessionSnapshot,
-  hydrateSidebarChildSessions,
+  applySidebarChildSessionSnapshot,
+  finishSidebarChildSessionLoad,
+  type SidebarChildSessionQuery,
   retireStaleChildSessionRows,
   scheduleSidebarChildSessions,
 } from "./app-sidebar-child-session-data.ts";
@@ -62,15 +64,6 @@ import { SessionDataScrollController } from "./session-data-scroll-controller.ts
 import { SessionLineageController } from "./session-lineage-controller.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 
-type ChildSessionQuery = {
-  observation?: ReturnType<SessionCapability["observeList"]>;
-  result?: SessionsListResult;
-  loading?: boolean;
-  childRead?: ReturnType<SessionLineageController["captureChildRead"]>;
-  hydration?: Promise<void>;
-  refresh?: Promise<void>;
-};
-
 /** Gateway-backed session-list and external-catalog data ownership. */
 export class SessionDataController implements SolidController, SessionCatalogDataOwner {
   sessionCatalogs: SessionCatalog[] = [];
@@ -112,7 +105,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   private unsubscribeFilteredSessions: (() => void) | null = null;
   childSessionScope = {};
   private childSessionCanonicalListRevision: number | null = null;
-  private readonly childSessionQueries = new Map<string, ChildSessionQuery>();
+  private readonly childSessionQueries = new Map<string, SidebarChildSessionQuery>();
   private stopCatalogBrowserEvents: (() => void) | null = null;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayConnectionRevision = 0;
@@ -410,13 +403,9 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     }
   }
 
-  handleSessionCatalogHostEvent(payload: unknown): void {
-    applySessionCatalogHostEventToData(this, payload);
-  }
+  handleSessionCatalogHostEvent = applySessionCatalogHostEventToData.bind(null, this);
 
-  handleSessionCatalogChanged(payload: unknown): void {
-    applySessionCatalogChangedToData(this, payload);
-  }
+  handleSessionCatalogChanged = applySessionCatalogChangedToData.bind(null, this);
 
   private readonly handleCatalogSessionContinued = (
     event: CustomEvent<CatalogSessionContinuedDetail>,
@@ -428,7 +417,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     scheduleSessionCatalogRefresh(this);
   };
 
-  invalidateSessionCatalogs = () => invalidateSessionCatalogData(this);
+  invalidateSessionCatalogs = invalidateSessionCatalogData.bind(null, this);
 
   archiveSessionCatalog = archiveSessionCatalogData.bind(null, this);
 
@@ -443,9 +432,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     return this.scroll.state;
   }
 
-  updateSessionsScrollState(element: HTMLElement): void {
-    this.scroll.update(element);
-  }
+  updateSessionsScrollState = this.scroll.update.bind(this.scroll);
 
   private resetChildSessionState(preserveOperatorContext = false): void {
     for (const query of this.childSessionQueries.values()) {
@@ -656,78 +643,26 @@ export class SessionDataController implements SolidController, SessionCatalogDat
       return;
     }
     const scope = { ...childSessionListQuery(parentKey), source: "sidebar" as const };
-    const query: ChildSessionQuery = {};
+    const query: SidebarChildSessionQuery = {};
     this.childSessionQueries.set(parentKey, query);
     const isCurrent = () =>
       this.host.isConnected &&
       sessions === this.context?.sessions &&
       this.childSessionQueries.get(parentKey) === query;
-    query.observation = sessions.observeList(scope, (snapshot) => {
-      if (!isCurrent()) {
-        return;
-      }
-      if (snapshot.loading) {
-        if (!query.loading) {
-          query.childRead = this.lineage.captureChildRead(scope);
-        }
-        query.loading = true;
-        this.loadingChildSessionKeys = new Set([...this.loadingChildSessionKeys, parentKey]);
-        this.requestSessionDataUpdate();
-        return;
-      }
-      if (snapshot.error) {
-        if (retry && !query.observation) {
-          return;
-        }
-        query.loading = false;
-        this.childSessionErrorsByParent = new Map(this.childSessionErrorsByParent).set(
-          parentKey,
-          snapshot.error,
-        );
-        this.finishChildSessionLoad(parentKey);
-        return;
-      }
-      const result = snapshot.result;
-      const refreshed = query.loading || !query.result;
-      query.loading = false;
-      if (!result) {
-        return;
-      }
-      if (!refreshed) {
-        // A sibling observation can update held row fields without a new page.
-        // Project those facts without restarting pagination or read admission.
-        const rows = this.childSessionRowsByParent[parentKey];
-        if (rows) {
-          const current = sessions.projectRows(rows);
-          if (current.some((row, index) => row !== rows[index])) {
-            this.childSessionRowsByParent = {
-              ...this.childSessionRowsByParent,
-              [parentKey]: current,
-            };
-            this.requestSessionDataUpdate();
-          }
-        }
-        return;
-      }
-      query.result = result;
-      if (query.hydration) {
-        return;
-      }
-      query.hydration = hydrateSidebarChildSessions({
+    query.observation = sessions.observeList(
+      scope,
+      applySidebarChildSessionSnapshot.bind(null, {
         owner: this,
-        parentKey,
         sessions,
-        initialResult: result,
-        childRead: query.childRead ?? this.lineage.captureChildRead(scope),
-        ownsQuery: isCurrent,
+        parentKey,
+        query,
+        retry,
+        isCurrent,
+        captureChildRead: () => this.lineage.captureChildRead(scope),
         selectedKey: () => this.lineage.routeKey,
-      }).finally(() => {
-        if (isCurrent()) {
-          query.hydration = undefined;
-          this.finishChildSessionLoad(parentKey);
-        }
-      });
-    });
+        finishLoad: () => this.finishChildSessionLoad(parentKey),
+      }),
+    );
     if (!isCurrent()) {
       query.observation.dispose();
       return;
@@ -745,23 +680,16 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     await query.hydration;
   }
 
-  private finishChildSessionLoad(parentKey: string): void {
-    if (this.childSessionErrorsByParent.has(parentKey)) {
-      const loaded = new Set(this.loadedChildSessionKeys);
-      loaded.delete(parentKey);
-      this.loadedChildSessionKeys = loaded;
+  private readonly finishChildSessionLoad = finishSidebarChildSessionLoad.bind(
+    null,
+    this,
+    (parentKey: string) => {
       this.childSessionQueries.get(parentKey)?.observation?.dispose();
       this.childSessionQueries.delete(parentKey);
-    }
-    const next = new Set(this.loadingChildSessionKeys);
-    next.delete(parentKey);
-    this.loadingChildSessionKeys = next;
-    this.requestSessionDataUpdate();
-  }
+    },
+  );
 
-  loadActiveSessionLineage(sessionKey: string): Promise<void> {
-    return this.lineage.load(sessionKey);
-  }
+  loadActiveSessionLineage = this.lineage.load.bind(this.lineage);
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
     this.visibleSessionLimits = new Map(this.visibleSessionLimits).set(sectionId, limit);

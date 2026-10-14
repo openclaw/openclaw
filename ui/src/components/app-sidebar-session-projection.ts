@@ -1,9 +1,22 @@
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { GatewaySessionRow } from "../api/types.ts";
+import type { PresencePayload } from "../app/user-profile.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
   groupSidebarSessionRows,
   type SidebarSessionSection,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-sidebar-presence.ts";
+import {
+  catalogSessionActivity,
+  catalogSessionRowsByKey,
+  type SidebarSessionCatalog,
+} from "./app-sidebar-session-catalogs.ts";
+import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import { visibleSessionChildren } from "./app-sidebar-session-row-render.tsx";
+import { sidebarChildSessionParents } from "./app-sidebar-session-snooze-visibility.ts";
 import {
   SIDEBAR_SESSION_PAGE_SIZE,
   type SidebarEmptyGroupsMode,
@@ -12,7 +25,10 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
+import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { resolveSidebarSessionSubtitle } from "./session-row-subtitle.ts";
+import { summarizeTeamSessionSlots } from "./solid/session-presentation.tsx";
 
 const SIDEBAR_CREATED_ORDER_CAP = 1_000;
 // Ambient subtitle sources (observer digest, narration, work path) race at
@@ -60,6 +76,15 @@ export type SidebarVisibleSections = {
   visibleRows: SidebarRecentSession[];
 };
 
+type SidebarPresentationHost = Readonly<AppSidebarSessionNavigationElement>;
+type SidebarPresentationReaders = {
+  sections(): SidebarVisibleSections["sections"];
+  tree(): SidebarRecentSession[];
+  catalogs(): SidebarSessionCatalog[];
+  catalogRows(): GatewaySessionRow[];
+  ownerOptions(): readonly SessionOwnerOption[];
+};
+
 /** Attention, agent-declared status, and the queued explanation are messages
  * the operator must act on; they replace a held subtitle immediately. */
 function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
@@ -75,6 +100,216 @@ export class SidebarSessionProjection {
     private readonly now: () => number = () => Date.now(),
     private readonly host?: { readonly isConnected: boolean; requestUpdate(): void },
   ) {}
+
+  // Record frame admission only; owner.updated can precede child DOM bindings.
+  private publishedSessionPresentation = "";
+  private admittedPresencePresentation = "";
+
+  shouldPublishSessionData(
+    host: SidebarPresentationHost,
+    readers: SidebarPresentationReaders,
+  ): boolean {
+    if (host.sidebarSnapshot) {
+      return true;
+    }
+    const data = host.sessionData;
+    const sessionsVisible = host.navigationView === "sessions" && !host.contextualSidebar;
+    const chip = host.activeChipAgent();
+    const replacement =
+      sessionsVisible && host.sessionDataContext?.plugins.selectedReplacement("session-list");
+    const navigation = host.getSessionNavigationState();
+    const sections = sessionsVisible ? readers.sections() : [];
+    const roster =
+      sessionsVisible && host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+    const rosterSnapshot =
+      sessionsVisible && host.sidebarAgentsMode === "roster" && host.sessionDataContext
+        ? rosterActivityStore(host.sessionDataContext).snapshot
+        : null;
+    const catalogs = host.sessionCatalogRowsVisible ? readers.catalogs() : null;
+    const catalogRowsByKey = catalogSessionRowsByKey(catalogs?.length ? readers.catalogRows() : []);
+    const presentation = JSON.stringify([
+      host.navigationView,
+      host.connected,
+      host.sessionDataContext?.gateway.snapshot.hello,
+      host.sessionDataContext?.agents.state.agentsList,
+      host.sidebarAgentsMode === "chip" ? chip.identity : null,
+      host.sidebarAgentsMode === "chip" && host.otherAgentsHaveUnread(),
+      host.sidebarMenus.agentMenuPosition !== null
+        ? chip.agents.map(({ id }) => [
+            chip.identities.get(normalizeAgentId(id)),
+            host.agentUnreadCount(id),
+          ])
+        : null,
+      host.sessionDataContext?.plugins.registryStatus,
+      host.pluginNavigation().map(({ key, value }) => [key, value]),
+      Boolean(replacement),
+      replacement ? host.sessionDataContext?.sessions.state.result?.sessions : null,
+      host.sessionDataContext?.sessions.groupsStatus(),
+      host.sessionDataContext?.sessions.state.error,
+      host.sessionDataContext?.sessions.eventSubscriptionError,
+      host.sessionDataContext?.sessions.state.groupSettings,
+      rosterSnapshot && [
+        rosterSnapshot.cards.map(({ id, name, avatar, textAvatar }) => [
+          id,
+          name,
+          avatar,
+          textAvatar,
+        ]),
+        rosterSnapshot.loading,
+        rosterSnapshot.error,
+        rosterSnapshot.subscriptionError,
+      ],
+      readers.ownerOptions(),
+      host.sessionOwnershipVisibility,
+      data.sessionsLoading,
+      data.sessionsStartupPending,
+      data.sessionsResult?.hasMore,
+      data.sessionMutationError,
+      data.sessionCatalogRefreshStatus,
+      [...data.loadingMoreSessionCatalogIds],
+      [...data.childSessionErrorsByParent],
+      catalogs
+        ? [
+            catalogs,
+            catalogs.map((catalog) =>
+              catalogSessionActivity(
+                catalog.visibleHosts.flatMap((catalogHost) => catalogHost.sessions),
+                catalogRowsByKey,
+                (row) => host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
+              ),
+            ),
+            Array.from(
+              host.querySelectorAll<HTMLElement>("[data-catalog-session-key][data-session-key]"),
+              (element) => {
+                const row = catalogRowsByKey.get(element.dataset.sessionKey ?? "");
+                return row ? navigation.toSidebarSession(row) : null;
+              },
+            ),
+            areSessionCatalogsSettled(data),
+            [...data.visibleSessionLimits],
+          ]
+        : null,
+      [data.ownerCounts.counts && [...data.ownerCounts.counts], data.ownerCounts.error],
+      this.admittedPresencePresentation,
+      sessionsVisible
+        ? [
+            readers.tree().map(({ children: _children, ...row }) => row),
+            sections.map(({ rows: sectionRows, ...header }) => [
+              header,
+              summarizeTeamSessionSlots(sectionRows, true),
+              sectionRows.reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
+            ]),
+          ]
+        : null,
+      sessionsVisible
+        ? (host.sidebarAgentsMode === "chip"
+            ? [host.expandedAgentId()]
+            : (roster?.agentIds ?? [])
+          ).map((id) => {
+            const row = host.mainSessionRow(id);
+            if (!row) {
+              return null;
+            }
+            const { children: _children, ...home } = host.projectHomeSession(row, id);
+            return home;
+          })
+        : null,
+    ]);
+    if (presentation === this.publishedSessionPresentation) {
+      return false;
+    }
+    this.publishedSessionPresentation = presentation;
+    return true;
+  }
+
+  samePresence(
+    previous: PresencePayload | undefined,
+    next: PresencePayload | undefined,
+    scope: SidebarPresenceScope,
+  ): boolean {
+    this.admittedPresencePresentation = sidebarPresencePresentation(next, scope);
+    return (
+      previous === next ||
+      sidebarPresencePresentation(previous, scope) === this.admittedPresencePresentation
+    );
+  }
+
+  refreshPresencePresentation(host: SidebarPresentationHost, scope: SidebarPresenceScope): void {
+    this.admittedPresencePresentation = sidebarPresencePresentation(
+      host.sessionData.presencePayload,
+      scope,
+    );
+    host.sessionData.requestSessionDataUpdate();
+  }
+
+  visibleTree(
+    roots: SidebarRecentSession[],
+    host: Pick<
+      SidebarPresentationHost,
+      "isSessionChildrenExpanded" | "isSessionChildrenFullyShown"
+    >,
+  ): SidebarRecentSession[] {
+    const rows: SidebarRecentSession[] = [];
+    const append = (session: SidebarRecentSession) => {
+      rows.push(session);
+      if (host.isSessionChildrenExpanded(session)) {
+        visibleSessionChildren({
+          session,
+          fullyShown: host.isSessionChildrenFullyShown(session.key),
+        }).forEach(append);
+      }
+    };
+    roots.forEach(append);
+    return rows;
+  }
+
+  visibleRowsInOrder(
+    zone: ReturnType<AppSidebarSessionNavigationElement["reconciledSidebarZone"]>,
+    visibleRows: SidebarRecentSession[],
+  ): SidebarRecentSession[] {
+    const pinnedRows = zone.entries.flatMap((entry) => {
+      const row = entry.type === "session" ? zone.sessionRows.get(entry.key) : undefined;
+      return row ? [row] : [];
+    });
+    return [...pinnedRows, ...visibleRows];
+  }
+
+  childSessionParents(rows: SidebarRecentSession[], host: SidebarPresentationHost): Set<string> {
+    const grouped = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+    const homeAgents = grouped
+      ? grouped.agentIds.filter((id) => !grouped.collapsedAgentIds.has(id))
+      : [host.expandedAgentId()];
+    return sidebarChildSessionParents(rows, homeAgents, host);
+  }
+
+  mainSessionRow(
+    mainKey: string,
+    rows: readonly GatewaySessionRow[],
+    lineage: GatewaySessionRow | null,
+  ): GatewaySessionRow | null {
+    return (
+      (lineage ? [...rows, lineage] : rows).find((row) =>
+        areUiSessionKeysEquivalent(row.key, mainKey),
+      ) ?? null
+    );
+  }
+
+  agentUnreadCount(
+    agentId: string,
+    rows: readonly GatewaySessionRow[],
+    host: SidebarPresentationHost,
+  ): number {
+    return rows.filter(
+      (row) => row.unread && !row.archived && host.sessionNavigationAgentId(row) === agentId,
+    ).length;
+  }
+
+  otherAgentsHaveUnread(host: SidebarPresentationHost): boolean {
+    const active = host.expandedAgentId();
+    return host
+      .activeChipAgent()
+      .agents.some(({ id }) => normalizeAgentId(id) !== active && host.agentUnreadCount(id) > 0);
+  }
 
   revision = 0;
   createdOrderRevision = 0;
