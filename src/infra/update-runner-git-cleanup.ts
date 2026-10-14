@@ -7,22 +7,14 @@ import { formatUpdateCleanupCommand } from "./update-maintenance.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
 import type { StepFactory } from "./update-runner-git-commands.js";
-import type { CommandRunner, UpdateRunResult } from "./update-runner-types.js";
+import type { CommandRunner } from "./update-runner-types.js";
 
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 
-/** Only reporting failed; no runtime or process-settlement verdict is implied. */
-export class GitCleanupReportingError extends AggregateError {
-  constructor(primary: unknown, reportingFailures: unknown[]) {
-    super([primary, ...reportingFailures], "Git update and cleanup reporting failed", {
-      cause: primary,
-    });
-  }
-}
-
 async function reportCleanupProgress(
   report: () => void | Promise<void>,
-  onReportingError: (error: unknown) => void,
+  warnings: string[],
+  env?: NodeJS.ProcessEnv,
 ) {
   try {
     await report();
@@ -38,7 +30,9 @@ async function reportCleanupProgress(
         refusal instanceof UpdateRequesterRevokedError
       )
     ) {
-      onReportingError(error);
+      const warning = `Preflight cleanup reporting failed: ${createUpdateErrorFact("preflight-cleanup", error, env).message}`;
+      warnings.push(warning);
+      console.warn(warning);
     }
   }
 }
@@ -58,7 +52,7 @@ export async function cleanupGitPreflight(
     gitRoot: string;
     step: StepFactory;
     runCommand: CommandRunner;
-    onCleanupReportingError?: (error: unknown) => void;
+    defaultCommandEnv?: NodeJS.ProcessEnv;
   },
   worktreeDir: string,
   preflightRoot: string,
@@ -71,11 +65,10 @@ export async function cleanupGitPreflight(
     ),
     runCommand: params.runCommand,
   };
-  const reportingFailures: unknown[] = [];
-  const onReportingError = (error: unknown) => {
-    reportingFailures.push(error);
-    params.onCleanupReportingError?.(error);
-  };
+  const warnings: string[] = [];
+  const env = options.env
+    ? { ...params.defaultCommandEnv, ...options.env }
+    : params.defaultCommandEnv;
   // Cancellation ends candidate work, not cleanup of the worktree and its Git metadata.
   // Keep cleanup commands in the owned process tree with their existing bounded budget.
   const cleanupSignal = new AbortController().signal;
@@ -96,7 +89,7 @@ export async function cleanupGitPreflight(
     progress: {
       ...options.progress,
       onStepStart: (step) =>
-        reportCleanupProgress(() => options.progress?.onStepStart?.(step), onReportingError),
+        reportCleanupProgress(() => options.progress?.onStepStart?.(step), warnings, env),
       onStepComplete: undefined,
     },
     runCommand: runCleanupCommand,
@@ -152,62 +145,11 @@ export async function cleanupGitPreflight(
         index: options.stepIndex,
         total: options.totalSteps,
       }),
-    onReportingError,
+    warnings,
+    env,
   );
-  if (reportingFailures.length > 0) {
-    // Reporting is not runtime verification and cannot revoke private scratch cleanup.
-    options.results?.push({
-      name: "preflight-cleanup-reporting",
-      command: "",
-      cwd: options.cwd,
-      durationMs: 0,
-      exitCode: 0,
-      advisory: {
-        kind: "recoverable-maintenance",
-        message: "Preflight cleanup reporting failed; cleanup was still attempted.",
-      },
-      failureFacts: reportingFailures.map((error) =>
-        createUpdateErrorFact("preflight-cleanup-reporting", error, options.env),
-      ),
-    });
+  if (warnings.length > 0) {
+    removeStep.warnings = [...(removeStep.warnings ?? []), ...warnings];
   }
   return removed;
-}
-
-/** Settle owned artifacts before exposing either the update result or its failure. */
-export async function settleGitUpdateCleanup(
-  update: () => Promise<UpdateRunResult>,
-  cleanup: () => Promise<void>,
-  reportingFailures: unknown[],
-): Promise<UpdateRunResult> {
-  let outcome: { result: UpdateRunResult } | { error: unknown };
-  try {
-    outcome = { result: await update() };
-  } catch (error) {
-    outcome = { error };
-  }
-  // Do not use an async finally: its rejection would erase the initiating failure.
-  let cleanupFailure: { cause: unknown } | undefined;
-  try {
-    await cleanup();
-  } catch (error) {
-    cleanupFailure = { cause: error };
-  }
-  if (cleanupFailure) {
-    if ("error" in outcome) {
-      throw new AggregateError(
-        [outcome.error, ...reportingFailures, cleanupFailure.cause],
-        "Git update and cleanup failed",
-        { cause: outcome.error },
-      );
-    }
-    throw cleanupFailure.cause;
-  }
-  if ("error" in outcome) {
-    if (reportingFailures.length > 0) {
-      throw new GitCleanupReportingError(outcome.error, reportingFailures);
-    }
-    throw outcome.error;
-  }
-  return outcome.result;
 }
