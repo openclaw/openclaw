@@ -412,13 +412,15 @@ export function createGatewayEventLoopHealthMonitor(
         histogram.disable();
       }
     }
-    sampleDueAt = nowMs() + delayMs;
-    return scheduler.schedule({
+    const job = scheduler.schedule({
       id: "event-loop-health",
       delayMs,
+      phase: delayMs === IDLE_SAMPLE_INTERVAL_MS ? "maintenance" : undefined,
       // Let the blocking callback's after hook publish its stall before resetting the window.
       run: () => queueMicrotask(sample),
     });
+    sampleDueAt = nowMs() + (job.atMs - scheduler.now());
+    return job;
   };
   let samplingJob = histogram ? scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) : undefined;
   if (histogram) {

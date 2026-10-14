@@ -28,18 +28,33 @@ export class ControllerHost implements ReactiveControllerHost {
 
   requestUpdate(): void {
     if (!this.pendingUpdate) {
-      this.pendingUpdate = Promise.resolve().then(() => {
-        this.pendingUpdate = null;
-        if (this.isConnected) {
-          for (const controller of this.controllers) {
-            controller.hostUpdate?.();
-          }
-        }
-        for (const listener of this.listeners) {
-          listener();
+      const pending: Promise<boolean> = Promise.resolve().then(() => {
+        if (this.pendingUpdate === pending) {
+          this.performUpdate();
         }
         return true;
       });
+      this.pendingUpdate = pending;
+    }
+  }
+
+  /** Frame owners can publish before paint without a second queued notification. */
+  performUpdate(): void {
+    if (!this.isConnected) {
+      this.pendingUpdate = null;
+      return;
+    }
+    // Controller publications belong to this update; listeners read their new facts below.
+    this.pendingUpdate ??= Promise.resolve(true);
+    try {
+      for (const controller of this.controllers) {
+        controller.hostUpdate?.();
+      }
+    } finally {
+      this.pendingUpdate = null;
+    }
+    for (const listener of this.listeners) {
+      listener();
     }
   }
 
@@ -56,6 +71,7 @@ export class ControllerHost implements ReactiveControllerHost {
   }
 
   disconnect(): void {
+    this.pendingUpdate = null;
     this.isConnected = false;
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();

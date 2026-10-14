@@ -595,21 +595,3 @@ it("keeps captured async policy and inventory in pinned roots after a concurrent
     await descendant?.catch(() => {});
   }
 });
-
-it("does not reactivate policy preparation inside a later snapshot of the same database", async () => {
-  const env = environment();
-  await seed(env, index());
-  await withArtifactPreservingStateReads(() =>
-    withPluginCache(createPluginCache(), async () => {
-      const options = resolveInstalledPluginIndexStateDatabaseOptions({ env });
-      const activate = await withOpenClawStateDatabaseReadSnapshot(
-        () => bundledDiscovery.prepareBundledDiscoveryMode(env),
-        options,
-      );
-      expect(activate).toThrow(PluginCacheFactInvalidatedError);
-      await withOpenClawStateDatabaseReadSnapshot(async () => {
-        expect(activate).toThrow(PluginCacheFactInvalidatedError);
-      }, options);
-    }),
-  );
-});

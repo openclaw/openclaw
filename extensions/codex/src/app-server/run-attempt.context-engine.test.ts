@@ -11,6 +11,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -144,6 +145,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.fallbackReason = "provider_unavailable";
     params.degradedReason = "context_overflow";
     params.config = { memory: { citations: "on" } } as EmbeddedRunAttemptParams["config"];
+    setRuntimeConfigSnapshot(params.config ?? {});
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -528,6 +530,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
             defaults: { compaction: { maxActiveTranscriptBytes: resumed ? 1_000 : "1mb" } },
           },
         };
+        setRuntimeConfigSnapshot(params.config);
       }
       const harness = createStartedThreadHarness(
         async (method) => {
@@ -752,6 +755,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           },
         },
       } as EmbeddedRunAttemptParams["config"];
+      setRuntimeConfigSnapshot(params.config ?? {});
 
       const run = runCodexAppServerAttempt(params);
       await Promise.race([

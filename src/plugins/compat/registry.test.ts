@@ -8,7 +8,10 @@ const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
   "plugin-sdk-tool-plugin-public-demotion",
   "agent-harness-sdk-alias",
   "plugin-sdk-shipped-channel-setup-exports",
-  "runtime-config-sync-load",
+  // Removal dates follow the stable releases that first ship these deprecations.
+  "cron-store-sync-path",
+  "session-transcript-sync-view",
+  "web-search-sync-provider-list",
 ]);
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
@@ -26,7 +29,9 @@ describe("plugin compatibility registry", () => {
         expect(record.deprecated, record.code).toMatch(datePattern);
         expect(record.warningStarts, record.code).toMatch(datePattern);
         if (record.removalGate !== undefined) {
-          expect(record.removalGate, record.code).toBe("next-plugin-sdk-major");
+          expect(["next-plugin-sdk-major", "stable-deprecation-period"], record.code).toContain(
+            record.removalGate,
+          );
           expect(record.removeAfter, record.code).toBeUndefined();
         } else if (removalDatePendingCompatCodes.has(record.code)) {
           expect(record.removeAfter, record.code).toBeUndefined();

@@ -544,6 +544,21 @@ suite.define(() => {
                       .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
                       .toBe(true);
                   } else {
+                    if (latest.distance > 8) {
+                      const locked = samples.findIndex(
+                        (sample, index) =>
+                          sample.policy?.locked && samples[index - 1]?.policy?.locked === false,
+                      );
+                      console.info(
+                        "REAL_GATEWAY_FOLLOW_LOCK",
+                        JSON.stringify({
+                          mode,
+                          stage,
+                          transition:
+                            locked < 0 ? [] : samples.slice(Math.max(0, locked - 2), locked + 3),
+                        }),
+                      );
+                    }
                     expect
                       .soft(latest.distance, mode + ": " + stage + " follows")
                       .toBeLessThanOrEqual(8);

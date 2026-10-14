@@ -134,7 +134,9 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
     },
     run<T>(run: () => Promise<T>): Promise<T> {
       assertCurrent();
-      return runOutsideOperatorToolGatewayAuthority(run);
+      return runWithoutOwnedSessionTranscriptWrites(() =>
+        runOutsideOperatorToolGatewayAuthority(run),
+      );
     },
   };
 }

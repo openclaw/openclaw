@@ -5,6 +5,7 @@ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { isWorkspaceInspectionCommand } from "../../worker/workspace-inspection-protocol.js";
 import {
   type PreparedWorkerSsh,
@@ -117,7 +118,12 @@ export function createWorkerWorkspaceActions(
     );
   };
 
-  const runTask = (argv: string[], opts: CommandOptions) => track(options.runner.run(argv, opts));
+  const runTask = (argv: string[], opts: CommandOptions) =>
+    withGitProcessOperation(
+      "workspace.sync",
+      () => track(options.runner.run(argv, opts)),
+      "default",
+    );
 
   const runRsync = (
     prepared: PreparedWorkerSsh,

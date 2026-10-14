@@ -204,6 +204,7 @@ describe("Completed child results on a real parent-agent turn", () => {
           token,
           clientDisplayName: "vitest-subagent-prompt-recent",
         });
+        await gateway.server.startupSettled;
 
         const firstCursor = requests.length;
         await runParentAgentTurn(gateway.client, "first parent turn");

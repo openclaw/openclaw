@@ -44,6 +44,7 @@ import {
   readSqliteTableColumns,
   hasPendingSessionConversationRouteContextColumn,
   hasPendingSessionProjectColumn,
+  hasPendingSessionRowTranscriptColumns,
   hasPendingSessionTranscriptContextEligibilityColumn,
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
@@ -390,6 +391,7 @@ export function hasPendingCurrentVersionAgentDatabaseMigration(database: Databas
     hasPendingSessionConversationRouteContextColumn(database) ||
     hasPendingSessionTranscriptContextEligibilityColumn(database) ||
     hasPendingInputConsumptionColumnMigration(database) ||
-    hasPendingSessionProjectColumn(database)
+    hasPendingSessionProjectColumn(database) ||
+    hasPendingSessionRowTranscriptColumns(database)
   );
 }

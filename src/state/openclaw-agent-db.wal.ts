@@ -13,9 +13,6 @@ export function registerOpenClawAgentWalMaintenance(
 ): void {
   const options = { agentId: database.agentId, path: database.path, env };
   const identity = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity.identity !== "string") {
-    return;
-  }
   const expectedIdentity = {
     kind: "file" as const,
     physicalIdentity: identity.identity,

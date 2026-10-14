@@ -10,6 +10,7 @@ import {
   Switch,
   untrack,
 } from "solid-js";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
@@ -20,8 +21,13 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import { StreamGroup, WorkGroupSummary } from "./chat-message-stream-view.tsx";
+import {
+  StreamGroup,
+  UnplacedSubagentWait,
+  WorkGroupSummary,
+} from "./chat-message-stream-view.tsx";
 import type { TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
@@ -50,6 +56,18 @@ function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
       </Match>
       <Match when={props.value.kind === "work" ? props.value : undefined}>
         {(view) => <WorkGroupSummary item={view().item} options={view().options} />}
+      </Match>
+      <Match when={props.value.kind === "frame" ? props.value : undefined}>
+        {(view) => <AgentRunFrame frame={view().frame} options={view().options} />}
+      </Match>
+      <Match when={props.value.kind === "wait" ? props.value : undefined}>
+        {(view) => (
+          <UnplacedSubagentWait
+            sessionKey={view().sessionKey}
+            wait={view().wait}
+            options={view().options}
+          />
+        )}
       </Match>
     </Switch>
   );
@@ -278,12 +296,20 @@ export class ChatTranscriptRenderer {
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
           element.addEventListener("click", capture, true);
           onCleanup(() => element.removeEventListener("click", capture, true));
-          return (
+          const content = () => (
             <TranscriptMediaDisconnect value={this.mediaDisconnect}>
               <SolidContentPresentation value={active}>
                 <TranscriptRows snapshot={snapshot()} />
               </SolidContentPresentation>
             </TranscriptMediaDisconnect>
+          );
+          // Keep the session root independent while retaining its application capabilities.
+          return (
+            <Show when={snapshot().applicationContext} fallback={content()} keyed>
+              {(application) => (
+                <ApplicationProvider value={application}>{content()}</ApplicationProvider>
+              )}
+            </Show>
           );
         }, element),
       );

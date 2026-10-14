@@ -13,6 +13,7 @@ import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-termina
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { formatThinkingLevelClampNotice } from "../thinking.shared.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -286,6 +287,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             }
             runStart.signalExecutionPhaseForTyping(info);
           };
+        await turn.opts?.dashboardReadAdmission?.prepare?.();
+        await readUserTurnPromptReactionSource(
+          turn.followupRun.userTurnTranscriptRecorder,
+        )?.prepare?.();
         const messageActionTurnCapability = mintReplyMessageActionTurnCapability(
           turn,
           params.runId,

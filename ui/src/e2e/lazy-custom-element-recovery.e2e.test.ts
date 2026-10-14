@@ -214,9 +214,7 @@ const systemBusyness = {
     page.locator(".debug-overlay__header").getByRole("button", { name: "Close", exact: true }),
   open: async (page: Page) => {
     await page.locator(".sidebar-identity-card").click();
-    await page
-      .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:debug-overlay"]')
-      .click();
+    await page.locator('.sidebar-identity-menu [data-value="command:debug-overlay"]').click();
   },
   ready: (page: Page) =>
     page

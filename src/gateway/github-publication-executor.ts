@@ -83,8 +83,7 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
     return undefined;
   }
   let worktreeOwner: Awaited<ReturnType<typeof readLocalGitHubPublicationWorktreeOwner>>;
-  using _ = { [Symbol.dispose]: () => worktreeOwner?.release() };
-
+  let releaseWorktree: (() => void) | undefined;
   const { assertCurrent, refreshIdentity } = createGitHubPublicationExecutionIdentity({
     row,
     identity: params.identity,
@@ -96,6 +95,7 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
   let url: string | undefined;
   try {
     worktreeOwner = await readLocalGitHubPublicationWorktreeOwner(row);
+    releaseWorktree = worktreeOwner.release;
     const { worktree } = worktreeOwner;
     assertCurrent();
     const target = await prepareGitHubPublicationTarget({
@@ -133,6 +133,8 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
       "GitHub publication is unconfirmed; restore read access to the original target and retry recovery. Recorded effects are retained.",
       { cause: error },
     );
+  } finally {
+    releaseWorktree?.();
   }
   if (!url) {
     return undefined;
@@ -718,5 +720,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       throw error;
     }
     return result;
+  } finally {
+    worktreeOwner?.release();
   }
 }

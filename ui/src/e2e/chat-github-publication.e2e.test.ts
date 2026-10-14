@@ -134,7 +134,9 @@ suite.define(() => {
         const optionRequest = await gateway.waitForRequest("sessions.github.options");
         expect(optionRequest.params).toEqual(target);
         await page.getByRole("button", { name: "Publication account", exact: true }).click();
-        await page.locator('wa-dropdown-item[value="personal"]').click();
+        await page
+          .locator('.chat-pr__accounts-panel [role="menuitemradio"][value="personal"]')
+          .click();
         await screenshot("01-selected-research.png");
         await page.getByRole("button", { name: "Publish PR", exact: true }).click();
         const publication = await gateway.waitForRequest("sessions.github.publish");
@@ -347,7 +349,9 @@ suite.define(() => {
     await openDetailsPullRequests(page);
     const activePane = page.locator(".chat-pane-cache__pane--active");
     await activePane.getByRole("button", { name: "Publication account", exact: true }).click();
-    await activePane.locator(`wa-dropdown-item[value="${source}"]`).click();
+    await activePane
+      .locator(`.chat-pr__accounts-panel [role="menuitemradio"][value="${source}"]`)
+      .click();
     await gateway.deferNext("sessions.github.publish");
     await activePane.getByRole("button", { name: "Publish PR", exact: true }).click();
     const first = await gateway.waitForRequest("sessions.github.publish");
@@ -448,7 +452,9 @@ suite.define(() => {
       await showPublicationBranch(gateway, "fix/publisher-recovery");
       await openDetailsPullRequests(page);
       await page.getByRole("button", { name: "Publication account", exact: true }).click();
-      await page.locator(`wa-dropdown-item[value="${source}"]`).click();
+      await page
+        .locator(`.chat-pr__accounts-panel [role="menuitemradio"][value="${source}"]`)
+        .click();
       await gateway.deferNext("sessions.github.publish");
       await page.getByRole("button", { name: "Publish PR", exact: true }).click();
       const first = await gateway.waitForRequest("sessions.github.publish");
@@ -488,9 +494,11 @@ suite.define(() => {
       await page.getByRole("button", { name: "Refresh publication", exact: true }).click();
       await expect.poll(() => publish.isEnabled()).toBe(true);
       await page.getByRole("button", { name: "Publication account", exact: true }).click();
-      await page.locator(`wa-dropdown-item[value="${source}"]`).click();
+      await page
+        .locator(`.chat-pr__accounts-panel [role="menuitemradio"][value="${source}"]`)
+        .click();
       const selectedAccount = page.locator(
-        `wa-dropdown-item[value="${source}"][aria-checked="true"]`,
+        `.chat-pr__accounts-panel [role="menuitemradio"][value="${source}"][aria-checked="true"]`,
       );
       await selectedAccount.waitFor({ state: "hidden" });
       expect(await selectedAccount.textContent()).toContain("@publisher-current");
@@ -547,7 +555,9 @@ suite.define(() => {
       await expect.poll(() => publish.isEnabled()).toBe(true);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(2);
       await page.getByRole("button", { name: "Publication account", exact: true }).click();
-      await page.locator(`wa-dropdown-item[value="${source}"]`).click();
+      await page
+        .locator(`.chat-pr__accounts-panel [role="menuitemradio"][value="${source}"]`)
+        .click();
       await gateway.deferNext("sessions.github.publish");
       await publish.click();
       const third = await gateway.waitForRequest("sessions.github.publish", { after: 2 });
@@ -590,7 +600,9 @@ suite.define(() => {
     await personal.click();
     await personal.waitFor({ state: "hidden" });
     expect(
-      await page.locator('wa-dropdown-item[value="personal"]').getAttribute("aria-checked"),
+      await page
+        .locator('.chat-pr__accounts-panel [role="menuitemradio"][value="personal"]')
+        .getAttribute("aria-checked"),
     ).toBe("true");
     await gateway.deferNext("sessions.github.publish");
     await page.getByRole("button", { name: "Publish PR" }).click();
@@ -874,7 +886,7 @@ suite.define(() => {
     await showPublicationBranch(gateway);
     await openDetailsPullRequests(page);
     await page.getByRole("button", { name: "Publication account" }).click();
-    await page.locator('wa-dropdown-item[value="personal"]').click();
+    await page.locator('.chat-pr__accounts-panel [role="menuitemradio"][value="personal"]').click();
     await gateway.deferNext("sessions.github.publish");
     await page.getByRole("button", { name: "Publish PR" }).click();
     await gateway.waitForRequest("sessions.github.publish");

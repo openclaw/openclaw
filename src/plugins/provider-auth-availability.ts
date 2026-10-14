@@ -6,12 +6,12 @@ export const {
   resolveProviderAuthProfileApiKey,
 } = nativePluginBindings.authAvailability;
 
-/** @deprecated Use isProviderApiKeyConfiguredAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use isProviderApiKeyConfiguredAsync. Retained until an announced stable removal window. */
 export const isProviderApiKeyConfigured =
   nativePluginBindings.authAvailability.isProviderApiKeyConfigured;
-/** @deprecated Use listUsableProviderAuthProfileIdsAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use listUsableProviderAuthProfileIdsAsync. Retained until an announced stable removal window. */
 export const listUsableProviderAuthProfileIds =
   nativePluginBindings.authAvailability.listUsableProviderAuthProfileIds;
-/** @deprecated Use isProviderAuthProfileConfiguredAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use isProviderAuthProfileConfiguredAsync. Retained until an announced stable removal window. */
 export const isProviderAuthProfileConfigured =
   nativePluginBindings.authAvailability.isProviderAuthProfileConfigured;

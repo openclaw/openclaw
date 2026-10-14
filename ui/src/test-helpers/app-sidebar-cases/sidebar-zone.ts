@@ -14,7 +14,7 @@ import {
 } from "../app-sidebar.ts";
 import { createDataTransferStub } from "../drag-data.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
 

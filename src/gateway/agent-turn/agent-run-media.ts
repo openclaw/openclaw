@@ -7,7 +7,9 @@ import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.j
 /** Bind assistant media to the agent command before dispatch releases its run owner. */
 export function dispatchAgentRunWithMedia(
   dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0],
-  params: Pick<StartAgentRunExecutionParams, "cfg" | "client" | "activeSessionAgentId">,
+  params: Pick<StartAgentRunExecutionParams, "cfg" | "client" | "activeSessionAgentId"> & {
+    prepared: Pick<StartAgentRunExecutionParams["prepared"], "lifecycleStorePath">;
+  },
 ) {
   const { ingressOpts, admittedRunEntry, abortController } = dispatch;
   const sessionKey = ingressOpts.sessionKey;
@@ -23,12 +25,14 @@ export function dispatchAgentRunWithMedia(
     const { createAssistantCommentaryMediaCustody } =
       await import("../server-methods/chat-send-commentary-media.js");
     const { createOutboundPayloadPlan } = await import("../../infra/outbound/payloads.js");
+    const cfg = dispatch.commandRuntimeContext?.config ?? params.cfg;
     const mediaParams = {
       options: ingressOpts,
       incognito: dispatch.isIncognito === true,
       session: {
         agentId: params.activeSessionAgentId,
-        cfg: dispatch.commandRuntimeContext?.config ?? params.cfg,
+        cfg,
+        storePath: params.prepared.lifecycleStorePath,
         sessionKey,
         sessionLoadOptions: { agentId: params.activeSessionAgentId },
       },

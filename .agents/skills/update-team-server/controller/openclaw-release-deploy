@@ -806,16 +806,22 @@ request_suspension() {
 }
 
 poll_suspension() {
-	local release="$1" response params parsed observed_expiry _terminal_blocked rpc_exit
+	local release="$1" response params parsed observed_expiry _terminal_blocked rpc_exit category
+	local timeout_ms=30000 rpc_budget="${OPENCLAW_TEAM_RPC_BUDGET:-45}"
+	if ((drain_deadline > 0)); then
+		timeout_ms=5000; rpc_budget=5
+	fi
 	params="$(proof suspension-lease-params "$held_suspension")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=params method=gateway.suspend.status exit=%s\n' "$?" >&2
 		return 1
 	}
-	response="$(run_gateway "$release" gateway call gateway.suspend.status \
-		--params "$params" --json --timeout 30000)" || {
+	response="$(OPENCLAW_TEAM_RPC_BUDGET="$rpc_budget" run_gateway "$release" gateway call gateway.suspend.status \
+		--params "$params" --json --timeout "$timeout_ms")" || {
 		rpc_exit=$?
+		category="$(proof_json suspension-poll-failure "$response" "$rpc_exit" 2>/dev/null)" || category=fatal
 		printf 'SUSPENSION_POLL_FAILED stage=rpc method=gateway.suspend.status exit=%s\n' "$rpc_exit" >&2
-		return "$rpc_exit"
+		[[ "$category" != retry ]] || return 76
+		return 1
 	}
 	parsed="$(proof_json suspension-status "$response" "$held_suspension" "$suspension_expiry")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=proof method=gateway.suspend.status exit=%s\n' "$?" >&2
@@ -908,22 +914,28 @@ prepare_suspension() {
 		if ((SECONDS >= drain_deadline)); then
 			continue
 		fi
-		if poll_suspension "$release"; then
-			:
-		else
-			poll_exit=$?
-			# A deadline-owned timeout enters the same fresh lease/generation check as
-			# expiry between polls. Other failed observations never authorize interruption.
-			if ((poll_exit == 124 && SECONDS >= drain_deadline)); then continue; fi
-			if ((SECONDS >= drain_deadline)); then
-				printf 'DEFERRED preserve-only Gateway drain exceeded its %s-second budget blockers=%s\n' \
-					"$drain_budget" "$suspension_blockers"
-			else
+		retry_seconds=1
+		while true; do
+			if poll_suspension "$release"; then break; else poll_exit=$?; fi
+			if ((poll_exit != 76)); then
 				printf 'DEFERRED preserve-only Gateway drain status changed, expired, or became unavailable blockers=%s\n' \
 					"$suspension_blockers"
+				return 75
 			fi
-			return 75
-		fi
+			# Failed reads grant no authority. Deadline expiry still needs fresh lease,
+			# generation, and write-custody proof before any authorized interruption.
+			remaining_budget=$((drain_deadline - SECONDS))
+			((remaining_budget > 0)) || break
+			sleep_seconds="$retry_seconds"
+			if ((sleep_seconds > remaining_budget)); then sleep_seconds="$remaining_budget"; fi
+			printf 'SUSPENSION_POLL_RETRY backoffSeconds=%s remainingSeconds=%s\n' "$sleep_seconds" "$remaining_budget" >&2
+			sleep "$sleep_seconds"
+			((SECONDS < drain_deadline)) || break
+			now_ms="$(proof suspension-now)" || return 1
+			# Re-enter the existing lease renewal owner instead of retrying past expiry.
+			((suspension_expiry - now_ms > 30000)) || break
+			if ((retry_seconds < 4)); then retry_seconds=$((retry_seconds * 2)); fi
+		done
 	done
 	drain_deadline=0
 	if [[ "$suspension_state" != READY ]]; then

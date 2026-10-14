@@ -97,68 +97,74 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
     ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}),
   };
   // Git and source resolvers inherit this process: routing variables must not escape the fixture.
-  process.env = { ...env };
-  const config = {
-    gateway: {
-      mode: "local",
-      bind: "loopback",
-      port: options.port,
-      auth: { mode: "none" },
-      controlUi: { enabled: false },
-      tailscale: { mode: "off" },
-    },
-    discovery: { mdns: { mode: "off" } },
-    browser: { enabled: false },
-    plugins: { enabled: false },
-    cron: { enabled: false },
-    update: { checkOnStart: false },
-    agents: {
-      defaults: { heartbeat: { every: "0m" } },
-      entries: { main: { workspace: path.join(stateDir, "workspace") } },
-    },
-    logging: { file: path.join(stateDir, "gateway.log") },
-  } satisfies OpenClawConfig;
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-
-  // Resolvers capture environment on import; bind the fixture before loading storage owners.
-  const [{ seedTeamShapeSessions }, { seedTeamShapeExtras }, agentDb, stateDb] = await Promise.all([
-    import("./team-shape-sessions.ts"),
-    import("./team-shape-extras.ts"),
-    import("../../src/state/openclaw-agent-db.js"),
-    import("../../src/state/openclaw-state-db.js"),
-  ]);
-  const agent = agentDb.openOpenClawAgentDatabase({ agentId: "main" });
-  const state = stateDb.openOpenClawStateDatabase();
-  let summary;
+  const previousEnv = process.env;
   try {
-    const seeded = await seedTeamShapeSessions(options);
-    const extras = await seedTeamShapeExtras({ ...options, sessions: seeded.sessions });
-    agent.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    state.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    const { sessions, generationMs: sessionGenerationMs, ...sessionMetrics } = seeded;
-    summary = {
-      format: "openclaw-team-shape-v1",
-      profile,
-      seed: options.seed,
-      now: options.now,
-      sessionCount: sessions.length,
-      ...sessionMetrics,
-      sessionGenerationMs,
-      ...extras,
-      agentDatabaseBytes: statSync(agent.path).size,
-      stateDatabaseBytes: statSync(state.path).size,
-      generationMs: performance.now() - startedAt,
-      node: process.version,
-    };
+    process.env = { ...env };
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        port: options.port,
+        auth: { mode: "none" },
+        controlUi: { enabled: false },
+        tailscale: { mode: "off" },
+      },
+      discovery: { mdns: { mode: "off" } },
+      browser: { enabled: false },
+      plugins: { enabled: false },
+      cron: { enabled: false },
+      update: { checkOnStart: false },
+      agents: {
+        defaults: { heartbeat: { every: "0m" } },
+        entries: { main: { workspace: path.join(stateDir, "workspace") } },
+      },
+      logging: { file: path.join(stateDir, "gateway.log") },
+    } satisfies OpenClawConfig;
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+    // Resolvers capture environment on import; bind the fixture before loading storage owners.
+    const [{ seedTeamShapeSessions }, { seedTeamShapeExtras }, agentDb, stateDb] =
+      await Promise.all([
+        import("./team-shape-sessions.ts"),
+        import("./team-shape-extras.ts"),
+        import("../../src/state/openclaw-agent-db.js"),
+        import("../../src/state/openclaw-state-db.js"),
+      ]);
+    const agent = agentDb.openOpenClawAgentDatabase({ agentId: "main" });
+    const state = stateDb.openOpenClawStateDatabase();
+    let summary;
+    try {
+      const seeded = await seedTeamShapeSessions(options);
+      const extras = await seedTeamShapeExtras({ ...options, sessions: seeded.sessions });
+      agent.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      state.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      const { sessions, generationMs: sessionGenerationMs, ...sessionMetrics } = seeded;
+      summary = {
+        format: "openclaw-team-shape-v1",
+        profile,
+        seed: options.seed,
+        now: options.now,
+        sessionCount: sessions.length,
+        ...sessionMetrics,
+        sessionGenerationMs,
+        ...extras,
+        agentDatabaseBytes: statSync(agent.path).size,
+        stateDatabaseBytes: statSync(state.path).size,
+        generationMs: performance.now() - startedAt,
+        node: process.version,
+      };
+    } finally {
+      await agentDb.closeOpenClawAgentDatabasesAsync();
+      await stateDb.closeOpenClawStateDatabaseAsync();
+    }
+    writeFileSync(
+      path.join(stateDir, "team-shape-summary.json"),
+      `${JSON.stringify(summary, null, 2)}\n`,
+    );
+    return { summary, env };
   } finally {
-    await agentDb.closeOpenClawAgentDatabasesAsync();
-    await stateDb.closeOpenClawStateDatabaseAsync();
+    process.env = previousEnv;
   }
-  writeFileSync(
-    path.join(stateDir, "team-shape-summary.json"),
-    `${JSON.stringify(summary, null, 2)}\n`,
-  );
-  return { summary, env };
 }
 
 async function main() {

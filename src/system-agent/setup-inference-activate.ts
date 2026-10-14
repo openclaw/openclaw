@@ -114,7 +114,7 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
         cfg,
         params.agentId,
         {
-          loadAuthProfileStoreForRuntime: ctx.deps.loadAuthProfileStoreForRuntime,
+          loadAuthProfileStoreForRuntimeAsync: ctx.deps.loadAuthProfileStoreForRuntimeAsync,
           ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
         },
         ctx.snapshot,
@@ -398,7 +398,7 @@ async function verifyAndActivateCandidate(
   const routeDeps = {
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     pluginMetadataPlugins: metadata.plugins,
-    loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
+    loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
   };
   const requestedAgentId = params.agentId ? routeAgentId : undefined;
   // Saved model rows stay sparse; compare the same runtime defaults before and after writing.

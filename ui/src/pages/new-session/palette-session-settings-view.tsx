@@ -2,12 +2,11 @@ import { For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
-import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import type { PaletteSessionSettings } from "./palette-session-settings.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
 
@@ -253,30 +252,39 @@ function SettingsSummary(props: { view: SettingsView }) {
 }
 
 export function PaletteSessionSettingsView(props: { view: SettingsView }) {
+  let trigger!: HTMLButtonElement;
+  let popover!: PopoverHandle;
   const keydown = nativeListener("keydown", (event) => props.view.onKeydown(event));
   const retry = nativeListener("click", () => props.view.options.preferences.retry());
   return (
     <>
       <button
         id={props.view.id + "-settings-trigger"}
+        ref={(node) => {
+          trigger = node;
+        }}
+        onClick={() => popover.overlay.request(!popover.overlay.open)}
         class="palette-session-settings__trigger"
         type="button"
         aria-label={t("commandPalette.newSessionSettings")}
         title={t("commandPalette.newSessionSettings")}
         aria-haspopup="dialog"
+        aria-controls={props.view.id + "-settings-popover"}
         aria-expanded={props.view.open ? "true" : "false"}
       >
         <SettingsIcon />
       </button>
-      <wa-popover
-        ref={syncPopoverLabel}
+      <Popover
+        ref={(handle) => {
+          popover = handle;
+        }}
+        id={props.view.id + "-settings-popover"}
+        label={t("commandPalette.newSessionSettings")}
         class="palette-session-settings"
-        for={props.view.id + "-settings-trigger"}
+        anchor={trigger}
         placement="bottom-end"
-        without-arrow
-        prop:open={props.view.open}
-        onWa-show={onOwnPopoverEvent(() => props.view.onOpen())}
-        onWa-hide={onOwnPopoverEvent(() => props.view.onHide())}
+        open={props.view.open}
+        onOpenChange={(open) => (open ? props.view.onOpen() : props.view.onHide())}
       >
         <div class="palette-session-settings__content" ref={keydown}>
           {props.view.places ? (
@@ -324,7 +332,7 @@ export function PaletteSessionSettingsView(props: { view: SettingsView }) {
             </div>
           ) : undefined}
         </div>
-      </wa-popover>
+      </Popover>
     </>
   );
 }

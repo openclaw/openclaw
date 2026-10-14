@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import * as authStore from "../agents/auth-profiles/store.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -14,6 +15,10 @@ import {
 } from "./auth-profile-preservation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeAll(async () => {
+  await prepareSharedAuthStoreOwnership();
+});
 
 const workspaceAliasPlugin = {
   id: "fixture-provider",
@@ -189,6 +194,7 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
     "retains a missing personal pin only when the selected provider %s is compatible",
     async (provider) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        await prepareSharedAuthStoreOwnership(state.env);
         const personalId = `personal:${randomUUID()}:${randomUUID()}`;
         const sessionEntry: SessionEntry = {
           ...entry,

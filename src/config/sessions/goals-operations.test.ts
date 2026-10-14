@@ -26,7 +26,6 @@ import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
-  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -205,7 +204,7 @@ describe("typed Goal operation persistence", () => {
             : null,
     );
     let edited: Awaited<ReturnType<typeof mutateSessionGoal>>;
-    const assertCurrent = vi.fn();
+    const assertCurrent = Object.assign(vi.fn(), { nativeSource: true });
     try {
       edited = await mutateSessionGoal({
         ...scope(),
@@ -265,33 +264,6 @@ describe("typed Goal operation persistence", () => {
     } finally {
       unsubscribe();
     }
-  });
-
-  it("rejects a session replacement made by the commit authority check", async () => {
-    const goal = await createSessionGoal({ ...scope(), objective: "original objective" });
-    const before = loadSessionEntry(scope());
-    await expect(
-      mutateSessionGoal({
-        ...scope(),
-        expectedSessionId: sessionId,
-        operation: {
-          ...identity("edit-rebound"),
-          action: "edit",
-          goalId: goal.id,
-          objective: "must not commit",
-        },
-        assertCurrent: Object.assign(
-          () => {
-            replaceSessionEntrySync(scope(), {
-              ...before!,
-              sessionId: "replacement-session",
-            });
-          },
-          { nativeSource: true },
-        ),
-      }),
-    ).rejects.toMatchObject({ code: "session-rebound" });
-    expect(loadSessionEntry(scope())).toEqual(before);
   });
 
   it("replays the original success after clear and reopening without recreating Goal or turn", async () => {

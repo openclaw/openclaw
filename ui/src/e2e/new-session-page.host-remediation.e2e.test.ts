@@ -63,12 +63,16 @@ suite.define(() => {
           await writeFile(path.join(suite.artifactDir, `${name}-${width}.png`), frame.png);
         }
       };
+      const tapRow = async (row: Locator) => {
+        await row.scrollIntoViewIfNeeded();
+        const bounds = await row.boundingBox();
+        expect(bounds).not.toBeNull();
+        await page.touchscreen.tap(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+      };
       const revealReason = async (row: Locator) => {
         expect(await row.getAttribute("aria-disabled")).toBe("true");
         if (width === 390) {
-          const bounds = await row.boundingBox();
-          expect(bounds).not.toBeNull();
-          await page.touchscreen.tap(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+          await tapRow(row);
         } else {
           await page.keyboard.press("Tab");
           await row.focus();
@@ -84,19 +88,33 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         await openEnvironmentPicker(page);
-        const where = page.locator("wa-popover.new-session-page__where-popover");
+        const where = page.locator(".oc-popover.new-session-page__where-popover");
+        if (width === 390) {
+          expect(
+            await where
+              .locator(".new-session-page__environment-list")
+              .evaluate((list) => list.scrollHeight > list.clientHeight),
+          ).toBe(true);
+        }
         const row = where.locator('[data-value="device:paired-device"]');
         await revealReason(row);
         const details = row
           .locator("xpath=ancestor::openclaw-tooltip[1]")
           .locator('[slot="content"]');
         await details.waitFor({ state: "visible" });
-        await capture("picker", where.locator('[part="body"]'), [row, details]);
+        await capture("picker", where, [row, details]);
         const hint = await details.textContent();
         expect(hint).toContain("openclaw config set nodeHost.workerRuns.enabled true");
         expect(hint).toContain("openclaw node install --force");
         expect(hint).not.toContain("openclaw connect");
         expect(await row.textContent()).toContain("Unavailable");
+        if (width === 390) {
+          await tapRow(row);
+          await row
+            .locator("xpath=ancestor::openclaw-tooltip[1]")
+            .getByRole("tooltip")
+            .waitFor({ state: "hidden" });
+        }
         const offline = where.locator('[data-value="device:offline-device"]');
         await revealReason(offline);
         expect(
@@ -114,7 +132,7 @@ suite.define(() => {
         const palette = page.locator("openclaw-command-palette");
         await palette.locator(".cmd-palette__input").waitFor({ state: "visible" });
         await palette.getByRole("button", { name: "New session settings", exact: true }).click();
-        const settings = palette.locator("wa-popover.palette-session-settings");
+        const settings = palette.locator(".oc-popover.palette-session-settings");
         await settings.locator(".palette-session-settings__workspace").click();
         await settings
           .locator('[data-machine="local"][data-project="docs"]')
@@ -128,7 +146,7 @@ suite.define(() => {
         expect(await choices.textContent()).toContain("Unavailable");
         const reason = await revealReason(choices);
         expect(await reason.textContent()).toContain("Session hosting is disabled");
-        await capture("palette", settings.locator('[part="body"]'), [choices, reason]);
+        await capture("palette", settings, [choices, reason]);
         const search = settings.getByRole("searchbox", { name: "Search", exact: true });
         await search.fill("Offline device");
         const offlineChoice = settings.locator('[data-machine="device:offline-device"]');

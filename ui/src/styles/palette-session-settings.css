@@ -17,7 +17,7 @@
   color: var(--text);
 }
 
-.palette-session-settings::part(body) {
+.oc-popover.palette-session-settings {
   padding: 5px;
   border: 1px solid var(--border);
   border-radius: 12px;

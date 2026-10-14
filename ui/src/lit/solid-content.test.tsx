@@ -9,6 +9,7 @@ import {
   createSignal,
   getOwner,
   onCleanup,
+  onSettled,
   runWithOwner,
 } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
@@ -18,11 +19,30 @@ import { LitContent as LegacyOutlet } from "./solid-bridge.ts";
 import {
   LitContent,
   mountLitContent,
+  unmountLitContent,
   solidContent,
   SolidContentPresentation,
 } from "./solid-content.tsx";
 
 describe("Lit and Solid content boundaries", () => {
+  it("settles parent refs after mounting nested Solid content through Lit", () => {
+    const settled = vi.fn();
+    const Nested = () => <span>Provider</span>;
+    function Parent() {
+      let sibling: HTMLButtonElement | undefined;
+      onSettled(() => settled(sibling?.isConnected));
+      return (
+        <section>
+          <LegacyOutlet render={() => html`${solidContent(Nested, {})}`} />
+          <button ref={(element) => (sibling = element)}>Next</button>
+        </section>
+      );
+    }
+    mountSolid(() => <Parent />);
+    flush();
+    expect(settled).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
   it("updates a retained media mount and clears its range before remounting", () => {
     const disconnected = vi.fn();
     class MediaContent extends AsyncDirective {
@@ -45,8 +65,8 @@ describe("Lit and Solid content boundaries", () => {
       expect(button.textContent).toBe("Second");
       expect(disconnected).not.toHaveBeenCalled();
 
-      mounted.dispose();
-      mounted.dispose();
+      unmountLitContent(container);
+      unmountLitContent(container);
       expect(container.childNodes).toHaveLength(0);
       expect(disconnected).toHaveBeenCalledOnce();
 
@@ -114,6 +134,37 @@ describe("Lit and Solid content boundaries", () => {
     flush();
     expect(view.container.querySelector("section > div")?.textContent).toBe("Updated");
     expect(view.container.querySelector("article")).toBeNull();
+  });
+
+  it("mounts and retires a delegated Solid default from a settled plugin callback", async () => {
+    const disposed = vi.fn();
+    function DefaultView() {
+      onCleanup(disposed);
+      return <button>Default composer</button>;
+    }
+    function DelegatedView() {
+      return <LitContent value={html`${solidContent(DefaultView, {})}`} />;
+    }
+    function PluginSlot() {
+      const owner = getOwner();
+      let slot!: HTMLDivElement;
+      onSettled(() => {
+        runWithOwner(owner, () => render(solidContent(DelegatedView, {}), slot));
+        return () => render(nothing, slot);
+      });
+      return (
+        <div
+          ref={(element) => {
+            slot = element;
+          }}
+        />
+      );
+    }
+    const view = mountSolid(() => <PluginSlot />);
+    expect(view.getByRole("button", { name: "Default composer" })).toBeTruthy();
+    view.unmount();
+    await Promise.resolve();
+    expect(disposed).toHaveBeenCalledOnce();
   });
 
   it("updates a stable Solid component through Lit without resetting focus or local state", async () => {

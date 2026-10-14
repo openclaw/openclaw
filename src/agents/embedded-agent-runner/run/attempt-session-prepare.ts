@@ -555,14 +555,20 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
             recorder: attempt.userTurnTranscriptRecorder,
             runId: attempt.runId,
           });
-          if (initial) {
+          if (initial || getOwnedSessionTranscriptReader(target)) {
             const manager = await SessionManager[sessionManagerOpenTranscriptCohort](
               target,
               { ...limits, cwd: input.effectiveCwd, signal: attempt.abortSignal },
-              initial.selection,
+              initial?.selection ?? {
+                sessionKey: target.sessionKey,
+                entryIds: [],
+                includeMessagePresence: true,
+              },
               (opened, prepared, assertView) => {
                 try {
-                  initial.consume(opened, prepared, assertView);
+                  initial?.consume(opened, prepared, assertView);
+                  messagePresence =
+                    prepared.kind === "bounded" ? prepared.transcript?.messagePresence : undefined;
                 } finally {
                   // Cleanup owns even a refused manager; publication cannot supply replay evidence.
                   publishedSessionManager = opened;
@@ -570,8 +576,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
                 }
               },
             );
-            initialReplay = initial.readInitial();
-            messagePresence = initial.readMessagePresence();
+            initialReplay = initial?.readInitial();
             return manager;
           }
           return SessionManager.openAsync(target, input.effectiveCwd, limits, attempt.abortSignal);

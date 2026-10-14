@@ -61,7 +61,8 @@ vi.mock("../status/summary.runtime.js", async (importOriginal) => {
         provider: "openai",
         model: "gpt-5.5",
       })),
-      resolveSessionRuntime: vi.fn(async () => ({ id: "openclaw", label: "OpenClaw Default" })),
+      resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
+      readSessionRuntimeMetadata: vi.fn(async (_cfg, candidates) => candidates.map(() => null)),
       resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
         typeof model === "string" && model.length > 0
           ? {
@@ -251,7 +252,7 @@ describe("getStatusSummary", () => {
     });
     statusSummaryMocks.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
     vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
-    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockResolvedValue({
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
       id: "openclaw",
       label: "OpenClaw Default",
     });
@@ -705,5 +706,11 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.count).toBe(3);
     expect(summary.sessions.byAgent[0]?.count).toBe(1);
     expect(summary.sessions.byAgent[0]?.recent.map(({ key }) => key)).toEqual(["agent:main:main"]);
+    expect(statusSummaryRuntime.readSessionRuntimeMetadata).toHaveBeenCalledOnce();
+    expect(
+      vi
+        .mocked(statusSummaryRuntime.readSessionRuntimeMetadata)
+        .mock.calls[0]?.[1].map(({ sessionKey }) => sessionKey),
+    ).toEqual(["agent:ops:main", "agent:research:main", "agent:main:main"]);
   });
 });

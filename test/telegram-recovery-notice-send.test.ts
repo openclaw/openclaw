@@ -113,8 +113,9 @@ describe("recovery notice final transport fence", () => {
       getOrCreateAccountThrottler(botToken, createImmediateSerialThrottler);
       let currentCfg = cfg;
       const sessionKey = "agent:main:telegram:direct:123";
-      const storePath = path.join(state.stateDir, "sessions.json");
+      const storePath = path.join(state.stateDir, "openclaw-agent.sqlite");
       const scope = {
+        agentId: "main",
         storePath,
         sessionKey,
         sessionId: "notice-session",
@@ -314,7 +315,8 @@ describe("recovery typing final transport fence", () => {
       getOrCreateAccountThrottler(botToken, createImmediateSerialThrottler);
       let currentCfg = cfg;
       const scope = {
-        storePath: path.join(state.stateDir, "sessions.json"),
+        agentId: "main",
+        storePath: path.join(state.stateDir, "openclaw-agent.sqlite"),
         sessionKey: "agent:main:telegram:group:-100123:topic:99",
         sessionId: "typing-session",
         recoveryRunId: "typing-run",

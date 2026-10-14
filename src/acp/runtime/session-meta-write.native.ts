@@ -7,7 +7,6 @@ import {
   type SessionAcpMeta,
   type SessionEntry,
 } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   legacyAcpMigrationBindingMatches,
   recordLegacyAcpMigrationCompletion,
@@ -20,7 +19,10 @@ import { selectAcpSessionRowForStoreEntry } from "./session-meta-keys.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { readSessionEntryFromStore } from "./session-meta-store.js";
 import { applyAcpSessionMutation } from "./session-meta-write.kernel.js";
-import type { AcpSessionMutationCommit } from "./session-meta-write.types.js";
+import type {
+  AcpSessionMutationCommit,
+  AcpSessionMutationParams,
+} from "./session-meta-write.types.js";
 
 function consumeLegacyAcpMigrationSources(params: {
   database: DatabaseSync;
@@ -46,22 +48,10 @@ function consumeLegacyAcpMigrationSources(params: {
   }
 }
 
-export async function upsertAcpSessionMetaNative(params: {
-  assertCommitAllowed?: () => void;
-  expectedControlBinding?: AcpSessionControlBinding;
-  sessionKey: string;
-  agentId?: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-  now?: () => number;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  mutate: (
-    current: SessionAcpMeta | undefined,
-    entry: SessionEntry | undefined,
-  ) => SessionAcpMeta | null | undefined;
-}): Promise<SessionEntry | null> {
+/** Exclusive native maintenance only; runtime and memory mutations use the shared worker. */
+export async function upsertAcpSessionMetaForMaintenance(
+  params: AcpSessionMutationParams,
+): Promise<SessionEntry | null> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return null;
