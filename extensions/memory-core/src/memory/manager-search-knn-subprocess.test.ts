@@ -19,8 +19,7 @@ import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { vectorKnnParentEntrypoint } from "./manager-search-knn-runtime.test-support.js";
 import type { VectorKnnRequest } from "./manager-search-knn.js";
-import { runVectorKnnInSubprocess } from "./manager-search-knn.test-support.js";
-import { vectorToBlob } from "./manager-search-knn.test-support.js";
+import { runVectorKnnInSubprocess, vectorToBlob } from "./manager-search-knn.test-support.js";
 import { searchVector } from "./manager-search-vector.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 

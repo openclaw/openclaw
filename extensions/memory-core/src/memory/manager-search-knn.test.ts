@@ -8,8 +8,7 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { runVectorKnnQuery } from "./manager-search-knn.test-support.js";
-import { vectorToBlob } from "./manager-search-knn.test-support.js";
+import { runVectorKnnQuery, vectorToBlob } from "./manager-search-knn.test-support.js";
 
 describe("memory vector KNN decision counts", () => {
   it("runs KNN before chunk lookup even when planner statistics favor chunks", async () => {

@@ -13,8 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runVectorKnnQuery } from "./manager-search-knn.test-support.js";
-import { vectorToBlob } from "./manager-search-knn.test-support.js";
+import { runVectorKnnQuery, vectorToBlob } from "./manager-search-knn.test-support.js";
 import { createEmbeddingScorer } from "./manager-search-scorer.js";
 import { searchChunksByEmbedding, searchVector } from "./manager-search-vector.js";
 import { runMemorySearchWithDeadline } from "./search-deadline.js";
