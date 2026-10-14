@@ -668,7 +668,7 @@ export function recordUpdateResultNextAction(
         result.verification === undefined
           ? result
           : { ...result, recovery: verification.recovery ?? undefined },
-      restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
+      restart: params.opts.restart,
       serviceRunning: verification.serviceRunning,
       runningVersion: verification.runningVersion,
       verifiedServingVersion: resolveUpdateRunVerifiedServingVersion(

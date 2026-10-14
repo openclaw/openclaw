@@ -841,6 +841,8 @@ recorded contention also defers Gateway recovery verification. Restart the Gatew
 owner, then run `openclaw update status` and `openclaw doctor`; keep recovery backups
 until verification completes. Other failures keep their recovery diagnostics;
 a genuine database incompatibility still fails.
+After a successful update with changed plugins, the final report reminds you to
+restart to activate them, including when the core version also changed.
 
 Interactive updates show phase transitions, the current step, and elapsed time.
 The phases match the Control UI: requested, staging, validating, activating,
