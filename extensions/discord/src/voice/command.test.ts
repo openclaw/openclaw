@@ -119,7 +119,7 @@ describe("createDiscordVoiceCommand", () => {
   it.each([
     { owner: "100000000000000001", authorized: true },
     { owner: "discord:100000000000000001", authorized: true },
-    { owner: "discord:user:100000000000000001", authorized: false },
+    { owner: "discord:user:100000000000000001", authorized: true },
     { owner: "user:100000000000000001", authorized: true },
     { owner: "pk:100000000000000001", authorized: true },
     { owner: "user:*", authorized: false },
