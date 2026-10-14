@@ -75,7 +75,9 @@ describe("session roster event traffic", () => {
       } satisfies SessionsListResult;
       reads[scope]++;
       bytes[scope] += new TextEncoder().encode(JSON.stringify(response)).byteLength;
-      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 200);
+      });
       return response;
     };
     const harness = createGatewayHarness(createTestGatewayClient(request));
