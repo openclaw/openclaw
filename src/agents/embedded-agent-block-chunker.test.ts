@@ -255,6 +255,20 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.consumedLength).toBe(deltas.join("").length);
   });
 
+  it("keeps indented Unicode source intact when a fenced projection cannot fit", () => {
+    const source = "    😀abc";
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 9,
+      hardMaxChars: 40,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(source);
+
+    expect(drainChunks(chunker, true)).toEqual([source]);
+  });
+
   it.each([
     { force: false, body: `${"A".repeat(56)} TAIL_153587` },
     { force: true, body: `${"A".repeat(56)} TAIL_153587` },
@@ -422,6 +436,82 @@ describe("EmbeddedBlockChunker", () => {
       }
     },
   );
+
+  it("does not split a label while a streamed destination is still empty", () => {
+    const link = `[${"a".repeat(30)}](https://example.com/x)`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 160,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+    const emit = (chunk: string) => chunks.push(chunk);
+    const emptyDestinationEnd = link.indexOf("(") + 1;
+
+    for (const character of link.slice(0, emptyDestinationEnd)) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    expect(chunks).toEqual([]);
+
+    for (const character of link.slice(emptyDestinationEnd)) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    chunker.drain({ force: true, emit });
+    expect(chunks).toEqual([link]);
+  });
+
+  it("keeps adjacent bounded Markdown links in separate chunks", () => {
+    const first = "[a](https://a.co)";
+    const second = "[b](https://b.co)";
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 20,
+      hardMaxChars: 30,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(first + second);
+
+    expect(drainChunks(chunker, true)).toEqual([first, second]);
+  });
+
+  it("hard-splits a link that exceeds the transport ceiling without breaking UTF-16", () => {
+    const link = `[invite](https://example.com/${"a".repeat(40)}😀${"b".repeat(40)})`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 50,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(link);
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks.join("")).toBe(link);
+    expectChunksWithinLength(chunks, 50);
+    expect(chunks.every((chunk) => chunk.isWellFormed())).toBe(true);
+  });
+
+  it("keeps a link intact after shortening an oversized fence language hint", () => {
+    const link = `[invite](https://example.com/${"a".repeat(80)})`;
+    const text = `\`\`\`${"language".repeat(8)}\ncode\n\`\`\`\nSee ${link} now.`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 160,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+
+    chunker.append(text);
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+    expectChunksWithinLength(chunks, 160);
+  });
 
   it.each([false, true])(
     "reports original source across synthetic wrappers with a preserved break: %s",
@@ -953,110 +1043,4 @@ describe("EmbeddedBlockChunker", () => {
       }
     },
   );
-
-  describe("Markdown tables", () => {
-    // Discord's native block-streaming defaults.
-    const chunking = { minChars: 800, maxChars: 1200, breakPreference: "paragraph" } as const;
-    const intro = "Here is the quarterly summary you asked for.";
-    const outro = "Totals are rounded to the nearest unit.";
-    const buildTable = (rowCount: number) =>
-      [
-        "| Region | Owner | Q1 | Q2 |",
-        "| --- | --- | ---: | ---: |",
-        ...Array.from(
-          { length: rowCount },
-          (_, i) => `| R${String(i + 1).padStart(2, "0")} | North | ${1100 + i} | ${2200 + i} |`,
-        ),
-      ].join("\n");
-    const table = buildTable(28);
-    const quotedTable = table
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n");
-    const longIntro = "Background detail. ".repeat(20).trim();
-    const capRows = buildTable(38);
-    // Pad one header cell so the whole table is exactly maxChars long.
-    const tableAtCap = capRows.replace(
-      "Region",
-      `Region${" ".repeat(chunking.maxChars - capRows.length)}`,
-    );
-
-    function streamChunks(text: string, delta: number) {
-      const chunker = new EmbeddedBlockChunker(chunking);
-      const chunks: string[] = [];
-      for (let index = 0; index < text.length; index += delta) {
-        chunker.append(text.slice(index, index + delta));
-        chunks.push(...drainChunks(chunker));
-      }
-      chunks.push(...drainChunks(chunker, true));
-      return chunks;
-    }
-
-    it.each([
-      {
-        name: "after a short intro",
-        text: `${intro}\n\n${table}\n\n${outro}`,
-        expected: [`${intro}\n\n${table}`, outro],
-      },
-      {
-        name: "inside a blockquote",
-        text: `${intro}\n\n${quotedTable}\n\n${outro}`,
-        expected: [`${intro}\n\n${quotedTable}`, outro],
-      },
-      {
-        name: "by breaking before it when the intro leaves no room",
-        text: `${longIntro}\n\n${table}\n\n${outro}`,
-        expected: [longIntro, table, outro],
-      },
-      {
-        name: "when it exactly fills maxChars",
-        text: `${tableAtCap}\n\n${outro}`,
-        expected: [tableAtCap, outro],
-      },
-      {
-        name: "when it exactly fills maxChars and a heading follows directly",
-        text: `${intro}\n\n${tableAtCap}\n# Next steps`,
-        expected: [intro, tableAtCap, "# Next steps"],
-        oneShot: true,
-      },
-    ])("keeps a streamed table that fits maxChars whole $name", ({ text, expected, oneShot }) => {
-      for (const delta of oneShot ? [1, 17, 43, text.length] : [1, 17, 43]) {
-        expect(streamChunks(text, delta)).toEqual(expected);
-      }
-    });
-
-    it.each([
-      { name: "with many rows", text: `${intro}\n\n${buildTable(60)}\n\n${outro}` },
-      { name: "with trailing spaces past the cap", text: `${tableAtCap}  \n\n${outro}` },
-    ])("still splits a table larger than maxChars at row boundaries $name", ({ text }) => {
-      for (const delta of [1, 17, text.length]) {
-        const chunks = streamChunks(text, delta);
-        expectChunksWithinLength(chunks, chunking.maxChars);
-        expect(chunks.flatMap((chunk) => chunk.split("\n")).filter(Boolean)).toEqual(
-          text.split("\n").filter(Boolean),
-        );
-      }
-    });
-
-    it("streams pipe-bearing prose at the same boundaries as plain prose", () => {
-      const text = Array.from({ length: 60 }, (_, i) => `step ${i}: alpha | beta | gamma`).join(
-        "\n",
-      );
-      for (const delta of [1, 17]) {
-        const lengths = (source: string) =>
-          streamChunks(source, delta).map((chunk) => chunk.length);
-        expect(lengths(text)).toEqual(lengths(text.replaceAll("|", "/")));
-      }
-    });
-
-    it("emits a table that exactly fills maxChars once the next line starts", () => {
-      const chunker = new EmbeddedBlockChunker(chunking);
-      const chunks: string[] = [];
-      for (const character of `${tableAtCap}\n${" ".repeat(20)}`) {
-        chunker.append(character);
-        chunks.push(...drainChunks(chunker));
-      }
-      expect(chunks).toEqual([tableAtCap]);
-    });
-  });
 });

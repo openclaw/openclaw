@@ -6,9 +6,23 @@ export type BreakSpan = Pick<FenceSpan, "start" | "end">;
 export type BreakSpans = {
   fences: FenceSpan[];
   tables: BreakSpan[];
-  /** Fences and whole-kept tables, sorted by start. */
+  /** Fences, whole-kept tables, and links as disjoint ranges sorted by start. */
   unsafe: BreakSpan[];
 };
+
+export function mergeOverlappingBreakSpans(spans: BreakSpan[]): BreakSpan[] {
+  const ordered = spans.toSorted((left, right) => left.start - right.start || right.end - left.end);
+  const merged: BreakSpan[] = [];
+  for (const span of ordered) {
+    const previous = merged.at(-1);
+    if (!previous || span.start >= previous.end) {
+      merged.push({ start: span.start, end: span.end });
+      continue;
+    }
+    previous.end = Math.max(previous.end, span.end);
+  }
+  return merged;
+}
 
 /**
  * A table that fits one message stays whole, like a fenced block: channel

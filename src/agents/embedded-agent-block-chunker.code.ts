@@ -1,4 +1,5 @@
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import type { MarkdownIndentedSource } from "../../packages/markdown-core/src/reasoning-tag-parser.js";
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { findCodeOwnership } from "../shared/text/code-regions.js";
@@ -17,6 +18,14 @@ type Replacement = {
   code: MarkdownIndentedSource;
   open: boolean;
 };
+
+export function resolveFenceReopenLine(fence: FenceSpan, maxChars: number): string | undefined {
+  const bareMarker = `${fence.indent}${fence.marker}`;
+  if (bareMarker.length * 2 + 3 > maxChars) {
+    return undefined;
+  }
+  return fence.openLine.length + bareMarker.length + 3 <= maxChars ? fence.openLine : bareMarker;
+}
 
 /** Project parser-owned code into the chunker's existing balanced-fence path. */
 export function prepareIndentedCode(
