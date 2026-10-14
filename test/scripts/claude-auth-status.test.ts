@@ -14,11 +14,13 @@ describe("claude-auth-status.sh", () => {
     expiresAt,
     apiKeys = 0,
     statusExit = 0,
+    missingProvidersInUse = [],
   }: {
     readiness?: "configured" | "unknown" | "missing";
     expiresAt?: number;
     apiKeys?: number;
     statusExit?: number;
+    missingProvidersInUse?: string[];
   } = {}) {
     const root = harness.createTempDir("openclaw-claude-auth-status-");
     const bin = path.join(root, "bin");
@@ -27,6 +29,7 @@ describe("claude-auth-status.sh", () => {
     const message = "Run claude auth login on the gateway host.";
     const status = {
       auth: {
+        missingProvidersInUse,
         runtimeAuthRoutes: readiness
           ? [
               {
@@ -145,6 +148,21 @@ describe("claude-auth-status.sh", () => {
       expect(result.stdout.trim()).toBe(output);
     },
   );
+
+  it("reports owner-confirmed missing managed auth without inferring native logout", () => {
+    const { run } = fixture({ missingProvidersInUse: ["anthropic"] });
+    const json = run("json");
+    expect(json.status).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      claude_code: { status: "UNKNOWN", expires_at_ms: 0 },
+      openclaw: { status: "MISSING", expires_at_ms: 0 },
+      needs_reauth: true,
+    });
+    const simple = run("simple");
+    expect(simple.status).toBe(1);
+    expect(simple.stdout.trim()).toBe("OPENCLAW_EXPIRED");
+    expect(run("full").stdout).toContain("Configure managed Anthropic authentication");
+  });
 
   it("reports command failure as unknown without reading credential file fallbacks", () => {
     const { root, run } = fixture({ statusExit: 1 });

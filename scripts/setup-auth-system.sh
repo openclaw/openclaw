@@ -2,6 +2,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPENCLAW_BIN="$(command -v openclaw)" || {
+    echo "ERROR: openclaw must be on PATH before installing auth monitoring." >&2
+    exit 1
+}
+NODE_BIN="$(command -v node)" || {
+    echo "ERROR: node must be on PATH before installing auth monitoring." >&2
+    exit 1
+}
+SCHEDULED_PATH="$(dirname "$OPENCLAW_BIN"):$(dirname "$NODE_BIN"):$PATH"
 
 echo "=== OpenClaw Auth System Setup ==="
 echo ""
@@ -32,7 +41,7 @@ echo ""
 
 echo "Step 3: Auth monitoring setup"
 echo ""
-echo "The auth monitor checks expiry every 30 minutes and notifies you."
+echo "The auth monitor checks login readiness and managed expiry every 30 minutes."
 echo ""
 echo "Configure notification channels:"
 echo ""
@@ -93,14 +102,22 @@ render_environment_line() {
 RENDERED_EXEC_START="ExecStart=$(systemd_quote_arg "$AUTH_MONITOR_PATH")"
 RENDERED_NTFY_LINE="$(render_environment_line "NOTIFY_NTFY" "openclaw-alerts" "$NTFY_TOPIC")"
 RENDERED_PHONE_LINE="$(render_environment_line "NOTIFY_PHONE" "+1234567890" "$PHONE_NUMBER")"
+RENDERED_PATH="${SCHEDULED_PATH//\\/\\\\}"
+RENDERED_PATH="${RENDERED_PATH//%/%%}"
+RENDERED_PATH="${RENDERED_PATH//\"/\\\"}"
+RENDERED_PATH_LINE="Environment=\"PATH=$RENDERED_PATH\""
 FOUND_EXEC_START=0
 FOUND_NTFY=0
 FOUND_PHONE=0
+FOUND_PATH=0
 
 while IFS= read -r line || [ -n "$line" ]; do
     if [[ "$line" =~ ^[[:space:]]*ExecStart=.*$ ]]; then
         printf '%s\n' "$RENDERED_EXEC_START"
         FOUND_EXEC_START=1
+    elif [[ "$line" =~ ^[[:space:]]*Environment=PATH=.*$ ]]; then
+        printf '%s\n' "$RENDERED_PATH_LINE"
+        FOUND_PATH=1
     elif [[ "$line" =~ ^[[:space:]]*#?[[:space:]]*Environment=NOTIFY_NTFY=.*$ ]]; then
         printf '%s\n' "$RENDERED_NTFY_LINE"
         FOUND_NTFY=1
@@ -122,6 +139,10 @@ if [ "$FOUND_NTFY" -ne 1 ]; then
 fi
 if [ "$FOUND_PHONE" -ne 1 ]; then
     echo "ERROR: NOTIFY_PHONE placeholder not found in $SERVICE_TEMPLATE" >&2
+    exit 1
+fi
+if [ "$FOUND_PATH" -ne 1 ]; then
+    echo "ERROR: PATH placeholder not found in $SERVICE_TEMPLATE" >&2
     exit 1
 fi
 

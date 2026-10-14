@@ -1,11 +1,12 @@
 [Unit]
-Description=OpenClaw Auth Expiry Monitor
+Description=OpenClaw Auth Monitor
 After=network.target
 
 [Service]
 Type=oneshot
-# setup-auth-system.sh renders this placeholder to the checked-out script path.
+# setup-auth-system.sh renders the checked-out script and CLI/runtime search path.
 ExecStart=@OPENCLAW_AUTH_MONITOR_PATH@
+Environment=PATH=@OPENCLAW_AUTH_MONITOR_EXEC_PATH@
 # Configure notification channels via environment
 Environment=WARN_HOURS=2
 # Environment=NOTIFY_PHONE=+1234567890
