@@ -27,7 +27,8 @@ import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import type { SessionsUsageResult, UsageOverviewSession } from "../../shared/usage-types.js";
+import { buildUsageOverview } from "../../shared/usage-overview.js";
+import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -38,7 +39,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { RespondFn } from "./types.js";
-import { loadUsageOverview } from "./usage-overview.js";
+import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 import * as usageSessionSelection from "./usage-session-selection.js";
 import { usageHandlers } from "./usage.js";
 
@@ -113,7 +114,7 @@ it("preserves global session addition order across agents before overview pagina
   await withUsageState(async (state) => {
     const config = getRuntimeConfig();
     const startMs = Date.UTC(2026, 8, 18);
-    const sessions: UsageOverviewSession[] = [];
+    const sessions = [];
     for (const [index, cost] of [0.2, 0.1, 0.3].entries()) {
       const agentId = index === 1 ? "opus" : "main";
       const sessionId = `ordered-${index}`;
@@ -155,15 +156,23 @@ it("preserves global session addition order across agents before overview pagina
           .flatMap((session) => session.instances.map((instance) => instance.sessionFile)),
       });
     }
-    const result = await loadUsageOverview({
-      sessions,
+    const loaded = await loadUsageSessionSummaries({
+      entries: sessions,
       config,
       startMs,
       endMs: startMs + 86_400_000 - 1,
-      options: { offset: 1 },
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-      projection: "overview",
     });
+    const result = {
+      ...buildUsageOverview({
+        rows: sessions.map((session, index) =>
+          Object.assign({}, session, { usage: loaded.summaries[index] ?? null }),
+        ),
+        options: { offset: 1 },
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      }),
+      cacheStatus: loaded.cacheStatus,
+    };
     expect(result.cacheStatus?.status).toBe("fresh");
     const expectedCost = 0.6000000000000001;
     expect(result.totals.totalCost).toBe(expectedCost);
@@ -332,7 +341,7 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
     const bob = ensureProfileForEmail("bob@example.test");
     const timestamp = Date.now() - 60_000;
     const fixtures = ["main", "opus"].flatMap((agentId, agentIndex) =>
-      Array.from({ length: 8 }, (_, index) => {
+      Array.from({ length: agentId === "main" ? 8 : 51 }, (_, index) => {
         const ordinal = agentIndex * 8 + index;
         return {
           agentId,
@@ -398,6 +407,12 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       { selected: [newest, secondNewest], includeContextWeight: false },
       { selected: [adaNewest], includeContextWeight: false, creatorKey: adaCreatorKey },
       { selected: [adaNewest], includeContextWeight: true, creatorKey: adaCreatorKey },
+      {
+        selected: adaFixtures.toReversed(),
+        includeContextWeight: true,
+        creatorKey: adaCreatorKey,
+        projection: "overview" as const,
+      },
     ]) {
       let payload: unknown;
       const transferredPrompts = new Set<string>();
@@ -421,6 +436,7 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
           limit: scenario.selected.length,
           includeContextWeight: scenario.includeContextWeight,
           creatorKey: scenario.creatorKey,
+          projection: scenario.projection,
         });
       } finally {
         for (const transfer of transfers) {

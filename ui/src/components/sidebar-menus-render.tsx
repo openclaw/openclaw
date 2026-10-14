@@ -43,7 +43,6 @@ import {
 } from "./sidebar-attention-dismissals.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 
-export { focusActiveAgentMenuItem } from "./app-sidebar-agent-menu.tsx";
 export {
   renderSidebarCatalogViewMenuForController,
   renderSidebarSessionGroupMenuForController,
@@ -74,8 +73,7 @@ export function renderSidebarRailPinMenuForController(
         class="sidebar-customize-menu sidebar-rail-pin-menu"
         label={t("chat.sidebar.reorderItem", { item: position.label })}
         {...controller.positionedMenuHandlers("railPin")}
-        onSelect={(item) => {
-          const value = item.getAttribute("value");
+        onSelect={(value) => {
           controller.closePositionedMenu("railPin");
           if (value === "remove") {
             host.sessionOrganizer.removeSidebarEntry(position.entry);
@@ -87,17 +85,15 @@ export function renderSidebarRailPinMenuForController(
             }
           }
         }}
-        content={
-          <>
-            {renderSidebarMenuAction("before", t("chat.sidebar.moveUp"), "arrowUp", {
-              disabled: !before,
-            })}
-            {renderSidebarMenuAction("after", t("chat.sidebar.moveDown"), "arrowDown", {
-              disabled: !after,
-            })}
-            {renderSidebarMenuAction("remove", t("nav.unpin"), "pin")}
-          </>
-        }
+        items={[
+          renderSidebarMenuAction("before", t("chat.sidebar.moveUp"), "arrowUp", {
+            disabled: !before,
+          }),
+          renderSidebarMenuAction("after", t("chat.sidebar.moveDown"), "arrowDown", {
+            disabled: !after,
+          }),
+          renderSidebarMenuAction("remove", t("nav.unpin"), "pin"),
+        ]}
       />
     </Show>
   );
@@ -167,7 +163,7 @@ export function renderSidebarAgentMenuForController(
           host.switchChipAgent(agentId);
         },
         onAskCapabilities: (agentId) => host.askAgentCapabilities(agentId),
-        onTabAway: () => trigger?.focus(),
+        anchor: trigger ?? undefined,
         onClose: (restoreFocus) => {
           if (controller.agentMenuPosition !== position) {
             return;

@@ -45,17 +45,12 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     const settingsItem = firstMenu?.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="command:agent-settings"]',
+      '[data-value="command:agent-settings"]',
     );
     expect(firstMenu).not.toBeNull();
     expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
     expect(settingsItem).not.toBeNull();
-    firstMenu?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: settingsItem },
-      }),
-    );
+    settingsItem?.click();
     await sidebar.updateComplete;
 
     trigger.click();
@@ -63,7 +58,9 @@ describe("AppSidebar transient menus", () => {
     const replacement = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     expect(replacement).not.toBe(firstMenu);
 
-    firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    firstMenu?.dispatchEvent(
+      new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }),
+    );
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(replacement);
   });
@@ -80,12 +77,9 @@ describe("AppSidebar transient menus", () => {
       new MouseEvent("contextmenu", { bubbles: true, composed: true, cancelable: true }),
     );
     await sidebar.updateComplete;
-    const menu = sidebar.querySelector<
-      HTMLElement & { open: boolean; updateComplete: Promise<boolean> }
-    >(".sidebar-rail-pin-menu")!;
+    const menu = sidebar.querySelector<HTMLElement>(".sidebar-rail-pin-menu")!;
     expect(menu).not.toBeNull();
-    await menu.updateComplete;
-    expect(menu.open).toBe(true);
+    expect(menu.getAttribute("role")).toBe("menu");
     expect(menu.closest("openclaw-menu-surface")).toBeNull();
     return menu;
   }
@@ -102,11 +96,7 @@ describe("AppSidebar transient menus", () => {
     sidebar.onUpdateSidebarEntries = update;
     await sidebar.updateComplete;
     const first = await openPinMenu(sidebar, "route:usage");
-    first.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: first.querySelector('wa-dropdown-item[value="remove"]')! },
-      }),
-    );
+    first.querySelector<HTMLElement>('[data-value="remove"]')!.click();
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([]);
     expect(first.isConnected).toBe(false);
@@ -120,10 +110,10 @@ describe("AppSidebar transient menus", () => {
     const replacement = await openPinMenu(sidebar, "route:usage");
     expect(replacement).not.toBe(first);
     const writes = update.mock.calls.length;
-    first.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    first.dispatchEvent(new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }));
     await sidebar.updateComplete;
     expect(replacement.isConnected).toBe(true);
-    expect(replacement.open).toBe(true);
+    expect(replacement.getAttribute("role")).toBe("menu");
     expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
     expect(update).toHaveBeenCalledTimes(writes);
   });
@@ -141,14 +131,10 @@ describe("AppSidebar transient menus", () => {
     const first = await openPinMenu(sidebar, "route:usage");
     const replacement = await openPinMenu(sidebar, "route:plugins");
     expect(replacement).not.toBe(first);
-    first.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    first.dispatchEvent(new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }));
     await sidebar.updateComplete;
-    expect(replacement.open).toBe(true);
-    replacement.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: replacement.querySelector('wa-dropdown-item[value="remove"]')! },
-      }),
-    );
+    expect(replacement.getAttribute("role")).toBe("menu");
+    replacement.querySelector<HTMLElement>('[data-value="remove"]')!.click();
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
     expect(sidebar.querySelector('.sidebar-rail [data-sidebar-entry="route:plugins"]')).toBeNull();

@@ -84,20 +84,20 @@ describe("AppSidebar agent roster", () => {
         await vi.waitFor(() => expect(sidebar.querySelector(".sidebar-agent-menu")).not.toBeNull());
         const menu = sidebar.querySelector(".sidebar-agent-menu");
         expect(
-          [...(menu?.querySelectorAll(":scope > wa-dropdown-item") ?? [])].map((item) =>
+          [...(menu?.querySelectorAll(':scope > [role^="menuitem"]') ?? [])].map((item) =>
             item.textContent?.trim(),
           ),
         ).toEqual(["New agent", "See all agents", "What can Harbor do?", "Harbor settings"]);
         expect(
-          menu?.querySelectorAll(".sidebar-agent-menu__agent-list wa-dropdown-item"),
+          menu?.querySelectorAll('.sidebar-agent-menu__agent-list [role^="menuitem"]'),
         ).toHaveLength(4);
         expect(
           [...(menu?.querySelectorAll("a") ?? [])].map((link) => link.getAttribute("href")),
         ).toEqual([]);
-        expect(menu?.querySelector('[value="scope:all"]')?.getAttribute("aria-current")).toBe(
+        expect(menu?.querySelector('[data-value="scope:all"]')?.getAttribute("aria-current")).toBe(
           "true",
         );
-        menu?.querySelector<HTMLElement>('[value="agent:main"]')?.click();
+        menu?.querySelector<HTMLElement>('[data-value="agent:main"]')?.click();
         await vi.waitFor(() =>
           expect(sidebar.querySelector(".sidebar-agent-card__main")?.textContent).toContain(
             "Harbor",
@@ -108,7 +108,7 @@ describe("AppSidebar agent roster", () => {
         await vi.waitFor(() =>
           expect(
             sidebar
-              .querySelector('.sidebar-agent-menu [value="agent:main"]')
+              .querySelector('.sidebar-agent-menu [data-value="agent:main"]')
               ?.getAttribute("aria-current"),
           ).toBe("true"),
         );
@@ -318,27 +318,30 @@ describe("AppSidebar agent roster", () => {
     const { sidebar } = await mountRoster();
     await toggleRoster(sidebar);
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    expect(sidebar.querySelectorAll(".sidebar-agent-roster__menu wa-dropdown-item")).toHaveLength(
+    expect(sidebar.querySelectorAll('.sidebar-agent-roster__menu [role^="menuitem"]')).toHaveLength(
       0,
     );
     const agentMenu = sidebar.querySelector(
       '[data-agent-group="main"] .sidebar-agent-roster__menu',
     )!;
-    agentMenu.dispatchEvent(new Event("wa-show"));
-    flush();
-    const agentOptions = [...agentMenu.querySelectorAll("wa-dropdown-item")];
-    expect(agentOptions.map((item) => item.getAttribute("value"))).toEqual([
+    const agentTrigger = agentMenu.querySelector<HTMLButtonElement>(".oc-menu-trigger")!;
+    const agentSurface = agentMenu.querySelector<HTMLElement>('[role="menu"]')!;
+    agentTrigger.click();
+    await vi.waitFor(() => expect(agentSurface.matches(":popover-open")).toBe(true));
+    const agentOptions = [...agentMenu.querySelectorAll('[role^="menuitem"]')];
+    expect(agentOptions.map((item) => item.getAttribute("data-value"))).toEqual([
       "main",
       "sessions",
       "collapse-others",
     ]);
-    agentMenu.dispatchEvent(new Event("wa-hide"));
-    agentMenu.dispatchEvent(new Event("wa-show"));
-    flush();
-    const retainedAgentOptions = [...agentMenu.querySelectorAll("wa-dropdown-item")];
+    agentTrigger.click();
+    await vi.waitFor(() => expect(agentSurface.matches(":popover-open")).toBe(false));
+    agentTrigger.click();
+    await vi.waitFor(() => expect(agentSurface.matches(":popover-open")).toBe(true));
+    const retainedAgentOptions = [...agentMenu.querySelectorAll('[role^="menuitem"]')];
     expect(retainedAgentOptions).toHaveLength(agentOptions.length);
     retainedAgentOptions.forEach((item, index) => expect(item).toBe(agentOptions[index]));
-    expect(sidebar.querySelectorAll(".sidebar-agent-roster__menu wa-dropdown-item")).toHaveLength(
+    expect(sidebar.querySelectorAll('.sidebar-agent-roster__menu [role^="menuitem"]')).toHaveLength(
       3,
     );
     await vi.dynamicImportSettled();

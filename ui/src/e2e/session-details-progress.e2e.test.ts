@@ -6,6 +6,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requ
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -305,8 +306,8 @@ suite.define(() => {
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await page.setViewportSize({ width: 430, height: 900 });
-        expect(await trigger.getAttribute("aria-expanded")).toBe("false");
-        await trigger.click();
+        expect(await details.isVisible()).toBe(false);
+        await openChatDetails(page);
         await expect.poll(() => details.getAttribute("role")).toBe("dialog");
         await geometry(false);
         await capture("narrow.png");

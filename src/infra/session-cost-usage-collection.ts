@@ -331,14 +331,21 @@ export async function resolveUsageCostTranscriptPaths(
   sessionFiles: readonly string[],
   access: UsageCostCollectionAccess,
 ): Promise<Array<string | undefined>> {
+  // Physical ownership is stable for this batch; every actual read retains database custody.
+  const storePaths = new Map<string, string>();
   const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: sessionFiles.map((sessionFile) => async () => {
       const marker = parseSqliteSessionFileMarker(sessionFile);
       if (marker) {
-        const { path: storePath } = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
-          agentId: marker.agentId,
-          env: access.env,
-        });
+        const targetKey = JSON.stringify([marker.agentId, marker.storePath]);
+        let storePath = storePaths.get(targetKey);
+        if (storePath === undefined) {
+          storePath = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
+            agentId: marker.agentId,
+            env: access.env,
+          }).path;
+          storePaths.set(targetKey, storePath);
+        }
         return formatSqliteSessionFileMarker({ ...marker, storePath });
       }
       try {

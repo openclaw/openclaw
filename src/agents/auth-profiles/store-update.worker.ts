@@ -224,13 +224,16 @@ export function updateAuthProfileStoreInDatabase(
     };
     let credentialFacts: AuthStoreUpdateCommitted["credentialFacts"];
     if (publication.credentialsChanged) {
-      const { receipt } = authProfileCredentialPublication.capture(database, () => {
-        if (payload === null) {
-          deleteAuthProfileJsonCell(database, "store", kind);
-        } else {
-          writeAuthProfileJsonCell(database, "store", kind, payload);
-        }
-      });
+      const { receipt } = authProfileCredentialPublication.capture(
+        sqlPublicationAnchor(database),
+        () => {
+          if (payload === null) {
+            deleteAuthProfileJsonCell(database, "store", kind);
+          } else {
+            writeAuthProfileJsonCell(database, "store", kind, payload);
+          }
+        },
+      );
       credentialFacts = authProfileCredentialPublication.bound(receipt);
       deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database), {
         authCredentials: credentialFacts,
