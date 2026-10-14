@@ -123,8 +123,9 @@ export function resolvePinnedBun(
       deps.fs.rmSync(staging, { recursive: true, force: true });
     }
     return { command };
-  } catch {
-    return { reason: "could not stage the pinned fork (offline or cache unavailable)" };
+  } catch (error) {
+    const cause = (error instanceof Error ? error.message : String(error)).split(/\r?\n/u, 1)[0];
+    return { reason: `could not stage the pinned fork: ${cause}` };
   }
 }
 

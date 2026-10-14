@@ -121,13 +121,16 @@ describe("pinned Bun resolution", () => {
     expect(fs.readFileSync(command, "utf8")).toBe(bytes);
   });
 
-  it("reports stage failure and removes incomplete staging files", () => {
+  it.each([
+    { failure: new Error("checksum mismatch\nadditional details"), cause: "checksum mismatch" },
+    { failure: new Error("permission denied\r\nadditional details"), cause: "permission denied" },
+  ])("reports stage failure ($cause) on one line and cleans up", ({ failure, cause }) => {
     const { env, deps, command, stage } = fixture();
     stage.mockImplementation(() => {
-      throw new Error("offline");
+      throw failure;
     });
     expect(resolvePinnedBun(env, deps)).toEqual({
-      reason: "could not stage the pinned fork (offline or cache unavailable)",
+      reason: `could not stage the pinned fork: ${cause}`,
     });
     expect(fs.existsSync(command)).toBe(false);
     expect(fs.readdirSync(path.dirname(path.dirname(command)))).toEqual(["bin"]);
