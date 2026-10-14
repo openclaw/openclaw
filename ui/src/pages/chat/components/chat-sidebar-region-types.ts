@@ -20,7 +20,7 @@ export type SidebarPanelDefinition = {
     | typeof emptyLegacyContent
     | null;
   loading: LegacyTemplateResult;
-  headerAction?: LegacyTemplateResult;
+  headerAction?: LegacyTemplateResult | ReturnType<typeof solidContent>;
   empty: {
     description: string;
     action?: LegacyTemplateResult;

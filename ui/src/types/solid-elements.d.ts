@@ -22,7 +22,7 @@ export type { JSX } from "@solidjs/web";
 type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
 type Tooltip = HTMLElementTagNameMap["openclaw-tooltip"];
 
-type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
+export type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
 type PluginViewProperties = {
   [Surface in keyof ControlUiSurfaceProps]: {
     "prop:surface": Surface;

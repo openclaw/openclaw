@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { html, render, type nothing, type TemplateResult } from "lit";
+import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
+import { emptyLegacyContent, LitContent } from "../../lit/solid-content.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -16,10 +18,7 @@ type BoardTestPane = HTMLElement & {
   state: ChatPageHost;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
-  renderBoardPanel: (
-    board: ResolvedBoardView,
-    layout: ChatPageHost["sidebarLayout"],
-  ) => TemplateResult | typeof nothing;
+  renderBoardPanel: (board: ResolvedBoardView, layout: ChatPageHost["sidebarLayout"]) => unknown;
   releaseBoardProviderLease: () => void;
 };
 
@@ -45,18 +44,22 @@ function createGatewayBoardPane(sessionKey: string) {
       snapshot: { client, phase: "connected", hello: { features: { methods: ["board.get"] } } },
     },
   } as unknown as ApplicationContext;
-  // Lit only starts updating once connected, so the skeleton's reflected
-  // attributes need a container that lives in the document.
+  // The board custom element must be connected before its loading state commits.
   const container = document.body.appendChild(document.createElement("div"));
   const layout = openSlot({ columns: [] }, "dashboard");
+  const [content, setContent] = createSignal<unknown>(emptyLegacyContent);
+  const mounted = mountSolid(() => <LitContent value={content()} />, { container });
   return {
     pane,
     request,
     snapshot,
     container,
-    draw: () => render(pane.renderBoardPanel(pane.resolveBoardView(), layout), container),
+    draw: () => {
+      setContent(pane.renderBoardPanel(pane.resolveBoardView(), layout));
+      flush();
+    },
     cleanup: () => {
-      render(html``, container);
+      mounted.unmount();
       container.remove();
       pane.releaseBoardProviderLease();
     },
