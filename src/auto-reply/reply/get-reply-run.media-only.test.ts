@@ -405,8 +405,7 @@ vi.mock("./session-reset-prompt.js", () => ({
 }));
 
 vi.mock("./typing-mode.js", async (importOriginal) => ({
-  createTypingSignaler: (await importOriginal<typeof import("./typing-mode.js")>())
-    .createTypingSignaler,
+  ...(await importOriginal<typeof import("./typing-mode.js")>()),
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
 
