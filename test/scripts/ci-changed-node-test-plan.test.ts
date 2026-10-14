@@ -1095,17 +1095,30 @@ describe("CI changed Node test plan", () => {
     expect(createChangedNodeTestShards([target], { cwd })).toBeNull();
   });
 
-  it("keeps more than 96 changed tests and a direct plugin test precise with canonical worker budgets", () => {
+  it("keeps more than 96 changed tests with E2E and plugin owners precise with canonical worker budgets", () => {
     const cronTests = listGitTrackedFiles({ pathspecs: "src/cron" })
       ?.filter((file) => file.endsWith(".test.ts") && !/\.(?:e2e|live)\.test\.ts$/u.test(file))
       .slice(0, 97);
     expect(cronTests?.length).toBe(97);
-    const changedTests = [...(cronTests ?? []), "src/plugins/tools.optional.test.ts"];
+    const e2eTarget = "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts";
+    const changedTests = [...(cronTests ?? []), "src/plugins/tools.optional.test.ts", e2eTarget];
+    const expectedTargets = [...changedTests, "test/scripts/tsgo-core-test-shards.test.ts"];
     const shards = createChangedNodeTestShards(changedTests);
     expect(shards).not.toBeNull();
     const targets = selectedFiles(shards);
-    expect(targets.toSorted()).toEqual(changedTests?.toSorted());
+    expect(targets.toSorted()).toEqual(expectedTargets.toSorted());
     expect(new Set(targets).size).toBe(targets.length);
+    const e2eRow = expectDefined(
+      shards?.find((shard) => shard.targets?.includes(e2eTarget)),
+      "E2E target row",
+    );
+    expect(e2eRow.pretestBuildMode).toBe("private-qa");
+    expect(
+      resolveShardPlans({ OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(e2eRow.targets) }),
+    ).toContainEqual({ kind: "target", name: e2eTarget, target: e2eTarget });
+    expect(buildVitestRunPlans([e2eTarget]).map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.e2e.config.ts",
+    ]);
     const full = createNodeTestShardBundles({
       changedPaths: changedTests,
       compactMode: "pull-request",
@@ -1150,7 +1163,7 @@ describe("CI changed Node test plan", () => {
     try {
       const measured = createChangedNodeTestShards(changedTests);
       expect(measured).not.toBeNull();
-      expect(selectedFiles(measured).toSorted()).toEqual(changedTests.toSorted());
+      expect(selectedFiles(measured).toSorted()).toEqual(expectedTargets.toSorted());
       expect(
         measured?.every((job) => (job.predictedTestSeconds ?? job.predictedSeconds ?? 0) <= 150),
       ).toBe(true);

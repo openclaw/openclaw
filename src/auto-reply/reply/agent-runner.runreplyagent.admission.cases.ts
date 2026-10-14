@@ -268,6 +268,7 @@ export function registerReplyAdmissionCases({
         storePath,
       },
     });
+    onTestFinished(() => authorized.authorization?.release?.());
     expect(authorized.error).toBeNull();
     const authority = expectDefined(
       authorized.authorization,

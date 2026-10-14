@@ -4523,13 +4523,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("covers every auto-reply reply test exactly once across split shards", () => {
+  it("covers every executable auto-reply reply test exactly once across split shards", () => {
     const actual = defaultShards
       .filter((shard) => shard.shardName.startsWith("auto-reply-reply-"))
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
 
-    expect(actual).toEqual(listTestFiles("src/auto-reply/reply"));
+    expect(actual).toEqual(listMatchedTestFiles(createAutoReplyReplyVitestConfig({})));
     expect(new Set(actual).size).toBe(actual.length);
   });
 });
