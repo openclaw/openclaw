@@ -101,10 +101,10 @@ describe("install runtime enforcement", () => {
       {
         name: "old launcher",
         launcher: "/opt/bun/bin/bun",
-        bun: "1.3.9",
+        bun: "1.4.2",
         persistent: undefined,
         accepted: false,
-        error: "Bun launcher /opt/bun/bin/bun requires Bun 1.4+",
+        error: "Bun launcher /opt/bun/bin/bun requires Bun 1.4.3+",
       },
       {
         name: "relative launcher",
@@ -125,7 +125,7 @@ describe("install runtime enforcement", () => {
       {
         name: "same Bun-backed node before supported Node with marker",
         launcher: "/opt/bun/bin/bun",
-        bun: "1.3.9",
+        bun: "1.4.2",
         persistent: "same-bun",
         accepted: false,
         error: "detected Node missing",

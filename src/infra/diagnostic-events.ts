@@ -58,7 +58,10 @@ import {
   shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
+import {
+  MAX_DIAGNOSTIC_WORKER_SLOTS,
+  normalizeDiagnosticWorkerScript,
+} from "./worker-diagnostic-script.js";
 
 export type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 
@@ -1258,6 +1261,15 @@ function emitDiagnosticEventWithTrust(
       enriched.thread === undefined || enriched.thread === "main"
         ? "main"
         : normalizeDiagnosticWorkerScript(enriched.thread);
+    if (
+      enriched.thread !== "code-mode-node.worker.js" ||
+      typeof enriched.workerSlot !== "number" ||
+      !Number.isInteger(enriched.workerSlot) ||
+      enriched.workerSlot < 1 ||
+      enriched.workerSlot > MAX_DIAGNOSTIC_WORKER_SLOTS
+    ) {
+      enriched.workerSlot = undefined;
+    }
   }
   const { hostPluginId, internal = false, privateData } = options;
   const trustedTraceContext = options.trustedTraceContext === true;

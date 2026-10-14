@@ -1145,6 +1145,7 @@ src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-checksum.ts
 src/infra/sqlite-wal-filesystem.ts
 src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
@@ -1608,6 +1609,7 @@ src/process/spawn-broker/context.ts
 src/process/spawn-broker/execa-client.ts
 src/process/spawn-broker/execa-message.ts
 src/process/spawn-broker/execa-protocol.ts
+src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
@@ -1798,6 +1800,7 @@ src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts
+src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
@@ -2409,6 +2412,7 @@ src/config/sessions/session-manual-compact-entry.ts
 src/config/sessions/session-manual-compact-selection.ts
 src/config/sessions/store-maintenance-plan.ts
 src/config/sessions/store-maintenance-preserve-snapshot.ts
+src/agents/auth-profiles/authorization-lifetime.ts
 src/agents/auth-profiles/constants.ts
 src/agents/auth-profiles/credential-schema.ts
 src/agents/auth-profiles/credential-write-custody.ts

@@ -37,11 +37,8 @@ type SessionMessageSubscription = Awaited<ReturnType<SessionCapability["subscrib
 type NarrationSource = Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
 
 type NarrationSubscription = {
-  key: string;
   source: NarrationSource;
-  connectionIdentity: object;
   subscription: SessionMessageSubscription;
-  release?: Promise<void>;
 };
 
 type NarrationRetry = {
@@ -109,7 +106,6 @@ export class SidebarSessionNarrationController {
   private agentId = "main";
   private desiredKeys = new Set<string>();
   private subscriptions = new Map<string, NarrationSubscription>();
-  private pendingReleases = new Map<NarrationSubscription, NarrationRetry>();
   private pendingSubscriptions = new Map<string, PendingSubscription>();
   private streams = new Map<string, NarrationStream>();
   private runIds = new Map<string, string>();
@@ -153,7 +149,6 @@ export class SidebarSessionNarrationController {
     if (disconnected || !this.enabled) {
       this.desiredKeys = new Set();
       this.resetSubscriptions();
-      this.syncReleases();
       this.clearAllLines();
       return;
     }
@@ -205,7 +200,6 @@ export class SidebarSessionNarrationController {
       }
       void this.subscribeKey(key);
     }
-    this.syncReleases();
   }
 
   handleEvent(event: GatewayEventFrame): void {
@@ -237,10 +231,9 @@ export class SidebarSessionNarrationController {
     this.resetSubscriptions();
     this.clearAllLines();
     this.connected = false;
-    this.syncReleases();
   }
 
-  /** Final teardown retains cleanup custody; no later sync will resume it. */
+  /** Final teardown prevents later syncs from resuming presentation. */
   dispose(): void {
     if (this.disposed) {
       return;
@@ -274,7 +267,7 @@ export class SidebarSessionNarrationController {
         agentId: pending.agentId ?? undefined,
         mode: "narration",
       });
-      const owned = { key, source, connectionIdentity, subscription };
+      const owned = { source, subscription };
       const current = this.pendingSubscriptions.get(key) === pending;
       if (current) {
         this.pendingSubscriptions.delete(key);
@@ -290,7 +283,6 @@ export class SidebarSessionNarrationController {
         return;
       }
       this.subscriptions.set(key, owned);
-      this.syncReleases();
     } catch (error) {
       if (this.pendingSubscriptions.get(key) === pending) {
         this.scheduleRetry(pending, error);
@@ -316,8 +308,6 @@ export class SidebarSessionNarrationController {
       retry.retryAt = 0;
       if (this.input) {
         this.sync(this.input);
-      } else {
-        this.syncReleases();
       }
     }, delay);
   }
@@ -348,64 +338,10 @@ export class SidebarSessionNarrationController {
   }
 
   private releaseSubscription(owned: NarrationSubscription): void {
-    const retry = this.pendingReleases.get(owned) ?? createNarrationRetry();
-    if (owned.release || retry.retryAt > Date.now()) {
-      return;
-    }
-    this.cancelRetry(retry);
-    retry.retryAt = Infinity;
-    this.pendingReleases.set(owned, retry);
-    owned.release = owned.source
-      .unsubscribeMessages(owned.subscription)
-      .then(() => {
-        this.pendingReleases.delete(owned);
-      })
-      .catch((error: unknown) => {
-        if (this.pendingReleases.get(owned) === retry && !this.releaseIsDesired(owned)) {
-          this.scheduleRetry(retry, error);
-        }
-      })
-      .finally(() => {
-        owned.release = undefined;
-        this.syncReleases();
-      });
-  }
-
-  private releaseIsDesired(owned: NarrationSubscription): boolean {
-    return (
-      owned.source === this.source &&
-      this.desiredKeys.has(owned.key) &&
-      (owned.subscription.agentId ?? null) === this.subscriptionAgentId(owned.key)
-    );
-  }
-
-  private syncReleases(): void {
-    for (const [owned, retry] of this.pendingReleases) {
-      // Final cleanup uses the original handles even after presentation ends.
-      // Their coordinator owns connection retirement and shared-viewer safety.
-      if (
-        !this.disposed &&
-        (!this.connected || owned.connectionIdentity !== this.connectionIdentity)
-      ) {
-        this.cancelRetry(retry);
-        retry.retryAt = 0;
-        // DOM detachment pauses cleanup without retiring the socket's leases.
-        if (this.input || owned.connectionIdentity !== this.connectionIdentity) {
-          this.pendingReleases.delete(owned);
-        }
-        continue;
-      }
-      if (this.releaseIsDesired(owned)) {
-        this.cancelRetry(retry);
-        retry.retryAt = 0;
-        // Reacquire through the coordinator before retiring the old handle: a
-        // timed-out unsubscribe may already have removed its wire observer.
-        if (!this.subscriptions.has(owned.key)) {
-          continue;
-        }
-      }
-      this.releaseSubscription(owned);
-    }
+    // A failed unsubscribe may leave narration traffic until the next reconnect.
+    void owned.source.unsubscribeMessages(owned.subscription).catch((error: unknown) => {
+      console.warn("Failed to release sidebar narration subscription", error);
+    });
   }
 
   private resetSubscriptions(): void {
