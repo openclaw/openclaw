@@ -1,13 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { render as renderSolid } from "@solidjs/testing-library";
-import { html, nothing, render } from "lit";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderHoverMarquee } from "./hover-marquee.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import type { MarqueeOptions } from "./hover-marquee-controller.ts";
 import { HoverMarquee } from "./solid/hover-marquee.tsx";
-
-const solidDisposers: Array<() => void> = [];
 
 function measurementClock() {
   let nextFrame = 0;
@@ -78,12 +75,7 @@ function measurementClock() {
 }
 
 afterEach(() => {
-  solidDisposers.splice(0).forEach((dispose) => dispose());
-  for (const container of document.body.children) {
-    if (container instanceof HTMLElement) {
-      render(nothing, container);
-    }
-  }
+  cleanupSolid();
   document.body.replaceChildren();
   document.documentElement.removeAttribute("dir");
   vi.useRealTimers();
@@ -91,50 +83,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function denseTitles(
-  count: number,
-  options: Parameters<typeof renderHoverMarquee>[2],
-  renderer: "lit" | "solid",
-) {
+function denseTitles(count: number, options: MarqueeOptions) {
   const container = document.createElement("div");
   document.body.append(container);
   const initialTitle = "A long conversation title";
-  let show: (title?: string, className?: string) => void;
-  if (renderer === "solid") {
-    const [props, setProps] = createSignal({ title: initialTitle, className: "session-name" });
-    const view = renderSolid(
-      () =>
-        Array.from({ length: count }, () => (
-          <a class="session-row-host">
-            <HoverMarquee
-              content={props().title}
-              class={props().className}
-              options={options ?? {}}
-            />
-          </a>
-        )),
-      { container },
-    );
-    solidDisposers.push(view.unmount);
-    show = (title = initialTitle, className = "session-name") => {
-      setProps({ title, className });
-      flush();
-    };
+  const [props, setProps] = createSignal({ title: initialTitle, className: "session-name" });
+  mountSolid(
+    () =>
+      Array.from({ length: count }, () => (
+        <a class="session-row-host">
+          <HoverMarquee content={props().title} class={props().className} options={options} />
+        </a>
+      )),
+    { container },
+  );
+  const show = (title = initialTitle, className = "session-name") => {
+    setProps({ title, className });
     flush();
-  } else {
-    show = (title = initialTitle, className = "session-name") => {
-      render(
-        html`${Array.from(
-          { length: count },
-          () => html`<a class="session-row-host">
-            ${renderHoverMarquee(html`${title}`, className, options)}
-          </a>`,
-        )}`,
-        container,
-      );
-    };
-    show();
-  }
+  };
+  flush();
   const labels = [...container.querySelectorAll<HTMLElement>(".hover-marquee")];
   const operations: string[] = [];
   for (const label of labels) {
@@ -158,9 +125,8 @@ function denseTitles(
   return { container, show, labels, operations };
 }
 
-describe.each(["lit", "solid"] as const)("%s hover marquee measurement budget", (renderer) => {
-  const titles = (count: number, options: Parameters<typeof renderHoverMarquee>[2] = {}) =>
-    denseTitles(count, options, renderer);
+describe("hover marquee measurement budget", () => {
+  const titles = (count: number, options: MarqueeOptions = {}) => denseTitles(count, options);
   it.each([false, true])("defers unseen label measurement and observers (loop=%s)", (loop) => {
     const clock = measurementClock();
     const { labels, operations } = titles(2, { loop });

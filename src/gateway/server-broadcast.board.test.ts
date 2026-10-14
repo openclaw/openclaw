@@ -14,7 +14,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
-import { ensureUserProfileRoleSchema } from "../state/user-profiles-schema.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { boardStore } from "./board-store.js";
@@ -83,203 +82,207 @@ describe("board and progress event session ownership", () => {
   ] as const)(
     "delivers $feature events only to the canonical draft owner in $scope mode",
     async ({ scope, feature }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const cfg: OpenClawConfig = {
-          ...rolePolicyConfig(),
-          agents: {
-            ownership: "explicit",
-            defaults: { systemAgent: { agentId: "main" } },
-            entries: { main: {}, work: {} },
-          },
-          session: { scope },
-          tools: { exec: { mode: "ask" } },
-        };
-        setRuntimeConfigSnapshot(cfg, cfg);
-        const targets = [
-          { sessionKey: "global", agentId: "work", label: "raw-owner" },
-          { sessionKey: "agent:work:global", agentId: "work", label: "ordinary-owner" },
-          { sessionKey: "global", agentId: "main", label: "other-agent-owner" },
-        ];
-        const peers = targets.map(({ label }) => {
-          const peer = makeClient(label, "operator", ["operator.read"]);
-          Object.assign(peer.client, roleClient("view", label));
-          return peer;
-        });
-        for (const [index, target] of targets.entries()) {
-          await upsertSessionEntryCore(target, {
-            sessionId: target.label,
-            label: target.label,
-            updatedAt: 1,
-            visibility: "draft",
-            createdActor: {
-              type: "human",
-              source: "profile",
-              id: peers[index]!.client.authenticatedUserProfile!.profileId,
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          const cfg: OpenClawConfig = {
+            ...rolePolicyConfig(),
+            agents: {
+              ownership: "explicit",
+              defaults: { systemAgent: { agentId: "main" } },
+              entries: { main: {}, work: {} },
             },
+            session: { scope },
+            tools: { exec: { mode: "ask" } },
+          };
+          setRuntimeConfigSnapshot(cfg, cfg);
+          const targets = [
+            { sessionKey: "global", agentId: "work", label: "raw-owner" },
+            { sessionKey: "agent:work:global", agentId: "work", label: "ordinary-owner" },
+            { sessionKey: "global", agentId: "main", label: "other-agent-owner" },
+          ];
+          const peers = targets.map(({ label }) => {
+            const peer = makeClient(label, "operator", ["operator.read"]);
+            Object.assign(peer.client, roleClient("view", label));
+            return peer;
           });
-        }
-        const projection = await createSessionRowProjection({ cfg });
-        const connection = createGatewayConnectionState({
-          scheduler: createTestGatewayScheduler(),
-          bootId: "board-owner-events",
-          cfg,
-        });
-        const detach = connection.attachSessionRowProjection(projection);
-        for (const { client } of peers) {
-          connection.clients.add(client);
-        }
-        const { broadcast, broadcastToConnIds } = connection;
-        const handlers = { ...createProgressCardHandlers(), ...createBoardHandlers(boardStore) };
-        const context = {
-          broadcast,
-          broadcastToConnIds,
-          getRuntimeConfig: () => cfg,
-          getSessionEventSubscriberConnIds: () => new Set(peers.map(({ client }) => client.connId)),
-          chatAbortControllers: new Map(),
-          resolveGatewayContext: (): GatewayRequestContext => context,
-        } as unknown as GatewayRequestContext;
-        bindSessionRowProjection(context, connection.getSessionRowProjection);
-        const invoke = async (method: string, params: Record<string, unknown>) => {
-          const respond = vi.fn<RespondFn>();
-          await handlers[method]!({
-            req: { type: "req", id: "event-owner", method, params },
-            params,
-            client: peers[0]!.client,
-            isWebchatConnect: () => false,
-            respond,
-            context,
-          });
-          await flushPendingSessionsChangedEvents(context);
-          expect(respond.mock.calls[0]?.[0]).toBe(true);
-          return peers.map(({ socket }) => {
-            const frames = socket.send.mock.calls.map(([frame]) => JSON.parse(String(frame)));
-            socket.send.mockClear();
-            return frames.map(({ event, payload }) => ({ event, payload }));
-          });
-        };
-        try {
-          if (feature === "progress") {
-            const rawWrite = await invoke("progressCard.put", {
-              sessionKey: "global",
-              agentId: "work",
-              plan: [{ step: "Done", status: "completed" }],
+          for (const [index, target] of targets.entries()) {
+            await upsertSessionEntryCore(target, {
+              sessionId: target.label,
+              label: target.label,
+              updatedAt: 1,
+              visibility: "draft",
+              createdActor: {
+                type: "human",
+                source: "profile",
+                id: peers[index]!.client.authenticatedUserProfile!.profileId,
+              },
             });
-            const rawClear = await invoke("progressCard.put", {
-              sessionKey: "global",
-              agentId: "work",
-              expectedRevision: 1,
-            });
-            const ordinaryWrite = await invoke("progressCard.put", {
-              sessionKey: "agent:work:global",
-              markdown: "Ordinary session",
-            });
-            expect(await progressCardStore.get("global", "work")).toBeNull();
-            expect((await progressCardStore.get("agent:work:global", "work"))?.markdown).toBe(
-              "Ordinary session",
-            );
-            const changed = (revision: number | null) => ({
-              event: "progressCard.changed",
-              payload: { sessionKey: "agent:work:global", revision },
-            });
-            expect({ rawWrite, rawClear, ordinaryWrite }).toEqual({
-              rawWrite: [[changed(1)], [], []],
-              rawClear: [[changed(null)], [], []],
-              ordinaryWrite: [[], [changed(1)], []],
-            });
-            return;
           }
+          const projection = await createSessionRowProjection({ cfg });
+          const connection = createGatewayConnectionState({
+            scheduler: createTestGatewayScheduler(),
+            bootId: "board-owner-events",
+            cfg,
+          });
+          const detach = connection.attachSessionRowProjection(projection);
+          for (const { client } of peers) {
+            connection.clients.add(client);
+          }
+          const { broadcast, broadcastToConnIds } = connection;
+          const handlers = { ...createProgressCardHandlers(), ...createBoardHandlers(boardStore) };
+          const context = {
+            broadcast,
+            broadcastToConnIds,
+            getRuntimeConfig: () => cfg,
+            getSessionEventSubscriberConnIds: () =>
+              new Set(peers.map(({ client }) => client.connId)),
+            chatAbortControllers: new Map(),
+            resolveGatewayContext: (): GatewayRequestContext => context,
+          } as unknown as GatewayRequestContext;
+          bindSessionRowProjection(context, connection.getSessionRowProjection);
+          const invoke = async (method: string, params: Record<string, unknown>) => {
+            const respond = vi.fn<RespondFn>();
+            await handlers[method]!({
+              req: { type: "req", id: "event-owner", method, params },
+              params,
+              client: peers[0]!.client,
+              isWebchatConnect: () => false,
+              respond,
+              context,
+            });
+            await flushPendingSessionsChangedEvents(context);
+            expect(respond.mock.calls[0]?.[0]).toBe(true);
+            return peers.map(({ socket }) => {
+              const frames = socket.send.mock.calls.map(([frame]) => JSON.parse(String(frame)));
+              socket.send.mockClear();
+              return frames.map(({ event, payload }) => ({ event, payload }));
+            });
+          };
+          try {
+            if (feature === "progress") {
+              const rawWrite = await invoke("progressCard.put", {
+                sessionKey: "global",
+                agentId: "work",
+                plan: [{ step: "Done", status: "completed" }],
+              });
+              const rawClear = await invoke("progressCard.put", {
+                sessionKey: "global",
+                agentId: "work",
+                expectedRevision: 1,
+              });
+              const ordinaryWrite = await invoke("progressCard.put", {
+                sessionKey: "agent:work:global",
+                markdown: "Ordinary session",
+              });
+              expect(await progressCardStore.get("global", "work")).toBeNull();
+              expect((await progressCardStore.get("agent:work:global", "work"))?.markdown).toBe(
+                "Ordinary session",
+              );
+              const changed = (revision: number | null) => ({
+                event: "progressCard.changed",
+                payload: { sessionKey: "agent:work:global", revision },
+              });
+              expect({ rawWrite, rawClear, ordinaryWrite }).toEqual({
+                rawWrite: [[changed(1)], [], []],
+                rawClear: [[changed(null)], [], []],
+                ordinaryWrite: [[], [changed(1)], []],
+              });
+              return;
+            }
 
-          const target = { sessionKey: "global", agentId: "work" };
-          const rawUpdate = await invoke("board.update", {
-            ...target,
-            ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
-          });
-          const rawPut = await invoke("board.widget.put", {
-            ...target,
-            name: "status",
-            content: { kind: "html", html: "<p>Working</p>" },
-            declared: { tools: ["status.refresh"] },
-          });
-          const widget = (await boardStore.getSnapshot(target)).widgets[0]!;
-          const rawGrant = await invoke("board.widget.grant", {
-            ...target,
-            name: "status",
-            decision: "granted",
-            revision: widget.revision,
-            instanceId: widget.instanceId,
-          });
-          const emptyUpdate = await invoke("board.update", { ...target, ops: [] });
-          const ordinaryUpdate = await invoke("board.update", {
-            sessionKey: "agent:work:global",
-            ops: [{ kind: "tab_create", tabId: "ordinary", title: "Ordinary" }],
-          });
-          const otherAgentUpdate = await invoke("board.update", {
-            sessionKey: "global",
-            agentId: "main",
-            ops: [{ kind: "tab_create", tabId: "main-notes", title: "Main notes" }],
-          });
-          expect(await boardStore.getSnapshot(target)).toMatchObject({
-            sessionKey: "global",
-            revision: 3,
-            widgets: [{ name: "status", grantState: "granted" }],
-          });
-          const changed = (agentId: string, revision: number, widgetName?: string) => ({
-            event: "board.changed",
-            payload: {
-              sessionKey: `agent:${agentId}:global`,
-              revision,
-              ...(widgetName ? { widget: widgetName } : {}),
-            },
-          });
-          const sessionChanged = (sessionKey: string, agentId: string, label: string) => ({
-            event: "sessions.changed",
-            payload: expect.objectContaining({
-              sessionKey,
-              agentId,
-              sessionId: label,
-              label,
-              reason: "board",
-              session: expect.objectContaining({ key: sessionKey, agentId, sessionId: label }),
-            }),
-          });
-          const rawSession = sessionChanged("global", "work", "raw-owner");
-          expect({
-            rawUpdate,
-            rawPut,
-            rawGrant,
-            emptyUpdate,
-            ordinaryUpdate,
-            otherAgentUpdate,
-          }).toEqual({
-            rawUpdate: [[changed("work", 1), rawSession], [], []],
-            rawPut: [[changed("work", 2, "status"), rawSession], [], []],
-            rawGrant: [[changed("work", 3)], [], []],
-            emptyUpdate: [[], [], []],
-            ordinaryUpdate: [
-              [],
-              [changed("work", 1), sessionChanged("agent:work:global", "work", "ordinary-owner")],
-              [],
-            ],
-            otherAgentUpdate: [
-              [],
-              [],
-              [changed("main", 1), sessionChanged("global", "main", "other-agent-owner")],
-            ],
-          });
-        } finally {
-          await flushPendingSessionsChangedEvents(context);
-          detach();
-          projection.dispose();
-          await connection.mentionInbox.dispose();
-        }
-      });
+            const target = { sessionKey: "global", agentId: "work" };
+            const rawUpdate = await invoke("board.update", {
+              ...target,
+              ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
+            });
+            const rawPut = await invoke("board.widget.put", {
+              ...target,
+              name: "status",
+              content: { kind: "html", html: "<p>Working</p>" },
+              declared: { tools: ["status.refresh"] },
+            });
+            const widget = (await boardStore.getSnapshot(target)).widgets[0]!;
+            const rawGrant = await invoke("board.widget.grant", {
+              ...target,
+              name: "status",
+              decision: "granted",
+              revision: widget.revision,
+              instanceId: widget.instanceId,
+            });
+            const emptyUpdate = await invoke("board.update", { ...target, ops: [] });
+            const ordinaryUpdate = await invoke("board.update", {
+              sessionKey: "agent:work:global",
+              ops: [{ kind: "tab_create", tabId: "ordinary", title: "Ordinary" }],
+            });
+            const otherAgentUpdate = await invoke("board.update", {
+              sessionKey: "global",
+              agentId: "main",
+              ops: [{ kind: "tab_create", tabId: "main-notes", title: "Main notes" }],
+            });
+            expect(await boardStore.getSnapshot(target)).toMatchObject({
+              sessionKey: "global",
+              revision: 3,
+              widgets: [{ name: "status", grantState: "granted" }],
+            });
+            const changed = (agentId: string, revision: number, widgetName?: string) => ({
+              event: "board.changed",
+              payload: {
+                sessionKey: `agent:${agentId}:global`,
+                revision,
+                ...(widgetName ? { widget: widgetName } : {}),
+              },
+            });
+            const sessionChanged = (sessionKey: string, agentId: string, label: string) => ({
+              event: "sessions.changed",
+              payload: expect.objectContaining({
+                sessionKey,
+                agentId,
+                sessionId: label,
+                label,
+                reason: "board",
+                session: expect.objectContaining({ key: sessionKey, agentId, sessionId: label }),
+              }),
+            });
+            const rawSession = sessionChanged("global", "work", "raw-owner");
+            expect({
+              rawUpdate,
+              rawPut,
+              rawGrant,
+              emptyUpdate,
+              ordinaryUpdate,
+              otherAgentUpdate,
+            }).toEqual({
+              rawUpdate: [[changed("work", 1), rawSession], [], []],
+              rawPut: [[changed("work", 2, "status"), rawSession], [], []],
+              rawGrant: [[changed("work", 3)], [], []],
+              emptyUpdate: [[], [], []],
+              ordinaryUpdate: [
+                [],
+                [changed("work", 1), sessionChanged("agent:work:global", "work", "ordinary-owner")],
+                [],
+              ],
+              otherAgentUpdate: [
+                [],
+                [],
+                [changed("main", 1), sessionChanged("global", "main", "other-agent-owner")],
+              ],
+            });
+          } finally {
+            await flushPendingSessionsChangedEvents(context);
+            detach();
+            projection.dispose();
+            await connection.mentionInbox.dispose();
+          }
+        },
+      );
     },
   );
 });
 
 describe("collaboration event scope guards", () => {
   it("revalidates an authoritative session-generation creator replacement before socket I/O", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg: OpenClawConfig = {};
       setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:main:draft-owner-filter";
@@ -429,8 +432,7 @@ describe("collaboration event scope guards", () => {
 
   it("rechecks incognito visibility only for subscription recipients", async () => {
     const hidden = { visibility: "shared" as const, incognito: true as const };
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      ensureUserProfileRoleSchema({});
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg, cfg);
       const sessionKey = "agent:main:subscription-filter";
@@ -728,8 +730,7 @@ describe("collaboration event scope guards", () => {
 });
 
 it("delivers committed collector updates to a parent-only cross-agent viewer", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    ensureUserProfileRoleSchema({});
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg: OpenClawConfig = {
       ...rolePolicyConfig(),
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },

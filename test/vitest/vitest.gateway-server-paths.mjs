@@ -241,6 +241,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-history-broadcast.worker.test.ts",
   "src/gateway/session-history-cold.benchmark.test.ts",
   "src/gateway/session-history-lookup.worker.test.ts",
+  "src/gateway/session-history-readonly-reader.test.ts",
   "src/gateway/session-history-worker-lifecycle.test.ts",
   "src/gateway/session-history-worker.integration.test.ts",
   "src/gateway/session-involvement.test.ts",

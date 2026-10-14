@@ -523,9 +523,14 @@ export function recordSessionParticipantInWorker(
           scope: "session-entry",
           facts: result.projectionChanged
             ? { kind: "participants", projection: result.participants }
-            : { kind: "participants", projectionChanged: false },
+            : {
+                kind: "participants",
+                projectionChanged: false,
+                records: result.records,
+                actorVersion: result.actorVersion,
+              },
         };
-        // Count-only writes still invalidate exact aggregate records in the actor replica.
+        // The committed count-only receipt keeps the actor's exact aggregate current.
         publishSessionCollaborationChanges([change], database);
         emitSessionLifecycleEvent({
           agentId: location.agentId,

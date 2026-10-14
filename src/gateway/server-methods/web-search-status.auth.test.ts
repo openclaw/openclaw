@@ -45,8 +45,14 @@ vi.mock("../../flows/search-setup.js", () => ({ listSearchProviderOptions: mocks
 vi.mock("../../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: mocks.providers,
 }));
-vi.mock("../../plugins/management-service.js", () => ({
-  resolveManagedPluginMetadata: () => ({ byPluginId: new Map() }),
+// mock-isolation: Prepared-auth status uses fixed metadata without loading the discovery registry.
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshotAsync: async () => ({ byPluginId: new Map() }),
+}));
+// mock-isolation: Use fixed discovery policy without opening machine state for status projection.
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
 }));
 vi.mock("../../agents/web-search-tool-policy.js", () => ({
   resolveWebSearchToolPolicy: () => ({ allowed: true }),

@@ -597,7 +597,20 @@ export async function runPreparedEmbeddedLoop(
       if (terminalResolution.action === "retry") {
         continue;
       }
-      return providerReview.finish(terminalResolution.result);
+      // Diagnostics-only final-message fact from terminal preparation; terminal
+      // resolution builds the rest of the completed result.
+      const { result } = terminalResolution;
+      return providerReview.finish(
+        terminalPrepared.finalAssistantMessageRawText === undefined
+          ? result
+          : {
+              ...result,
+              meta: {
+                ...result.meta,
+                finalAssistantMessageRawText: terminalPrepared.finalAssistantMessageRawText,
+              },
+            },
+      );
     }
   } finally {
     // Successful registration already cleared the marker; every earlier exit

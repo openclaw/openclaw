@@ -402,7 +402,7 @@ class CanvasWidgetController {
     }
     postWidgetTheme(frame, this.sandboxOrigin);
     frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, this.sandboxOrigin);
-    // Saved widget documents already use this bridge for unconsumed wheel/touch input.
+    // Saved widget documents use this bridge for unconsumed wheel input.
     frame.contentWindow?.postMessage(
       { type: "openclaw:widget-board-host", nonce: this.scrollNonce },
       this.sandboxOrigin,

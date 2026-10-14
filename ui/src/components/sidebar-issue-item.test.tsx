@@ -14,7 +14,7 @@ import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import {
-  renderSidebarIssueItem,
+  SidebarIssueItem,
   renderSidebarMentionItem as SidebarMentionItem,
   renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
@@ -50,18 +50,18 @@ afterEach(() => {
   container.remove();
 });
 
-describe("renderSidebarIssueItem", () => {
+describe("SidebarIssueItem", () => {
   it("renders a dismiss control only when the producer supplies the action", () => {
     const shared = {
       basePath: "",
       onNavigate: vi.fn(),
       onOpen: vi.fn(),
     };
-    render(() => renderSidebarIssueItem(item, shared), container);
+    render(() => <SidebarIssueItem item={item} handlers={shared} />, container);
     expect(container.querySelector(".sidebar-issues-panel__dismiss")).toBeNull();
 
     const onDismiss = vi.fn();
-    render(() => renderSidebarIssueItem(item, { ...shared, onDismiss }), container);
+    render(() => <SidebarIssueItem item={item} handlers={{ ...shared, onDismiss }} />, container);
     container.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")?.click();
     expect(onDismiss).toHaveBeenCalledOnce();
   });

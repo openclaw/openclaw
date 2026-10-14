@@ -27,7 +27,7 @@ import {
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { upsertAuthProfileAsync } from "../agents/auth-profiles.js";
 import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -375,7 +375,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             "utf8",
           );
           if (scenario.configuredProfile || scenario.model?.includes("@")) {
-            upsertAuthProfile({
+            await upsertAuthProfileAsync({
               agentDir,
               profileId: PROFILE,
               credential: {

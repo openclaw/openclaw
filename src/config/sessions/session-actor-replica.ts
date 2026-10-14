@@ -1,8 +1,4 @@
-import {
-  readSqliteDatabaseScopedWriteTokenForPath,
-  readSqliteDatabaseWriteTokenForPath,
-  sqliteSessionIdWriteScope,
-} from "../../infra/sqlite-database-admission.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -23,6 +19,11 @@ import type {
   SessionActorOutcome,
   SessionActorTarget,
 } from "./session-actor-contract.js";
+import {
+  readSessionActorParticipantPostimage,
+  readSessionActorProjectionReceiptFromCells,
+  scopedWriteToken,
+} from "./session-actor-replica-receipts.js";
 import type {
   FileTarget,
   ReplicaCell,
@@ -61,13 +62,6 @@ const pool = resolveGlobalSingleton<ReplicaPool>(
     owner.bytes = 0;
   },
 );
-
-function scopedWriteToken(target: FileTarget, sessionIds: readonly string[]) {
-  return readSqliteDatabaseScopedWriteTokenForPath(target.database.nativeLocation, [
-    ...collectSessionEntryLookupKeys(target.sessionKey),
-    ...sessionIds.map(sqliteSessionIdWriteScope),
-  ]);
-}
 
 export function ensureReplicaSubscription(): void {
   if (pool.unsubscribe) {
@@ -134,12 +128,24 @@ export function ensureReplicaSubscription(): void {
       const unchangedEntry =
         unchangedMarker && cell.entry ? { ...cell.entry, projection: undefined } : undefined;
       const previousTranscript = cell.transcript;
+      const participantPostimage = readSessionActorParticipantPostimage(
+        { database, sessionKey },
+        cell.snapshot,
+        change,
+      );
       const previousPredicateColumns = cell.predicateColumns;
       const previous = cell.snapshot ?? cell.entry;
       const previousProjection = cell.snapshot
         ? { hasBoard: cell.snapshot.hasBoard }
         : cell.entry?.projection;
       discard(cell);
+      if (participantPostimage) {
+        retainSnapshot(cell, participantPostimage, cell.generation);
+        if (previousTranscript) {
+          retainTranscript(cell, previousTranscript);
+        }
+        continue;
+      }
       const transcript = readPreparedSessionTranscriptChange(change);
       const rewrite =
         publishedKey === sessionKey && transcript?.kind === "postimage"
@@ -346,35 +352,10 @@ function touch(cell: ReplicaCell): void {
   }
 }
 
-/** The receiving worker checks this receipt against its admitted database once. */
 export function readSessionActorProjectionReceipt(
   params: Pick<SessionTranscriptProjectionReceipt, "path" | "sessionId"> & { sessionKey?: string },
 ): SessionTranscriptProjectionReceipt | undefined {
-  for (const cell of pool.cells.values()) {
-    const { database, sessionKey } = cell.target;
-    const snapshot = cell.snapshot;
-    if (
-      database.kind !== "file" ||
-      database.nativeLocation !== params.path ||
-      (params.sessionKey !== undefined && sessionKey !== params.sessionKey) ||
-      snapshot?.entry?.sessionId !== params.sessionId ||
-      !snapshot.transcript.projection
-    ) {
-      continue;
-    }
-    touch(cell);
-    return {
-      path: database.nativeLocation,
-      sessionId: params.sessionId,
-      writeToken: snapshot.writeToken,
-      writeScopes: [
-        ...collectSessionEntryLookupKeys(sessionKey),
-        ...snapshot.dependencySessionIds.map(sqliteSessionIdWriteScope),
-      ],
-      facts: snapshot.transcript.projection,
-    };
-  }
-  return undefined;
+  return readSessionActorProjectionReceiptFromCells(pool.cells.values(), touch, params);
 }
 
 function readCurrentEntryCell(target: FileTarget, admitted?: DatabasePathIdentity) {

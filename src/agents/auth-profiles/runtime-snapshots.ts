@@ -4,6 +4,7 @@ import path from "node:path";
  * Snapshots are cloned at boundaries so callers cannot mutate shared state.
  */
 import { isDeepStrictEqual } from "node:util";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { registerListener } from "../../shared/listeners.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
@@ -13,7 +14,8 @@ import {
   recordRuntimeAuthProfileStorePersistedMutation,
   resolveRuntimeStoreKey,
 } from "./mutation-lineage.js";
-import { captureAuthProfileOwnerScope } from "./path-resolve.js";
+import { captureAuthProfileOwnerScope, prepareSharedAuthStoreOwnership } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import { createRuntimeAuthProfileFileObservation } from "./runtime-file-observation.js";
 import {
@@ -282,8 +284,32 @@ export function registerRuntimeAuthProfileStoreMutationListener(
   return registerListener(runtimeAuthStoreMutationListeners, listener);
 }
 
-/** Replaces all runtime auth profile snapshots with cloned entries. */
+/** @deprecated Use replaceRuntimeAuthProfileStoreSnapshotsAsync. Removal is planned for a later stable release. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
+  entries: Array<{ databasePath?: string; agentDir?: string; store: AuthProfileStore }>,
+): void {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "replaceRuntimeAuthProfileStoreSnapshots",
+    replacement: "replaceRuntimeAuthProfileStoreSnapshotsAsync",
+  });
+  if (entries.some((entry) => !entry.databasePath && !entry.agentDir)) {
+    prepareSharedAuthStoreOwnershipForNative();
+  }
+  replaceRuntimeAuthProfileStoreSnapshotEntries(entries);
+}
+
+/** Resolve a default owner off-thread before publishing the supplied snapshot facts. */
+export async function replaceRuntimeAuthProfileStoreSnapshotsAsync(
+  entries: Array<{ databasePath?: string; agentDir?: string; store: AuthProfileStore }>,
+): Promise<void> {
+  if (entries.some((entry) => !entry.databasePath && !entry.agentDir)) {
+    await prepareSharedAuthStoreOwnership();
+  }
+  replaceRuntimeAuthProfileStoreSnapshotEntries(entries);
+}
+
+function replaceRuntimeAuthProfileStoreSnapshotEntries(
   entries: Array<{ databasePath?: string; agentDir?: string; store: AuthProfileStore }>,
 ): void {
   const prepared = entries.map((entry): OwnedRuntimeAuthProfileStoreSnapshotEntry => {

@@ -50,6 +50,13 @@ execution kinds plus explicit exclusions or errors. Unknown, empty explicit,
 profile-incompatible, or lane-incompatible selections are rejected instead of
 being replaced by a default suite.
 
+QA Lab shutdown drains an accepted suite before closing its bus and capture
+store, using the suite's existing execution deadlines. It does not cancel that
+suite. While the HTTP server remains reachable during the drain, new suite,
+self-check, and reset requests return HTTP 503. Unaccepted requests may disconnect
+at the existing HTTP shutdown deadline; a suite whose planning crosses shutdown
+cannot start.
+
 For faster QA Lab UI iteration without rebuilding the Docker image each time,
 start the stack with a bind-mounted QA Lab bundle:
 

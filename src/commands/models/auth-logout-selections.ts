@@ -6,7 +6,7 @@ import {
 } from "../../agents/agent-scope-config.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { listCandidateAuthProfileStores } from "../../agents/auth-profiles/candidate-stores.js";
-import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
+import { resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.native.js";
 import type { AuthProfileRemovalScope } from "../../agents/auth-profiles/profiles.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import {

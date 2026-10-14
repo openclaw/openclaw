@@ -16,9 +16,9 @@ import {
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
-import { commitPresence, listSystemPresence } from "../../../infra/system-presence.js";
+import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
-import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
+import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import { resolveControlUiIdentity } from "../../control-ui-identity.js";
@@ -123,16 +123,6 @@ export async function sendGatewayHello(
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
-  if (
-    listSystemPresence({ includeConnectionId: connId }).some((row) => row.watchedSessions?.length)
-  ) {
-    while (sessionRowProjection?.needsMembershipPreparation()) {
-      await sessionRowProjection.prepareMembership();
-      if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
-        throw new Error("Gateway connection closed before hello");
-      }
-    }
-  }
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
     includeSensitive: scopes.includes(ADMIN_SCOPE),
@@ -268,7 +258,7 @@ export async function sendGatewayHello(
       tickIntervalMs: TICK_INTERVAL_MS,
       attachments: resolveChatAttachmentPolicy(context.configSnapshot),
       allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
-      hasMultipleSessionSharingIdentities: hasMultipleSessionSharingIdentities(),
+      hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
     },
   };
   advanceHandshakePhase("hello_payload_prepared");

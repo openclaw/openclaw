@@ -173,6 +173,8 @@ renders the richer footer described below.
 `/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
 context window, and cost when those fields are available. No template file is
 required for the built-in footer.
+Context windows of one million tokens or more use `m` units, such as `1.0m` or
+`2.0m`; smaller windows keep `k` units, such as `200k`.
 
 `messages.usageTemplate` is only for advanced custom layouts. The value is a
 JSON file path (supports `~`) or an inline object, and it replaces the built-in

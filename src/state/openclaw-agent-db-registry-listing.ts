@@ -510,6 +510,17 @@ export function listOpenClawRegisteredAgentDatabases(
   return cloneRegisteredAgentDatabases(entries, options);
 }
 
+/** Runtime discovery loads the registry through its existing read worker. */
+export async function listOpenClawRegisteredAgentDatabasesAsync(
+  options: AgentDatabaseRegistryListOptions = {},
+): Promise<OpenClawRegisteredAgentDatabase[]> {
+  const snapshot = await prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read();
+  if (snapshot.result.status !== "available") {
+    throw new Error(`OpenClaw state database ${resolveDatabasePath(options)} is unavailable.`);
+  }
+  return snapshot.result.entries;
+}
+
 /** Scoped publication witnesses are immediate; native registry rows remain demand-driven. */
 export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
   inputOptions: AgentDatabaseRegistryListOptions & {

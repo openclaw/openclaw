@@ -5,6 +5,7 @@ import {
   createAuthProfileStoreFixture,
   createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,
@@ -101,6 +102,7 @@ describe("OAuth inference grants", () => {
   );
 
   it("does not substitute another account when SIWC is locked for an unsupported capability", async () => {
+    await prepareSharedAuthStoreOwnership();
     await expect(
       resolveApiKeyForProviderCore({
         provider: "openai",

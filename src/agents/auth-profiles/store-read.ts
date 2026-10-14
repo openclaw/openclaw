@@ -10,7 +10,7 @@ import {
   loadInheritedAuthProfileStore,
   readRuntimeAuthProfileStoreFromSnapshots,
 } from "./inherited-store.js";
-import { resolveSharedAuthStorePath as resolveSharedAuthPath } from "./path-resolve.js";
+import { resolveNativeSharedAuthStorePath } from "./path-resolve.native.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { materializePersonalAuthProfile } from "./personal-profiles.js";
 import { mergeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
@@ -151,7 +151,10 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
           ok: true,
           value:
             step.value.kind === "shared-path"
-              ? { kind: "shared-path", path: resolveSharedAuthPath(getScopedAuthProfileEnv()) }
+              ? {
+                  kind: "shared-path",
+                  path: resolveNativeSharedAuthStorePath(getScopedAuthProfileEnv()),
+                }
               : {
                   kind: "store",
                   store: loadAuthProfileStoreForAgent(step.value.agentDir, step.value.options),

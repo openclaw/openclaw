@@ -129,6 +129,46 @@ describe("Gateway request start fairness", () => {
     }
   });
 
+  it("prioritizes lifecycle starts while preserving same-connection mutation order", async () => {
+    const held = Array.from({ length: 4 }, () => createDeferredCore());
+    const events: string[] = [];
+    const start = (method: string, connId: string) =>
+      requestStart(100, { method }, connId).then(() => events.push(`${connId}:${method}`));
+    try {
+      await Promise.all(
+        held.map((completion, index) =>
+          requestStart(100, { method: "models.list" }, `held-${index}`, completion.promise),
+        ),
+      );
+      // The parked preparation wakes the queue, but unrelated lifecycle starts
+      // must reach their handlers before the ordinary backlog resumes.
+      const parked = start("models.list", "blocked");
+      const mutation = start("chat.send", "blocked");
+      const resume = start("gateway.suspend.resume", "blocked");
+      const ordinary = start("chat.send", "ordinary");
+      const status = start("gateway.suspend.status", "blocked");
+      const update = start("update.status", "operator");
+      const handoff = start("gateway.suspend.handoff", "operator");
+      await nextTurn();
+      expect(events).toEqual([
+        "blocked:gateway.suspend.status",
+        "operator:update.status",
+        "operator:gateway.suspend.handoff",
+        "ordinary:chat.send",
+      ]);
+      held[0]!.resolve();
+      await Promise.all([parked, mutation, resume, status, update, handoff, ordinary]);
+      expect(events.slice(4)).toEqual([
+        "blocked:models.list",
+        "blocked:chat.send",
+        "blocked:gateway.suspend.resume",
+      ]);
+    } finally {
+      held.forEach((completion) => completion.resolve());
+      await Promise.all(permissions);
+    }
+  });
+
   it("releases a cancelled preparation waiter while earlier requests still own capacity", async () => {
     const settled = Array.from({ length: 4 }, () => createDeferredCore());
     const request = { method: "sessions.subscribe" };
