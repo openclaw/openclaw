@@ -61,6 +61,30 @@ describe("createChatRunState", () => {
     });
   });
 
+  it("stops oversized container-only progress capture before reading later fields", () => {
+    const state = createChatRunState();
+    let laterReads = 0;
+    const metadata = { phase: "result", name: "read", toolCallId: "done" };
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      data: {
+        ...metadata,
+        result: {
+          rows: Array.from({ length: 32_768 }, () => ({})),
+          get later() {
+            laterReads += 1;
+            return "unused";
+          },
+        },
+      },
+    });
+    expect(laterReads).toBe(0);
+    expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data).toEqual(metadata);
+  });
+
   it.each([
     { finalized: true, keepState: false },
     { finalized: true, keepState: true },
@@ -581,7 +605,7 @@ describe("createChatRunState", () => {
     { prefix: 'é\n"\\\ud800', raw: false },
     { prefix: "🦞", raw: false },
     { prefix: "é", raw: true },
-  ])("retains the exact JSON byte limit and drops overflow: %j", ({ prefix, raw }) => {
+  ])("retains the exact JSON byte limit and stops capture on overflow: %j", ({ prefix, raw }) => {
     const encode = (text: string): unknown => {
       if (!raw) {
         return text;
@@ -608,14 +632,22 @@ describe("createChatRunState", () => {
     expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data.result).toEqual({
       [field]: text,
     });
+    let laterReads = 0;
     state.recordProgressEvent("run-1", {
       ...event,
       seq: 2,
       data: {
         ...metadata,
-        result: { [field]: encode(`${text}x`) },
+        result: {
+          [field]: encode(`${text}x`),
+          get later() {
+            laterReads += 1;
+            return "unused";
+          },
+        },
       },
     });
+    expect(laterReads).toBe(0);
     expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data).toEqual(metadata);
   });
 

@@ -1,3 +1,4 @@
+import { types } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -18,16 +19,66 @@ const TOOL_PROGRESS_FIELDS = new Map<string, readonly string[]>([
   ["result", ["approvalReviewOutcome", "isError", "result"]],
 ]);
 const retainedEventBytes = new WeakMap<AgentEventPayload, number>();
+const isRawJSON =
+  "isRawJSON" in JSON && typeof JSON.isRawJSON === "function" ? JSON.isRawJSON : undefined;
+
 function stringifyProgressEvent(event: AgentEventPayload): string {
   let bytes = 0;
-  // Scalars cheaply reject large tool output. Container/key overhead and boxed/raw
-  // values use the final exact check; native JSON owns their serialization semantics.
-  return JSON.stringify(event, (_key, value: unknown) => {
-    if (value === null || typeof value !== "object") {
-      bytes += boundedJsonUtf8Bytes(value, CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes).bytes;
-      if (bytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
-        throw new RangeError("Progress event exceeds replay budget");
+  const containers = new WeakMap<object, { array: boolean; count: number }>();
+  const charge = (amount: number) => {
+    bytes += amount;
+    if (bytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
+      throw new RangeError("Progress event exceeds replay budget");
+    }
+  };
+  const primitive = (value: unknown) =>
+    charge(boundedJsonUtf8Bytes(value, CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes).bytes);
+
+  // Native traversal owns getters and toJSON. Only already-observed primitives
+  // are measured separately, so producer callbacks execute exactly once.
+  return JSON.stringify(event, function (this: object, key: string, input: unknown) {
+    let value = input;
+    if (types.isNumberObject(value)) {
+      // JSON's ToNumber rejects BigInt from custom coercion; Number() would accept it.
+      // Reflect.apply preserves the boxed input for Math.max's native ToNumber operation.
+      value = Reflect.apply(Math.max, undefined, [value]);
+    } else if (types.isStringObject(value)) {
+      value = String(value);
+    } else if (types.isBooleanObject(value)) {
+      value = Boolean.prototype.valueOf.call(value);
+    }
+    const parent = containers.get(this);
+    const omitted = value === undefined || typeof value === "function" || typeof value === "symbol";
+    if (parent && (parent.array || !omitted)) {
+      if (parent.count > 0) {
+        charge(1);
       }
+      parent.count += 1;
+      if (!parent.array) {
+        primitive(key);
+        charge(1);
+      }
+    }
+    if (omitted) {
+      if (parent?.array) {
+        charge(4);
+      }
+      return value;
+    }
+    if (value !== null && typeof value === "object") {
+      if (isRawJSON?.(value) && "rawJSON" in value && typeof value.rawJSON === "string") {
+        if (value.rawJSON.length > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes) {
+          throw new RangeError("Progress event exceeds replay budget");
+        }
+        charge(Buffer.byteLength(value.rawJSON, "utf8"));
+      } else {
+        charge(2);
+        // Capture the kind before getters can revoke a proxy, and reset counts
+        // each time native JSON revisits a shared, non-cyclic container.
+        containers.set(value, { array: Array.isArray(value), count: 0 });
+      }
+    } else {
+      primitive(value);
     }
     return value;
   });
