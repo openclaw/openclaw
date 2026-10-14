@@ -223,6 +223,28 @@ describe("native overlay lifecycle", () => {
     expect(outgoing.owner.open).toBe(false);
   });
 
+  it("reopens after a native close callback supersedes the accepted close", async () => {
+    const fixture = mountOverlay();
+    await open(fixture);
+    const phases = recordPhases(fixture);
+    fixture.surface.addEventListener(
+      "beforetoggle",
+      (event) => {
+        if ((event as ToggleEvent).newState === "closed") {
+          fixture.owner.request(true);
+        }
+      },
+      { once: true },
+    );
+    const shown = completion(fixture, "open");
+
+    fixture.owner.request(false);
+    await shown;
+    expect(fixture.owner.open).toBe(true);
+    expect(fixture.surface.matches(":popover-open")).toBe(true);
+    expect(phases).toEqual(["open"]);
+  });
+
   it("preserves the accepted hide when initial focus dismisses the opening", async () => {
     const fixture: Fixture = mountOverlay({ onInitialFocus: () => fixture.owner.request(false) });
     const phases = recordPhases(fixture);
@@ -281,6 +303,8 @@ describe("native overlay lifecycle", () => {
         nativeOpen: fixture.surface.matches(":popover-open"),
       });
       event.preventDefault();
+      expect(fixture.owner.request(false)).toBe(true);
+      expect(fixture.owner.request(true)).toBe(false);
     });
     const phases = recordPhases(fixture);
     const hidden = completion(fixture, "hidden");
@@ -291,6 +315,36 @@ describe("native overlay lifecycle", () => {
     expect(fixture.owner.open).toBe(false);
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["retire", "remove", "dispose"] as const)(
+    "joins reentrant %s during forced hide without duplicate notifications or leaked leases",
+    async (action) => {
+      const release = vi.fn();
+      const fixture = mountOverlay({ acquireOcclusion: () => release });
+      await open(fixture);
+      const phases = recordPhases(fixture);
+      let hides = 0;
+      fixture.surface.addEventListener("overlay-hide", () => {
+        hides += 1;
+        if (action === "remove") {
+          fixture.surface.remove();
+          fixture.owner.retire();
+        } else if (action === "dispose") {
+          fixture.owner.dispose();
+        } else {
+          fixture.owner.retire();
+        }
+      });
+      fixture.owner.retire();
+      await Promise.resolve();
+      await frame();
+      expect(hides).toBe(1);
+      expect(fixture.owner.open).toBe(false);
+      expect(fixture.surface.matches(":popover-open")).toBe(false);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(phases).toEqual(action === "retire" ? ["hidden"] : []);
+    },
+  );
 
   it.each(["opening", "open"] as const)(
     "silently retires a detached %s surface while releasing its lease",

@@ -1,4 +1,3 @@
-import { createElementPresentationObserver } from "./element-presentation.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { containsComposed } from "./overlay-registry.ts";
 import { isTooltipTextRedundant, normalizeTooltipText } from "./tooltip-content.ts";
@@ -103,10 +102,14 @@ export class TooltipController {
   #richContentObserver: MutationObserver | null = null;
   readonly #triggerContentObserver = new MutationObserver(() => this.#syncDescription());
   #tooltipProvider: TooltipProviderPolicy | null = null;
-  readonly #presentation = createElementPresentationObserver(
-    () => this.#triggerElement,
-    () => this.options.retire(),
-  );
+  #presentationAncestors: Node[] = [];
+  readonly #presentationObserver = new MutationObserver(() => {
+    if (!this.#isPresented()) {
+      this.options.retire();
+    } else {
+      this.#observePresentation();
+    }
+  });
   readonly #tooltipId = createTooltipId();
   readonly #descriptionId = `${this.#tooltipId}-description`;
 
@@ -358,7 +361,7 @@ export class TooltipController {
       !this.#triggerElement ||
       !this.#tooltipText ||
       this.#isRedundant() ||
-      !this.#presentation.isPresented()
+      !this.#isPresented()
     ) {
       return false;
     }
@@ -372,7 +375,7 @@ export class TooltipController {
       previous.#close();
     }
     this.#pending = true;
-    this.#presentation.observe();
+    this.#observePresentation();
     TooltipController.#pendingByDocument.set(this.host.ownerDocument, this);
     this.host.ownerDocument.defaultView?.addEventListener(
       "keydown",
@@ -388,7 +391,8 @@ export class TooltipController {
       TooltipController.#pendingByDocument.delete(this.host.ownerDocument);
     }
     if (!open) {
-      this.#presentation.disconnect();
+      this.#presentationObserver.disconnect();
+      this.#presentationAncestors = [];
       this.#pinned = false;
       this.host.removeAttribute("open");
       this.options.richContainer()?.setAttribute("inert", "");
@@ -405,7 +409,7 @@ export class TooltipController {
       return;
     }
     this.#clearTimers(false);
-    this.#presentation.observe();
+    this.#observePresentation();
     TooltipController.#activeByDocument.set(this.host.ownerDocument, this);
     this.#tooltipProvider?.openTooltip();
     this.#syncDescription();
@@ -453,6 +457,53 @@ export class TooltipController {
 
   #close() {
     return this.options.requestOpen(false);
+  }
+
+  #triggerAncestors() {
+    const ancestors: Node[] = [];
+    let node: Node | null = this.#triggerElement;
+    while (node) {
+      ancestors.push(node);
+      node =
+        node instanceof Element && node.assignedSlot
+          ? node.assignedSlot
+          : node instanceof ShadowRoot
+            ? node.host
+            : node.parentNode;
+    }
+    return ancestors;
+  }
+
+  #isPresented() {
+    return (
+      this.#triggerElement?.isConnected === true &&
+      !this.#triggerAncestors().some(
+        (node) =>
+          node instanceof Element &&
+          (node.hasAttribute("hidden") ||
+            node.hasAttribute("inert") ||
+            node.getAttribute("aria-hidden") === "true"),
+      )
+    );
+  }
+
+  #observePresentation() {
+    const ancestors = this.#triggerAncestors();
+    if (
+      ancestors.length === this.#presentationAncestors.length &&
+      ancestors.every((node, index) => node === this.#presentationAncestors[index])
+    ) {
+      return;
+    }
+    this.#presentationObserver.disconnect();
+    this.#presentationAncestors = ancestors;
+    for (const node of ancestors) {
+      this.#presentationObserver.observe(node, {
+        childList: true,
+        attributes: true,
+        attributeFilter: ["hidden", "inert", "aria-hidden"],
+      });
+    }
   }
 
   #isRedundant() {
