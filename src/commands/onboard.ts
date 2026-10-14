@@ -284,6 +284,7 @@ async function validateResetAuthChoice(params: {
         modelId: params.opts.customModelId,
         compatibility: params.opts.customCompatibility,
         apiKey: undefined,
+        noAuth: params.opts.customNoAuth,
         providerId: params.opts.customProviderId,
         supportsImageInput: params.opts.customImageInput,
       });
@@ -317,7 +318,9 @@ async function validateResetAuthChoice(params: {
     } catch (error) {
       const message =
         error instanceof CustomApiError &&
-        (error.code === "missing_required" || error.code === "invalid_compatibility")
+        (error.code === "missing_required" ||
+          error.code === "invalid_compatibility" ||
+          error.code === "no_auth_conflict")
           ? error.message
           : `Invalid custom provider config: ${formatErrorMessage(error)}`;
       return reject(message);

@@ -113,6 +113,7 @@ const ProviderAuthModeSchema = Type.Union([
   Type.Literal("aws-sdk"),
   Type.Literal("oauth"),
   Type.Literal("token"),
+  Type.Literal("none"),
 ]);
 export type ProviderAuthMode = Static<typeof ProviderAuthModeSchema>;
 

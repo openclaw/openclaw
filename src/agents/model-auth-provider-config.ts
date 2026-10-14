@@ -245,7 +245,7 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   );
 }
 
-/** True when configured or prepared route facts prove a local no-auth provider. */
+/** True when configured or prepared route facts prove a no-auth provider (local, or explicitly `auth: "none"`). */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -253,7 +253,8 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
 }): boolean {
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
-  if (authOverride && authOverride !== "api-key") {
+  const noAuthOverride = authOverride === "none";
+  if (authOverride && authOverride !== "api-key" && !noAuthOverride) {
     return false;
   }
   if (
@@ -263,12 +264,19 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
     return false;
   }
   const route = params.route ?? providerConfig;
-  return (
-    typeof route?.api === "string" &&
-    route.api.trim().length > 0 &&
-    typeof route.baseUrl === "string" &&
-    isLocalAuthProviderBaseUrl(route.baseUrl)
-  );
+  if (
+    !(
+      typeof route?.api === "string" &&
+      route.api.trim().length > 0 &&
+      typeof route.baseUrl === "string"
+    )
+  ) {
+    return false;
+  }
+  // `auth: "none"` is an explicit operator declaration, so it also covers
+  // reachable-but-private hosts (tailnet/VPN inference servers) that hostname
+  // classification cannot prove local.
+  return noAuthOverride || isLocalAuthProviderBaseUrl(route.baseUrl);
 }
 
 export function resolveProviderAuthOverride(
@@ -277,7 +285,13 @@ export function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveMergedModelProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "oauth" ||
+    auth === "token" ||
+    auth === "none"
+  ) {
     return auth;
   }
   return undefined;

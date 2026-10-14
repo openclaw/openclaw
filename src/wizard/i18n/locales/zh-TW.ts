@@ -52,6 +52,8 @@ export const zh_TW = {
       modelId: "模型 ID",
       modelIdPlaceholder: "例如 llama3、claude-3-7-sonnet",
       modelIdRequired: "模型 ID 必填",
+      noAuthConfirm:
+        "未輸入 API Key。是否將該端點設為免驗證模式（請求不發送 Authorization 標頭）？",
       retryChoice: "你想修改哪一項？",
       verifying: "正在驗證...",
       verificationFailedError: "驗證失敗：{error}",

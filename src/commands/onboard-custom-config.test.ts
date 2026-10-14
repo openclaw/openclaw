@@ -398,6 +398,75 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.baseUrl).toBe("https://my-resource.openai.azure.com/openai/v1");
   });
 
+  it("persists auth none for no-auth custom endpoints", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://studio.example.ts.net/v1",
+      modelId: "qwen3.8",
+      compatibility: "openai",
+      noAuth: true,
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+
+    expect(provider?.auth).toBe("none");
+    expect(provider?.apiKey).toBeUndefined();
+  });
+
+  it("clears stale keys and auth modes when switching a provider to no-auth", () => {
+    const providerId = "custom-studio-example-ts-net";
+    const result = applyCustomApiConfig({
+      config: {
+        models: {
+          providers: {
+            [providerId]: {
+              baseUrl: "https://studio.example.ts.net/v1",
+              api: "openai-completions",
+              auth: "api-key",
+              apiKey: "stale-key",
+              models: [],
+            },
+          },
+        },
+      },
+      baseUrl: "https://studio.example.ts.net/v1",
+      modelId: "qwen3.8",
+      compatibility: "openai",
+      noAuth: true,
+      providerId,
+    });
+    const provider = result.config.models?.providers?.[providerId];
+
+    expect(provider?.auth).toBe("none");
+    expect(provider?.apiKey).toBeUndefined();
+  });
+
+  it("clears a previous auth none when a real key is supplied later", () => {
+    const providerId = "custom-studio-example-ts-net";
+    const result = applyCustomApiConfig({
+      config: {
+        models: {
+          providers: {
+            [providerId]: {
+              baseUrl: "https://studio.example.ts.net/v1",
+              api: "openai-completions",
+              auth: "none",
+              models: [],
+            },
+          },
+        },
+      },
+      baseUrl: "https://studio.example.ts.net/v1",
+      modelId: "qwen3.8",
+      compatibility: "openai",
+      apiKey: "fresh-key",
+      providerId,
+    });
+    const provider = result.config.models?.providers?.[providerId];
+
+    expect(provider?.auth).toBeUndefined();
+    expect(provider?.apiKey).toBe("fresh-key");
+  });
+
   it("re-onboard updates existing Azure provider instead of creating a duplicate", () => {
     const oldProviderId = "custom-my-resource-openai-azure-com";
     const result = applyCustomApiConfig({
@@ -551,6 +620,28 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     });
 
     expect(result.compatibility).toBe("openai-responses");
+  });
+
+  it("parses the no-auth opt-in", () => {
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      noAuth: true,
+    });
+
+    expect(result.noAuth).toBe(true);
+    expect(result.apiKey).toBeUndefined();
+  });
+
+  it("rejects no-auth combined with an API key", () => {
+    expect(() =>
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        apiKey: "custom-test-key", // pragma: allowlist secret
+        noAuth: true,
+      }),
+    ).toThrow("--custom-no-auth cannot be combined with --custom-api-key");
   });
 
   it.each([

@@ -900,6 +900,45 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
     },
   );
 
+  it("synthesizes no-auth key for explicit auth none remote providers", async () => {
+    const auth = await resolveAuth({
+      provider: "custom-studio",
+      cfg: configForProviders({
+        "custom-studio": {
+          baseUrl: "https://studio.example.ts.net/v1",
+          api: "openai-completions",
+          auth: "none",
+          models: [createModelConfig()],
+        },
+      }),
+      store: authStore({}),
+      allowAuthProfileFallback: false,
+    });
+
+    expectAuthFields(auth, {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: "models.providers.custom-studio (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
+  it("keeps requiring a key for remote providers without explicit auth none", async () => {
+    await expect(
+      resolveAuth({
+        provider: "custom-studio",
+        cfg: configForProviders({
+          "custom-studio": {
+            baseUrl: "https://studio.example.ts.net/v1",
+            api: "openai-completions",
+            models: [createModelConfig()],
+          },
+        }),
+        store: authStore({}),
+        allowAuthProfileFallback: false,
+      }),
+    ).rejects.toThrow('No API key found for provider "custom-studio"');
+  });
+
   it("uses implicit aws-sdk auth for built-in Bedrock Converse models", async () => {
     const auth = await resolveModelAuth({
       model: {

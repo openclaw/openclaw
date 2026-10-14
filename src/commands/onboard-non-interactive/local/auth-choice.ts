@@ -176,6 +176,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         modelId: opts.customModelId,
         compatibility: opts.customCompatibility,
         apiKey: opts.customApiKey,
+        noAuth: opts.customNoAuth,
         providerId: opts.customProviderId,
         supportsImageInput: opts.customImageInput,
       });
@@ -215,6 +216,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         modelId: customAuth.modelId,
         compatibility: customAuth.compatibility,
         apiKey: customApiKeyInput,
+        ...(customAuth.noAuth ? { noAuth: true } : {}),
         providerId: customAuth.providerId,
         supportsImageInput: customAuth.supportsImageInput,
         target: params.target,

@@ -119,6 +119,8 @@ type ApplyCustomApiConfigParams = {
   modelId: string;
   compatibility: CustomApiCompatibility;
   apiKey?: SecretInput;
+  /** Explicitly mark the endpoint as not enforcing auth (`auth: "none"`). */
+  noAuth?: boolean;
   providerId?: string;
   alias?: string;
   supportsImageInput?: boolean;
@@ -132,6 +134,7 @@ type ParseNonInteractiveCustomApiFlagsParams = {
   modelId?: string;
   compatibility?: string;
   apiKey?: string;
+  noAuth?: boolean;
   providerId?: string;
   supportsImageInput?: boolean;
 };
@@ -142,7 +145,8 @@ type CustomApiErrorCode =
   | "invalid_base_url"
   | "invalid_model_id"
   | "invalid_provider_id"
-  | "invalid_alias";
+  | "invalid_alias"
+  | "no_auth_conflict";
 
 /** Error class used by callers to turn custom API validation failures into CLI UX. */
 export class CustomApiError extends Error {
@@ -401,11 +405,18 @@ export function parseNonInteractiveCustomApiFlags(params: ParseNonInteractiveCus
   const apiKey = normalizeOptionalString(params.apiKey);
   const providerId = normalizeOptionalString(params.providerId);
   assertValidCustomProviderId(providerId);
+  if (params.noAuth && apiKey) {
+    throw new CustomApiError(
+      "no_auth_conflict",
+      "Custom provider flags conflict: --custom-no-auth cannot be combined with --custom-api-key. Omit one.",
+    );
+  }
   return {
     baseUrl,
     modelId,
     compatibility: parseCustomApiCompatibility(params.compatibility),
     ...(apiKey ? { apiKey } : {}),
+    ...(params.noAuth ? { noAuth: true } : {}),
     ...(providerId ? { providerId } : {}),
     ...(params.supportsImageInput === undefined
       ? {}
@@ -506,10 +517,19 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams) {
           : model,
       )
     : [...existingModels, nextModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
-  const normalizedApiKey =
-    normalizeOptionalProviderApiKey(params.apiKey) ??
-    normalizeOptionalProviderApiKey(existingApiKey);
+  const {
+    apiKey: existingApiKey,
+    auth: existingAuth,
+    ...existingProviderRest
+  } = existingProvider ?? {};
+  // An explicit key or no-auth choice on this call redeclares the provider's
+  // auth mode; other authored values survive untouched.
+  const redeclaresAuth = params.noAuth === true || params.apiKey !== undefined;
+  const nextAuth = params.noAuth ? ("none" as const) : redeclaresAuth ? undefined : existingAuth;
+  const normalizedApiKey = params.noAuth
+    ? undefined
+    : (normalizeOptionalProviderApiKey(params.apiKey) ??
+      normalizeOptionalProviderApiKey(existingApiKey));
 
   // Azure clients use api-key headers and no bearer Authorization header.
   const azureHeaders = isAzure && normalizedApiKey ? { "api-key": normalizedApiKey } : undefined;
@@ -532,6 +552,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams) {
                 ? "openai-responses"
                 : "openai-completions",
           ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+          ...(nextAuth ? { auth: nextAuth } : {}),
           ...(isAzure ? { authHeader: false } : {}),
           ...(azureHeaders ? { headers: azureHeaders } : {}),
           models: mergedModels,

@@ -53,6 +53,8 @@ export const en = {
       modelId: "Model ID",
       modelIdPlaceholder: "e.g. llama3, claude-3-7-sonnet",
       modelIdRequired: "Model ID is required",
+      noAuthConfirm:
+        "No API key entered. Use no-auth mode for this endpoint (requests send no Authorization header)?",
       retryChoice: "What would you like to change?",
       verifying: "Verifying...",
       verificationFailedError: "Verification failed: {error}",
