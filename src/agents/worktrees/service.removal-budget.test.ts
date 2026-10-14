@@ -8,7 +8,7 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { requireGit } from "./git.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { isWorktreeRepositoryCorruptionError } from "./removal-errors.js";
-import { resolveRepository } from "./service-preparation.js";
+import { resolveRepository } from "./repository-paths.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,

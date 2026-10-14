@@ -23,8 +23,8 @@ import * as registryReads from "./registry-read.js";
 import * as registry from "./registry.js";
 import { deleteRegistryWorktree, insertRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
+import { resolveRepository } from "./repository-paths.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
-import { resolveRepository } from "./service-preparation.js";
 import { IDLE_GC_MS, ManagedWorktreeService, WORKTREE_GC_INTERVAL_MS } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,

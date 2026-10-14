@@ -114,6 +114,7 @@ export async function withShimFixture<T>(
       "scripts/lib/managed-child-process.mts",
       "scripts/lib/managed-cleanup-handoff.mts",
       "scripts/lib/vitest-resource-ownership.mts",
+      "scripts/lib/vitest-worker-descriptor.mts",
       "scripts/lib/windows-taskkill.mjs",
     ]) {
       copyFileSync(source, path.join(checkoutRoot, source));

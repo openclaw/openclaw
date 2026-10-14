@@ -305,6 +305,14 @@ instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
 
+Diagnostic subscriptions made while a managed plugin is loading, registering,
+or running belong to that instance. OpenClaw automatically unsubscribes them
+when the instance is disposed, including after a failed load or replacement.
+The unsubscribe handle still releases a subscription early and removes its
+cleanup registration. This covers `onDiagnosticEvent` and
+`onInternalDiagnosticEvent` from `openclaw/plugin-sdk/diagnostic-runtime`, as well
+as host-owned diagnostic subscriptions created on the plugin's behalf.
+
 ### Instance-bound background context
 
 Managed instances also expose the additive

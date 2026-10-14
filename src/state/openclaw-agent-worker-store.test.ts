@@ -121,6 +121,13 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   return { db, worker };
 }
 
+it("leaves agent worker checkpoints to maintenance instead of foreground commits", async () => {
+  const { worker } = await setup();
+  expect(
+    await worker.execute({ type: "inspect", input: "wal_autocheckpoint" }, () => undefined),
+  ).toBe(0);
+});
+
 it("retains an idle agent executor for thirty minutes and renews the window after reborrowing", async () => {
   const { db, worker } = await setup();
   const shared = openOpenClawStateDatabase();

@@ -249,9 +249,11 @@ describe("bundled plugin build entries", () => {
   it("keeps Codex CLI metadata in bundled build and standalone pack entries", () => {
     const sources = collectBuildSources();
     const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
+    const sourceEntry = collectSourceCheckoutPluginBuildEntries().find(({ id }) => id === "codex");
 
     expect(sources).toContain("extensions/codex/cli-metadata.ts");
     expect(artifacts).toContain("dist/extensions/codex/cli-metadata.js");
+    expect(sourceEntry).toMatchObject({ isolated: true, runtimeExtension: ".js" });
   });
 
   it("rejects unknown bounded bundled plugin build ids", () => {

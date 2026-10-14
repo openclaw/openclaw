@@ -66,6 +66,11 @@ import {
 import { assertExactStateOwner } from "./removal-git.js";
 import { removeSettledManagedWorktree, type RemoveWorktreeParams } from "./removal.js";
 import {
+  resolveRepository,
+  resolveRepositoryIdentity,
+  type ResolvedRepository,
+} from "./repository-paths.js";
+import {
   completeRepositoryWorktreeSetup,
   type MaterializedRepositoryWorktree,
 } from "./repository-setup.js";
@@ -81,12 +86,9 @@ import {
   prepareWorktreeDestination,
   readWorktreeGitInventory,
   findWorktreeByName,
-  resolveRepository,
   rebindLiveWorktreeRepository,
-  resolveRepositoryIdentity,
   withWorktreeSource,
   withWorktreeSources,
-  type ResolvedRepository,
   type WorktreeSourceCustody,
 } from "./service-preparation.js";
 import {

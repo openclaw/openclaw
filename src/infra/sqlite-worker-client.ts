@@ -65,7 +65,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
   isDraining: () => boolean;
   isAvailable: () => boolean;
   dispatch: (
-    payload: Buffer,
+    payload: Buffer<ArrayBuffer>,
     signal: AbortSignal | undefined,
     scope: OperationScope | undefined,
     assertCurrent: (() => void) | undefined,
@@ -91,7 +91,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
           toErrorObject(options.signal.reason, "SQLite worker operation canceled"),
         );
       }
-      let payload: Buffer;
+      let payload: Buffer<ArrayBuffer>;
       let requestClass: string;
       let assertCurrent: (() => void) | undefined;
       const admission = scope?.assertCurrent;

@@ -227,6 +227,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         // internal-event turns must not re-flag the session unread.
         touchActivity: !isHeartbeatLifecycleRun && !params.opts.internalEvents?.length,
         preserveRuntimeModel:
+          result.meta.providerStarted === false ||
           fallbackExhausted ||
           fallbackProvider !== provider ||
           fallbackModel !== model ||

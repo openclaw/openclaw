@@ -266,6 +266,7 @@ async function runDoctorHealthFlowWithResult(
         runtime: doctorRuntime,
         json: options.json,
         postCoreSchemaRepair: writeAuthority?.postCoreSchemaRepair,
+        signal: maintenance?.signal,
         onVerifiedBackup: (snapshots) => {
           verifiedSnapshots = snapshots;
         },

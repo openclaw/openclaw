@@ -6,10 +6,9 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRosterActivity } from "../../lib/reactive/domain-capabilities.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { AgentsHomeView } from "./view.tsx";
 
-function AgentsHomePageContent(props: { active: boolean }) {
+export function AgentsHomePage(props: { active?: boolean }) {
   const context = useApplication();
   const store = rosterActivityStore(context);
   const roster = projectRosterActivity(store);
@@ -25,7 +24,7 @@ function AgentsHomePageContent(props: { active: boolean }) {
         canCreate: canCallGatewayMethod(currentGateway, "openclaw.chat", "operator.admin"),
       };
     },
-    () => props.active,
+    () => props.active ?? true,
   );
   const cards = createMemo(() => {
     const defaultId = snapshot().defaultId;
@@ -49,20 +48,24 @@ function AgentsHomePageContent(props: { active: boolean }) {
       );
   });
   return (
-    <AgentsHomeView
-      cards={cards()}
-      context={context}
-      connected={snapshot().connected}
-      loading={snapshot().roster.loading}
-      error={snapshot().roster.error ?? snapshot().roster.subscriptionError}
-      onRetry={() => void store.refresh()}
-      canCreate={snapshot().canCreate}
-    />
+    <openclaw-agents-home-page>
+      <AgentsHomeView
+        cards={cards()}
+        context={context}
+        connected={snapshot().connected}
+        loading={snapshot().roster.loading}
+        error={snapshot().roster.error ?? snapshot().roster.subscriptionError}
+        onRetry={() => void store.refresh()}
+        canCreate={snapshot().canCreate}
+      />
+    </openclaw-agents-home-page>
   );
 }
 
-export const AgentsHomePage = defineSolidBridge(
-  "openclaw-agents-home-page",
-  AgentsHomePageContent,
-  { properties: { active: { default: true, attribute: false } } },
-);
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-agents-home-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

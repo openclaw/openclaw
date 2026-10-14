@@ -625,7 +625,9 @@ describe("prepared session fork provider boundary", () => {
 
   it("isolates replayed wire data without re-entering the parent's one-shot payload hook", async () => {
     const { parent, physicalFetch } = guardedTransport();
-    const metadata = { acknowledged: "review", unicode: "🦞" };
+    const unicode = "🦞 café e\u0301 \u0000 \ud800";
+    const metadata = { acknowledged: "review", unicode };
+    const parentText = "Unicode parent 🦞 café e\u0301";
     const onPayload = vi.fn((payload: unknown) => {
       if (onPayload.mock.calls.length > 1) {
         throw new Error("Provider review continuation cannot rebuild or retry its request");
@@ -635,7 +637,13 @@ describe("prepared session fork provider boundary", () => {
       }
       return { ...payload, client_metadata: metadata };
     });
-    await (await parent(model, context, { apiKey: "synthetic-key", onPayload })).result();
+    await (
+      await parent(
+        model,
+        { ...context, messages: [{ role: "user", content: parentText, timestamp: 1 }] },
+        { apiKey: "synthetic-key", onPayload },
+      )
+    ).result();
     metadata.acknowledged = "changed after parent send";
     await expect(fork()).resolves.toBe("Answer");
     await expect(fork()).resolves.toBe("Answer");
@@ -645,7 +653,15 @@ describe("prepared session fork provider boundary", () => {
     );
     expect(bodies).toHaveLength(3);
     for (const body of bodies) {
-      expect(body).toMatchObject({ client_metadata: { acknowledged: "review", unicode: "🦞" } });
+      expect(body).toMatchObject({
+        client_metadata: { acknowledged: "review", unicode },
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: [{ type: "input_text", text: parentText }],
+          }),
+        ]),
+      });
     }
     expect(bodies[2]).toEqual(bodies[1]);
   });

@@ -142,6 +142,10 @@ export async function resolveSubagentChildPlan(params: {
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
+  const requesterThinkingExplicit =
+    // SAFETY: Host tool construction adds this optional bit without changing the public context.
+    (params.ctx as SpawnSubagentContext & { requesterThinkingExplicit?: boolean })
+      .requesterThinkingExplicit;
   const requesterPreferences =
     params.ctx.requesterThinkingLevel === undefined ||
     (params.targetAgentId === params.requesterAgentId && !params.ctx.requesterModel)
@@ -152,6 +156,10 @@ export async function resolveSubagentChildPlan(params: {
   // a later turn and cannot represent one-shot overrides.
   const callerThinkingRaw =
     params.ctx.requesterThinkingLevel ?? requesterPreferences?.thinkingLevel;
+  const callerThinkingExplicit =
+    params.ctx.requesterThinkingLevel !== undefined
+      ? requesterThinkingExplicit
+      : requesterPreferences?.thinkingExplicit;
   const modelPlan = await resolveSubagentModelAndThinkingPlan({
     cfg: params.cfg,
     targetAgentId: params.targetAgentId,
@@ -160,6 +168,7 @@ export async function resolveSubagentChildPlan(params: {
     modelOverride: params.request.model,
     thinkingOverrideRaw: params.request.thinking,
     callerThinkingRaw,
+    callerThinkingExplicit,
     inheritedModel:
       params.targetAgentId === params.requesterAgentId
         ? (params.ctx.requesterModel ?? requesterPreferences?.model)

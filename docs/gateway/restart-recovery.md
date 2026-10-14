@@ -741,6 +741,9 @@ If recovery fails during preparation before the agent starts, the Gateway restor
 the interrupted state and releases that attempt's delivery claim. The next recovery
 attempt uses a fresh run ID while retaining the original interrupted turn and retry
 budget, so a rejected pending input cannot leave the conversation permanently busy.
+This includes an accepted continuation refused by shutdown before its runtime turn
+starts. Its charged attempt remains in the same retry budget across startups;
+exhaustion still produces the normal recovery notice.
 
 ## Automatic resume
 
@@ -923,6 +926,10 @@ the breaker's recovery window ends.
 Startup restores completed runs directly from the registry. Any retained delivery
 keeps its normal session and ownership checks. Unfinished runs still reconcile
 the current child session before resuming.
+Human follow-ups in retained child sessions take native custody under the actual
+executing run ID and follow-up prompt, including browser chat. The completed
+original run keeps its own outcome. Human ownership and dashboard nesting do not
+turn a child into a main-session replay candidate.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 For native children with completion notifications disabled, recovery sends a

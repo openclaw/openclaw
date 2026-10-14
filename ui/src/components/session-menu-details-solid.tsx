@@ -3,6 +3,7 @@ import { For, createMemo, createSignal } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import type {
   SessionMenuActions,
@@ -10,7 +11,6 @@ import type {
   SessionMenuActionsState as MenuState,
 } from "./session-menu-actions.ts";
 import { SessionMenuItem } from "./session-menu-item.tsx";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 
