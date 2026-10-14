@@ -14,11 +14,7 @@ import { resolveUsageCostWorkerDayBucket } from "../../infra/session-cost-usage-
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
-import {
-  AsyncWorkScope,
-  getAsyncWorkSignal,
-  trackAsyncWork,
-} from "../../shared/async-work-scope.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   createUsageAggregateAccumulator,
   UNKNOWN_USAGE_CREATOR_KEY,
@@ -65,7 +61,7 @@ import {
   loadCostUsageSummaryCached,
   loadSessionsUsageSnapshotCached,
 } from "./usage-result-cache.js";
-import { loadUsageSessionSummaries } from "./usage-session-loading.js";
+import { loadUsageSessionSummaries, withUsageRequestBudget } from "./usage-session-loading.js";
 import {
   loadUsageSessionContext,
   resolveSessionUsageTarget,
@@ -181,46 +177,6 @@ function projectUsageCreator(
   return { key, ...(projected ? { actor: projected } : {}) };
 }
 
-function withUsageRequestBudget(
-  handler: GatewayRequestHandlers[string],
-): GatewayRequestHandlers[string] {
-  return async (request) => {
-    const parent = AbortSignal.any(
-      [getAsyncWorkSignal(), request.signal].filter(
-        (signal): signal is AbortSignal => signal !== undefined,
-      ),
-    );
-    const work = new AsyncWorkScope();
-    const cancel = () => work.beginClose(parent?.reason);
-    const timer = setTimeout(
-      () =>
-        work.beginClose(
-          new Error(
-            "Usage request exceeded its 15-second budget; narrow the date range or select a session.",
-          ),
-        ),
-      15_000,
-    );
-    timer.unref?.();
-    parent?.addEventListener("abort", cancel, { once: true });
-    if (parent?.aborted) {
-      cancel();
-    }
-    try {
-      await trackAsyncWork(() => work.track(() => handler(request)));
-    } finally {
-      clearTimeout(timer);
-      // Refreshes already queued by this read keep their original connection lifetime.
-      void trackAsyncWork(() =>
-        AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => work.drain(),
-        ),
-      ).finally(() => parent?.removeEventListener("abort", cancel));
-    }
-  };
-}
-
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond, context, client }) => {
     // Only clients with bounded retry machinery may receive an incomplete cold result.
@@ -288,7 +244,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     respond(true, summary, undefined);
   },
-  "sessions.usage": withUsageRequestBudget(async ({ respond, params, context, client }) => {
+  "sessions.usage": withUsageRequestBudget(async ({ respond, params, context, client }, budget) => {
     if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
@@ -394,15 +350,19 @@ export const usageHandlers: GatewayRequestHandlers = {
           const now = Date.now();
           const loadedAccessRevision = readGatewayAccessRevision();
           const loadedSessionRevision = readSessionRowChangeRevision();
-          const visibleEntries = await selectUsageSessions({
-            config,
-            agentId: effectiveAgentId,
-            specificKey,
-            groupingMode,
-            startMs,
-            endMs,
-            visibilityFilter,
-          });
+          const visibleEntries = await budget.read(
+            () =>
+              selectUsageSessions({
+                config,
+                agentId: effectiveAgentId,
+                specificKey,
+                groupingMode,
+                startMs,
+                endMs,
+                visibilityFilter,
+              }),
+            () => [],
+          );
           const profiles: Parameters<typeof projectSessionActor>[1] = new Map();
           const matchedEntries = visibleEntries.map((entry) => ({
             entry,
@@ -423,11 +383,15 @@ export const usageHandlers: GatewayRequestHandlers = {
               (term) => term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
             )
           ) {
-            await loadUsageSessionContext(mergedEntries, visibilityFilter);
+            await budget.read(
+              () => loadUsageSessionContext(mergedEntries, visibilityFilter),
+              () => undefined,
+            );
           }
           const sessions: SessionUsageEntry[] = [];
           const { summaries, computing, cacheStatus } = await loadUsageSessionSummaries({
             entries: mergedEntries,
+            read: budget.read,
             config,
             startMs,
             endMs,
@@ -476,7 +440,15 @@ export const usageHandlers: GatewayRequestHandlers = {
           return {
             updatedAt: now,
             sessions,
-            cacheStatus,
+            cacheStatus: budget.exhausted()
+              ? {
+                  cachedFiles: 0,
+                  pendingFiles: 0,
+                  staleFiles: 0,
+                  ...cacheStatus,
+                  status: "partial" as const,
+                }
+              : cacheStatus,
             sources: visibleEntries,
             accessRevision: loadedAccessRevision,
             sessionRevision: loadedSessionRevision,
@@ -613,8 +585,18 @@ export const usageHandlers: GatewayRequestHandlers = {
           break;
         }
         visible = undefined;
-        await loadUsageSessionContext(pageSources, visibilityFilter);
-        pageSources.forEach((source) => hydratedSources.add(source));
+        const hydrated = await budget.read(
+          async () => {
+            await loadUsageSessionContext(pageSources, visibilityFilter);
+            return true;
+          },
+          () => false,
+        );
+        if (hydrated) {
+          pageSources.forEach((source) => hydratedSources.add(source));
+        } else {
+          break;
+        }
         result = {
           ...result,
           sessions: result.sessions.map((row) => {
@@ -656,23 +638,36 @@ export const usageHandlers: GatewayRequestHandlers = {
             totals: accumulator.totals,
             aggregates: accumulator.finish(),
           };
+      const partial = budget.exhausted()
+        ? { reason: "time-budget" as const, message: budget.hint }
+        : undefined;
+      if (partial && "overview" in slice) {
+        slice.overview.queryWarnings.push(partial.message);
+      }
       getAsyncWorkSignal()?.throwIfAborted();
-      respond(
-        true,
-        {
-          ...slice,
-          sessions: slice.sessions.filter((row) => {
-            const source = sourceFor(row);
-            return source && hydratedSources.has(source);
-          }),
-          updatedAt: result.updatedAt,
-          startDate: formatDateLabel(startMs, dateInterpretation),
-          endDate: formatDateLabel(endMs, dateInterpretation),
-          creatorOptions: [...creatorOptions.values()],
-          cacheStatus: result.cacheStatus,
-        },
-        undefined,
-      );
+      respond(true, {
+        ...slice,
+        sessions: slice.sessions.map((row) => {
+          const source = sourceFor(row);
+          return source && hydratedSources.has(source)
+            ? row
+            : Object.assign({}, row, { hasContextWeight: false, contextWeight: undefined });
+        }),
+        updatedAt: result.updatedAt,
+        startDate: formatDateLabel(startMs, dateInterpretation),
+        endDate: formatDateLabel(endMs, dateInterpretation),
+        creatorOptions: [...creatorOptions.values()],
+        cacheStatus: partial
+          ? {
+              cachedFiles: 0,
+              pendingFiles: 0,
+              staleFiles: 0,
+              ...result.cacheStatus,
+              status: "partial",
+            }
+          : result.cacheStatus,
+        ...(partial ? { partial } : {}),
+      });
     } finally {
       contextReads.forEach((read) => read?.release());
     }

@@ -1,6 +1,9 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
-import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import { listTranscriptArchivesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { listSqliteSessionEntriesFromDatabase } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
@@ -90,6 +93,18 @@ export function createUsageCostCollectionAccess(params: {
     const database = target(marker.agentId, marker.storePath);
     return JSON.stringify([database.path, database.agentId, marker.sessionId]);
   };
+  if (operation.kind === "sessions") {
+    for (const session of operation.sessions) {
+      const file = session.transcriptFile;
+      const marker = file && parseSqliteSessionFileMarker(session.sessionFile);
+      if (marker && file) {
+        transcriptFacts.set(transcriptKey(marker), {
+          generation: file.generation ?? null,
+          cold: file.cold === true,
+        });
+      }
+    }
+  }
   const access: UsageCostCollectionAccess = {
     env,
     materializeArchive: (sourcePath) =>
@@ -138,7 +153,7 @@ export function createUsageCostCollectionAccess(params: {
       });
     },
     readSqliteStats: async (markers) => {
-      const result: Array<SessionTranscriptStats | undefined> = Array(markers.length);
+      const result: Array<TranscriptStats | undefined> = Array(markers.length);
       const groups = new Map<
         string,
         Array<{ marker: SqliteSessionFileMarker; index: number; receipt?: string }>

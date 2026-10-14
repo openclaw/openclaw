@@ -198,7 +198,7 @@ describe("sessions.usage", () => {
   );
 
   it.each(["client cancellation", "time budget"] as const)(
-    "aborts usage work without publishing a report after %s",
+    "cancels data work after %s while preserving the caller lifetime",
     async (cause) => {
       const started = createDeferred<AbortSignal | undefined>();
       const release = createDeferred();
@@ -241,11 +241,20 @@ describe("sessions.usage", () => {
           await vi.advanceTimersByTimeAsync(1);
         }
         expect(signal.aborted).toBe(true);
-        expect(await pending).toBe(signal.reason);
         if (cause === "time budget") {
-          expect(signal.reason).toMatchObject({ message: expect.stringContaining("15-second") });
+          expect(await pending).toBeUndefined();
+          expect(readResult(respond)).toMatchObject({
+            totals: { totalTokens: 0 },
+            cacheStatus: { status: "partial", pendingFiles: 1 },
+            partial: {
+              reason: "time-budget",
+              message: expect.stringContaining("narrow the date range"),
+            },
+          });
+        } else {
+          expect(await pending).toBe(signal.reason);
+          expect(respond).not.toHaveBeenCalled();
         }
-        expect(respond).not.toHaveBeenCalled();
       } finally {
         release.resolve();
         await pending;
@@ -253,6 +262,113 @@ describe("sessions.usage", () => {
       }
     },
   );
+
+  it("returns completed batches and a range hint when the next batch exceeds its budget", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const started = createDeferred();
+    const release = createDeferred();
+    const discovered = vi.mocked(discoverAllSessions);
+    const originalDiscovery = discovered.getMockImplementation()!;
+    const load = vi.mocked(loadSessionCostSummariesFromCache);
+    const originalLoad = load.getMockImplementation()!;
+    discovered.mockResolvedValue(
+      Array.from({ length: 257 }, (_, index) => ({
+        sessionId: `budget-${index}`,
+        sessionFile: `/tmp/budget-${index}.jsonl`,
+        mtime: 257 - index,
+      })),
+    );
+    load.mockImplementation(async ({ sessions }) => {
+      if (sessions.some(({ sessionId }) => sessionId === "budget-256")) {
+        const signal = getAsyncWorkSignal()!;
+        const abort = () => release.resolve();
+        signal.addEventListener("abort", abort, { once: true });
+        started.resolve();
+        try {
+          await release.promise;
+          signal.throwIfAborted();
+        } finally {
+          signal.removeEventListener("abort", abort);
+        }
+      }
+      return {
+        summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
+        cacheStatus: {
+          status: "fresh",
+          cachedFiles: sessions.length,
+          pendingFiles: 0,
+          staleFiles: 0,
+        },
+      };
+    });
+    const pending = runSessionsUsage({ ...BASE_USAGE_RANGE, projection: "overview" });
+    try {
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = readResult(await pending);
+      expect(result.totals.totalTokens).toBe(256 * 7);
+      expect(result.sessions).toHaveLength(50);
+      expect(result.cacheStatus).toMatchObject({
+        status: "partial",
+        cachedFiles: 256,
+        pendingFiles: 1,
+      });
+      expect(result.partial?.reason).toBe("time-budget");
+      expect(result.overview?.queryWarnings).toContain(result.partial?.message);
+      // A timed-out snapshot must not become a complete cached empty/subtotal result.
+      load.mockImplementation(originalLoad);
+      const retried = readResult(
+        await runSessionsUsage({ ...BASE_USAGE_RANGE, projection: "overview" }),
+      );
+      expect(retried.partial).toBeUndefined();
+      expect(retried.cacheStatus?.status).toBe("fresh");
+    } finally {
+      release.resolve();
+      await pending;
+      discovered.mockImplementation(originalDiscovery);
+      load.mockImplementation(originalLoad);
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries the remaining report allowance into later batches", async () => {
+    const discovered = vi.mocked(discoverAllSessions);
+    const originalDiscovery = discovered.getMockImplementation()!;
+    const load = vi.mocked(loadSessionCostSummariesFromCache);
+    const originalLoad = load.getMockImplementation()!;
+    discovered.mockResolvedValue(
+      Array.from({ length: 257 }, (_, index) => ({
+        sessionId: `memory-${index}`,
+        sessionFile: `/tmp/memory-${index}.jsonl`,
+        mtime: 257 - index,
+      })),
+    );
+    load.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
+      summaries: sessions.map(() =>
+        reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
+      ),
+      remainingReportBytes: 0,
+      cacheStatus: {
+        status: reportBudgetBytes === 0 ? "partial" : "fresh",
+        cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
+        pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
+        staleFiles: 0,
+      },
+    }));
+    try {
+      const result = readResult(await runSessionsUsage(BASE_USAGE_RANGE));
+      expect(load.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
+      expect(result.totals.totalTokens).toBe(256 * 7);
+      expect(result.cacheStatus).toMatchObject({
+        status: "partial",
+        cachedFiles: 256,
+        pendingFiles: 1,
+      });
+    } finally {
+      discovered.mockImplementation(originalDiscovery);
+      load.mockImplementation(originalLoad);
+    }
+  });
 
   it("keeps an identical cold usage request alive when the first client disconnects", async ({
     signal: testSignal,
