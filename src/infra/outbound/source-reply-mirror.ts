@@ -158,7 +158,11 @@ export async function beginTerminalSourceReplyDelivery(
   if (!toolCallId) {
     throw new Error("terminal source reply requires tool-call correlation");
   }
-  if (!params.sessionId || !isCurrentSourceConversation(params)) {
+  if (
+    !params.sessionId ||
+    !RESTART_RECEIPT_ACTION_NAMES.has(params.action.trim().toLowerCase()) ||
+    !isCurrentSourceConversation(params)
+  ) {
     return undefined;
   }
   const sourceTurnId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
@@ -369,6 +373,16 @@ function matchesDeliveredSourceTargets(
 /** Actions addressed by target, where an exact target match proves the delivery's conversation. */
 const TARGET_ADDRESSED_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessageActionName>([
   "dice",
+  "poll",
+  "send",
+]);
+
+/**
+ * Actions that own a durable restart receipt. AGENTS.md keeps this scope separate from completion
+ * eligibility, so an action counted as a delivered source reply does not thereby persist a
+ * pre-send intent that can answer already_delivered before the transport runs.
+ */
+const RESTART_RECEIPT_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessageActionName>([
   "poll",
   "send",
 ]);
