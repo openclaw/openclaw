@@ -76,7 +76,11 @@ export function recordOperationTimingEvent(
       store.histogram(
         "openclaw_gc_duration_seconds",
         "Elapsed garbage collection duration in seconds by collection kind and isolate role.",
-        { kind: evt.kind ?? "unknown", thread: evt.thread ?? "main" },
+        {
+          kind: evt.kind ?? "unknown",
+          thread: evt.thread ?? "main",
+          ...(evt.workerSlot === undefined ? {} : { slot: String(evt.workerSlot) }),
+        },
         seconds(evt.durationMs),
       );
       return;
