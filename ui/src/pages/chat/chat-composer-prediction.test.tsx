@@ -51,7 +51,9 @@ function fixture(
     flush();
   };
   props.onRequestUpdate = paint;
-  onTestFinished(() => render(nothing, container));
+  onTestFinished(() => {
+    render(nothing, container);
+  });
   paint();
   const input = container.querySelector("textarea")!;
   const finish = (runId = "run-a") =>
