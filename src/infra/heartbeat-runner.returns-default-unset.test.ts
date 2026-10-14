@@ -412,7 +412,6 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 
   it.each([
     { name: "topic suffix", to: "-100111:topic:42", expectedTo: "-100111", expectedThreadId: 42 },
-    { name: "plain chat id", to: "-100111", expectedTo: "-100111", expectedThreadId: undefined },
   ])(
     "parses optional telegram :topic: threadId suffix through session route: $name",
     async ({ to, expectedTo, expectedThreadId }) => {

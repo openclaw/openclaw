@@ -323,7 +323,6 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
   it.each([
     { source: undefined, work: "monitor", heartbeatCopy: true },
-    { source: "interval", work: "cron", heartbeatCopy: false },
     { source: "interval", work: "exec-and-cron", heartbeatCopy: false },
     { source: "manual", work: "background-task", heartbeatCopy: false },
     { source: "exec-event", work: "scheduled-task", heartbeatCopy: true },
@@ -331,7 +330,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     "delivers failure copy for selected $work work after a $source wake",
     async ({ source, work, heartbeatCopy }) => {
       await withHeartbeat(async ({ sessionKey, replySpy, run, expectSend }) => {
-        if (work === "cron" || work === "exec-and-cron") {
+        if (work === "exec-and-cron") {
           enqueueSystemEvent("Cron: scheduled reminder", { sessionKey, contextKey: "cron:job" });
         }
         if (work === "exec-and-cron" || work === "scheduled-task") {

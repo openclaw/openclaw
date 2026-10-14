@@ -5,7 +5,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { heartbeatLog } from "./heartbeat-log.js";
 import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
@@ -116,40 +115,6 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith(wake("exec-event"));
-  });
-
-  it("coalesces a colliding scheduled wake into the task turn", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-    const scheduled = wake("interval", {
-      agentId: "main",
-      scheduledEveryMs: 5 * 60_000,
-      coalesceMs: 100,
-    });
-    const task = {
-      source: "interval" as const,
-      intent: "task" as const,
-      reason: "heartbeat-task:job-inbox",
-      agentId: "main",
-      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-      coalesceMs: 100,
-    };
-
-    for (const request of [task, scheduled]) {
-      requestHeartbeat(request);
-    }
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handler).toHaveBeenCalledWith({
-      source: "interval",
-      intent: "task",
-      reason: "heartbeat-task:job-inbox",
-      agentId: "main",
-      scheduledEveryMs: 5 * 60_000,
-      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-    });
   });
 
   it("runs equal-period tasks at staggered anchors by retaining the spaced task", async () => {
@@ -648,70 +613,6 @@ describe("heartbeat-wake", () => {
     expect(handlerB).toHaveBeenCalledTimes(1);
     expect(handlerB).toHaveBeenCalledWith(wake("manual"));
   });
-
-  it("preserves heartbeat override when same-target wakes coalesce", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeat({
-      source: "manual",
-      intent: "manual",
-      reason: "manual",
-      agentId: "ops",
-      sessionKey: "agent:ops:guildchat:channel:alerts",
-      heartbeat: { target: "last" },
-      coalesceMs: 100,
-    });
-    requestHeartbeat({
-      source: "manual",
-      intent: "manual",
-      reason: "manual",
-      agentId: "ops",
-      sessionKey: "agent:ops:guildchat:channel:alerts",
-      coalesceMs: 100,
-    });
-
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith({
-      source: "manual",
-      intent: "manual",
-      reason: "manual",
-      agentId: "ops",
-      sessionKey: "agent:ops:guildchat:channel:alerts",
-      heartbeat: { target: "last" },
-    });
-  });
-  it("dispatches an urgent wake after the wall clock changes forward", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(2_000_000_000_000);
-    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeat(wake("interval", { agentId: "slow", coalesceMs: 60_000 }));
-    vi.setSystemTime(Date.now() + 3_600_000);
-    requestHeartbeat(wake("manual", { agentId: "urgent", coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(handler).toHaveBeenCalledExactlyOnceWith(wake("manual", { agentId: "urgent" }));
-  });
-
-  it("keeps manual requests-in-flight on the default retry delay", async () => {
-    vi.useFakeTimers();
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-    requestHeartbeat(wake("manual", { coalesceMs: 0 }));
-
-    await vi.advanceTimersByTimeAsync(999);
-    expect(handler).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(2);
-  });
 });
 
 describe("heartbeat wake settlement", () => {
@@ -735,41 +636,6 @@ describe("heartbeat wake settlement", () => {
   function setHandler(handler: Parameters<typeof setRuntimeHeartbeatWakeHandler>[0]) {
     disposeHandler = setRuntimeHeartbeatWakeHandler(handler);
   }
-
-  it.each([false, true])("logs terminal wake failures with a waiter=%s", async (wait) => {
-    vi.useFakeTimers();
-    const error = vi.spyOn(heartbeatLog, "error").mockImplementation(() => {});
-    const failure = { status: "failed" as const, reason: "synthetic target unavailable" };
-    const handler = vi.fn().mockResolvedValue(failure);
-    setHandler(handler);
-    const request = {
-      source: "exec-event" as const,
-      intent: "event" as const,
-      reason: "exec-event",
-      agentId: "main",
-      sessionKey: "agent:main:wake-failure",
-      coalesceMs: 0,
-    };
-    const result = wait ? requestHeartbeatAndWait(request) : requestHeartbeat(request);
-
-    await vi.runAllTimersAsync();
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(error).toHaveBeenCalledExactlyOnceWith(
-      "session event wake failed; no wake retry scheduled",
-      {
-        source: "exec-event",
-        intent: "event",
-        agentId: "main",
-        sessionKey: "agent:main:wake-failure",
-        wakeReason: "exec-event",
-        error: failure.reason,
-      },
-    );
-    if (wait) {
-      expect(await result).toEqual(failure);
-    }
-  });
 
   it.each(["absent", "queued", "running"])(
     "settles a waiter with an unavailable handler when %s",

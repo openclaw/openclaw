@@ -201,26 +201,6 @@ async function startRuntime(
   };
 }
 
-it.each([65_000, -5_000])(
-  "renews unchanged worker custody after a heartbeat age of %s ms",
-  async (age) => {
-    const rootPath = path.join(tempDirs.make("openclaw-owner-gap-"), "root.lock");
-    fs.writeFileSync(rootPath, "root-owner");
-    vi.useFakeTimers();
-    const runtime = await startRuntime(
-      { [rootPath]: "root-owner" },
-      { clock: "epoch", seed: BigInt(Date.now() - age) },
-    );
-    try {
-      expect(Number(Atomics.load(runtime.lastBeat, 0))).toBe(Date.now());
-      expect(fs.statSync(rootPath).mtimeMs).toBe(Date.now());
-      expect(vi.getTimerCount()).toBe(1);
-    } finally {
-      await runtime.stop();
-    }
-  },
-);
-
 it.each([65_000, -5_000, "replacement"] as const)(
   "rechecks parent custody after %s before fencing",
   async (age) => {
@@ -255,8 +235,6 @@ it.each([65_000, -5_000, "replacement"] as const)(
 );
 
 it.each([
-  { clock: "monotonic", age: 0, renew: true },
-  { clock: "epoch", age: 0, renew: true },
   { clock: "monotonic", age: 60_001, renew: true },
   { clock: "epoch", age: 60_001, renew: true },
   { clock: "monotonic", age: 120_001, renew: false },

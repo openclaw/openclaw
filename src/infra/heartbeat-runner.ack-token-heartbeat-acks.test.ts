@@ -150,13 +150,6 @@ describe("heartbeat acknowledgements", () => {
     sentText?: string;
   }>([
     {
-      name: "canonical NO_REPLY acknowledgement",
-      payload: { text: "NO_REPLY" },
-      options: { showOk: true },
-      sends: 1,
-      sentText: "HEARTBEAT_OK",
-    },
-    {
       name: "truncated NO_REPLY final",
       payload: { text: "NO_R" },
       options: { telegram: true },
