@@ -624,7 +624,7 @@ async function fetchWithSsrFGuardInternal(
         }
       }
 
-      const init: DispatcherAwareRequestInit = {
+      const init: DispatcherAwareRequestInit & { duplex?: "half" } = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
@@ -632,6 +632,21 @@ async function fetchWithSsrFGuardInternal(
           ? AbortSignal.any([signal, requestController.signal])
           : requestController.signal,
       };
+      if (init.body instanceof Blob && !init.keepalive && init.mode !== "no-cors") {
+        // This owner replays redirects. A per-hop stream avoids Fetch's unused body tee.
+        // Fetch forbids stream bodies for keepalive and no-cors requests.
+        const body = init.body;
+        const headers = new Headers(init.headers);
+        if (!headers.has("content-length")) {
+          headers.set("content-length", String(body.size));
+        }
+        if (!headers.has("content-type") && body.type) {
+          headers.set("content-type", body.type);
+        }
+        init.headers = headers;
+        init.body = body.stream();
+        init.duplex = "half";
+      }
 
       // Explicit caller stubs and test-installed fetch mocks should win.
       // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
