@@ -238,6 +238,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sandbox/runtime-status.session-override.test.ts",
   "src/auto-reply/reply/agent-runner-steer-adoption.worker.test.ts",
   "src/auto-reply/reply/followup-turn-execution.steering.test.ts",
+  "src/auto-reply/reply/followup-turn-admission.test.ts",
+  "src/auto-reply/reply/queue.personal-bootstrap-overflow.test.ts",
   "src/auto-reply/reply/queue.authority.test.ts",
   "src/auto-reply/reply/queue.collect.test.ts",
   "src/auto-reply/reply/reply-run-registry.preparation.test.ts",
