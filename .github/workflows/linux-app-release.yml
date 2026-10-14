@@ -293,7 +293,9 @@ jobs:
   build_linux:
     name: Build Linux companion bundles
     needs: validate_release
-    if: ${{ needs.validate_release.outputs.already_published != 'true' }}
+    # Keep the mirror-only dispatch excluded at the selected-code execution boundary,
+    # including for analyzers that do not propagate validate_release's event gate.
+    if: ${{ github.event_name == 'workflow_run' && needs.validate_release.outputs.already_published != 'true' }}
     # Oldest supported build base: bundles link against this glibc, so newer
     # runners would silently drop Ubuntu 22.04/Debian 12 users.
     runs-on: ubuntu-22.04

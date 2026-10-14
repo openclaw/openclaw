@@ -6453,12 +6453,15 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
   expect(linux.concurrency["cancel-in-progress"]).toBe(false);
   expect(linux.concurrency.queue).toBe("max");
   expect(linux.concurrency.group).not.toBe(linux.jobs.publish.concurrency.group);
-  for (const alreadyPublished of ["true", "false"]) {
-    expect(
-      runInNewContext(linux.jobs.build_linux.if.replace(/^\$\{\{|\}\}$/gu, ""), {
-        needs: { validate_release: { outputs: { already_published: alreadyPublished } } },
-      }),
-    ).toBe(alreadyPublished !== "true");
+  for (const event_name of ["workflow_run", "workflow_dispatch"]) {
+    for (const alreadyPublished of ["true", "false"]) {
+      expect(
+        runInNewContext(linux.jobs.build_linux.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+          github: { event_name },
+          needs: { validate_release: { outputs: { already_published: alreadyPublished } } },
+        }),
+      ).toBe(event_name === "workflow_run" && alreadyPublished !== "true");
+    }
   }
   for (const [alreadyPublished, build, signing, expected] of [
     ["true", "skipped", "skipped", true],
