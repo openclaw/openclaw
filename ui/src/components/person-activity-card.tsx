@@ -175,7 +175,6 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
     personActivityLink(user().identity?.id, props.input.routing, label().name),
   );
   // Undefined means presence has not been observed; an empty snapshot means offline.
-  const observed = () => user().entries !== undefined;
   const offline = () => user().entries?.length === 0;
   const onlineSince = createMemo(() => {
     const times = (user().entries ?? []).flatMap((entry) =>
@@ -237,7 +236,7 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
         />
         <div>
           <h2>{label().name}</h2>
-          <Show when={observed()}>
+          <Show when={user().entries !== undefined}>
             <span
               class={[
                 "person-activity-card__status",
@@ -267,7 +266,7 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
           {t("presence.sharedOwner.hint")}
         </p>
       </Show>
-      <Show when={observed() && !offline()}>
+      <Show when={user().entries !== undefined && !offline()}>
         <dl class="person-activity-card__facts">
           <Show when={where().length > 0 || zones().length > 0}>
             <div>
@@ -323,7 +322,6 @@ export function updatePersonActivityCard(container: HTMLElement, input?: CardVal
   const existing = cards.get(container);
   if (input === undefined) {
     existing?.dispose();
-    cards.delete(container);
   } else if (existing) {
     existing.update(input);
   } else {
@@ -341,7 +339,10 @@ export function updatePersonActivityCard(container: HTMLElement, input?: CardVal
             })()}
             fallback={
               <div class="person-reference__status" role="status">
-                {String(value())}
+                {(() => {
+                  const current = value();
+                  return typeof current === "string" ? current : "";
+                })()}
               </div>
             }
           >
