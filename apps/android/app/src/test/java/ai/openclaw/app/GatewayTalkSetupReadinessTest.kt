@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.voice.TalkModeRoute
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
@@ -13,6 +14,7 @@ class GatewayTalkSetupReadinessTest {
   fun targetTitlesStayNestedLocalizedPresentation() {
     val targets =
       listOf(
+        GatewayTalkSetupTarget.TALK to "Talk",
         GatewayTalkSetupTarget.REALTIME_TALK to "Realtime Talk",
         GatewayTalkSetupTarget.DICTATION to "Dictation",
       )
@@ -47,7 +49,7 @@ class GatewayTalkSetupReadinessTest {
   fun gatewayTechnicalLabelsStayVerbatimInsideLocalizedPresentation() {
     assertEquals(
       NativeText.Resource(
-        source = "\${state.provider.label} via Gateway relay",
+        source = "\${state.provider.label} via Gateway",
         formatArgs = listOf(NativeText.Verbatim("Future Realtime")),
       ),
       gatewayTalkSetupDescriptionText(
@@ -81,13 +83,14 @@ class GatewayTalkSetupReadinessTest {
   fun mixedProviderStatesRemainDistinct() {
     val readiness =
       parseGatewayTalkSetupReadiness(
+        TalkModeRoute.RealtimeRelay,
         catalog(
           realtime = providerGroup(id = "openai", label = "OpenAI Realtime", configured = false),
           transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
         ),
       )
 
-    val realtime = readiness.realtimeTalk as GatewayTalkSetupState.NeedsSetup
+    val realtime = readiness.talk as GatewayTalkSetupState.NeedsSetup
     val dictation = readiness.dictation as GatewayTalkSetupState.Ready
     assertEquals("OpenAI Realtime", realtime.provider?.label)
     assertEquals("Deepgram", dictation.provider.label)
@@ -106,6 +109,7 @@ class GatewayTalkSetupReadinessTest {
   fun activeProviderAliasSelectsCanonicalCatalogEntry() {
     val readiness =
       parseGatewayTalkSetupReadiness(
+        TalkModeRoute.RealtimeRelay,
         catalog(
           realtime = providerGroup(id = "google", label = "Google Live", configured = true),
           transcription =
@@ -127,6 +131,7 @@ class GatewayTalkSetupReadinessTest {
   fun canonicalProviderIdWinsOverAnEarlierAliasCollision() {
     val readiness =
       parseGatewayTalkSetupReadiness(
+        TalkModeRoute.RealtimeRelay,
         json(
           """
           {
@@ -144,7 +149,7 @@ class GatewayTalkSetupReadinessTest {
         ),
       )
 
-    val realtime = readiness.realtimeTalk as GatewayTalkSetupState.Ready
+    val realtime = readiness.talk as GatewayTalkSetupState.Ready
     assertEquals("google", realtime.provider.id)
   }
 
@@ -152,6 +157,7 @@ class GatewayTalkSetupReadinessTest {
   fun missingActiveProviderStaysUnverifiedInsteadOfGuessingFromRowOrder() {
     val readiness =
       parseGatewayTalkSetupReadiness(
+        TalkModeRoute.RealtimeRelay,
         json(
           """
           {
@@ -167,14 +173,15 @@ class GatewayTalkSetupReadinessTest {
         ),
       )
 
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(!readiness.realtimeTalk.requiresSetup)
+    assertTrue(readiness.talk is GatewayTalkSetupState.Unverified)
+    assertTrue(!readiness.talk.requiresSetup)
   }
 
   @Test
   fun authoritativeUnconfiguredProvidersRequireSetupWithoutAnActiveProvider() {
     val readiness =
       parseGatewayTalkSetupReadiness(
+        TalkModeRoute.RealtimeRelay,
         catalog(
           realtime =
             providerGroup(
@@ -188,14 +195,15 @@ class GatewayTalkSetupReadinessTest {
         ),
       )
 
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.NeedsSetup)
-    assertTrue(readiness.realtimeTalk.requiresSetup)
+    assertTrue(readiness.talk is GatewayTalkSetupState.NeedsSetup)
+    assertTrue(readiness.talk.requiresSetup)
   }
 
   @Test
   fun olderCatalogRowStateStaysUnverified() {
     val readiness =
       parseGatewayTalkSetupReadiness(
+        TalkModeRoute.RealtimeRelay,
         catalog(
           realtime =
             providerGroup(
@@ -208,28 +216,30 @@ class GatewayTalkSetupReadinessTest {
         ),
       )
 
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(!readiness.realtimeTalk.requiresSetup)
+    assertTrue(readiness.talk is GatewayTalkSetupState.Unverified)
+    assertTrue(!readiness.talk.requiresSetup)
   }
 
   @Test
   fun unknownActiveProviderStaysUnverifiedInsteadOfBlockingStartup() {
     val readiness =
       parseGatewayTalkSetupReadiness(
+        TalkModeRoute.RealtimeRelay,
         catalog(
           realtime = providerGroup(id = "google", label = "Google Live", configured = true, activeProvider = "future-alias"),
           transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
         ),
       )
 
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(!readiness.realtimeTalk.requiresSetup)
+    assertTrue(readiness.talk is GatewayTalkSetupState.Unverified)
+    assertTrue(!readiness.talk.requiresSetup)
   }
 
   @Test
   fun authoritativeUnknownActiveProviderRequiresSetup() {
     val readiness =
       parseGatewayTalkSetupReadiness(
+        TalkModeRoute.RealtimeRelay,
         catalog(
           realtime =
             providerGroup(
@@ -243,15 +253,16 @@ class GatewayTalkSetupReadinessTest {
         ),
       )
 
-    val realtime = readiness.realtimeTalk as GatewayTalkSetupState.NeedsSetup
+    val realtime = readiness.talk as GatewayTalkSetupState.NeedsSetup
     assertEquals("Choose a supported Realtime Talk provider on the Gateway", gatewayTalkSetupDescription(realtime))
-    assertTrue(readiness.realtimeTalk.requiresSetup)
+    assertTrue(readiness.talk.requiresSetup)
   }
 
   @Test
   fun unknownActiveProviderWithEmptyRegistryStaysUnverified() {
     val readiness =
       parseGatewayTalkSetupReadiness(
+        TalkModeRoute.RealtimeRelay,
         json(
           """
           {
@@ -262,15 +273,15 @@ class GatewayTalkSetupReadinessTest {
         ),
       )
 
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
-    assertTrue(!readiness.realtimeTalk.requiresSetup)
+    assertTrue(readiness.talk is GatewayTalkSetupState.Unverified)
+    assertTrue(!readiness.talk.requiresSetup)
   }
 
   @Test
   fun missingCatalogIsUnverifiedForBothActions() {
-    val readiness = parseGatewayTalkSetupReadiness(null)
+    val readiness = parseGatewayTalkSetupReadiness(TalkModeRoute.RealtimeRelay, null)
 
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
+    assertTrue(readiness.talk is GatewayTalkSetupState.Unverified)
     assertTrue(readiness.dictation is GatewayTalkSetupState.Unverified)
   }
 

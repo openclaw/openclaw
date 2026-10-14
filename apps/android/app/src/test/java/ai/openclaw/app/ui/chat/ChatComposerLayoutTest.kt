@@ -1264,7 +1264,7 @@ class ChatComposerLayoutTest {
             .get(runtime) as MutableStateFlow<GatewayTalkSetupReadiness>
         readiness.value =
           readiness.value.copy(
-            realtimeTalk =
+            talk =
               GatewayTalkSetupState.NeedsSetup(
                 GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider, GatewayTalkSetupTarget.REALTIME_TALK),
               ),
