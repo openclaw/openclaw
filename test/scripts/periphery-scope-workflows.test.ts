@@ -213,15 +213,20 @@ describe("Periphery scope workflows", () => {
       };
       commit();
       const { script } = scopeWorkflows.get(workflowPath)!;
-      const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].map((match) => match[1]);
-      expect(prosePaths.length).toBeGreaterThan(0);
+      const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].flatMap((match) =>
+        match[1] ? [match[1]] : [],
+      );
+      const firstProsePath = prosePaths[0];
+      if (!firstProsePath) {
+        throw new Error(`missing prose exclusions in ${workflowPath}`);
+      }
       for (const prosePath of prosePaths) {
         writeFixture(repoRoot, prosePath, "documentation\n");
       }
       commit();
       await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("false");
 
-      writeFixture(repoRoot, prosePaths[0], "updated documentation\n");
+      writeFixture(repoRoot, firstProsePath, "updated documentation\n");
       writeFixture(repoRoot, scopedPath, "struct Example {}\n");
       commit();
       await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
@@ -234,7 +239,7 @@ describe("Periphery scope workflows", () => {
       commit();
       await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
 
-      renameSync(path.join(repoRoot, scopedPath), path.join(repoRoot, prosePaths[0]));
+      renameSync(path.join(repoRoot, scopedPath), path.join(repoRoot, firstProsePath));
       commit();
       await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
     },
