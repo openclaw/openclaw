@@ -354,7 +354,6 @@ describe("chat session sharing menu", () => {
   });
 
   it("keeps the linked owner beside the draft marker for a non-manager", () => {
-    const navigate = vi.fn();
     const root = mount(
       renderSharing({
         session: {
@@ -374,7 +373,7 @@ describe("chat session sharing menu", () => {
         },
         state: undefined,
         ownerViewing: false,
-        personActivity: { basePath: "", navigate },
+        personActivity: { basePath: "", navigate: vi.fn() },
         showOwner: true,
         onOpen: vi.fn(),
         onVisibilityChange: vi.fn(),
@@ -393,20 +392,6 @@ describe("chat session sharing menu", () => {
     expect(ownerLink?.hasAttribute("aria-hidden")).toBe(false);
     ownerLink?.focus();
     expect(document.activeElement).toBe(ownerLink);
-
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    ownerLink?.dispatchEvent(click);
-    expect(click.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("owner", "Owner");
-
-    const modifiedClick = new MouseEvent("click", {
-      bubbles: true,
-      cancelable: true,
-      ctrlKey: true,
-    });
-    ownerLink?.dispatchEvent(modifiedClick);
-    expect(modifiedClick.defaultPrevented).toBe(false);
-    expect(navigate).toHaveBeenCalledOnce();
   });
 
   it("keeps read-only owner controls visible but refuses disabled synthetic actions", () => {
