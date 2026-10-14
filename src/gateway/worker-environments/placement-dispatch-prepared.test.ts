@@ -414,6 +414,38 @@ describe("prepared worker dispatch", () => {
     },
   );
 
+  it("carries prepared repository authority into the provider lifecycle launch", async () => {
+    const { harness, request } = await preparedHarness({ recipe: lifecycleRecipe });
+    let repositoryCurrent = true;
+    const bind = vi.mocked(harness.environments.bindPreparedWorkspace);
+    const ordinaryBind = bind.getMockImplementation()!;
+    bind.mockImplementation(async (input) => ({
+      ...(await ordinaryBind(input)),
+      assertCurrent: () => {
+        input.assertCurrent();
+        if (!repositoryCurrent) {
+          throw new Error("Repository identity revoked");
+        }
+      },
+    }));
+    const runSetup = vi.fn<NonNullable<typeof harness.environments.runProjectLifecycleCommand>>(
+      async (_environmentId, _ownerEpoch, command) => {
+        expect(command.workspaceDir).toBe("/worker/workspace");
+        expect(command.homeDir).toBe("/worker/home");
+        command.assertCurrent();
+        await Promise.resolve();
+        repositoryCurrent = false;
+        command.assertCurrent();
+        throw new Error("Repository command must not launch");
+      },
+    );
+    harness.environments.runProjectLifecycleCommand = runSetup;
+    await expect(harness.service.dispatch(request)).rejects.toThrow("Repository identity revoked");
+    expect(runSetup).toHaveBeenCalledOnce();
+    expect(harness.log).not.toContain("lifecycle:post-create");
+    expect(harness.log).not.toContain("activation");
+  });
+
   it("fails dispatch before activation when a declared post-binding command fails", async () => {
     const { harness, placements, ready, request } = await preparedHarness({
       recipe: lifecycleRecipe,
