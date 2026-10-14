@@ -7,6 +7,7 @@ import { withActor, type Mutation } from "./session-actor-worker.test-support.js
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
+// mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 it("retains an oversized sole actor across commits and accounts its bytes when another actor arrives", async () => {
