@@ -109,7 +109,11 @@ catalogSuite.define(() => {
     }
     const url = new URL("cron", browserUrl);
     url.hash = new URL(browserUrl).hash;
-    const frames: unknown[] = [];
+    const frames: Array<{
+      direction: "sent" | "received";
+      frame: Record<string, unknown>;
+      transportFailure?: boolean;
+    }> = [];
     const catalogRequests = new Set<string>();
     const commands: unknown[] = [];
     let rejectCatalogReplies = false;
@@ -232,6 +236,20 @@ catalogSuite.define(() => {
           }
         },
       );
+    } catch (error) {
+      console.error("Automation catalog publication diagnostics", {
+        configEvents: frames.filter(({ frame }) => frame.event === "config.changed").length,
+        catalogRequests: catalogRequests.size,
+        catalogReplies: frames.filter(
+          ({ direction, frame }) =>
+            direction === "received" &&
+            typeof frame.id === "string" &&
+            catalogRequests.has(frame.id),
+        ).length,
+        publicationCommands: commands.length,
+        leaseVerificationFailed: owner.logs().includes("failed to verify plugin lifecycle lease"),
+      });
+      throw error;
     } finally {
       const redact = (text: string) =>
         text
