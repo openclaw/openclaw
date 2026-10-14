@@ -69,6 +69,11 @@ spec:
               value: /home/node
             - name: OPENCLAW_CONFIG_DIR
               value: /home/node/.openclaw
+            # The Gateway stages private SQLite snapshots under XDG_CACHE_HOME (default
+            # ~/.cache), which readOnlyRootFilesystem cannot provide. Keep it on the PVC;
+            # without a writable cache location images newer than 2026.7.1-2 fail to start.
+            - name: XDG_CACHE_HOME
+              value: /home/node/.openclaw/.cache
             - name: NODE_ENV
               value: production
             - name: OPENCLAW_GATEWAY_TOKEN
