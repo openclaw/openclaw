@@ -7,13 +7,24 @@
 // /proc/<pid>/cmdline and redeem it before the intended browser does.
 //
 // This module keeps the credential out of process arguments: the target URL is
-// written to a one-time document inside a private 0700 temporary directory
-// with mode 0600, and only that non-secret file path is handed to the browser
-// opener. The document redirects the intended browser to the real target.
+// written to a one-time document inside a private temporary directory, and
+// only that non-secret file path is handed to the browser opener. The document
+// redirects the intended browser to the real target.
+//
+// Privacy is established per platform: POSIX uses a 0700 mkdtemp directory
+// and a 0600 file; Windows uses fs-safe private creation, which applies an
+// owner-only protected ACL to both the directory and the file rather than
+// relying on inherited temp-directory permissions.
+import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { openLocalFile } from "./browser-open.js";
+import {
+  createPrivateWindowsDirectory,
+  createPrivateWindowsFile,
+} from "./windows-private-directory.js";
 
 const HANDOFF_DIR_PREFIX = "openclaw-browser-handoff-";
 const HANDOFF_FILE_NAME = "handoff.html";
@@ -57,6 +68,31 @@ function renderBrowserHandoffDocument(targetUrl: string): string {
   ].join("\n");
 }
 
+/** Create the private handoff directory with platform-appropriate owner-only access. */
+async function createHandoffDirectory(): Promise<string> {
+  if (process.platform !== "win32") {
+    // mkdtemp creates the directory with mode 0700.
+    return await fs.mkdtemp(path.join(os.tmpdir(), HANDOFF_DIR_PREFIX));
+  }
+  const directory = path.join(os.tmpdir(), `${HANDOFF_DIR_PREFIX}${randomUUID()}`);
+  createPrivateWindowsDirectory(directory);
+  return directory;
+}
+
+/** Write the handoff document with platform-appropriate owner-only access. */
+async function writeHandoffDocument(filePath: string, content: string): Promise<void> {
+  if (process.platform !== "win32") {
+    await fs.writeFile(filePath, content, { mode: 0o600, flag: "wx" });
+    return;
+  }
+  const file = createPrivateWindowsFile(filePath);
+  try {
+    fsSync.writeFileSync(file.fd, content);
+  } finally {
+    file.close();
+  }
+}
+
 async function removeHandoffDirectory(directory: string): Promise<void> {
   await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
 }
@@ -78,19 +114,16 @@ export async function openUrlPrivately(targetUrl: string): Promise<boolean> {
 
   let directory: string;
   try {
-    // mkdtemp creates the directory with mode 0700: only this OS user can
-    // traverse it, so the credential cannot leak across the OS-user boundary
-    // even while the document exists.
-    directory = await fs.mkdtemp(path.join(os.tmpdir(), HANDOFF_DIR_PREFIX));
+    // Only this OS user can traverse the directory, so the credential cannot
+    // leak across the OS-user boundary even while the document exists.
+    directory = await createHandoffDirectory();
   } catch {
     return false;
   }
 
   const filePath = path.join(directory, HANDOFF_FILE_NAME);
   try {
-    await fs.writeFile(filePath, renderBrowserHandoffDocument(normalizedTargetUrl), {
-      mode: 0o600,
-    });
+    await writeHandoffDocument(filePath, renderBrowserHandoffDocument(normalizedTargetUrl));
   } catch {
     await removeHandoffDirectory(directory);
     return false;

@@ -4,13 +4,26 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { openLocalFileMock } = vi.hoisted(() => ({
-  openLocalFileMock: vi.fn<(filePath: string) => Promise<boolean>>(),
-}));
+const { openLocalFileMock, createPrivateWindowsDirectoryMock, createPrivateWindowsFileMock } =
+  vi.hoisted(() => ({
+    openLocalFileMock: vi.fn<(filePath: string) => Promise<boolean>>(),
+    createPrivateWindowsDirectoryMock: vi.fn<(directoryPath: string) => void>(),
+    createPrivateWindowsFileMock: vi.fn(),
+  }));
 
 vi.mock("./browser-open.js", () => ({
   openLocalFile: openLocalFileMock,
 }));
+
+vi.mock("./windows-private-directory.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./windows-private-directory.js")>();
+  createPrivateWindowsDirectoryMock.mockImplementation(actual.createPrivateWindowsDirectory);
+  createPrivateWindowsFileMock.mockImplementation(actual.createPrivateWindowsFile);
+  return {
+    createPrivateWindowsDirectory: createPrivateWindowsDirectoryMock,
+    createPrivateWindowsFile: createPrivateWindowsFileMock,
+  };
+});
 
 let openUrlPrivately: typeof import("./browser-handoff.js").openUrlPrivately;
 
@@ -61,6 +74,35 @@ describe("openUrlPrivately", () => {
     expect(content).toContain(encodeURIComponent("secret-handoff-token"));
     expect(content).toContain('location.replace("http://127.0.0.1:18789/#bootstrapToken=');
   });
+
+  it.runIf(process.platform !== "win32")(
+    "creates the Windows handoff through owner-only ACL helpers instead of POSIX modes",
+    async () => {
+      const realMkdir = (await import("node:fs")).mkdirSync;
+      const realOpen = (await import("node:fs")).openSync;
+      const realClose = (await import("node:fs")).closeSync;
+      createPrivateWindowsDirectoryMock.mockImplementation((dir) => {
+        realMkdir(dir, { mode: 0o700 });
+      });
+      createPrivateWindowsFileMock.mockImplementation((filePath: string) => {
+        const fd = realOpen(filePath, "wx", 0o600);
+        return { fd, close: () => realClose(fd), [Symbol.dispose]: () => realClose(fd) };
+      });
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      try {
+        await expect(
+          openUrlPrivately("http://127.0.0.1:18789/#bootstrapToken=secret-handoff-token"),
+        ).resolves.toBe(true);
+      } finally {
+        platform.mockRestore();
+      }
+
+      const openedPath = openLocalFileMock.mock.calls[0]![0];
+      expect(createPrivateWindowsDirectoryMock).toHaveBeenCalledWith(path.dirname(openedPath));
+      expect(createPrivateWindowsFileMock).toHaveBeenCalledWith(openedPath);
+      expect(await fs.readFile(openedPath, "utf8")).toContain("location.replace(");
+    },
+  );
 
   it("rejects non-http(s) targets without creating a handoff", async () => {
     await expect(openUrlPrivately("file:///etc/passwd")).resolves.toBe(false);
