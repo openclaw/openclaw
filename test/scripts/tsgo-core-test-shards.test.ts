@@ -629,7 +629,8 @@ exec ${JSON.stringify(native)} "$@"
         `import { createChangedCiTypeCheckPlan } from "./run-tsgo-core-test-shards.mts";
 import { checkCoreTsgoGraphBoundary } from "./check-tsgo-core-boundary.mts";
 if (process.argv[2] === "boundary") {
-  await checkCoreTsgoGraphBoundary();
+  const graphs = await checkCoreTsgoGraphBoundary();
+  console.log(JSON.stringify(graphs.find(({ name }) => name === "core-test-ui-e2e-chat")?.files));
 } else {
   const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}, ...JSON.parse(process.argv[3])], {
     cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
@@ -660,6 +661,53 @@ if (process.argv[2] === "boundary") {
         );
       };
       const deletedNonCompilerPaths = ["docs/removed.md", "docs/removed.mdx", "ui/src/removed.css"];
+      const presentationPaths = [
+        "extensions/active-memory/control-ui.presentation.json",
+        "extensions/memory-wiki/control-ui.presentation.json",
+      ];
+      for (const file of presentationPaths) {
+        write(file, '{"label":"Memory add-on"}\n');
+      }
+      const uiConsumer = "ui/src/presentation.ts";
+      const presentationImports = presentationPaths
+        .map(
+          (file, index) =>
+            `import presentation${index} from '../../${file}' with { type: 'json' };`,
+        )
+        .join("\n");
+      write(uiConsumer, `${presentationImports}\n`);
+      const uiConfig = TSGO_CORE_GRAPHS.find(
+        ({ name }) => name === "core-test-ui-e2e-chat",
+      )!.config;
+      const coreConfig = TSGO_CORE_GRAPHS.find(({ name }) => name === "core")!.config;
+      const originalUiConfig = fs.readFileSync(path.join(root, uiConfig), "utf8");
+      const originalCoreConfig = fs.readFileSync(path.join(root, coreConfig), "utf8");
+      const setGraphFiles = (config: string, original: string, files: string[]) => {
+        const value = JSON.parse(original);
+        value.compilerOptions.resolveJsonModule = true;
+        value.files = files.map((file) => path.join(root, file));
+        write(config, JSON.stringify(value));
+      };
+      setGraphFiles(uiConfig, originalUiConfig, [uiConsumer]);
+      const presentationBoundary = await inspectExtension("boundary");
+      expect(presentationBoundary.status, presentationBoundary.stderr).toBe(0);
+      expect(JSON.parse(presentationBoundary.stdout.trim())).toEqual(
+        expect.arrayContaining(presentationPaths),
+      );
+      const unrelatedJson = "extensions/example/other.json";
+      write(unrelatedJson, "{}\n");
+      write(
+        uiConsumer,
+        `${presentationImports}\nimport '../../${extension}';\nimport other from '../../${unrelatedJson}' with { type: 'json' };\n`,
+      );
+      setGraphFiles(coreConfig, originalCoreConfig, [presentationPaths[0]!]);
+      const rejectedExtensionInputs = await inspectExtension("boundary");
+      expect(rejectedExtensionInputs.status).not.toBe(0);
+      expect(rejectedExtensionInputs.stderr).toContain(`core-test-ui-e2e-chat: ${extension}`);
+      expect(rejectedExtensionInputs.stderr).toContain(`core-test-ui-e2e-chat: ${unrelatedJson}`);
+      expect(rejectedExtensionInputs.stderr).toContain(`core: ${presentationPaths[0]}`);
+      write(uiConfig, originalUiConfig);
+      write(coreConfig, originalCoreConfig);
       for (const serial of ["", "1"]) {
         const extensionPlan = await inspectExtension("plan", serial, deletedNonCompilerPaths);
         expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
