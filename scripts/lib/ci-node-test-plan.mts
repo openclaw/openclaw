@@ -5368,9 +5368,61 @@ function createCompactNodeTestShardBundles(
         true,
       );
     }
-    throw new Error(
-      `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${measuredJobs.length} planned)`,
-    );
+    if (options.runnerBackend === "hybrid") {
+      // A stranded parallel tail can run serially beside tooling without giving
+      // either child more workers. Keep the existing no-build serial budget.
+      const boundedWorkers = (job: CompactNodeTestShard) =>
+        Object.keys(job.env ?? {}).every((key) => key === "OPENCLAW_VITEST_MAX_WORKERS") &&
+        Number(job.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2) <= 2 &&
+        job.groups.every((group) => Number(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2) <= 2);
+      for (const tail of measuredJobs.slice()) {
+        if (
+          measuredJobs.length <= compactJobCap ||
+          tail.planConcurrency !== 2 ||
+          tail.pretestBuildMode ||
+          tail.requiresDist ||
+          !boundedWorkers(tail) ||
+          !tail.groups.every(isParallelCompactGroup)
+        ) {
+          continue;
+        }
+        const recipient = measuredJobs.find((job) => {
+          const groups = [...job.groups, ...tail.groups];
+          const seconds = Math.max(
+            estimateBinSeconds(groups),
+            (job.predictedSeconds ?? 0) + (tail.predictedSeconds ?? 0),
+          );
+          return (
+            job.runner === tail.runner &&
+            job.planConcurrency === 1 &&
+            !job.pretestBuildMode &&
+            !job.requiresDist &&
+            boundedWorkers(job) &&
+            (job.timeoutMinutes ?? 60) <= (tail.timeoutMinutes ?? 60) &&
+            job.groups.every(isParallelToolingGroup) &&
+            admitsCompactBin(groups, COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS, () => seconds)
+          );
+        });
+        if (!recipient) {
+          continue;
+        }
+        tail.groups.unshift(...recipient.groups);
+        tail.predictedSeconds = Math.ceil(
+          Math.max(
+            estimateBinSeconds(tail.groups),
+            (recipient.predictedSeconds ?? 0) + (tail.predictedSeconds ?? 0),
+          ),
+        );
+        tail.planConcurrency = 1;
+        tail.env = { ...tail.env, ...PINNED_COMPACT_GROUP_ENV };
+        measuredJobs.splice(measuredJobs.indexOf(recipient), 1);
+      }
+    }
+    if (measuredJobs.length > compactJobCap) {
+      throw new Error(
+        `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${measuredJobs.length} planned)`,
+      );
+    }
   }
   for (const job of measuredJobs) {
     if (job.planConcurrency !== 2) {

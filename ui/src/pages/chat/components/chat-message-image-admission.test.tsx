@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { renderMessageImages } from "./chat-message-images.ts";
+import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
   releaseChatMediaResourceSubscriber,
   type ImageBlock,
@@ -14,6 +16,13 @@ import {
 
 let container: HTMLDivElement;
 let onRequestUpdate: () => void;
+let view:
+  | {
+      update: (props: MessageImagesProps) => void;
+      setPresented: (presented: boolean) => void;
+      unmount: () => void;
+    }
+  | undefined;
 const intersections: (() => void)[] = [];
 
 beforeEach(() => {
@@ -51,7 +60,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  render(nothing, container);
+  unmount();
   releaseChatMediaResourceSubscriber(onRequestUpdate);
   container.remove();
   intersections.length = 0;
@@ -70,7 +79,35 @@ const ticketResponse = () =>
   });
 
 function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
-  return render(renderMessageImages(images, { onRequestUpdate, ...options }), container);
+  const props = { images, options: { onRequestUpdate, ...options } };
+  if (view) {
+    view.update(props);
+    return view;
+  }
+  const [current, setCurrent] = createSignal<MessageImagesProps>(props);
+  const [presented, setPresented] = createSignal(true);
+  const mounted = mountSolid(
+    () => (
+      <SolidContentPresentation value={presented}>
+        <MessageImages {...current()} />
+      </SolidContentPresentation>
+    ),
+    { container },
+  );
+  view = {
+    update(next) {
+      setCurrent(next);
+      flush();
+    },
+    setPresented,
+    unmount: mounted.unmount,
+  };
+  return view;
+}
+
+function unmount() {
+  view?.unmount();
+  view = undefined;
 }
 
 async function loadAdmittedImage() {
@@ -203,13 +240,13 @@ it.each(["assistant remount", "managed remount", "assistant reconnect"] as const
     const loaded = await loadAdmittedImage();
     const src = loaded.getAttribute("src");
     if (mode === "assistant reconnect") {
-      root.setConnected(false);
+      root.setPresented(false);
       flush();
       expect(loaded.parentNode).toBeNull();
-      root.setConnected(true);
+      root.setPresented(true);
       flush();
     } else {
-      render(nothing, container);
+      unmount();
       await Promise.resolve();
       draw(images);
     }
@@ -246,7 +283,7 @@ it.each([
   draw(images, options);
   const loaded = await loadAdmittedImage();
   const removeListener = vi.spyOn(loaded, "removeEventListener");
-  render(nothing, container);
+  unmount();
   await Promise.resolve();
   expect(loaded.parentNode).toBeNull();
   expect(removeListener).toHaveBeenCalledWith("load", expect.any(Function));
@@ -361,7 +398,7 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
   intersections[1]!();
   flush();
   expect(resolveArtifactDownload).toHaveBeenCalledOnce();
-  render(nothing, container);
+  unmount();
   artifact.resolve({ url: second });
   await vi.advanceTimersByTimeAsync(0);
 

@@ -20,6 +20,18 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
+An explicit organization-wide tokens-per-minute (TPM) exhaustion skips same-model
+backoff and auth-profile rotation when another configured candidate remains and the
+attempt is safe to replay. Auth-profile-backed credentials use the existing model cooldown,
+starting at 30 seconds, before another primary check. Other models on the same
+provider remain eligible. Generic 429 throttles, request limits, server errors,
+and connection failures keep bounded same-model recovery. The last configured
+candidate retains same-model recovery. If all later candidates are skipped by
+policy, authentication, or cooldown checks, the turn reports the exhausted chain
+instead of returning to the TPM-limited model. Inline provider keys still retry
+the primary on later turns; their existing cooldown policy covers auth and billing
+failures rather than model rate limits.
+
 An output-token limit is separate from a transient provider outage. The embedded
 runtime permits at most one continuation for a truncated Responses tool call or
 an empty length stop that still needs an answer. It records an output-limit

@@ -98,6 +98,21 @@ function successfulNativeSetup() {
 
 describe("PostgreSQL conformance selection", () => {
   it.each([
+    [["extensions/workboard/README.md", "src/utils/absolute-deadline.test.ts"], false],
+    [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
+    [["extensions/workboard/test/fixtures/README.md", "src/utils/absolute-deadline.test.ts"], true],
+  ] as const)("selects mixed diff %j: %s", (changedPaths, selected) => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths: [...changedPaths],
+      targetFiles: ["scripts/test-database-conformance.mjs"],
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_postgres_conformance).toBe(String(selected));
+  });
+
+  it.each([
     ["src/infra/database-engine/open.ts", true],
     ["src/infra/postgres-sync/locks.test.ts", true],
     ["src/infra/sql-connection.ts", true],

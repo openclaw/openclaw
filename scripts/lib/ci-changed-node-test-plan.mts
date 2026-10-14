@@ -84,6 +84,7 @@ import {
 
 // The manifest protocol also reads this policy from historical target planners.
 export { hasQaSmokeAffectingChange } from "./ci-qa-smoke-scope.mts";
+export { isCiDocumentationPath } from "../ci-changed-scope.mjs";
 
 type ChangedNodeTestShard = NodeTestShard & {
   targets?: string[];
@@ -256,7 +257,9 @@ export function hasControlUiPerformanceAffectingChange(
   changedPaths: string[],
   options: CwdOptions = {},
 ) {
-  const sources = changedPaths.filter((file) => !isTestOnlyPath(file));
+  const sources = changedPaths.filter(
+    (file) => !isTestOnlyPath(file) && !isDocumentationPath(file),
+  );
   if (sources.some((file) => CONTROL_UI_PERFORMANCE_SURFACE_RE.test(file))) {
     return true;
   }
@@ -294,10 +297,11 @@ const GLOBAL_NODE_TEST_INPUT_RE =
  */
 export function hasPromptSnapshotAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
   const cwd = options.cwd ?? process.cwd();
-  if (changedPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
+  const relevantPaths = changedPaths.filter((changedPath) => !isDocumentationPath(changedPath));
+  if (relevantPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
     return true;
   }
-  const sourcePaths = changedPaths.filter(
+  const sourcePaths = relevantPaths.filter(
     (changedPath) => changedPath.startsWith("src/") && !isTestFileTarget(changedPath),
   );
   if (sourcePaths.length === 0) {

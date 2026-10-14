@@ -1315,6 +1315,96 @@ describe("createTelegramBot", () => {
     expect(payload.BodyForAgent).toContain("Total voters: 3");
   });
 
+  it("preserves a bot mention split across ordinary long-paste fragments", async () => {
+    loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
+      channels: { telegram: { groupPolicy: "open", groups: { "*": { requireMention: true } } } },
+    });
+    const timerSpy = vi.spyOn(globalThis, "setTimeout");
+    const work: Promise<unknown>[] = [];
+    let flush: (() => void) | undefined;
+    try {
+      await createTelegramBot({ token: "tok" });
+      const handler = getMessageHandler();
+      const fragments = ["A".repeat(4090) + " @open", "claw_bot help"];
+      for (const [index, text] of fragments.entries()) {
+        const replay = await dispatchSpooledPrivateText(handler, {
+          updateId: 8300 + index,
+          messageId: 8300 + index,
+          text,
+          replayUpdate: "full",
+          message: { chat: { id: -1008300, type: "supergroup", title: "Long paste" } },
+        });
+        work.push(requireValue(replay.deferredWork, "long-paste participant").task);
+        flush = takeLatestTimerCallback(1_500);
+      }
+      requireValue(flush, "long-paste flush")();
+      await Promise.all(work);
+      expect(replySpy).toHaveBeenCalledOnce();
+      expect(replySpy.mock.calls[0]?.[0].RawBody).toBe(fragments.join(""));
+    } finally {
+      flush?.();
+      await Promise.allSettled(work);
+      timerSpy.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "keeps forwarded contact mentions separate from text (contactFirst=%s)",
+    async (contactFirst) => {
+      loadConfig.mockReturnValue({
+        channels: { telegram: { groupPolicy: "open", groups: { "*": { requireMention: true } } } },
+      });
+      const timerSpy = vi.spyOn(globalThis, "setTimeout");
+      const work: Promise<unknown>[] = [];
+      let flush: (() => void) | undefined;
+      try {
+        await createTelegramBot({ token: "tok" });
+        const handler = getMessageHandler();
+        let id = contactFirst ? 8100 : 8200;
+        for (const text of ["hello", "@openclaw_bot help"]) {
+          replySpy.mockClear();
+          const segments = [
+            { text },
+            {
+              contact: { first_name: "@openclaw_bot", phone_number: "+15550100001" },
+            },
+          ];
+          if (contactFirst) {
+            segments.reverse();
+          }
+          for (const segment of segments) {
+            const replay = await dispatchSpooledPrivateText(handler, {
+              updateId: ++id,
+              messageId: id,
+              text: "",
+              replayUpdate: "full",
+              message: {
+                ...segment,
+                chat: { id: -1008100, type: "supergroup", title: "Contact batch" },
+                forward_origin: { type: "hidden_user", date: 500, sender_user_name: "Original" },
+              },
+            });
+            work.push(requireValue(replay.deferredWork, "forwarded contact participant").task);
+            flush = takeLatestTimerCallback(1_000);
+          }
+          requireValue(flush, "contact batch flush")();
+          await Promise.all(work);
+          expect(replySpy).toHaveBeenCalledTimes(text === "hello" ? 0 : 1);
+          if (text !== "hello") {
+            expect(replySpy.mock.calls[0]?.[0].BodyForAgent).toContain(
+              "[Shared contact] @openclaw_bot, +15550100001",
+            );
+          }
+        }
+      } finally {
+        flush?.();
+        await Promise.allSettled(work);
+        timerSpy.mockRestore();
+      }
+    },
+  );
+
   it.each([false, true])(
     "preserves forwarded origin and formatting across debounce (multiple=%s)",
     async (multiple) => {
