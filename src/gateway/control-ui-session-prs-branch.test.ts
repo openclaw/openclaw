@@ -171,6 +171,14 @@ describe("session branch diff stats", () => {
       rateLimited: false,
       repository: { owner: "openclaw", repo: "openclaw" },
     });
+    const reads = vi.spyOn(worktreeGit, "runGitBytes");
+    const initial = await load();
+    reads.mockClear();
+    await appendCommit("a.txt", "next commit\n", "advance main");
+    await trackRemote("main");
+    expect(await load()).toEqual(initial);
+    expect(reads).not.toHaveBeenCalled();
+    reads.mockRestore();
     await git("remote", "set-url", "origin", "https://gitlab.com/openclaw/openclaw.git");
     await expect(load()).resolves.toEqual({ pullRequests: [], rateLimited: false });
     await git("remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
