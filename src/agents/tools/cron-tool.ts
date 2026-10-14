@@ -4,7 +4,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import type { CronDelivery } from "../../cron/types.js";
+import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
@@ -54,6 +54,7 @@ import { listCronSelfJob } from "./cron-tool-self-list.js";
 import {
   assertCronCreatorAuthorityResolutionAvailable,
   assertNoCronShellExecution,
+  resolveCronUpdateCreatorOptions,
   updateCronJobFromAgentTool,
 } from "./cron-tool-write.js";
 import type {
@@ -616,9 +617,13 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
               throw new Error("job required");
             }
-            // Admin patches still need stored-payload inference, but must not
-            // recapture the creator's execution authority.
-            const creatorOptions = managementAuthority ? undefined : opts;
+            const creatorOptions = await resolveCronUpdateCreatorOptions({
+              adminManagement: Boolean(managementAuthority),
+              options: opts,
+              callerSessionKey: callerIdentity?.sessionKey,
+              patch,
+              readCurrentJob: () => callGateway<CronJob>("cron.get", gatewayOpts, { id }),
+            });
             return jsonResult(
               await updateCronJobFromAgentTool({
                 id,
@@ -627,10 +632,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 creatorToolAllowlist: creatorOptions?.creatorToolAllowlist,
                 creatorToolAllowlistCaptureRef: creatorOptions?.creatorToolAllowlistCaptureRef,
                 resolveCreatorToolAuthority: creatorOptions?.resolveCreatorToolAuthority,
-                withCreatorAuthorityProvenance:
-                  !managementAuthority && callerIdentity
-                    ? withCreatorAuthorityProvenance
-                    : undefined,
+                withCreatorAuthorityProvenance,
                 gatewayOpts,
                 callGateway,
                 operationSignal,

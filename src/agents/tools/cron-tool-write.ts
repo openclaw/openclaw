@@ -1,5 +1,7 @@
 // Agent cron-tool write safety and optimistic update orchestration.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { CronJob } from "../../cron/types.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import { isRecord } from "../../utils.js";
 import {
   assertInheritedCronToolCaptureReady,
@@ -11,10 +13,40 @@ import {
 import type {
   CronCreatorToolAllowlistEntry,
   CronCreatorToolAuthoritySnapshot,
+  CronToolOptions,
   CronToolsAllowCaptureRef,
   GatewayToolCaller,
 } from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
+
+export async function resolveCronUpdateCreatorOptions(params: {
+  adminManagement: boolean;
+  options?: CronToolOptions;
+  callerSessionKey?: string;
+  patch: Record<string, unknown>;
+  readCurrentJob: () => Promise<CronJob>;
+}): Promise<CronToolOptions | undefined> {
+  const { options, patch } = params;
+  if (!params.adminManagement) {
+    return options;
+  }
+  if (
+    !options?.resolveCreatorToolAuthority ||
+    !isRecord(patch.payload) ||
+    !Object.hasOwn(patch.payload, "toolsAllow")
+  ) {
+    return undefined;
+  }
+  const current = await params.readCurrentJob();
+  if (
+    current.owner?.sessionKey === params.callerSessionKey &&
+    normalizeAccountId(current.owner?.accountId) === normalizeAccountId(options.agentAccountId)
+  ) {
+    // Resolve a fresh owner ceiling even for already-visible tools.
+    return { ...options, creatorToolAllowlist: undefined };
+  }
+  return undefined;
+}
 
 export function assertNoCronShellExecution(value: unknown): void {
   if (!isRecord(value)) {
