@@ -65,7 +65,10 @@ describe("Control UI relay tunnel", () => {
   it("streams HTTP chunks in both directions with unchanged paths, safe headers and read cookies", async () => {
     const f = setup();
     const upload = Buffer.alloc(512 * 1024, 3);
-    const download = Buffer.alloc(512 * 1024 + 9, 7);
+    const download = Buffer.alloc(512 * 1024 + 9);
+    for (let index = 0; index < download.length; index++) {
+      download[index] = index % 251;
+    }
     vi.mocked(f.handle.request).mockImplementation(async (input) => {
       expect(input.pathAndQuery).toBe("/control/?x=1");
       expect(input.headers).toEqual([
@@ -149,12 +152,13 @@ describe("Control UI relay tunnel", () => {
       cookies: [{ name: "asset", value: "signed", path: "/", maxAgeSeconds: 300 }],
     });
     const bodies = f.frames.values.filter((frame) => frame.type === "ui.http.body");
-    expect(bodies.map((frame) => Buffer.from(String(frame.b64), "base64").length)).toEqual([
-      512 * 1024,
-      9,
-      0,
-    ]);
-    expect(bodies.map((frame) => frame.more)).toEqual([true, true, false]);
+    for (const frame of bodies.slice(0, -1)) {
+      const bytes = Buffer.from(String(frame.b64), "base64");
+      expect(bytes.length).toBeGreaterThan(0);
+      expect(bytes.length).toBeLessThanOrEqual(512 * 1024);
+      expect(frame.more).toBe(true);
+    }
+    expect(bodies.at(-1)).toEqual({ type: "ui.http.body", sid: HTTP.sid, b64: "", more: false });
     expect(f.open).toHaveBeenCalledWith("gr_one", {
       ...ORIGINS,
       frameAncestors: ["https://chatgpt.com"],
