@@ -31,7 +31,7 @@ const fixture = vi.hoisted(() => ({
 }));
 vi.mock("./git.js", () => ({
   requireGit: async (_cwd: string, args: string[]) =>
-    args.includes("--git-common-dir") ? fixture.common : "a".repeat(40),
+    args.includes("--git-common-dir") ? fixture.common : "sha1",
   runGit: fixture.run,
   runGitBytes: fixture.run,
   runGitBuffered: fixture.run,
