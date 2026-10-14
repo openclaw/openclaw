@@ -183,6 +183,49 @@ describe("OpenAI completions output budgets", () => {
 
 describe("OpenAI completions reasoning", () => {
   it.each(["direct", "managed"] as const)(
+    "does not infer binary off support from a custom provider's endpoint (%s)",
+    (mode) => {
+      for (const [baseUrl, thinkingFormat] of [
+        ["https://api.z.ai/api/paas/v4", "zai"],
+        ["https://api.deepseek.com", "deepseek"],
+        ["https://api.together.ai/v1", "together"],
+      ] as const) {
+        for (const explicit of [false, true]) {
+          const model = makeCompletionsModel({
+            provider: "custom",
+            id: "always-thinking",
+            baseUrl,
+            ...(explicit ? { compat: { thinkingFormat } } : {}),
+          });
+          const params = buildOpenAICompletionsRequest(
+            model,
+            emptyContext(),
+            { reasoningEffort: "off" },
+            mode === "direct"
+              ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+              : { mode },
+          );
+          if (explicit && (mode === "direct" || thinkingFormat === "together")) {
+            expect(params).toMatchObject(
+              thinkingFormat === "together"
+                ? { reasoning: { enabled: false } }
+                : { thinking: { type: "disabled" } },
+            );
+          } else {
+            expect(params).not.toHaveProperty("thinking");
+            expect(params).not.toHaveProperty("reasoning");
+          }
+          if (explicit && mode === "managed" && thinkingFormat === "deepseek") {
+            expect(params.reasoning_effort).toBe("none");
+          } else {
+            expect(params).not.toHaveProperty("reasoning_effort");
+          }
+        }
+      }
+    },
+  );
+
+  it.each(["direct", "managed"] as const)(
     "sends custom reasoning controls with conservative off defaults (%s)",
     (mode) => {
       const cases: [

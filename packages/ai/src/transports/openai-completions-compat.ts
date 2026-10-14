@@ -312,10 +312,11 @@ export function resolveOpenAICompletionsCompat(
       configured?.supportsReasoningEffort ?? defaults.supportsReasoningEffort,
     supportedReasoningEfforts: configured?.supportedReasoningEfforts,
     reasoningEffortMap: configured?.reasoningEffortMap,
-    // Custom servers often accept only enabled efforts; declared off contracts still win.
+    // An inferred wire format does not prove the model can disable thinking.
+    // Explicit formats and effort mappings still own their off contract.
     reasoningEffortForOff:
       capabilities.usesExplicitProxyLikeEndpoint &&
-      thinkingFormat === "openai" &&
+      (thinkingFormat === "openai" || configured?.thinkingFormat === undefined) &&
       !configured?.supportedReasoningEfforts?.includes("none")
         ? null
         : "none",
