@@ -26,6 +26,7 @@ export {
   type WizardNotFoundErrorDetails,
   type SetupAdmissionBusyErrorDetails,
   type GitHubPublicationSelectionRejectedErrorDetails,
+  type SessionTranscriptOwnerMismatchErrorDetails,
   type SessionWorkspaceRecoveryRequiredErrorDetails,
   type TaskWorktreeSourceRequiredErrorDetails,
   readGitHubPublicationSelectionRejectedError,
@@ -104,6 +105,13 @@ export const TaskWorktreeSourceRequiredErrorDetailsSchema = closedObject({
   cwd: NonEmptyString,
 });
 
+export const SessionTranscriptOwnerMismatchErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SESSION_TRANSCRIPT_OWNER_MISMATCH),
+  sessionId: NonEmptyString,
+  ownerSessionKey: NonEmptyString,
+  requestedSessionKey: NonEmptyString,
+});
+
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
@@ -119,6 +127,7 @@ export const GatewayErrorDetailsSchema = Type.Union([
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   TaskWorktreeSourceRequiredErrorDetailsSchema,
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
+  SessionTranscriptOwnerMismatchErrorDetailsSchema,
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

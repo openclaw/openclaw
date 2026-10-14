@@ -1,5 +1,11 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  GatewayErrorDetailCodes,
+  type SessionTranscriptOwnerMismatchErrorDetails,
+} from "../../packages/gateway-protocol/src/index.js";
+import { SessionTranscriptOwnerMismatchError } from "../config/sessions/session-transcript-owner-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import {
@@ -27,7 +33,18 @@ export function errorShapeFromError(
             retryable: false,
             details: { code: ended.code },
           })
-        : errorShape(code, message ?? formatErrorMessageWithCode(error), metadata);
+        : error instanceof SessionTranscriptOwnerMismatchError
+          ? errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+              ...metadata,
+              retryable: false,
+              details: {
+                code: GatewayErrorDetailCodes.SESSION_TRANSCRIPT_OWNER_MISMATCH,
+                sessionId: error.sessionId,
+                ownerSessionKey: error.ownerSessionKey,
+                requestedSessionKey: error.requestedSessionKey,
+              } satisfies SessionTranscriptOwnerMismatchErrorDetails,
+            })
+          : errorShape(code, message ?? formatErrorMessageWithCode(error), metadata);
   copyErrorDiagnostic(error, shape);
   return shape;
 }
