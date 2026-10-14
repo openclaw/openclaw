@@ -3,14 +3,21 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "../acp/event-ledger-bytes.js";
+import { hashCronJobDefinition } from "../cron/definition-hash.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
-import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery-queue-backfill.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
@@ -372,6 +379,93 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
       asFiniteNumber(job.updatedAtMs) ?? (sqliteNumber(row.updated_at) || 0),
       row.store_key,
       row.job_id,
+    );
+  }
+}
+
+const STANDING_GRANT_GENERATION_TABLE = "operator_approval_standing_grant_generations";
+
+/**
+ * Binds live standing grants minted before definition generations existed
+ * (2026.8.x and earlier) to their job's first generation. Run only in the
+ * schema transaction that installs the cron_jobs generation projection: until
+ * then no generation-aware writer touched the database. Afterward, a grant
+ * without a companion row stays legacy and fails closed, so an edit restored
+ * after upgrade cannot revive it.
+ *
+ * Binding grants no new authority. Consumption still requires the job's current
+ * definition to match the config revision recorded at mint, the check earlier
+ * releases enforced, and any later substantive edit advances the generation.
+ * The projection hashes the stored job_json the way the cron codec does; a job
+ * whose stored JSON the current codec would canonicalize differently fails
+ * closed to prompting instead of matching.
+ */
+export function carryForwardLegacyCronStandingGrants(db: DatabaseSync, nowMs: number): void {
+  // Generation-aware writers create the companion only after the projection
+  // exists; a database that already has it is not a pre-generation database.
+  if (
+    !tableExists(db, "operator_approval_standing_grants") ||
+    !tableExists(db, "cron_jobs") ||
+    tableExists(db, STANDING_GRANT_GENERATION_TABLE)
+  ) {
+    return;
+  }
+  const stateDb =
+    getNodeSqliteKysely<
+      Pick<
+        OpenClawStateKyselyDatabase,
+        "cron_jobs" | "operator_approval_standing_grants" | typeof STANDING_GRANT_GENERATION_TABLE
+      >
+    >(db);
+  // Revoked and expired grants keep their ledger rows but are never bound.
+  const legacyGrants = executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("operator_approval_standing_grants")
+      .select(["grant_id", "cron_job_id"])
+      .where("revoked_at_ms", "is", null)
+      .where((eb) => eb.or([eb("expires_at_ms", "is", null), eb("expires_at_ms", ">", nowMs)])),
+  ).rows;
+  if (legacyGrants.length === 0) {
+    return;
+  }
+  db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, STANDING_GRANT_GENERATION_TABLE));
+  for (const jobId of new Set(legacyGrants.map((grant) => grant.cron_job_id))) {
+    const jobRows = executeSqliteQuerySync(
+      db,
+      stateDb
+        .selectFrom("cron_jobs")
+        .select(["store_key", "job_json", "updated_at"])
+        .where("job_id", "=", jobId)
+        .limit(2),
+    ).rows;
+    const definition = jobRows.length === 1 ? safeParseJsonRecord(jobRows[0]!.job_json) : null;
+    // Missing or ambiguous jobs leave their grants legacy, as consumption would.
+    if (!definition) {
+      continue;
+    }
+    const { enabled: _enabled, state: _state, ...grantDefinition } = definition;
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .updateTable("cron_jobs")
+        .set({
+          grant_definition_revision: hashCronJobDefinition(grantDefinition),
+          grant_definition_generation: 1,
+          grant_definition_updated_at: jobRows[0]!.updated_at,
+        })
+        .where("store_key", "=", jobRows[0]!.store_key)
+        .where("job_id", "=", jobId),
+    );
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .insertInto(STANDING_GRANT_GENERATION_TABLE)
+        .values(
+          legacyGrants
+            .filter((grant) => grant.cron_job_id === jobId)
+            .map((grant) => ({ grant_id: grant.grant_id, job_definition_generation: 1 })),
+        ),
     );
   }
 }

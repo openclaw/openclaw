@@ -14,6 +14,7 @@ import {
   backfillCronJobsFromJobJson,
   backfillCronRunLogEntryJson,
   backfillDeliveryQueueEntriesFromEntryJson,
+  carryForwardLegacyCronStandingGrants,
   ensureOperatorApprovalResolutionRefs,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
@@ -278,6 +279,9 @@ function ensureColumns(
 /** Runtime pairs new columns with their transforms; full historical repair stays explicit. */
 export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | "repair"): void {
   const repairHistoricalRows = scope === "repair";
+  // Absent generation projections mean only pre-generation builds wrote this database.
+  const installingGrantGenerations =
+    tableExists(db, "cron_jobs") && !tableHasColumn(db, "cron_jobs", "grant_definition_generation");
   ensureWorkerSessionToolStateSchema(db);
   for (const {
     columnName,
@@ -333,6 +337,9 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
     )
   ) {
     backfillCronJobsFromJobJson(db);
+  }
+  if (installingGrantGenerations) {
+    carryForwardLegacyCronStandingGrants(db, Date.now());
   }
   const addedDeliveryColumns = ensureColumns(db, columns.deliveryQueue);
   if (

@@ -14,6 +14,7 @@ import {
 import type { CronStoredJob } from "../cron/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -822,6 +823,147 @@ describe("cron standing grant consumption", () => {
       databaseOptions,
     });
     expect(consume({ databaseOptions, revision }).outcome).toBe("consumed");
+  });
+});
+
+describe("standing grants minted before definition generations", () => {
+  type LegacyGrant = {
+    grantId: string;
+    jobConfigRevision: string;
+    expiresAtMs?: number | null;
+    revokedAtMs?: number | null;
+  };
+
+  /**
+   * Leaves the database exactly as a 2026.8.35 writer would: grant rows without
+   * companions and cron_jobs without the generation projection.
+   */
+  async function seedPreGenerationDatabase(params: {
+    jobAtUpgrade?: CronStoredJob;
+    grants: (revision: string) => LegacyGrant[];
+  }) {
+    const databaseOptions = createDatabaseOptions();
+    const revision = seedCronJob(databaseOptions);
+    await insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
+    await resolveOperatorApproval({
+      id: "approval-1",
+      decision: "allow-always",
+      resolver: { kind: "device", id: "reviewer-1" },
+      nowMs: NOW_MS + 1_000,
+      databaseOptions,
+    });
+    if (params.jobAtUpgrade) {
+      seedCronJob(databaseOptions, params.jobAtUpgrade);
+    }
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const pathname = database.path;
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const previousWriter = new DatabaseSync(pathname);
+    try {
+      previousWriter.exec(`
+        DROP TABLE IF EXISTS operator_approval_standing_grant_generations;
+        ALTER TABLE cron_jobs DROP COLUMN grant_definition_revision;
+        ALTER TABLE cron_jobs DROP COLUMN grant_definition_generation;
+        ALTER TABLE cron_jobs DROP COLUMN grant_definition_updated_at;
+      `);
+      previousWriter.exec(
+        extractSqliteTableSchema(
+          PREVIOUS_STANDING_GRANT_SCHEMA,
+          "operator_approval_standing_grants",
+          {
+            endMarker:
+              "ON operator_approval_standing_grants(agent_id, cron_job_id, operation_binding, created_at_ms DESC);",
+          },
+        ),
+      );
+      const insert = previousWriter.prepare(
+        `INSERT INTO operator_approval_standing_grants (
+           grant_id, minted_by_approval_id, agent_id, cron_job_id, job_config_revision,
+           operation_binding, created_at_ms, expires_at_ms, revoked_at_ms, revoked_by,
+           last_used_at_ms, use_count
+         ) VALUES (?, 'approval-1', 'main', 'job-1', ?, ?, ?, ?, ?, ?, NULL, 0)`,
+      );
+      for (const [index, grant] of params.grants(revision).entries()) {
+        insert.run(
+          grant.grantId,
+          grant.jobConfigRevision,
+          OPERATION_BINDING,
+          NOW_MS + 1_000 + index,
+          grant.expiresAtMs ?? null,
+          grant.revokedAtMs ?? null,
+          grant.revokedAtMs ? "device:reviewer-1" : null,
+        );
+      }
+    } finally {
+      previousWriter.close();
+    }
+    return { databaseOptions, revision };
+  }
+
+  function consume(databaseOptions: OpenClawStateDatabaseOptions, revision: string) {
+    return consumeCronStandingGrant({
+      agentId: "main",
+      cronJobId: "job-1",
+      jobConfigRevision: revision,
+      operationBinding: OPERATION_BINDING,
+      nowMs: NOW_MS + 10_000,
+      databaseOptions,
+    }).outcome;
+  }
+
+  it("keeps an unchanged job's grant running unattended after the upgrade", async () => {
+    const { databaseOptions, revision } = await seedPreGenerationDatabase({
+      grants: (jobConfigRevision) => [{ grantId: "legacy-1", jobConfigRevision }],
+    });
+
+    expect(consume(databaseOptions, revision)).toBe("consumed");
+    // Binding is one-shot at upgrade; later 9.33 edits still invalidate it.
+    seedCronJob(databaseOptions, cronJob({ payload: { kind: "agentTurn", message: "changed" } }));
+    expect(consume(databaseOptions, seedCronJob(databaseOptions))).toBe("job-revision-changed");
+  });
+
+  it("carries a grant forward across a pause that predates the upgrade", async () => {
+    const { databaseOptions, revision } = await seedPreGenerationDatabase({
+      jobAtUpgrade: cronJob({ enabled: false, updatedAtMs: NOW_MS + 2_000 }),
+      grants: (jobConfigRevision) => [{ grantId: "legacy-1", jobConfigRevision }],
+    });
+
+    const reenabled = seedCronJob(databaseOptions, cronJob({ updatedAtMs: NOW_MS + 3_000 }));
+    expect(reenabled).toBe(revision);
+    expect(consume(databaseOptions, reenabled)).toBe("consumed");
+  });
+
+  it("keeps a grant invalid when the job changed before the upgrade, even if restored", async () => {
+    const { databaseOptions, revision } = await seedPreGenerationDatabase({
+      jobAtUpgrade: cronJob({
+        payload: { kind: "agentTurn", message: "changed" },
+        updatedAtMs: NOW_MS + 2_000,
+      }),
+      grants: (jobConfigRevision) => [{ grantId: "legacy-1", jobConfigRevision }],
+    });
+
+    const changed = seedCronJob(
+      databaseOptions,
+      cronJob({ payload: { kind: "agentTurn", message: "changed" }, updatedAtMs: NOW_MS + 2_000 }),
+    );
+    expect(consume(databaseOptions, changed)).toBe("job-revision-changed");
+    const restored = seedCronJob(databaseOptions, cronJob({ updatedAtMs: NOW_MS + 3_000 }));
+    expect(restored).toBe(revision);
+    expect(consume(databaseOptions, restored)).toBe("job-revision-changed");
+  });
+
+  it("never binds revoked or expired grants", async () => {
+    const { databaseOptions, revision } = await seedPreGenerationDatabase({
+      grants: (jobConfigRevision) => [
+        { grantId: "legacy-expired", jobConfigRevision, expiresAtMs: NOW_MS + 5_000 },
+        { grantId: "legacy-revoked", jobConfigRevision, revokedAtMs: NOW_MS + 4_000 },
+      ],
+    });
+
+    expect(consume(databaseOptions, revision)).toBe("revoked");
+    const { db } = openOpenClawStateDatabase(databaseOptions);
+    expect(tableExists(db, "operator_approval_standing_grant_generations")).toBe(false);
   });
 });
 
