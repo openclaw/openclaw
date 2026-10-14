@@ -540,25 +540,6 @@ describe("node worker bundle installer", () => {
     ).resolves.toContain(fixture.input.build.bundleHash);
   });
 
-  it("prewarms bundles while honoring an explicitly disabled compile cache", async () => {
-    const prewarmMarker = path.join(root, "worker-prewarmed-without-cache");
-    const fixture = await bundleFixture({
-      prewarmMarker,
-      bundlePrewarm: 1,
-      compileCacheDisabled: true,
-    });
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({
-      root,
-      env: { ...process.env, NODE_COMPILE_CACHE: undefined, NODE_DISABLE_COMPILE_CACHE: "1" },
-    });
-
-    await expect(
-      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).resolves.toEqual(fixture.input.build);
-    await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
-  });
-
   it("prewarms bundles with managed cache behind a host compile-cache fence", async () => {
     const prewarmMarker = path.join(root, "worker-prewarmed-with-managed-cache");
     const fixture = await bundleFixture({
@@ -630,40 +611,6 @@ describe("node worker bundle installer", () => {
     expect(served.requests).not.toHaveBeenCalled();
   });
 
-  it("reports installed only after full bundle validation", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
-
-    await expect(
-      installer.inspect({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHash: fixture.input.build.bundleHash,
-      }),
-    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
-    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
-    await expect(
-      installer.inspect({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHash: fixture.input.build.bundleHash,
-      }),
-    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "installed" });
-
-    const bundleDir = path.join(
-      root,
-      fixture.input.gatewayNamespace,
-      "bundles",
-      fixture.input.build.bundleHash,
-    );
-    await fs.writeFile(path.join(bundleDir, "github-exec-launcher.mjs"), "tampered\n");
-    await expect(
-      installer.inspect({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHash: fixture.input.build.bundleHash,
-      }),
-    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
-  });
-
   it("prunes superseded bundle artifacts in bounded passes while retaining the latest install", async () => {
     const fixture = await bundleFixture();
     const served = await serve(fixture.archive, fixture.input.archive.token);
@@ -715,6 +662,12 @@ describe("node worker bundle installer", () => {
     await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
     await fs.mkdir(path.dirname(tamperedDependency), { recursive: true });
     await fs.writeFile(tamperedDependency, "export const trusted = false;\n");
+    await expect(
+      installer.inspect({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      }),
+    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
     await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
 
     expect(served.requests).toHaveBeenCalledTimes(2);

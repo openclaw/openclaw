@@ -15,6 +15,7 @@ import {
   resolveGlobalManager,
   resolveUpdateRoot,
   runUpdateStep,
+  tryWriteCompletionCache,
   UpdatePreMutationError,
 } from "./shared.js";
 
@@ -59,6 +60,25 @@ describe("update CLI shared helpers", () => {
     vi.clearAllMocks();
     runCommandWithTimeout.mockResolvedValue(successfulCommandResult);
   });
+
+  it.each([false, true])(
+    "does not hide uncertain completion cleanup (uncertain=%s)",
+    async (uncertain) => {
+      await withTestDir({ prefix: "completion-cleanup-" }, async (root) => {
+        await fs.writeFile(path.join(root, "openclaw.mjs"), "");
+        const error = uncertain
+          ? new CommandProcessCleanupError()
+          : new Error("cache write failed");
+        runCommandWithTimeout.mockRejectedValueOnce(error);
+        const result = tryWriteCompletionCache(root, true, 500);
+        if (uncertain) {
+          await expect(result).rejects.toBe(error);
+        } else {
+          await expect(result).resolves.toBe("failed");
+        }
+      });
+    },
+  );
 
   it("accepts only complete positive integer timeout seconds", () => {
     for (const timeout of [

@@ -196,10 +196,14 @@ expired, or cancelled approval sends a deny choice, and so does an approval
 with no surface to show it. Each approval waits up to two minutes. The harness
 never grants persistent approvals.
 
-The harness also refuses an attempt when OpenClaw requires an OpenClaw sandbox,
-workspace-only file access, or a restricted plugin tool policy. Muse runs on
-the Gateway host and cannot enforce those boundaries. Select the `openclaw`
-runtime for those agents or sessions.
+The harness also refuses an attempt when OpenClaw requires an OpenClaw sandbox
+or workspace-only file access. Muse runs on the Gateway host and cannot enforce
+those boundaries. Select the `openclaw` runtime for those agents or sessions.
+
+A conversation tool policy (for example `tools.deny`) does not block Muse once
+you accept the native-runtime prompt. Muse does not receive OpenClaw's agent
+tools, so the policy has nothing to filter, and its own tools follow the
+approval mode above. Without that consent, OpenClaw refuses the turn.
 
 A refused attempt fails before any `muse` process starts, with an error that
 names the setting.

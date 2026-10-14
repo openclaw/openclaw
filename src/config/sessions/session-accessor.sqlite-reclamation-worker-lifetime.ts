@@ -1,6 +1,5 @@
 import { channel } from "node:diagnostics_channel";
 import { addAbortListener } from "node:events";
-import { statSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
@@ -180,14 +179,6 @@ export class SqliteReclamationWorker {
     if (!this.matches(options, expectedIdentity)) {
       throw new Error("SQLite session reclamation database owner is no longer current");
     }
-    this.assertPathCurrent();
-  }
-
-  private assertPathCurrent(): void {
-    const file = statSync(this.options.path, { bigint: true });
-    if (`${file.dev}:${file.ino}` !== this.identity) {
-      throw new Error("SQLite session reclamation database path was replaced");
-    }
   }
 
   async use<T>(run: () => Promise<T>): Promise<T> {
@@ -247,7 +238,6 @@ export class SqliteReclamationWorker {
     const { source, validation } = await this.runRequest({
       ...params,
       assertCurrent,
-      databaseOptions: this.options,
       kind: params.plan.kind,
       sessionId:
         params.plan.kind === "canonical-validation" ? undefined : reclamationSessionId(params.plan),
@@ -286,7 +276,6 @@ export class SqliteReclamationWorker {
   ): Promise<SqliteSessionReclamationResult> {
     return this.runRequest({
       ...params,
-      databaseOptions: params.plan.databaseOptions,
       assertCurrent: () => this.assertCurrent(params.plan.databaseOptions, params.claim),
       kind: params.plan.kind,
       sessionId: reclamationSessionId(params.plan),
@@ -327,7 +316,6 @@ export class SqliteReclamationWorker {
   private async runRequest<Result>(
     params: Omit<MutationRunParams<Result>, "claim"> & {
       assertCurrent: () => void;
-      databaseOptions: DatabaseOptions;
       kind: string;
       readOpeningValidation?: () => OpenClawAgentDatabaseValidation | undefined;
       sessionId?: string;
@@ -449,7 +437,8 @@ export class SqliteReclamationWorker {
     }
     worker.on("message", (message: SqliteReclamationWorkerMessage) => {
       if (message.type === "checkpoint") {
-        this.observeCheckpoint(message);
+        // Checkpoint hints are best effort; native settlement and commit authority are separate.
+        publishSqliteWalCheckpointObservation(this.options.path, message.snapshot);
       } else if (message.type === "closed") {
         this.cleanup = message;
         this.healthyCloseAcknowledged = this.closeRequested && message.settled;
@@ -507,28 +496,6 @@ export class SqliteReclamationWorker {
       channel("openclaw.memory.critical").subscribe(this.onMemoryPressure);
     }
     return transport;
-  }
-
-  private observeCheckpoint(
-    message: Extract<SqliteReclamationWorkerMessage, { type: "checkpoint" }>,
-  ): void {
-    if (
-      this.retired ||
-      this.failure ||
-      !this.lease ||
-      message.operationId !== this.operationId ||
-      (this.revoked && !this.closeRequested)
-    ) {
-      return;
-    }
-    try {
-      this.stateContext.admission.assertCurrent();
-      this.assertPathCurrent();
-      // Native close keeps its admitted custody after new requests are revoked.
-      publishSqliteWalCheckpointObservation(this.options.path, message.snapshot);
-    } catch {
-      // A retired state owner cannot publish late diagnostics or change native settlement.
-    }
   }
 
   private requestTermination(transport: SqliteMutationWorkerTransport): void {

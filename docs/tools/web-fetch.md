@@ -284,6 +284,25 @@ outbound policy after DNS resolution.
   either the URL or the `NO_PROXY` entry.
 </Note>
 
+## Saved output
+
+When fetched content exceeds the inline limit, `web_fetch` includes a `spill.path`
+and a **Full output** location. Use `read` with that path and bounded `offset`/`limit`
+arguments to retrieve the omitted content. Saved output retains the untrusted-content
+warning and is capped at 2,000,000 characters; `spill.truncated` indicates an
+incomplete saved response.
+
+Local Docker and Podman sandboxes save this output in their existing private
+input-staging area, accessible through the sandbox reader. Cached saved paths remain
+scoped to the requesting session and sandbox workspace. Recovery also works when
+guest workspace access is read-only: the trusted input-staging owner prepares the
+file without granting guest write access.
+
+Other backends, including remote-shell sandboxes, need a prepared input-staging
+capability before saved output is available. Without it, the inline result reports
+that full output is unavailable, makes no staging write, and advertises no host-only
+path. An unsuccessful save is not cached.
+
 ## Limits and safety
 
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap` (default `20000`)

@@ -138,19 +138,6 @@ describe("chat-queued-turns", () => {
     },
   );
 
-  it("keeps retired collect identities until completion after abort", () => {
-    const map = emptyMap();
-    const controller = new AbortController();
-    expect(registerTurn(map, "run-retired", controller, "sess-retired")).toBe(true);
-    expect(retireQueuedChatTurnCancellation(map, "run-retired", controller)).toBe(true);
-
-    controller.abort();
-
-    expect(map.get("run-retired")?.abortable).toBe(false);
-    expect(completeQueuedChatTurn(map, "run-retired", controller)).toBe(true);
-    expect(map.get("run-retired")).toBeUndefined();
-  });
-
   it("rejects re-register with a different controller", () => {
     const map = emptyMap();
     const first = new AbortController();
@@ -247,6 +234,8 @@ describe("chat-queued-turns", () => {
     expect(listQueuedChatTurnsForSession({ chatQueuedTurns: map, sessionKeys: ["main"] })).toEqual(
       [],
     );
+    controller.abort();
+    expect(map.get("run-collected")?.abortable).toBe(false);
     expect(completeQueuedChatTurn(map, "run-collected", controller)).toBe(true);
     expect(getEventListeners(controller.signal, "abort")).toEqual([]);
   });
