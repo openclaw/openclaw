@@ -291,8 +291,7 @@ export function createSessionEntryListReader(
 /** Read descriptive summaries through the original store selection and reader lifetime. */
 export async function readSessionEntrySummariesInWorker(
   input: Omit<SessionStoreWorkerReadScope, "agentId"> &
-    Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession"> &
-    Pick<SessionEntryListWorkerInput["scope"], "readConsistency" | "includeParticipants">,
+    Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession" | "readConsistency">,
 ) {
   const memory = captureMemoryExactSessionReader(input);
   if (memory) {
@@ -314,7 +313,6 @@ export async function readSessionEntrySummariesInWorker(
           env: database.env,
           projection: "list",
           cleanupSession: input.cleanupSession,
-          includeParticipants: input.includeParticipants,
           hydrateSkillPromptRefs: false,
           readConsistency: input.readConsistency,
         },

@@ -223,7 +223,13 @@ export function createSessionRowRefresh(
   function rowNeedsDatabaseRead(id: string, metadataOnly = false) {
     const row = owner.rows.get(id);
     if (metadataOnly) {
-      return Boolean(row && (!row.storedEntry || row.unresolvedDatabaseFacts));
+      return Boolean(
+        row &&
+        (!row.storedEntry ||
+          row.sharingEntry !== row.storedEntry ||
+          row.entryAcquisitionPending ||
+          row.unresolvedDatabaseFacts),
+      );
     }
     const facts = row?.retainedDatabaseFacts;
     return (
@@ -289,6 +295,19 @@ export function createSessionRowRefresh(
             continue;
           }
           await owner.membership.prepare();
+          if (owner.state().registryPrepared) {
+            for (const id of owner.dirty) {
+              const row = owner.rows.get(id);
+              if (
+                row?.entryAcquisitionPending &&
+                row.storedEntry &&
+                row.sharingEntry === row.storedEntry &&
+                !row.unresolvedDatabaseFacts
+              ) {
+                owner.acquireEntry(row, row.storedEntry);
+              }
+            }
+          }
           if (!metadataOnly && owner.catalog.needsInitialRead) {
             await owner.catalog.refresh();
           }

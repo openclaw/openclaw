@@ -202,12 +202,7 @@ export async function markRestartAbortedMainSessions(params: {
     const { storePath } = target;
     // Preselect read-only: ID-only admissions can own multiple persisted keys.
     // The per-key replacement below rereads the row and revalidates its owner.
-    const sessionKeys = (
-      await readSessionEntrySummariesInWorker({
-        ...target,
-        includeParticipants: false,
-      })
-    )
+    const sessionKeys = (await readSessionEntrySummariesInWorker(target))
       .filter(
         ({ sessionKey, entry }) =>
           activeRuns.some(
@@ -383,12 +378,7 @@ async function markOrphanedMainSessionStore(
     const entry = await readSessionEntryReadOnlyInWorker({ ...params.target, sessionKey: key });
     sessionKeys = entry && hasOrphanedMainSessionWork(entry, key) ? [key] : [];
   } else {
-    sessionKeys = (
-      await readSessionEntrySummariesInWorker({
-        ...params.target,
-        includeParticipants: false,
-      })
-    )
+    sessionKeys = (await readSessionEntrySummariesInWorker(params.target))
       .filter(({ entry, sessionKey }) => hasOrphanedMainSessionWork(entry, sessionKey))
       .map(({ sessionKey }) => sessionKey);
   }
