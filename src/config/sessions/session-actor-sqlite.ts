@@ -232,7 +232,7 @@ export function createSqliteSessionActorExecutor(
         return unknown(error);
       }
       const failure = { ...errorFacts(error), ...(origin ? { origin } : {}) };
-      committed = freezeJsonSnapshot({
+      committed = {
         ...committed,
         failure: committed.failure
           ? {
@@ -240,7 +240,7 @@ export function createSqliteSessionActorExecutor(
               message: `${committed.failure.message}; ${failure.message}`,
             }
           : failure,
-      });
+      };
       return committed;
     };
     let outcome: Outcome;
@@ -278,14 +278,12 @@ export function createSqliteSessionActorExecutor(
                 receipt.phaseId === captured.phaseId &&
                 receipt.phase === name
               ) {
-                // Register the shared postimage first so receipt freezing and replica settlement reuse it.
-                freezeJsonSnapshot(receipt.postimage);
                 // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
-                committed = freezeJsonSnapshot(evidence) as Extract<Outcome, { kind: "committed" }>;
+                committed = evidence as Extract<Outcome, { kind: "committed" }>;
                 if (!reply.ok) {
                   preserveFailure(reply.error, "response");
                 } else if (reply.value.kind === "committed" && reply.value.failure) {
-                  committed = freezeJsonSnapshot({ ...committed, failure: reply.value.failure });
+                  committed = { ...committed, failure: reply.value.failure };
                 }
                 result = committed;
                 try {
