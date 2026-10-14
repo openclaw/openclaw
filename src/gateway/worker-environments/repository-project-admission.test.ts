@@ -205,7 +205,7 @@ describe("repository project admission", () => {
       source: "detected",
       identity,
       inputs: { "yarn.lock": lock, "package.json": packageBlob },
-      env: { COREPACK_ENABLE_AUTO_PIN: "0" },
+      env: { COREPACK_ENABLE_AUTO_PIN: "0", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
       detectedInstall:
         'mkdir -p "$HOME/.local/bin" && corepack enable --install-directory "$HOME/.local/bin" && PATH="$HOME/.local/bin:$PATH" yarn install --immutable',
     });

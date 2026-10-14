@@ -1,8 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection, sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { readTrackedStateDatabaseIdentity } from "../../state/openclaw-state-db-handle.js";
 
 type PendingPublication = {
   revision: number;
@@ -53,11 +55,13 @@ export async function waitForAuthProfileNativePublications(
 }
 
 /** Native COMMIT can overtake a worker result before its host publication runs. */
-export function recordAuthProfileNativeCommit(database: DatabaseSync): void {
+export function recordAuthProfileNativeCommit(database: EngineConnection): void {
   if (pending.size === 0) {
     return;
   }
-  const location = database.location();
+  const location = isPostgresSqlConnection(database)
+    ? readTrackedStateDatabaseIdentity(sqlPublicationAnchor(database))?.canonicalPath
+    : database.location();
   if (!location) {
     return;
   }

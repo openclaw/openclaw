@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergeAuthProfileStores, mergePersistedAuthProfileState } from "./persisted.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
@@ -18,7 +18,7 @@ import { resetAuthProfileFailureState } from "./usage-state.js";
 
 /** Reduce the authoritative health row without rewriting credential bytes. */
 export function recordAuthProfileUsageInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   databaseKind: "agent" | "shared-state",
   input: AuthProfileUsageInput,

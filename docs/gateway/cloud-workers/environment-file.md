@@ -104,7 +104,7 @@ With neither a devcontainer file nor an executable fallback script, OpenClaw cho
 | `package-lock.json`       | `npm ci`                                                                                                                                                                                               |
 | `bun.lock` or `bun.lockb` | `bun install --frozen-lockfile` when Bun is on `PATH`; otherwise skip with a note                                                                                                                      |
 
-No recognized lockfile means no dependency setup. Detection does not install Node or Bun.
+No recognized lockfile means no dependency setup. Detection does not install Node or Bun. Detected pnpm and Yarn installs suppress Corepack's download prompt and do not auto-pin `packageManager` in `package.json`.
 
 A failed detected install records a reason and a bounded output tail, skips snapshot capture for that run, and lets the session start cold. A failed declared devcontainer command or fallback script keeps the existing visible dispatch failure.
 
