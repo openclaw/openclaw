@@ -1,3 +1,6 @@
+/**
+ * Tests shared approval helpers used by gateway method handlers.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -268,6 +271,67 @@ describe("handlePendingApprovalRequest", () => {
     }
   });
 
+  it("targets requested approval events to visible approval clients when available", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-visible",
+    );
+    record.requestedByDeviceId = "device-owner";
+    await manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const visibleConnIds = new Set(["conn-owner-approval"]);
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-owner-approval",
+              clientId: "client-owner",
+              deviceId: "device-owner",
+            }),
+            createApprovalClient({
+              connId: "conn-other-approval",
+              clientId: "client-other",
+              deviceId: "device-other",
+            }),
+          ]),
+        ),
+        hasExecApprovalClients: vi.fn(() => {
+          throw new Error("expected visibility-filtered approval client lookup");
+        }),
+      } as unknown as GatewayRequestContext,
+      clientConnId: "conn-requester",
+      requestEventName: "exec.approval.requested",
+      requestEvent: requestedEvent(record),
+      twoPhase: true,
+      deliverRequest: () => false,
+    });
+
+    await Promise.resolve();
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "exec.approval.requested",
+      expect.objectContaining({ id: "approval-visible" }),
+      visibleConnIds,
+      { dropIfSlow: true },
+    );
+
+    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+  });
+
   it("routes backend-runtime approval events to the authorized approval reviewer device", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const record = manager.create(
@@ -325,6 +389,69 @@ describe("handlePendingApprovalRequest", () => {
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "exec.approval.requested",
       expect.objectContaining({ id: "approval-reviewer-device-event" }),
+      visibleConnIds,
+      { dropIfSlow: true },
+    );
+
+    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+  });
+
+  it("targets requester-bound approval events to gateway-client approval runtimes", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-delivery-runtime",
+    );
+    record.requestedByDeviceId = "device-owner";
+    record.requestedByConnId = "conn-owner";
+    record.requestedByClientId = "client-owner";
+    await manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const visibleConnIds = new Set(["conn-delivery-runtime"]);
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-delivery-runtime",
+              clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+              approvalRuntime: true,
+            }),
+            createApprovalClient({
+              connId: "conn-other-approval",
+              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+              deviceId: "device-other",
+            }),
+          ]),
+        ),
+        hasExecApprovalClients: vi.fn(() => {
+          throw new Error("expected visibility-filtered approval client lookup");
+        }),
+      } as unknown as GatewayRequestContext,
+      clientConnId: "conn-owner",
+      requestEventName: "exec.approval.requested",
+      requestEvent: requestedEvent(record),
+      twoPhase: true,
+      deliverRequest: () => false,
+    });
+
+    await Promise.resolve();
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "exec.approval.requested",
+      expect.objectContaining({ id: "approval-delivery-runtime" }),
       visibleConnIds,
       { dropIfSlow: true },
     );
@@ -628,6 +755,75 @@ describe("handlePendingApprovalRequest", () => {
     );
   });
 
+  it("does not target no-device approvals by self-declared client id", async (testContext) => {
+    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-no-device",
+    );
+    record.requestedByConnId = "conn-requester";
+    record.requestedByClientId = "client-owner";
+    await manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const visibleConnIds = new Set<string>();
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-requester",
+              clientId: "client-owner",
+            }),
+            createApprovalClient({
+              connId: "conn-owner-approval",
+              clientId: "client-owner",
+            }),
+            createApprovalClient({
+              connId: "conn-other-approval",
+              clientId: "client-other",
+            }),
+          ]),
+        ),
+        hasExecApprovalClients: vi.fn(() => {
+          throw new Error("expected visibility-filtered approval client lookup");
+        }),
+      } as unknown as GatewayRequestContext,
+      clientConnId: "conn-requester",
+      requestEventName: "exec.approval.requested",
+      requestEvent: requestedEvent(record),
+      twoPhase: true,
+      deliverRequest: () => false,
+    });
+
+    await Promise.resolve();
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "exec.approval.requested",
+      expect.objectContaining({ id: "approval-no-device" }),
+      visibleConnIds,
+      { dropIfSlow: true },
+    );
+    await requestPromise;
+    expect((await manager.getSnapshot(record.id))?.resolvedBy).toBe("no-approval-route");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-no-device", decision: null }),
+      undefined,
+    );
+  });
+
   it("does not resolve no-device approvals by self-declared client id", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const record = manager.create(
@@ -829,6 +1025,63 @@ describe("handlePendingApprovalRequest", () => {
     fs.rmSync(tempDir, { force: true, recursive: true });
   });
 
+  it("does not allow approval-scoped clients to resolve device-bound gateway-client approvals from another device", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-gateway-device-resolve",
+    );
+    record.requestedByDeviceId = "device-gateway";
+    record.requestedByConnId = "conn-gateway";
+    record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
+    await manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+
+    await handleApprovalResolve({
+      approvalKind: "exec",
+      manager,
+      inputId: record.id,
+      decision: "allow-once",
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-mobile-approval",
+              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+              deviceId: "device-mobile",
+              scopes: ["operator.approvals"],
+            }),
+          ]),
+        ),
+      } as unknown as GatewayRequestContext,
+      client: createApprovalClient({
+        connId: "conn-mobile-approval",
+        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+        deviceId: "device-mobile",
+        scopes: ["operator.approvals"],
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "unknown or expired approval id",
+      }),
+    );
+    expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
+  });
+
   it("allows gateway-client approval runtimes to resolve requester-bound approvals", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const record = manager.create(
@@ -914,6 +1167,64 @@ describe("handlePendingApprovalRequest", () => {
     expect((await manager.getSnapshot(foreign.id))?.decision).toBeUndefined();
   });
 
+  it("targets resolved approval events to visible approval clients when available", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-resolved-visible",
+    );
+    record.requestedByDeviceId = "device-owner";
+    await manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const visibleConnIds = new Set(["conn-owner-approval"]);
+
+    await handleApprovalResolve({
+      approvalKind: "exec",
+      manager,
+      inputId: record.id,
+      decision: "allow-once",
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-owner-approval",
+              clientId: "client-owner",
+              deviceId: "device-owner",
+            }),
+            createApprovalClient({
+              connId: "conn-other-approval",
+              clientId: "client-other",
+              deviceId: "device-other",
+            }),
+          ]),
+        ),
+      } as unknown as GatewayRequestContext,
+      client: createApprovalClient({
+        connId: "conn-owner-approval",
+        clientId: "client-owner",
+        deviceId: "device-owner",
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "exec.approval.resolved",
+      expect.objectContaining({ id: "approval-resolved-visible" }),
+      visibleConnIds,
+      { dropIfSlow: true },
+    );
+  });
+
   it("closes a plugin approval immediately when its exact Slack request has no route", async (testContext) => {
     hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
     const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
@@ -967,3 +1278,4 @@ describe("handlePendingApprovalRequest", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

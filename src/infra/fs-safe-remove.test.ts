@@ -37,6 +37,8 @@ async function expectRejectCode(promise: Promise<unknown>, expected: string | Re
 describe("removePathWithinRoot", () => {
   it.each([
     { kind: "file", input: "relative" },
+    { kind: "tree", input: "absolute" },
+    { kind: "tree", input: "alias" },
     { kind: "tree", input: "home" },
   ] as const)(
     "preserves $input path semantics while removing a $kind beside a literal tilde",
@@ -57,11 +59,17 @@ describe("removePathWithinRoot", () => {
         await fs.mkdir(path.dirname(leaf), { recursive: true });
         await fs.writeFile(leaf, content);
       }
+      const alias = path.join(root, "selected");
+      if (input === "alias") {
+        await createRebindableDirectoryAlias({ aliasPath: alias, targetPath: literalRoot });
+      }
       const sentinelLeaf = kind === "tree" ? path.join(sentinel, "nested", "leaf.txt") : sentinel;
       const sentinelIdentity = await fs.lstat(sentinel, { bigint: true });
       const sentinelLeafIdentity = await fs.lstat(sentinelLeaf, { bigint: true });
       const inputs = {
         relative: "./~/" + name,
+        absolute: literalTarget,
+        alias: path.join("selected", name),
         home: "~/" + name,
       };
       const previousHome = process.env.HOME;
@@ -84,6 +92,9 @@ describe("removePathWithinRoot", () => {
           ino: sentinelLeafIdentity.ino,
         });
         expect(await fs.readFile(sentinelLeaf, "utf8")).toBe("retained");
+        if (input === "alias") {
+          expect((await fs.lstat(alias)).isSymbolicLink()).toBe(true);
+        }
       } finally {
         if (previousHome === undefined) {
           delete process.env.HOME;
@@ -94,23 +105,34 @@ describe("removePathWithinRoot", () => {
     },
   );
 
-  it("refuses a nonempty directory without recursive removal", async () => {
+  it.each([false, true])("removes a deep tree only with recursive=%s", async (recursive) => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const tree = path.join(root, "tree");
     const childPath = path.join(tree, "child.txt");
-    await fs.mkdir(tree);
+    await fs.mkdir(path.join(tree, "b-dir"), { recursive: true });
+    await fs.mkdir(path.join(tree, "a-dir", "nested"), { recursive: true });
     await fs.writeFile(childPath, "hello");
+    await fs.writeFile(path.join(tree, "b-dir", "b.txt"), "b");
+    await fs.writeFile(path.join(tree, "a-dir", "nested", "a.txt"), "a");
+    const deepDirectory = path.join(tree, ...Array.from({ length: 65 }, () => "d"));
+    await fs.mkdir(deepDirectory, { recursive: true });
+    await fs.writeFile(path.join(deepDirectory, "leaf.txt"), "deep");
     const removal = removePathWithinRoot({
       rootDir: root,
       relativePath: "tree",
-      recursive: false,
-      force: true,
+      recursive,
+      force: !recursive,
     });
-    await expectRejectCode(removal, "not-empty");
-    await expect(fs.readFile(childPath, "utf8")).resolves.toBe("hello");
+    if (recursive) {
+      await removal;
+      await expectRejectCode(fs.stat(tree), "ENOENT");
+    } else {
+      await expectRejectCode(removal, "not-empty");
+      await expect(fs.readFile(childPath, "utf8")).resolves.toBe("hello");
+    }
   });
 
-  it.each([undefined, 8])(
+  it.each([undefined, 8, 15])(
     "checks authority once per mutation and retains refusal at call %s",
     async (refuseAt) => {
       const root = await tempDirs.make("openclaw-fs-safe-authority-cost-");
@@ -401,6 +423,20 @@ describe("removePathWithinRoot", () => {
     }
   });
 
+  it("ignores an ordinary synchronous false return from a mutation assertion", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-sync-owner-");
+    const target = path.join(root, "target.txt");
+    await fs.writeFile(target, "owned");
+    const assertBeforeMutation = vi.fn(() => false);
+    const unlink = vi.spyOn(fs, "unlink");
+
+    await removePathWithinRoot({ rootDir: root, relativePath: "target.txt", assertBeforeMutation });
+
+    expect(assertBeforeMutation).toHaveBeenCalled();
+    expect(unlink).toHaveBeenCalledOnce();
+    await expectRejectCode(fs.lstat(target), "ENOENT");
+  });
+
   it("stops sorted recursive removal at a symlink and preserves later entries", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const outside = await tempDirs.make("openclaw-fs-safe-outside-");
@@ -427,12 +463,53 @@ describe("removePathWithinRoot", () => {
     expect((await fs.lstat(path.join(tree, "m-link"))).isSymbolicLink()).toBe(true);
   });
 
-  it("handles a missing leaf with default force", async () => {
+  it.each([
+    { missing: "leaf", force: undefined },
+    { missing: "leaf", force: false },
+    { missing: "parent", force: undefined },
+    { missing: "parent", force: false },
+    { missing: "root", force: true },
+  ] as const)("handles a missing $missing with force=$force", async ({ missing, force }) => {
+    const parent = await tempDirs.make("openclaw-fs-safe-root-");
+    const root = missing === "root" ? path.join(parent, "missing-root") : parent;
+    const relativePath =
+      missing === "parent" ? path.join("missing-parent", "target.txt") : "target.txt";
+    const removal = removePathWithinRoot({ rootDir: root, relativePath, recursive: true, force });
+    if (missing === "root" || force === false) {
+      await expectRejectCode(removal, "not-found");
+    } else {
+      await expect(removal).resolves.toBeUndefined();
+    }
+    await expectRejectCode(
+      fs.stat(missing === "root" ? root : path.join(root, relativePath)),
+      "ENOENT",
+    );
+    if (missing === "parent") {
+      await expectRejectCode(fs.stat(path.join(root, "missing-parent")), "ENOENT");
+    }
+  });
+
+  it("rejects symlink and junction targets", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
-    await expect(
-      removePathWithinRoot({ rootDir: root, relativePath: "target.txt", recursive: true }),
-    ).resolves.toBeUndefined();
-    await expectRejectCode(fs.stat(path.join(root, "target.txt")), "ENOENT");
+    const realDir = path.join(root, "real");
+    const aliasDir = path.join(root, "alias");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(path.join(realDir, "target.txt"), "hello");
+    await createRebindableDirectoryAlias({
+      aliasPath: aliasDir,
+      targetPath: realDir,
+    });
+
+    await expectRejectCode(
+      removePathWithinRoot({
+        rootDir: root,
+        relativePath: "alias",
+        recursive: true,
+        force: true,
+      }),
+      "symlink",
+    );
+    await expect(fs.readFile(path.join(realDir, "target.txt"), "utf8")).resolves.toBe("hello");
   });
 
   it("unlinks package symlink and junction leaves without traversing their targets", async () => {
@@ -454,6 +531,57 @@ describe("removePathWithinRoot", () => {
 
     await expectRejectCode(fs.lstat(path.join(root, "tree")), "ENOENT");
     expect(await fs.readFile(path.join(outside, "retained.txt"), "utf8")).toBe("outside");
+  });
+
+  it.each([
+    { name: "Error", refusal: new Error("owner closed") },
+    { name: "undefined", refusal: undefined },
+    { name: "ENOENT", refusal: Object.assign(new Error("owner missing"), { code: "ENOENT" }) },
+  ])("retains a one-shot $name refusal before a recursive leaf mutation", async ({ refusal }) => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const tree = path.join(root, "tree");
+    await fs.mkdir(tree);
+    await fs.writeFile(path.join(tree, "a.txt"), "first");
+    await fs.writeFile(path.join(tree, "b.txt"), "second");
+    let armed = false;
+    let refusals = 0;
+    const mutations: string[] = [];
+    __setFsSafeTestHooksForTest({
+      beforeRootFallbackMutation(operation, target) {
+        if (operation === "remove") {
+          mutations.push(path.basename(target));
+          armed = path.basename(target) === "b.txt";
+        }
+      },
+    });
+
+    const outcome = await removePathWithinRoot({
+      rootDir: root,
+      relativePath: "tree",
+      recursive: true,
+      force: true,
+      assertBeforeMutation: () => {
+        if (armed && refusals === 0) {
+          refusals += 1;
+          // Intentional non-Error refusal to prove exact pass-through semantics.
+          // oxlint-disable-next-line typescript/only-throw-error
+          throw refusal;
+        }
+      },
+    }).then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) {
+      throw new Error("recursive removal accepted a refused owner");
+    }
+    expect(outcome.error).toBe(refusal);
+    expect(refusals).toBe(1);
+    expect(mutations).toEqual(["a.txt", "b.txt"]);
+    await expectRejectCode(fs.lstat(path.join(tree, "a.txt")), "ENOENT");
+    expect(await fs.readFile(path.join(tree, "b.txt"), "utf8")).toBe("second");
   });
 
   it("does not adopt a replaced parent between recursive leaf operations", async () => {

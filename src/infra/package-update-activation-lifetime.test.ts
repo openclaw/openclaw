@@ -543,6 +543,26 @@ describe.skipIf(process.platform === "win32")(
       expect(fs.readdirSync(path.join(path.dirname(anchor), "openclaw"))).toEqual([]);
     });
 
+    it("has durable exact custody and a transfer intent before the first staged rename", async () => {
+      const rename = fsp.rename.bind(fsp);
+      let observed = false;
+      await prepare((anchor) => {
+        vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+          if (to === path.join(anchor, "candidate")) {
+            const record = openPackageActivationJournal(anchor).read();
+            expect(record.phase).toBe("preparing");
+            expect(record.intent).toMatchObject({ kind: "prepare", moving: "candidate" });
+            expect(record.descriptor.candidate.identity).toBe(
+              `${fs.lstatSync(from).dev}:${fs.lstatSync(from).ino}`,
+            );
+            observed = true;
+          }
+          await rename(from, to);
+        });
+      });
+      expect(observed).toBe(true);
+    });
+
     it.each(["candidate", "launchers"])(
       "reconciles lost %s transfer acknowledgement without adopting another object",
       async (name) => {

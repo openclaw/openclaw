@@ -104,6 +104,42 @@ describe("bootstrapWorker", () => {
     expect(runner.calls).toEqual([]);
   });
 
+  it("skips a matching installed bundle and uses the pinned host key", async () => {
+    let knownHosts = "";
+    const runner = fakeRunner(
+      [result({ stdout: `shell banner\n${tagged("current", RECEIPT_JSON)}login footer\n` })],
+      async (argv) => {
+        const option = argv.find((value) => value.startsWith("UserKnownHostsFile="));
+        if (!option) {
+          throw new Error("missing known-hosts option");
+        }
+        knownHosts = await fs.readFile(option.slice("UserKnownHostsFile=".length), "utf8");
+      },
+    );
+
+    await expect(
+      bootstrapWorker(
+        {
+          ssh: SSH,
+          artifact: BUNDLE,
+        },
+        { resolveIdentity, runCommand: runner.runCommand },
+      ),
+    ).resolves.toEqual({
+      bundleHash: BUNDLE_HASH,
+      openclawVersion: VERSION,
+      protocolFeatures: ["admission-v1"],
+    });
+
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]?.argv[0]).toBe("ssh");
+    expect(runner.calls[0]?.argv).toContain("StrictHostKeyChecking=yes");
+    expect(runner.calls[0]?.options.input).toContain("actual.openclawVersion");
+    expect(runner.calls[0]?.options.input).toContain("openclaw-worker-bundle-v1");
+    expect(runner.calls[0]?.options.input).not.toContain("$root/current");
+    expect(knownHosts).toBe(`[worker.example.com]:2222 ${HOST_KEY}\n`);
+  });
+
   it("fails before resolving identity or opening SSH when the host-key pin is missing", async () => {
     const runner = fakeRunner([]);
     let identityResolutionCount = 0;
@@ -177,6 +213,96 @@ describe("bootstrapWorker", () => {
     },
   );
 
+  it("transfers and installs a fresh bundle despite terminal cleanup failure", async () => {
+    const runner = fakeRunner([
+      result({ stdout: tagged("install", REMOTE_TARBALL) }),
+      result(),
+      result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+      result({ code: 1, stderr: "synthetic cleanup failure" }),
+    ]);
+
+    await expect(
+      bootstrapWorker(
+        { ssh: SSH, artifact: BUNDLE },
+        { resolveIdentity, runCommand: runner.runCommand },
+      ),
+    ).resolves.toEqual({
+      bundleHash: BUNDLE_HASH,
+      openclawVersion: VERSION,
+      protocolFeatures: ["admission-v1"],
+    });
+
+    expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "scp", "ssh", "ssh"]);
+    expect(runner.calls[0]?.argv).toContain("StrictHostKeyChecking=yes");
+    expect(runner.calls.flatMap((call) => call.argv)).not.toContain("StrictHostKeyChecking=no");
+    expect(runner.calls[1]?.argv).toContain(BUNDLE.tarballPath);
+    expect(runner.calls[1]?.argv).toContain(`worker@worker.example.com:${REMOTE_TARBALL}`);
+    expect(runner.calls.flatMap((call) => call.argv).join(" ")).not.toContain(OPERATION_ID);
+    expect(runner.calls[0]?.argv.at(-1)).toContain(OPERATION_TOKEN);
+    expect(runner.calls[2]?.options.input).toContain("bootstrap-receipt.json");
+    expect(runner.calls[2]?.options.input).toContain("lock=$lock_root/$hash");
+    expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
+    expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
+    expect(runner.calls[2]?.options.input).toContain(
+      'const artifactPaths = ["code-mode-node.worker.mjs","openclaw-state-read.worker.mjs","worker-native-lifecycle.worker.mjs","file-tool-planning.worker.mjs","file-tool-read.worker.mjs","gateway-state-owner-heartbeat.worker.mjs","github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-source-revision.worker.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
+    );
+    expect(runner.calls[2]?.options.input).not.toContain('npm install --prefix "$staging"');
+    expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
+    expect(runner.calls[2]?.options.input).toContain(
+      'mv "$staging" "$install_dir"\nfinish_with_receipt',
+    );
+    expect(runner.calls[2]?.options.input).toMatch(
+      /finish_with_receipt\(\) \{[\s\S]*?rm -f -- "\$upload"\s+printf [^\n]+ receipt/u,
+    );
+    expect(runner.calls[2]?.options.input).toMatch(
+      /if receipt_matches; then\s+finish_with_receipt/u,
+    );
+    expect(runner.calls[2]?.argv.at(-1)).toContain(BUNDLE_HASH);
+    expect(runner.calls[2]?.argv.at(-1)).toContain(TARBALL_SHA256);
+    expect(runner.calls[2]?.argv.at(-1)).toContain(VERSION);
+  });
+
+  it.each([
+    { name: "keeps the floor for a small bundle", tarballBytes: 1, transferTimeoutMs: 600_000 },
+    {
+      name: "scales the transfer timeout for a large bundle",
+      tarballBytes: 243_000_000,
+      transferTimeoutMs: 1_944_000,
+    },
+    {
+      name: "caps the transfer timeout for an absurdly large bundle",
+      tarballBytes: Number.MAX_SAFE_INTEGER,
+      transferTimeoutMs: 3_600_000,
+    },
+  ])(
+    "$name while other phases keep the base timeout",
+    async ({ tarballBytes, transferTimeoutMs }) => {
+      const baseTimeoutMs = 600_000;
+      const runner = fakeRunner([
+        result({ stdout: tagged("install", REMOTE_TARBALL) }),
+        result(),
+        result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+        result(),
+      ]);
+
+      await expect(
+        bootstrapWorker(
+          { ssh: SSH, artifact: { ...BUNDLE, tarballBytes } },
+          { resolveIdentity, runCommand: runner.runCommand, timeoutMs: baseTimeoutMs },
+        ),
+      ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+
+      const [preflight, transfer, install] = runner.calls;
+      expect(preflight?.options.timeoutMs).toBeLessThanOrEqual(baseTimeoutMs);
+      expect(preflight?.options.timeoutMs).toBeGreaterThanOrEqual(baseTimeoutMs - 100);
+      expect(transfer?.argv[0]).toBe("scp");
+      expect(transfer?.options.timeoutMs).toBeLessThanOrEqual(transferTimeoutMs);
+      expect(transfer?.options.timeoutMs).toBeGreaterThanOrEqual(transferTimeoutMs - 100);
+      expect(install?.options.timeoutMs).toBeLessThanOrEqual(baseTimeoutMs);
+      expect(install?.options.timeoutMs).toBeGreaterThanOrEqual(baseTimeoutMs - 100);
+    },
+  );
+
   it.each([Number.NaN, -1])(
     "rejects invalid bundle tarball size %s before any remote work",
     async (tarballBytes) => {
@@ -205,6 +331,72 @@ describe("bootstrapWorker", () => {
       ),
     ).rejects.toThrow("preflight returned an invalid upload path");
     expect(runner.calls).toHaveLength(2);
+  });
+
+  it("selects an authenticated fallback before transfer and install", async () => {
+    const runner = fakeRunner([
+      result({ code: 255, stderr: "primary transport unavailable" }),
+      result({ stdout: tagged("install", REMOTE_TARBALL) }),
+      result(),
+      result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+      result(),
+    ]);
+
+    await expect(
+      bootstrapWorker(
+        { ssh: { ...SSH, fallbackPorts: [22] }, artifact: BUNDLE },
+        { resolveIdentity, runCommand: runner.runCommand },
+      ),
+    ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+
+    expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "ssh", "scp", "ssh", "ssh"]);
+    expect(runner.calls.map((call) => commandPort(call.argv))).toEqual([2222, 22, 22, 22, 22]);
+    expect(new Set(runner.calls.map((call) => call.argv[call.argv.indexOf("-i") + 1]))).toEqual(
+      new Set(["/keys/worker"]),
+    );
+    expect(
+      new Set(
+        runner.calls.map((call) =>
+          call.argv.find((value) => value.startsWith("UserKnownHostsFile=")),
+        ),
+      ).size,
+    ).toBe(1);
+  });
+
+  it.each([
+    {
+      phase: "transfer",
+      commands: ["ssh", "scp", "scp", "ssh", "ssh"],
+      ports: [2222, 2222, 22, 22, 22],
+    },
+    {
+      phase: "install",
+      commands: ["ssh", "scp", "ssh", "ssh", "ssh"],
+      ports: [2222, 2222, 2222, 22, 22],
+    },
+  ])("retries $phase when the selected port changes", async ({ phase, commands, ports }) => {
+    const responses = [
+      result({ stdout: tagged("install", REMOTE_TARBALL) }),
+      result(),
+      result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+      result(),
+    ];
+    responses.splice(
+      phase === "transfer" ? 1 : 2,
+      0,
+      result({ code: 255, stderr: "primary transport unavailable" }),
+    );
+    const runner = fakeRunner(responses);
+
+    await expect(
+      bootstrapWorker(
+        { ssh: { ...SSH, fallbackPorts: [22] }, artifact: BUNDLE },
+        { resolveIdentity, runCommand: runner.runCommand },
+      ),
+    ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+
+    expect(runner.calls.map((call) => call.argv[0])).toEqual(commands);
+    expect(runner.calls.map((call) => commandPort(call.argv))).toEqual(ports);
   });
 
   it("fails with provider setup guidance when Node.js is missing", async () => {
@@ -290,6 +482,36 @@ describe("bootstrapWorker", () => {
     expect(runner.calls).toHaveLength(0);
   });
 
+  it("materializes inline identity data privately and removes it after use", async () => {
+    let identityPath = "";
+    let identityContents = "";
+    let identityMode = 0;
+    const runCommand: WorkerBootstrapCommandRunner = async (argv) => {
+      const identityIndex = argv.indexOf("-i");
+      identityPath = argv[identityIndex + 1] ?? "";
+      identityContents = await fs.readFile(identityPath, "utf8");
+      identityMode = (await fs.stat(identityPath)).mode & 0o777;
+      return result({ stdout: tagged("current", RECEIPT_JSON) });
+    };
+
+    await bootstrapWorker(
+      { ssh: SSH, artifact: BUNDLE },
+      {
+        resolveIdentity: async () => ({
+          kind: "material",
+          contents: "fake-key-start\\nkey-data\\r\\nfake-key-end",
+        }),
+        runCommand,
+      },
+    );
+
+    expect(identityContents).toBe("fake-key-start\nkey-data\nfake-key-end\n");
+    if (process.platform !== "win32") {
+      expect(identityMode).toBe(0o600);
+    }
+    await expect(fs.stat(identityPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("rejects a stale remote receipt instead of synthesizing the expected fields", async () => {
     const staleReceipt = JSON.stringify({
       bundleHash: BUNDLE_HASH,
@@ -365,6 +587,18 @@ describe("bootstrapWorker", () => {
       expect(cleanupCalls.every((call) => call.options.signal === undefined)).toBe(true);
     },
   );
+
+  it("keeps bootstrap failure details on a valid UTF-16 boundary", async () => {
+    const prefix = "e".repeat(511);
+    const runner = fakeRunner([result({ code: 1, stderr: `${prefix}😀 tail` }), result()]);
+
+    await expect(
+      bootstrapWorker(
+        { ssh: SSH, artifact: BUNDLE },
+        { resolveIdentity, runCommand: runner.runCommand },
+      ),
+    ).rejects.toThrow(`Worker bootstrap preflight failed (exit 1): ${prefix}`);
+  });
 
   it("rejects unpinned artifact digests before opening SSH", async () => {
     const runner = fakeRunner([]);

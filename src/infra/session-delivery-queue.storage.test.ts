@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -12,6 +13,7 @@ import {
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
+  markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   mergeSessionDeliveryPreparedMediaBlocks,
   moveSessionDeliveryToFailed,
@@ -144,6 +146,39 @@ describe("session-delivery queue storage", () => {
       });
       expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
       expect(readSessionQueueStatus(tempDir, first.id)).toBe("completed");
+    });
+  });
+
+  it("retains ambiguous attempt ownership and clears it only for a safe retry", async () => {
+    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-attempt-owner:agent-loop",
+        },
+        queueContext,
+      );
+      const entry = await loadPendingSessionDelivery(id, queueContext);
+      assert(entry, "Expected pending session delivery");
+
+      await markSessionDeliveryAttemptStarted(entry, queueContext);
+      expect(await loadPendingSessionDelivery(id, queueContext)).toMatchObject({
+        deliveryStartedAt: expect.any(Number),
+      });
+
+      await failSessionDelivery(id, "ambiguous failure after send", queueContext);
+      expect(await loadPendingSessionDelivery(id, queueContext)).toMatchObject({
+        deliveryStartedAt: expect.any(Number),
+      });
+
+      await failSessionDelivery(id, "safe failure before commit", queueContext, {
+        releaseAttemptOwnership: true,
+      });
+      expect(await loadPendingSessionDelivery(id, queueContext)).not.toHaveProperty(
+        "deliveryStartedAt",
+      );
     });
   });
 
