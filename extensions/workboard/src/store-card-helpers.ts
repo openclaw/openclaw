@@ -13,7 +13,6 @@ import {
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { definedFields } from "../record-fields.js";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
@@ -25,13 +24,7 @@ import {
   RUNNING_HEARTBEAT_STALE_MS,
 } from "./store-constants.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
-import {
-  capText,
-  metadataIsEmpty,
-  normalizeEvents,
-  normalizeTimestamp,
-  removeUndefinedMetadataFields,
-} from "./store-normalizers.js";
+import { capText, normalizeTimestamp, removeUndefinedMetadataFields } from "./store-normalizers.js";
 
 export function compareCards(left: WorkboardCard, right: WorkboardCard): number {
   if (left.status !== right.status) {
@@ -123,7 +116,7 @@ export function appendEvent(
   at = Date.now(),
 ): WorkboardEvent[] {
   return [
-    ...normalizeEvents(card.events),
+    ...(card.events ?? []),
     {
       id: randomUUID(),
       at,
@@ -315,14 +308,6 @@ export function updateEvent(
     return { kind: "stale" };
   }
   return { kind: "edited" };
-}
-
-export function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
-  const next = definedFields({ ...card });
-  if (metadataIsEmpty(next.metadata)) {
-    delete next.metadata;
-  }
-  return next;
 }
 
 export function assertCanMutateClaimedCard(

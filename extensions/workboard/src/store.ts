@@ -404,9 +404,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       return undefined;
     }
     const board = await this.boardStore.lookup(cardBoardId(card));
-    return board?.version === 1 && board.board.orchestration?.autoDecompose === true
-      ? board.board
-      : undefined;
+    return board?.board.orchestration?.autoDecompose === true ? board.board : undefined;
   }
 
   async dispatch(
@@ -447,7 +445,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
               ? "Run exceeded the card max runtime."
               : "Claim expired without a recent heartbeat.";
             const finished = this.finishRun(latest, "blocked", now, reason);
-            latest = await this.updateCard(await this.requireCard(latest.id), {
+            latest = await this.updateCard(latest, {
               ...finished,
               metadata: {
                 ...finished.metadata,
@@ -459,7 +457,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
             });
             blocked.push(latest);
           } else if (claimExpired) {
-            latest = await this.updateCard(await this.requireCard(latest.id), {
+            latest = await this.updateCard(latest, {
               metadata: { ...latest.metadata, claim: undefined },
             });
             reclaimed.push(latest);
@@ -469,7 +467,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
             retriesExhausted &&
             isDependencyPromotableStatus(latest.status)
           ) {
-            latest = await this.updateCard(await this.requireCard(latest.id), {
+            latest = await this.updateCard(latest, {
               status: "blocked",
               metadata: {
                 ...latest.metadata,
