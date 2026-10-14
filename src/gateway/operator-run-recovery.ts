@@ -8,6 +8,7 @@ import type { RequesterOrigin } from "../agents/requester-origin.js";
 import { readRestartRecoveryRequesterSource } from "../agents/requester-run-recovery-source.js";
 import { prepareCommandOwnerAuthority } from "../auto-reply/command-auth.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
@@ -95,6 +96,7 @@ export type RestoredGatewayOperatorAuthority = {
 type PreparedOperatorRecoverySource = {
   snapshot: OperatorRunRecoverySnapshot;
   revalidate: () => Promise<void>;
+  onSessionCompactionCommitted?: SessionSourceAssertion["onSessionCompactionCommitted"];
 };
 
 /** Authentication restoration is shared; each input owner supplies its exact live claim. */
@@ -267,6 +269,25 @@ async function restoreGatewayOperatorSnapshot(params: {
     assertPolicy();
     await prepared.revalidate();
     assertPolicy();
+    const assertRestoredPolicy = Object.assign(assertPolicy, {
+      onSessionCompactionCommitted: prepared.onSessionCompactionCommitted
+        ? (
+            ...args: Parameters<NonNullable<SessionSourceAssertion["onSessionCompactionCommitted"]>>
+          ) => {
+            // The commit already checked authority. Its identity publication follows this callback.
+            if (references === 0) {
+              throw new Error("Restart recovery operator authority is no longer active.");
+            }
+            signal.signal.throwIfAborted();
+            try {
+              prepared.onSessionCompactionCommitted?.(...args);
+            } catch (error) {
+              revoke(error);
+              throw error;
+            }
+          }
+        : undefined,
+    });
     const live = captureChannelOperatorRunAuthority({
       profileId: snapshot.profileId,
       assignedRole: snapshot.assignedRole,
@@ -274,7 +295,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       scopes: snapshot.scopes,
       gatewayAccessGrant: snapshot.grant,
       getRuntimeConfig: getConfig,
-      assertCurrent: assertPolicy,
+      assertCurrent: assertRestoredPolicy,
       signal: signal.signal,
     });
     const originalModels = snapshot.modelPolicy
@@ -386,12 +407,27 @@ export async function restoreGatewayRunRecovery(params: {
     return current;
   };
   let operator: RestoredGatewayOperatorAuthority | undefined;
+  let expectedCompaction: { previousSessionId: string; sessionId: string } | undefined;
   if (params.restoreOperator) {
     operator = await restoreGatewayOperatorSnapshot({
       context: params.context,
       assertCurrent: params.assertCurrent,
       subscribeToClaim: (revoke) =>
         onSessionIdentityMutation((mutation) => {
+          if (
+            expectedCompaction &&
+            mutation.kind === "replace" &&
+            mutation.agentId === target.agentId &&
+            mutation.previous.sessionId === expectedCompaction.previousSessionId &&
+            mutation.current.sessionId === expectedCompaction.sessionId &&
+            mutation.previous.sessionKeys.length === 1 &&
+            mutation.previous.sessionKeys[0] === target.sessionKey &&
+            mutation.current.sessionKeys.length === 1 &&
+            mutation.current.sessionKeys[0] === target.sessionKey
+          ) {
+            expectedCompaction = undefined;
+            return;
+          }
           if (
             mutation.agentId === target.agentId &&
             (mutation.previous.sessionId === target.sessionId ||
@@ -405,7 +441,7 @@ export async function restoreGatewayRunRecovery(params: {
         if (!current.restartRecoveryOperatorSource) {
           return undefined;
         }
-        const source = decodeGatewayOperatorRecoverySource(current.restartRecoveryOperatorSource);
+        let source = decodeGatewayOperatorRecoverySource(current.restartRecoveryOperatorSource);
         const assertSource = (value: InternalSessionEntry) => {
           if (
             value.lifecycleRevision !== source.lifecycleRevision ||
@@ -422,6 +458,36 @@ export async function restoreGatewayRunRecovery(params: {
         return {
           snapshot: source.snapshot,
           revalidate: async () => assertSource(await read()),
+          onSessionCompactionCommitted: (transition, committed) => {
+            if (
+              target.sessionId === transition.current.sessionId &&
+              source.lifecycleRevision === transition.current.lifecycleRevision
+            ) {
+              // Composed source assertions can deliver the same committed fact more than once.
+              assertRestartClaim(committed, target);
+              assertSource(committed);
+              return;
+            }
+            const next = { ...source, sessionId: transition.current.sessionId };
+            const successor = { ...target, sessionId: transition.current.sessionId };
+            assertRestartClaim(committed, successor);
+            if (
+              !transition.previous ||
+              transition.previous.sessionId !== target.sessionId ||
+              transition.previous.lifecycleRevision !== source.lifecycleRevision ||
+              transition.current.lifecycleRevision !== source.lifecycleRevision ||
+              committed.lifecycleRevision !== source.lifecycleRevision ||
+              !isDeepStrictEqual(committed.restartRecoveryOperatorSource, next)
+            ) {
+              throw new Error("Restart recovery operator source no longer owns this input.");
+            }
+            expectedCompaction = {
+              previousSessionId: target.sessionId,
+              sessionId: successor.sessionId,
+            };
+            target.sessionId = successor.sessionId;
+            source = next;
+          },
         };
       },
     });

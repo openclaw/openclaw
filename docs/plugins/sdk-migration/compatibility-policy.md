@@ -76,9 +76,11 @@ be safely revoked, `forceCleared` stays false and its custody remains retained.
 
 `BuildChannelInboundEventContextParams.access.toolPolicy` and
 `MsgContext.ConversationToolPolicy` are deprecated as of October 12, 2026.
-They remain source-compatible until the **next Plugin SDK major**, with explicit
-breaking-release approval required for removal. Legacy use emits the bounded
-`DEP_CHANNEL_PREPARED_TOOL_POLICY` warning.
+They remain source-compatible until a **later stable release**, after a separately
+announced deprecation window and explicit maintainer approval for removal. No
+removal date is set; the `stable-deprecation-period` gate does not itself authorize
+removal. The synchronous SQLite cutoff does not apply to these fields. Legacy use
+emits the bounded `DEP_CHANNEL_PREPARED_TOOL_POLICY` warning.
 
 The compatibility adapter retains the supplied policy for the **original external
 request**, including time waiting in its queued turn. That snapshot does not

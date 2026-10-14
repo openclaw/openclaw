@@ -12,7 +12,9 @@ it("retains an external request policy and warns once with its lifetime and migr
     expect(warning).toHaveBeenCalledTimes(1);
     expect(warning.mock.calls[0]?.[0]).toContain("security.resolveDirectToolPolicy");
     expect(warning.mock.calls[0]?.[0]).toContain("original request, including its queued turn");
-    expect(warning.mock.calls[0]?.[0]).toContain("next Plugin SDK major");
+    expect(warning.mock.calls[0]?.[0]).toContain("announced deprecation window");
+    expect(warning.mock.calls[0]?.[0]).toContain("explicit maintainer approval");
+    expect(warning.mock.calls[0]?.[0]).toContain("no removal date is set");
   } finally {
     warning.mockRestore();
   }

@@ -13,7 +13,8 @@ export function resolveLegacyConversationToolPolicy<T extends GroupToolPolicyCon
         "Resolve configured permissions through security.resolveDirectToolPolicy or groups.resolveToolPolicy. " +
         "The legacy snapshot applies only to the original request, including its queued turn; " +
         "it does not refresh at admission or propagate into new delegations. " +
-        "The legacy field will be removed in the next Plugin SDK major.",
+        "Removal requires an announced deprecation window and explicit maintainer approval " +
+        "for a later stable release; no removal date is set.",
       { type: "DeprecationWarning", code: "DEP_CHANNEL_PREPARED_TOOL_POLICY" },
     );
   }

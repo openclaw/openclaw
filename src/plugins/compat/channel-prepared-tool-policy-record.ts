@@ -7,7 +7,7 @@ export const CHANNEL_PREPARED_TOOL_POLICY_COMPAT_RECORD = {
   introduced: "2026-08-09",
   deprecated: "2026-10-12",
   warningStarts: "2026-10-12",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "stable-deprecation-period",
   replacement:
     "Resolve current configuration through security.resolveDirectToolPolicy or groups.resolveToolPolicy using authenticated requester and conversation facts. The legacy snapshot remains execution-local to the original external request, including its queued turn; it is never requester provenance for new delegation.",
   docsPath: "/plugins/sdk-migration/compatibility-policy#channel-prepared-tool-policy",
@@ -23,5 +23,5 @@ export const CHANNEL_PREPARED_TOOL_POLICY_COMPAT_RECORD = {
     "extensions/telegram/src/security.test.ts",
   ],
   releaseNote:
-    "Channel tool policy resolves from current configuration at each new admission. External prepared-policy fields retain their original-request snapshot contract until the next Plugin SDK major and explicit breaking-release approval.",
+    "Channel tool policy resolves from current configuration at each new admission. External prepared-policy fields retain their original-request snapshot contract until a later stable release after an announced deprecation window and explicit maintainer approval. No removal date is set.",
 } as const satisfies PluginCompatRecord;

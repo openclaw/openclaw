@@ -240,15 +240,17 @@ export function createGatewayInstanceRuntime(
       const assertRecoveryCurrent = () => {
         assertDispatchAvailable("agent");
         assertRecoveryTarget();
-        dispatchOptions.assertAdmissionCurrent?.();
         dispatchOptions.signal?.throwIfAborted();
+        const observed = startOwner?.observe();
         // Capture the actual registration, not its reusable run id. Once lost,
         // retained tools cannot acquire a successor registration's authority.
         ownerLost ||=
-          options.getContext() !== context ||
-          (startOwner !== undefined && startOwner.observe() === undefined);
+          options.getContext() !== context || (startOwner !== undefined && observed === undefined);
         if (ownerLost) {
           throw new Error("Restart recovery operator run is no longer active.");
+        }
+        if (observed?.executionStarted !== true) {
+          dispatchOptions.assertAdmissionCurrent?.();
         }
       };
       const target = recoveryTarget ?? requesterTarget;

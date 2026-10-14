@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { createRestartRecoveryRequesterSource } from "../agents/requester-run-recovery-source.js";
 import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
@@ -8,7 +9,9 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
+import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/transcript-write-context.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
@@ -239,10 +242,12 @@ describe("restart recovery authenticated operator source", () => {
           ).toBe(false);
           const captured = captureQueuedOperatorRecoverySource(bounded);
           expect(bounded.assertCurrent).not.toThrow();
+          const serialized = JSON.stringify(captured);
+          const persisted: unknown = JSON.parse(serialized);
           if (count === 256) {
             expect(captured?.kind).toBe("channel");
             const resumed = await restoreGatewayQueuedOperatorRecovery({
-              source: decodeQueuedOperatorRecoverySource(JSON.parse(JSON.stringify(captured))),
+              source: decodeQueuedOperatorRecoverySource(persisted),
               context: gateway,
               assertCurrent: () => {},
             });
@@ -263,7 +268,7 @@ describe("restart recovery authenticated operator source", () => {
             expect(captured).toEqual({ kind: "unavailable" });
             await expect(
               restoreGatewayQueuedOperatorRecovery({
-                source: decodeQueuedOperatorRecoverySource(JSON.parse(JSON.stringify(captured))),
+                source: decodeQueuedOperatorRecoverySource(persisted),
                 context: gateway,
                 assertCurrent: () => {},
               }),
@@ -839,7 +844,7 @@ describe("restart recovery authenticated operator source", () => {
       expect(restored.authority.assertCurrent).toThrow();
     }));
 
-  it("intersects the original model ceiling with current policy without widening the admitted role", () =>
+  it("restores requester custody and model ceilings across accepted compaction", () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("model@example.test");
       setUserProfileRole(profile.id, "operator");
@@ -857,27 +862,133 @@ describe("restart recovery authenticated operator source", () => {
       const fixture = await recoveryFixture(state.stateDir, profile.id, {
         config: cfg,
       });
+      const requesterOrigin = {
+        sessionKey: fixture.target.sessionKey,
+        messageProvider: "webchat",
+        senderId: profile.id,
+        operatorProfileId: profile.id,
+      };
+      await replaceSessionEntry(fixture.target, {
+        ...fixture.entry,
+        restartRecoveryRequesterSource: expectDefined(
+          createRestartRecoveryRequesterSource({
+            ...fixture.target,
+            entry: fixture.entry,
+            requesterOrigin,
+          }),
+          "original authenticated requester",
+        ),
+      });
       const current = structuredClone(cfg);
       current.gateway.roles.definitions.operator.modelPolicy = {
         allow: ["fixture/b", "fixture/c"],
       };
-      fixture.setConfig(current);
-      const restored = expectDefined(await fixture.restore(), "model-restricted recovery");
-      using _ = { [Symbol.dispose]: restored.release };
-
-      expect(restored.authority.rolePolicy).toMatchObject({
-        agents: ["main"],
-        sandboxRequired: true,
-        sessionAccessCap: "none",
-      });
-      expect(restored.authority.modelPolicy?.allows(modelRef("a"))).toBe(false);
-      expect(restored.authority.modelPolicy?.allows(modelRef("b"))).toBe(true);
-      expect(restored.authority.modelPolicy?.allows(modelRef("c"))).toBe(false);
-      const widened = structuredClone(current);
-      widened.gateway.roles.definitions.operator.modelPolicy = {
-        allow: ["fixture/a", "fixture/b", "fixture/c"],
-      };
-      fixture.setConfig(widened);
-      expect(restored.authority.modelPolicy?.models).toEqual([modelRef("b")]);
+      let target = { ...fixture.target };
+      const restore = (sourceTarget = target) =>
+        restoreGatewayRunRecovery({
+          target: sourceTarget,
+          context: fixture.context,
+          restoreOperator: true,
+          restoreRequester: true,
+          assertCurrent: () => {},
+        });
+      expect(fixture.sourceAuthority.assertCurrent).toThrow();
+      // This reuses authenticated source owners without a Gateway restart or model boot.
+      let recovered = await restore();
+      const active = expectDefined(recovered.operator, "initial recovered operator");
+      const restoredAuthorities = [active];
+      try {
+        expect(recovered.requesterOrigin).toEqual(requesterOrigin);
+        for (const sessionId of ["first-successor", "second-successor"]) {
+          const predecessor = expectDefined(
+            await readSessionEntryReadOnlyInWorker(target),
+            "current predecessor",
+          );
+          const predecessorTarget = target;
+          const accepted = await acceptCompactionSuccessor({
+            currentTarget: target,
+            expectedEntry: predecessor,
+            assertActive: active.authority.assertCurrent,
+            onCommitted: () => {
+              if (sessionId === "second-successor") {
+                throw new Error("compaction fact observer failed");
+              }
+            },
+            result: {
+              ok: true,
+              compacted: true,
+              result: { sessionId, tokensBefore: 120, tokensAfter: 42 },
+            },
+          });
+          expect(accepted.entry.sessionId).toBe(sessionId);
+          fixture.setConfig(current);
+          target = { ...fixture.target, sessionId };
+          await expect(restore(predecessorTarget)).rejects.toThrow("no longer owns this input");
+          recovered = await restore();
+          const successor = expectDefined(recovered.operator, "restored successor authority");
+          restoredAuthorities.push(successor);
+          expect(recovered.requesterOrigin).toEqual(requesterOrigin);
+          expect(active.authority.assertCurrent).not.toThrow();
+          expect(active.authority.modelPolicy?.models).toEqual([modelRef("b")]);
+          expect(successor.authority.modelPolicy?.models).toEqual([modelRef("b")]);
+          expect(successor.authority.profileId).toBe(profile.id);
+          expect(successor.authority.assertCurrent).not.toThrow();
+        }
+        const restored = expectDefined(recovered.operator, "model-restricted recovery");
+        await expect(
+          acceptCompactionSuccessor({
+            currentTarget: fixture.target,
+            expectedEntry: fixture.entry,
+            assertActive: active.authority.assertCurrent,
+            result: {
+              ok: true,
+              compacted: true,
+              result: { sessionId: "stale-successor", tokensBefore: 120, tokensAfter: 42 },
+            },
+          }),
+        ).rejects.toThrow(SessionTranscriptWriterClaimReboundError);
+        expect(active.authority.assertCurrent).not.toThrow();
+        expect(restored.authority.assertCurrent).not.toThrow();
+        expect(restored.authority.rolePolicy).toMatchObject({
+          agents: ["main"],
+          sandboxRequired: true,
+          sessionAccessCap: "none",
+        });
+        expect(restored.authority.modelPolicy?.allows(modelRef("a"))).toBe(false);
+        expect(restored.authority.modelPolicy?.allows(modelRef("b"))).toBe(true);
+        expect(restored.authority.modelPolicy?.allows(modelRef("c"))).toBe(false);
+        const widened = structuredClone(current);
+        expectDefined(widened.gateway?.roles?.definitions.operator, "operator role").modelPolicy = {
+          allow: ["fixture/a", "fixture/b", "fixture/c"],
+        };
+        fixture.setConfig(widened);
+        expect(restored.authority.modelPolicy?.models).toEqual([modelRef("b")]);
+        setUserProfileRole(profile.id, "revoked");
+        expect(active.authority.assertCurrent).toThrow("authority changed");
+        expect(restored.authority.assertCurrent).toThrow("authority changed");
+        await expect(restore()).rejects.toThrow(/Restart recovery operator/);
+        await expect(
+          acceptCompactionSuccessor({
+            currentTarget: target,
+            expectedEntry: expectDefined(
+              await readSessionEntryReadOnlyInWorker(target),
+              "retained successor",
+            ),
+            assertActive: active.authority.assertCurrent,
+            result: {
+              ok: true,
+              compacted: true,
+              result: { sessionId: "revoked-successor", tokensBefore: 120, tokensAfter: 42 },
+            },
+          }),
+        ).rejects.toThrow("authority changed");
+        expect((await readSessionEntryReadOnlyInWorker(target))?.sessionId).toBe(
+          "second-successor",
+        );
+      } finally {
+        for (const restored of restoredAuthorities.toReversed()) {
+          restored.release();
+        }
+      }
     }));
 });
