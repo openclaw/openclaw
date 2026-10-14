@@ -90,6 +90,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { SessionAttentionController } from "./session-attention-controller.ts";
+import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
@@ -139,8 +140,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       this.context?.gateway.snapshot.hello,
       this.context?.agents.state.agentsList,
       this.sidebarAgentsMode === "chip" ? chip.identity : null,
+      this.sidebarAgentsMode === "chip" && this.otherAgentsHaveUnread(),
       this.sidebarMenus.agentMenuPosition !== null
-        ? chip.agents.map(({ id }) => chip.identities.get(normalizeAgentId(id)))
+        ? chip.agents.map(({ id }) => [
+            chip.identities.get(normalizeAgentId(id)),
+            this.agentUnreadCount(id),
+          ])
         : null,
       this.context?.plugins.registryStatus,
       this.pluginNavigation().map(({ key, value }) => [key, value]),
@@ -170,22 +175,38 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       data.sessionCatalogRefreshStatus,
       [...data.loadingMoreSessionCatalogIds],
       [...data.childSessionErrorsByParent],
-      this.sessionCatalogRowsVisible ? this.sidebarSessionCatalogs() : null,
+      this.sessionCatalogRowsVisible
+        ? [
+            this.sidebarSessionCatalogs(),
+            areSessionCatalogsSettled(data),
+            [...data.visibleSessionLimits],
+          ]
+        : null,
       [data.ownerCounts.counts && [...data.ownerCounts.counts], data.ownerCounts.error],
       this.admittedPresencePresentation,
       sessionsVisible
         ? [
             this.visibleSessionTreeInOrder().map(({ children: _children, ...row }) => row),
-            sections.map(({ rows, ...header }) => [
+            sections.map(({ rows: sectionRows, ...header }) => [
               header,
-              summarizeTeamSessionSlots(rows, true),
-              rows.reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
+              summarizeTeamSessionSlots(sectionRows, true),
+              sectionRows.reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
             ]),
           ]
         : null,
-      (this.sidebarAgentsMode === "chip" ? [this.expandedAgentId()] : (roster?.agentIds ?? [])).map(
-        (id) => this.mainSessionRow(id),
-      ),
+      sessionsVisible
+        ? (this.sidebarAgentsMode === "chip"
+            ? [this.expandedAgentId()]
+            : (roster?.agentIds ?? [])
+          ).map((id) => {
+            const row = this.mainSessionRow(id);
+            if (!row) {
+              return null;
+            }
+            const { children: _children, ...home } = this.projectHomeSession(row, id);
+            return home;
+          })
+        : null,
     ]);
     if (presentation === this.publishedSessionPresentation) {
       return false;
@@ -900,5 +921,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     return rows.filter(
       (row) => row.unread && !row.archived && this.sessionNavigationAgentId(row) === normalized,
     ).length;
+  }
+
+  otherAgentsHaveUnread(): boolean {
+    const active = this.expandedAgentId();
+    return this.activeChipAgent().agents.some(
+      ({ id }) => normalizeAgentId(id) !== active && this.agentUnreadCount(id) > 0,
+    );
   }
 }

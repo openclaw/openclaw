@@ -56,7 +56,10 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     equality: "revision",
   });
   const presentationRevision = createParkedProjection(
-    () => projection.revision(),
+    () => {
+      Object.values(props);
+      return projection.revision();
+    },
     () => props.navigationVisible,
   );
   const observed = new WeakMap<object, object>();

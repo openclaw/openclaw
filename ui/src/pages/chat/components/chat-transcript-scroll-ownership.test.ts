@@ -22,6 +22,7 @@ import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
 } from "./chat-transcript-scroll-events.ts";
+import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 import {
   installTranscriptDomMocks,
   mountTestTranscript,
@@ -77,6 +78,9 @@ describe("chat transcript scroll ownership", () => {
     ];
     const { container, session, renderRows } = await mountTestTranscript(paneId, rows, transcript);
     try {
+      if (!(session instanceof ChatSessionVirtualizerHost)) {
+        throw new Error("Expected the session-owned transcript virtualizer");
+      }
       Object.defineProperties(container, {
         clientHeight: { configurable: true, value: 400 },
         scrollHeight: { configurable: true, value: 1000 },

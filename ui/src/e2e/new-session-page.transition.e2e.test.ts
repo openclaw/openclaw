@@ -31,6 +31,7 @@ import {
   pollLocatorText,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -139,11 +140,29 @@ suite.define(() => {
         .poll(() => page.locator(".new-session-page__starting").textContent())
         .toContain("Session created");
       await page.getByRole("button", { name: "Open session", exact: true }).waitFor();
+      if (label === "mobile") {
+        expect(
+          await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
+        ).toBe(0);
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        await waitForMobileSidebarDrawerOpen(page);
+      }
       await expect
         .poll(() =>
           page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
         )
         .toBe(1);
+      if (label === "mobile") {
+        expect(
+          await page
+            .locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`)
+            .isVisible(),
+        ).toBe(true);
+        await page.keyboard.press("Escape");
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .not.toContain("shell--nav-drawer-open");
+      }
       if (captureProofEnabled) {
         await page.waitForTimeout(600);
       }

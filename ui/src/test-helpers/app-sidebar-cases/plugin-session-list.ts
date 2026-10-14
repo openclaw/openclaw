@@ -153,7 +153,9 @@ describe("AppSidebar session-list replacement", () => {
           result: {
             ...wide.result!,
             sessions: wide.result!.sessions.map((row) =>
-              row.key === last.key ? { ...row, label: "Latest replacement row" } : row,
+              row.key === last.key
+                ? Object.assign({}, row, { label: "Latest replacement row" })
+                : row,
             ),
           },
         });

@@ -39,7 +39,7 @@ describe("AppSidebar agent roster", () => {
     const updated = {
       ...current,
       sessions: current.sessions.map((row) =>
-        row.key === last.key ? { ...row, label: "Quiet latest title" } : row,
+        row.key === last.key ? Object.assign({}, row, { label: "Quiet latest title" }) : row,
       ),
     };
     sessions.publish({ result: updated });
@@ -63,8 +63,10 @@ describe("AppSidebar agent roster", () => {
       await settleRoster(sidebar);
       const store = rosterActivityStore(context);
       onTestFinished(store.subscribe(() => {}));
-      const row = sidebar.querySelector<HTMLElement>('[data-session-key="agent:main:recent"]')!;
-      const initial = row.textContent;
+      const renderedRow = sidebar.querySelector<HTMLElement>(
+        '[data-session-key="agent:main:recent"]',
+      )!;
+      const initial = renderedRow.textContent;
       if (surface === "navigation") {
         sidebar.navigationVisible = false;
       } else {
@@ -78,10 +80,10 @@ describe("AppSidebar agent roster", () => {
       await settleRoster(sidebar);
       const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
       for (let index = 0; index < 3; index += 1) {
-        result.sessions = result.sessions.map((session) =>
-          session.key === "agent:main:recent"
-            ? { ...session, label: `Latest work ${index}`, unread: true, hasActiveRun: true }
-            : session,
+        result.sessions = result.sessions.map((heldRow) =>
+          heldRow.key === "agent:main:recent"
+            ? { ...heldRow, label: `Latest work ${index}`, unread: true, hasActiveRun: true }
+            : heldRow,
         );
         sessions.publish({
           result: { ...result, sessions: result.sessions.filter((row) => row.agentId === "main") },
@@ -90,7 +92,7 @@ describe("AppSidebar agent roster", () => {
         await settleRoster(sidebar);
       }
       expect(prepare).not.toHaveBeenCalled();
-      expect(row.textContent).toBe(initial);
+      expect(renderedRow.textContent).toBe(initial);
       if (surface === "navigation") {
         sidebar.navigationVisible = true;
       } else {
@@ -697,7 +699,22 @@ describe("AppSidebar agent roster", () => {
     expect(summary.querySelector(".session-glyph__ring")).toBeNull();
     expect(summary.querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
     result.sessions = result.sessions.map((row) =>
-      row.key === "agent:working:recent" ? { ...row, workspaceConflictCount: 3 } : row,
+      row.key === "agent:working:recent"
+        ? Object.assign({}, row, {
+            placement: {
+              state: "reclaimed" as const,
+              generation: 1,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+              stateChangedAtMs: 1,
+              workspaceResultConflict: {
+                paths: ["ui/layout.css"],
+                totalCount: 3,
+                stagedResultRef: "refs/openclaw/worker-results/test",
+              },
+            },
+          })
+        : row,
     );
     await rosterActivityStore(context).refresh();
     await settleRoster(sidebar);

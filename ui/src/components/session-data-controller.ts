@@ -165,7 +165,11 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     this.subscriptions
       .effect(
         () =>
-          this.host.sidebarAgentsMode === "roster" && this.context
+          this.host.sidebarAgentsMode === "roster" &&
+          this.host.navigationVisible &&
+          this.host.navigationView === "sessions" &&
+          !this.host.contextualSidebar &&
+          this.context
             ? rosterActivityStore(this.context)
             : undefined,
         (roster) => roster.subscribe(this.requestSessionDataUpdate),
