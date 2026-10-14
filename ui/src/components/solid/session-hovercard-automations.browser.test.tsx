@@ -83,7 +83,7 @@ it("tabs into a nested inspection, dismisses only the flyout with Escape, and re
   anchor.focus();
   await userEvent.tab();
   const summary = card.querySelector("summary")!;
-  await vi.waitFor(() => expect(document.activeElement).toBe(summary));
+  expect(document.activeElement).toBe(summary);
   await userEvent.keyboard("{Enter}");
   expect(card.querySelector("details")!.open).toBe(true);
   await userEvent.keyboard("{Escape}");
