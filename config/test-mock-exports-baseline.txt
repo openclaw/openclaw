@@ -427,7 +427,6 @@
 ["extensions/copilot/index.test.ts","./src/runtime.js","d637267b3402bbbcc724e9208f9bbb0e3c6bdb8de2d9a02e5b730cfc4b9119d4",1]
 ["extensions/copilot/src/attempt.test.ts","./workspace-bootstrap.js","3ce9e8236cfd5c54e1f289bfd31e76ddc32dd6f40c83b7ee3932c665994b8731",1]
 ["extensions/copilot/src/tool-bridge.host-surface.test.ts","openclaw/plugin-sdk/agent-harness","2b0e09803695d608dd875d642df19d527726e4aefb3fae263d23c4fb97772ad1",1]
-["extensions/crabbox/src/crabbox-model-run.test.ts","openclaw/plugin-sdk/process-runtime","9d30941a845e7f98a462d2fcd4b8676f40a38df3987bf65e1b4c6389dcc28c33",1]
 ["extensions/crabbox/src/crabbox-model-run.test.ts","openclaw/plugin-sdk/secret-egress-runtime","a0cb79e58bc13c1b5a42ae1f79841d56ac5bbb8cd5903ffe8d31f4bfc80b9926",1]
 ["extensions/crabbox/src/crabbox-sandbox-backend.test.ts","openclaw/plugin-sdk/sandbox","2a6727f726a880b8bc70713b116115e1634aa6fc50e13ee279922946007e4117",1]
 ["extensions/crabbox/src/crabbox-worker-provider-binary.test.ts","./crabbox-managed-binary.js","85c188b5ff62abb2449ae89defd3693dcc5f8a194f74ccfec61323a6d089b457",1]

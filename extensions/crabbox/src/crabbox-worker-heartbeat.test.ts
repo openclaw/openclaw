@@ -6,7 +6,10 @@ import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { commandResult, createProviderFixtures } from "./crabbox-worker-provider.test-support.js";
 
-vi.mock("./crabbox-managed-binary.js", () => ({ ensureManagedCrabboxBinary: vi.fn() }));
+vi.mock("./crabbox-managed-binary.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./crabbox-managed-binary.js")>()),
+  ensureManagedCrabboxBinary: vi.fn(),
+}));
 const LEASE_ID = "cbx_6071fc2062a6";
 const PROFILE = { provider: "aws", ttl: "4h", idleTimeout: "60m", warmImage: false };
 const { providers, createProvider } = createProviderFixtures();

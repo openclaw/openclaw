@@ -1098,7 +1098,7 @@ describe("Crabbox worker provider", () => {
       let lost = false;
       const runCommand: CrabboxCommandRunner = async (argv) => {
         calls.push(argv);
-        if (!["warmup", "inspect", "run", "stop"].includes(argv[1]!)) {
+        if (!["warmup", "inspect", "heartbeat", "run", "stop"].includes(argv[1]!)) {
           throw new Error("unexpected Crabbox command");
         }
         const flag = argv.includes("--id") ? "--id" : "--lease-id";
@@ -1141,12 +1141,11 @@ describe("Crabbox worker provider", () => {
       }
       await restarted.destroy({ ...lease, profile });
       expect(live.size).toBe(0);
-      expect(calls.map((argv) => argv[1])).toEqual([
+      expect(calls.filter((argv) => argv[1] !== "heartbeat").map((argv) => argv[1])).toEqual([
         "warmup",
         ...(failure === "inspect" ? ["inspect"] : []),
         "warmup",
         "inspect",
-        "heartbeat",
         "run",
         "stop",
       ]);
