@@ -2095,7 +2095,6 @@
 ["src/agents/btw.mocks.test-support.ts","./sessions/session-manager.js","85196b1aa98d8a87608910a1c81edf06c1f82e2e68d6a4dcf284e6b0c553d07e",1]
 ["src/agents/bundle-mcp-config.test.ts","../plugins/bundle-mcp.js","ddd685741746a5dd12a28aa406e6e283d3947f49a2d52d131119757145d1a534",1]
 ["src/agents/cli-execution-auth.test.ts","./auth-profiles/order.js","32a7686fcd681066ebcb7833622a0f862f999a250913f3b17dba243b1139b6f2",1]
-["src/agents/cli-execution-auth.test.ts","./auth-profiles/store-runtime.js","1d36f8604fe31380ec41243212d7fe2b9037d58f6bf29946dceb56fda6b98f71",1]
 ["src/agents/cli-runner.before-agent-reply-cron.test.ts","../gateway/mcp-http.js","520b5b62bcaf24497595779ef50dd9e21307ad8cfcd549a53f7104fee4be9baf",1]
 ["src/agents/cli-runner.before-agent-reply-cron.test.ts","../plugins/hook-runner-global.js","aecfbe5f621bd7abae96f478831a5f22b1861ed08874cab25e940c1e19f1c5cb",1]
 ["src/agents/cli-runner.before-agent-reply-cron.test.ts","./agent-bundle-mcp-tools.js","c3777ecff643d3e1edb02878be9a56a6836df1fbcd33b07d3c919fe0ba44ae31",1]
