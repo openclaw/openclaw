@@ -267,9 +267,14 @@ export async function handleAgentExecutionError(params: {
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
     return await settleFailure({
-      // Curated facet copy beats the generic classified summary; see
-      // buildExternalRunFailureReply for the same priority.
-      text: providerRequestError.userMessage,
+      // Recorded retry exhaustion is more specific than generic quota guidance.
+      // Other facets keep their recovery advice, as in buildExternalRunFailureReply.
+      text:
+        failureSummary?.kind === "rate_limit" &&
+        isFailoverError(err) &&
+        err.rateLimitRetriesExhausted !== undefined
+          ? failureSummary.text
+          : providerRequestError.userMessage,
     });
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
