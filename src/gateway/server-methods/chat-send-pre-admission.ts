@@ -639,7 +639,8 @@ export async function runChatSendPreAdmission(
       respondChatSendAdmissionError(error, respond);
       return false;
     }
-    params.assertCurrent?.();
+    // Reconciliation yields while other session writes may still be publishing.
+    await consumeChatSendCurrent(params, () => undefined);
   }
 
   const durableClaim = await (preparedClaim ?? resolveClaim(durableEntry, warnRecovery));

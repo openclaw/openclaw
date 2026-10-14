@@ -173,6 +173,11 @@ export async function dispatchCronDelivery(
       abortSignal: params.abortSignal,
     });
     if (child.finalReply) {
+      if (isSilentReplyText(child.finalReply, SILENT_REPLY_TOKEN)) {
+        deliveryAttempted = true;
+        record("not-delivered", undefined, "silent");
+        return finish({ kind: "suppressed" });
+      }
       adoptChild(child.finalReply);
     }
     if (params.spawnOnlyHandoff && !synthesizedText?.trim()) {

@@ -6,6 +6,7 @@ import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
+import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { BrowserPanelTabs } from "./browser-panel-tabs.tsx";
@@ -25,32 +26,27 @@ function BrowserIconButton(props: {
   newTab?: boolean;
 }) {
   return (
-    <button
+    <PanelIconButton
+      {...props}
       class={props.class ?? "bp-icon"}
-      type="button"
-      data-new-tab-action={props.newTab ? "" : undefined}
-      title={props.title ?? props.label}
-      aria-label={props.label}
-      aria-busy={props.busy === undefined ? undefined : props.busy ? "true" : "false"}
-      disabled={props.disabled}
-      onClick={() => props.onClick()}
-    >
-      {props.icon === "mousePointer" ? (
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />
-        </svg>
-      ) : (
-        <Icon name={props.icon} />
-      )}
-    </button>
+      icon={
+        props.icon === "mousePointer" ? (
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />
+          </svg>
+        ) : (
+          <Icon name={props.icon} />
+        )
+      }
+    />
   );
 }
 

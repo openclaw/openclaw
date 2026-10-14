@@ -177,13 +177,15 @@ describe("Goal continuation eligibility", () => {
 });
 
 describe("Goal queue custody", () => {
-  it("queues hidden individual work without cloning the source turn's lifecycle", async () => {
+  it("queues hidden individual work without cloning the source turn's identity or lifecycle", async () => {
     const f = fixture();
+    f.params.base.sourceTurnId = "accepted-source";
     f.params.base.turnAdoptionLifecycle = { onAdopted: () => {} };
     expect(await enqueueGoalContinuation(f.params)).toBe(true);
     const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
     expect(queued.prompt).toContain("Advance");
     expect(queued.goalContinuation).toEqual(identity);
+    expect(queued.sourceTurnId).toBeUndefined();
     expect(queued.turnAdoptionLifecycle).toBeUndefined();
     expect(queued.disableCollectBatching).toBe(true);
     expect(queued.run.suppressNextUserMessagePersistence).toBe(true);
