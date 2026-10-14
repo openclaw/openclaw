@@ -33,6 +33,12 @@ import type {
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 
+type RetainedStore = {
+  revoked: boolean;
+  releases: (() => void)[];
+  close(this: void): Promise<void>;
+};
+
 export function createSessionTranscriptReadPool<Input extends SessionTranscriptWorkerInput>(
   maxWorkers: number,
   sharedCompute = false,
@@ -48,10 +54,7 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
     maxWorkers,
     sharedCompute,
   });
-  const stores = new Map<
-    string,
-    { revoked: boolean; releases: (() => void)[]; close(this: void): Promise<void> }
-  >();
+  const stores = new Map<string, RetainedStore>();
   function retainStore(storePath: string) {
     let retained = stores.get(storePath);
     if (!retained) {
@@ -60,9 +63,9 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
         target.path,
         target.agentId || target.shared ? undefined : "sibling-family",
       );
-      const owned = {
+      const owned: RetainedStore = {
         revoked: false,
-        releases: [] as (() => void)[],
+        releases: [],
         async close(this: void) {
           // Replies leave cached native readers alive; join worker exit before deleting a store.
           await pool.rotate();
