@@ -12,6 +12,10 @@ if (process.env.MUSE_REQUEST_LOG) {
       pid: process.pid,
       args: process.argv.slice(2),
       noAutoUpdate: process.env.MUSE_NO_AUTO_UPDATE,
+      credentialBackend: process.env.TBH_CREDENTIAL_BACKEND,
+      configHome: process.env.XDG_CONFIG_HOME,
+      path: process.env.PATH,
+      inheritedValue: process.env.MUSE_FIXTURE_INHERITED_VALUE,
     })}\n`,
   );
 }
@@ -105,6 +109,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       grantedCapabilities: [],
       experimentalApi: false,
       platformOs: "linux",
+    });
+  } else if (method === "model/list") {
+    reply(id, {
+      providerId: "meta",
+      profileId: "fixture",
+      source: process.env.MUSE_FIXTURE_CATALOG_SOURCE ?? "providerCatalog",
+      models:
+        process.env.META_API_KEY === "rejected-test-key"
+          ? []
+          : [{ providerId: "meta", modelId: "muse-spark-1.3" }],
     });
   } else if (method === "session/start") {
     const sessionId = process.env.MUSE_REQUEST_LOG ? randomUUID() : `session-${++sessionCount}`;

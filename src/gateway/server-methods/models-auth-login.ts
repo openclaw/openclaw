@@ -26,7 +26,11 @@ import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
-import { rejectExistingSetupWizardSession } from "./system-agent-setup-wizard.js";
+import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
+import {
+  rejectExistingSetupWizardSession,
+  startSetupActivationWizard,
+} from "./system-agent-setup-wizard.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { startWizardLogin } from "./wizard-login.js";
@@ -111,6 +115,24 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         throw new Error("That provider login is no longer available.");
       }
     };
+    if (choice.appGuidedAuth && choice.credentialOnly !== true) {
+      await startSetupActivationWizard({
+        sessionId: params.sessionId,
+        client,
+        ownerKey: resolveSystemAgentSessionOwnerKey({ client }),
+        assertCurrent,
+        activation: {
+          kind: "provider-auth",
+          authChoice: choice.choiceId,
+          agentId: params.agentId,
+        },
+        timeoutMs: 25 * 60_000,
+        context,
+        respond,
+        isLocalClient: client.internal?.isLocalClient === true,
+      });
+      return;
+    }
     await startWizardLogin({
       client,
       context,

@@ -41,7 +41,11 @@ import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { Menu } from "./solid/menu.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
-import { renderTeamSessionSlots, sessionRunVisibility } from "./solid/session-presentation.tsx";
+import {
+  TeamSessionSlots,
+  type TeamSessionSlotsProps,
+  sessionRunVisibility,
+} from "./solid/session-presentation.tsx";
 import "../styles/sidebar-agent-roster.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
@@ -237,15 +241,18 @@ function SidebarAgentRosterContent(
                 ...(main() ? [main()!] : []),
                 ...(isCollapsed() ? sections().flatMap((section) => section.rows) : []),
               ];
-              const headerSummary = (): Parameters<typeof renderTeamSessionSlots> => [
-                summaryRows(),
-                isCollapsed(),
-                isCollapsed()
+              const headerSummary = (): TeamSessionSlotsProps => ({
+                rows: summaryRows(),
+                includeChildren: isCollapsed(),
+                childCount: isCollapsed()
                   ? sections().reduce((count, section) => count + section.rows.length, 0)
                   : 0,
-                summaryRows().reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
+                groupConflicts: summaryRows().reduce(
+                  (count, row) => count + (row.workspaceConflictCount ?? 0),
+                  0,
+                ),
                 runVisibility,
-              ];
+              });
               const access = () => roster.host().readNewSessionAccess();
               return (
                 <section
@@ -292,15 +299,17 @@ function SidebarAgentRosterContent(
                       </span>
                     </a>
                     <span class="sidebar-agent-roster__signals">
-                      {main()
-                        ? renderSidebarSessionIndicators(
-                            roster.host(),
-                            () => main()!,
+                      <Show when={main()} fallback={<TeamSessionSlots {...headerSummary()} />}>
+                        {(session) =>
+                          renderSidebarSessionIndicators(
+                            untrack(roster.host),
+                            session,
                             undefined,
                             undefined,
-                            headerSummary(),
+                            headerSummary,
                           ).content
-                        : renderTeamSessionSlots(...headerSummary())}
+                        }
+                      </Show>
                     </span>
                     <span
                       class="sidebar-agent-roster__actions"

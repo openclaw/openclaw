@@ -424,12 +424,12 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     }
     this.updateSessions(sessions);
     if (this.context?.gateway.snapshot.phase === "connected") {
-      void this.context.connectionBootstrap.run(sessions.groupsLoad, () => sessions.groupsLoad(), {
-        background: true,
-      });
       if (sourceChanged && hasSidebarListFilter(this.host)) {
         void this.scheduleSidebarSessions();
       }
+      void this.context.connectionBootstrap.run(sessions.groupsLoad, sessions.groupsLoad, {
+        background: true,
+      });
     }
   }
 

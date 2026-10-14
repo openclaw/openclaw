@@ -5,11 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
-import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  dropStaleOpenAIReasoning,
-  isMessagingToolDuplicate,
-} from "./embedded-agent-helpers.js";
+import { dropStaleOpenAIReasoning, isMessagingToolDuplicate } from "./embedded-agent-helpers.js";
 import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
@@ -343,60 +339,6 @@ describe("dropStaleOpenAIReasoning", () => {
       content: [{ ...reasoning, thinkingSignature: "reasoning_content" }],
     });
     expect(dropStaleOpenAIReasoning([message], 2)).toEqual([message]);
-  });
-});
-
-describe("downgradeOpenAIFunctionCallReasoningPairs", () => {
-  const callIdWithReasoning = "call_123|fc_123";
-  const callIdWithoutReasoning = "call_123";
-  const readArgs = {} as Record<string, never>;
-
-  const makeToolCall = (id: string) => ({
-    type: "toolCall",
-    id,
-    name: "read",
-    arguments: readArgs,
-  });
-  const makeToolResult = (toolCallId: string, text: string) => ({
-    role: "toolResult",
-    toolCallId,
-    toolName: "read",
-    content: [{ type: "text", text }],
-  });
-  const makeReasoningAssistantTurn = (id: string) => ({
-    role: "assistant",
-    content: [
-      {
-        type: "thinking",
-        thinking: "internal",
-        thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-      },
-      makeToolCall(id),
-    ],
-  });
-  const makePlainAssistantTurn = (id: string) => ({
-    role: "assistant",
-    content: [makeToolCall(id)],
-  });
-
-  it("only rewrites tool results paired to the downgraded assistant turn", () => {
-    const input = [
-      makePlainAssistantTurn(callIdWithReasoning),
-      makeToolResult(callIdWithReasoning, "turn1"),
-      makeReasoningAssistantTurn(callIdWithReasoning),
-      makeToolResult(callIdWithReasoning, "turn2"),
-    ];
-
-    expect(
-      downgradeOpenAIFunctionCallReasoningPairs(
-        input as Parameters<typeof downgradeOpenAIFunctionCallReasoningPairs>[0],
-      ),
-    ).toEqual([
-      makePlainAssistantTurn(callIdWithoutReasoning),
-      makeToolResult(callIdWithoutReasoning, "turn1"),
-      makeReasoningAssistantTurn(callIdWithReasoning),
-      makeToolResult(callIdWithReasoning, "turn2"),
-    ]);
   });
 });
 
