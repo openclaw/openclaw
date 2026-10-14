@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
@@ -150,8 +150,6 @@ function stubChangingVisibility() {
     emitVisibility();
   };
 }
-
-beforeEach(() => stubVisibility(() => true));
 
 afterEach(() => {
   for (const dispose of disposers.splice(0)) {

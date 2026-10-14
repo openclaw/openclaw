@@ -105,16 +105,6 @@ export async function mount(
     canGrant?: boolean;
   } = {},
 ): Promise<OpenClawBoardView> {
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
   const view = document.createElement("openclaw-board-view");
   view.snapshot = options.snapshot ?? snapshot();
   view.activeTabId = options.activeTabId ?? "main";

@@ -103,7 +103,9 @@ if (typeof HTMLDialogElement !== "undefined" && !("close" in HTMLDialogElement.p
   });
 }
 
-// JSDOM fixtures own browser storage, not Node's optional global WebStorage.
+// Node 25+ exposes accessor-backed WebStorage that can be disabled or inert.
+// Vitest intentionally rejects all storage accessors, so jsdom needs an owned
+// value descriptor even when invoking the original getter appears to work.
 function globalLocalStorageIsUsable(): boolean {
   try {
     const existing = globalThis.localStorage;

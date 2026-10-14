@@ -15,6 +15,9 @@ export class NearViewportObserver {
     this.disconnect();
     this.target = target;
     this.setNearVisible(this.isNearViewport(target));
+    if (typeof IntersectionObserver === "undefined") {
+      return;
+    }
     this.observer = new IntersectionObserver(
       (entries) => {
         const entry = entries.at(-1);

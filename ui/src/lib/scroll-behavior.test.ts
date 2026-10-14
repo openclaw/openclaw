@@ -23,6 +23,11 @@ describe("resolveScrollBehavior", () => {
     expect(matchMedia).toHaveBeenCalledWith("(prefers-reduced-motion: reduce)");
   });
 
+  it("keeps smooth scrolling when matchMedia is unavailable", () => {
+    vi.stubGlobal("matchMedia", undefined);
+    expect(resolveScrollBehavior("smooth")).toBe("smooth");
+  });
+
   it("preserves instant scrolling without querying motion", () => {
     const matchMedia = stubMatchMedia(true);
     expect(resolveScrollBehavior("instant")).toBe("instant");

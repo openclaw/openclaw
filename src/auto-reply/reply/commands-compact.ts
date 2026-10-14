@@ -14,7 +14,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_PROVIDER_ID,
-  resolveOpenAIRuntimeProvider as resolveContextConfigProviderForRuntime,
+  resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";

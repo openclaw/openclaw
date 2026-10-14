@@ -12,7 +12,6 @@ import { handleChatScrollTakeover } from "./scroll.ts";
 const controllers: ChatStateController<ChatPageHost>[] = [];
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("localStorage", createStorageMock());
 });

@@ -10,7 +10,7 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../agents/model-visibility-policy.js";
-import { resolveOpenAIRuntimeProvider as resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
 import { resolveOperatorModelDefault } from "../agents/operator-model-policy.js";
 import {
   persistStickyModelSelectionBestEffort,

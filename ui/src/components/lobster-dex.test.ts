@@ -13,6 +13,8 @@ import {
 } from "./lobster-dex.ts";
 
 beforeEach(() => {
+  // getSafeLocalStorage only accepts an own value property under Vitest, so
+  // tests opt in by stubbing jsdom's storage onto globalThis.
   vi.stubGlobal("localStorage", window.localStorage);
 });
 

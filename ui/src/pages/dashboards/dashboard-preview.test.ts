@@ -11,17 +11,9 @@ type DashboardPreviewElement = SolidBridgeElement<DashboardPreviewProps>;
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
-  vi.unstubAllGlobals();
 });
 
 it("resumes near-viewport rendering after being detached and reattached", async () => {
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
   const frames: FrameRequestCallback[] = [];
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
     frames.push(callback);

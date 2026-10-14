@@ -184,19 +184,43 @@ export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
   agentHarnessId?: string;
   config?: OpenClawConfig;
 }): string[] {
-  return [resolveOpenAIRuntimeProvider(params)];
+  if (!isOpenAIProvider(params.provider)) {
+    return [params.provider];
+  }
+  return [OPENAI_PROVIDER_ID];
 }
 
 /** Resolves the provider id passed to OpenAI runtime auth/execution paths. */
 export function resolveOpenAIRuntimeProvider(params: {
   provider: string;
   harnessRuntime?: string;
-  runtimeId?: string;
   agentHarnessId?: string;
   authProfileProvider?: string;
   authProfileId?: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
+}): string {
+  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
+}
+
+/** Resolves the selected provider id displayed for OpenAI runtime routes. */
+export function resolveSelectedOpenAIRuntimeProvider(params: {
+  provider: string;
+  harnessRuntime?: string;
+  agentHarnessId?: string;
+  authProfileProvider?: string;
+  authProfileId?: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): string {
+  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
+}
+
+/** Resolves the config provider used for context-window lookup. */
+export function resolveContextConfigProviderForRuntime(params: {
+  provider: string;
+  runtimeId?: string;
+  config?: OpenClawConfig;
 }): string {
   return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
 }

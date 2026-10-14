@@ -14,7 +14,7 @@ import {
 } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { resolveModelExtraParamSources } from "../../model-extra-params.js";
-import { resolveOpenAIRuntimeProvider as resolveContextConfigProviderForRuntime } from "../../openai-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../../openai-routing.js";
 import { resolveProviderRequestCapabilities } from "../../provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
 import type { PreparedAgentRuntimeAuthAttempt } from "../../runtime-plan/prepare-auth.js";
