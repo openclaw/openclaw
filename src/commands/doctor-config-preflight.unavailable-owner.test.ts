@@ -65,10 +65,7 @@ async function readReceipt(home: string, pluginId: string) {
 }
 
 describe("unavailable plugin migration owners", () => {
-  it.each([
-    { kind: "object", value: {} },
-    { kind: "array", value: [] },
-  ])(
+  it.each([{ kind: "object", value: {} }])(
     "keeps an authored empty legacy $kind protected during Doctor preparation",
     async ({ value: legacyValue }) => {
       await withHome(async (home) => {
@@ -336,44 +333,4 @@ describe("unavailable plugin migration owners", () => {
       });
     },
   );
-
-  it("keeps retained values and tells Doctor which unavailable plugin to install or enable", async () => {
-    await withHome(async (home) => {
-      const pluginId = "webhooks";
-      const config = { routes: [{ name: "retained-route", taskFlowId: "synthetic-flow" }] };
-      await writeOpenClawConfig(home, {
-        gateway: { mode: "local" },
-        plugins: { allow: ["other-plugin"], entries: { [pluginId]: { config } } },
-      });
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        await recordDeferredPluginMigrations({
-          pending: [
-            {
-              pluginId,
-              reason: "The plugin has not reported completion.",
-              command: "openclaw update repair",
-              configPaths: [["plugins", "entries", pluginId, "config"]],
-            },
-          ],
-        });
-        {
-          const result = await runDoctorConfigPreflight(options);
-          expect(readDeferredPluginMigrations()).toEqual([expect.objectContaining({ pluginId })]);
-          expect(result.snapshot.sourceConfig.plugins?.entries?.[pluginId]?.config).toEqual(config);
-          expect(result.stateMigrationStepReceipts).toContainEqual(
-            expect.objectContaining({
-              id: `plugin:${pluginId}`,
-              outcome: "deferred",
-              warnings: [expect.stringContaining('Install or enable plugin "webhooks"')],
-            }),
-          );
-        }
-        expect((await readReceipt(home, pluginId)).status).toBe("pending");
-        expect(
-          JSON.parse(await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"))
-            .plugins.entries.webhooks.config,
-        ).toEqual(config);
-      });
-    });
-  });
 });

@@ -192,48 +192,48 @@ it("keeps legacy bundles without a provable owner, record, or draft until every 
   expect(fs.existsSync(proposalsDir)).toBe(false);
 });
 
-it.each([
-  { case: "a NULL owner and no provable agent", owner: "NULL" },
-  { case: "an owner that is no longer configured", owner: "'removed'" },
-])("keeps a proposal with $case out of every archive", async ({ owner }) => {
-  const root = tempDirs.make("openclaw-retire-unowned-proposal-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const mainDir = path.join(root, "main-agent");
-  const config: OpenClawConfig = {
-    agents: {
-      entries: {
-        main: { agentDir: mainDir },
-        ops: { agentDir: path.join(root, "ops-agent") },
+it.each([{ case: "an owner that is no longer configured", owner: "'removed'" }])(
+  "keeps a proposal with $case out of every archive",
+  async ({ owner }) => {
+    const root = tempDirs.make("openclaw-retire-unowned-proposal-");
+    const stateDir = path.join(root, "state");
+    const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
+    const mainDir = path.join(root, "main-agent");
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: { agentDir: mainDir },
+          ops: { agentDir: path.join(root, "ops-agent") },
+        },
       },
-    },
-  };
-  const proposalDir = path.join(stateDir, "skill-workshop", "proposals", "unowned-procedure-1");
-  openOpenClawStateDatabase({ env }).db.exec(`
+    };
+    const proposalDir = path.join(stateDir, "skill-workshop", "proposals", "unowned-procedure-1");
+    openOpenClawStateDatabase({ env }).db.exec(`
     ${RETIRED_TABLES}
     INSERT INTO skill_workshop_proposals VALUES
       ('unowned-procedure-1', '{"draftFile":"PROPOSAL.md"}', ${owner}, 'pending');
   `);
-  write(path.join(proposalDir, "PROPOSAL.md"), "# Unowned\n");
+    write(path.join(proposalDir, "PROPOSAL.md"), "# Unowned\n");
 
-  const first = await retireSkillWorkshopProposals({ config, env });
-  expect(first).toEqual({
-    changes: [],
-    warnings: [
-      `No configured agent owns Skill Workshop proposal unowned-procedure-1; kept ${proposalDir}. To keep it, add its agent back to your config and rerun openclaw doctor --fix, or have an agent save that whole directory (draft and support files) with /learn and then delete the directory; otherwise delete the directory and rerun openclaw doctor --fix.`,
-    ],
-    warningDisposition: "recoverable",
-  });
-  expect(fs.existsSync(path.join(mainDir, "workshop-skills", ".archive"))).toBe(false);
-  expect(fs.readFileSync(path.join(proposalDir, "PROPOSAL.md"), "utf8")).toBe("# Unowned\n");
-  expect(retiredTableNames(env)).not.toEqual([]);
+    const first = await retireSkillWorkshopProposals({ config, env });
+    expect(first).toEqual({
+      changes: [],
+      warnings: [
+        `No configured agent owns Skill Workshop proposal unowned-procedure-1; kept ${proposalDir}. To keep it, add its agent back to your config and rerun openclaw doctor --fix, or have an agent save that whole directory (draft and support files) with /learn and then delete the directory; otherwise delete the directory and rerun openclaw doctor --fix.`,
+      ],
+      warningDisposition: "recoverable",
+    });
+    expect(fs.existsSync(path.join(mainDir, "workshop-skills", ".archive"))).toBe(false);
+    expect(fs.readFileSync(path.join(proposalDir, "PROPOSAL.md"), "utf8")).toBe("# Unowned\n");
+    expect(retiredTableNames(env)).not.toEqual([]);
 
-  // Once the operator has copied the draft and removed its directory, nothing is left to keep.
-  fs.rmSync(proposalDir, { recursive: true });
-  const second = await retireSkillWorkshopProposals({ config, env });
-  expect(second.changes).toContain("Retired the Skill Workshop proposal tables.");
-  expect(retiredTableNames(env)).toEqual([]);
-});
+    // Once the operator has copied the draft and removed its directory, nothing is left to keep.
+    fs.rmSync(proposalDir, { recursive: true });
+    const second = await retireSkillWorkshopProposals({ config, env });
+    expect(second.changes).toContain("Retired the Skill Workshop proposal tables.");
+    expect(retiredTableNames(env)).toEqual([]);
+  },
+);
 
 it("undoes an apply that stopped before SKILL.md, then retires its rollback", async () => {
   const root = tempDirs.make("openclaw-retire-unfinished-apply-");

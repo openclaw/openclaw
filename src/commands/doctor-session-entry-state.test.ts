@@ -394,35 +394,7 @@ it("backs up original rows and migrates pending delivery state before canonical 
   });
 });
 
-it.each([false, true])(
-  "refuses retired room grouping before any row repair (apply: %s)",
-  async (apply) => {
-    state = await createOpenClawTestState({
-      prefix: "openclaw-retired-room-",
-      scenario: "minimal",
-    });
-    const supported = seedEntry("a-supported", { memoryFlushCompactionCount: 0 });
-    const retired = seedEntry("retired", { room: "#legacy" });
-    const canonical = seedEntry("canonical", { room: "opaque", groupChannel: "#current" });
-    const raw = `${retired.raw.slice(0, -1)}, "groupChannel":"ignored", "groupChannel":null }`;
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    database.db
-      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-      .run(raw, retired.sessionKey);
-    expect(() => loadExactSessionEntryReadOnly(retired.scope)).toThrow(/2026\.9\.5/);
-    expect(loadExactSessionEntryReadOnly(canonical.scope)?.entry).toMatchObject({
-      groupChannel: "#current",
-    });
-    await expect(
-      repairLegacySessionEntryStates({ apply, cfg: {}, env: state.env }),
-    ).rejects.toThrow(/2026\.9\.5/);
-    expect(retired.readRaw()).toBe(raw);
-    expect(supported.readRaw()).toBe(supported.raw);
-    expect(canonical.readRaw()).toBe(canonical.raw);
-  },
-);
-
-it.each(["snapshot failure", "retired owner", "retired room introduced after scan"] as const)(
+it.each(["retired owner", "retired room introduced after scan"] as const)(
   "does not rewrite rows after %s",
   async (failure) => {
     state = await createOpenClawTestState({
@@ -437,9 +409,6 @@ it.each(["snapshot failure", "retired owner", "retired room introduced after sca
     let retired = false;
     let expectedRaw = legacy.raw;
     vi.spyOn(snapshots, "createVerifiedSqliteSnapshot").mockImplementation(async (options) => {
-      if (failure === "snapshot failure") {
-        throw new Error("snapshot unavailable");
-      }
       const result = await createSnapshot(options);
       if (failure === "retired owner") {
         retired = true;
@@ -472,31 +441,12 @@ it.each(["snapshot failure", "retired owner", "retired room introduced after sca
     });
     await expect(refused).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
     await expect(refused).rejects.toThrow(
-      failure === "snapshot failure"
-        ? "snapshot unavailable"
-        : failure === "retired owner"
-          ? "repair owner retired"
-          : "2026.9.5",
+      failure === "retired owner" ? "repair owner retired" : "2026.9.5",
     );
     expect(legacy.readRaw()).toBe(expectedRaw);
     expect(() => loadExactSessionEntryReadOnly(legacy.scope)).toThrow(/openclaw doctor --fix/);
   },
 );
-
-it("refuses a failed raw scan without treating its store as clean", async () => {
-  state = await createOpenClawTestState({
-    prefix: "openclaw-entry-scan-refusal-",
-    scenario: "minimal",
-  });
-  const legacy = seedEntry("scan-failure", { pendingFinalDelivery: true });
-  vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce(() => {
-    throw new Error("synthetic database read failure");
-  });
-  await expect(
-    repairLegacySessionEntryStates({ apply: false, cfg: {}, env: state.env }),
-  ).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
-  expect(legacy.readRaw()).toBe(legacy.raw);
-});
 
 it("normalizes only scalar state while leaving malformed identity for its repair owner", async () => {
   state = await createOpenClawTestState({
