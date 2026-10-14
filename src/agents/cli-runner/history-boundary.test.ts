@@ -4,6 +4,10 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   getCliHistoryWriter,
   runWithCliHistoryWriter,
 } from "../../config/sessions/cli-history-boundary.js";
@@ -31,12 +35,20 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-const sessionDirs = useSessionStoreTempDirs(afterAll, "cli-history-boundary-");
+const sessionDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "cli-history-boundary-",
+);
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 async function fixture(withHeader = true) {
+  setRuntimeConfigSnapshot({});
   const dir = sessionDirs.make();
   const target = {
     agentId: "main",
@@ -347,7 +359,7 @@ describe("CLI transcript account boundary", () => {
       throw new Error("Missing admitted history writer");
     }
     const before = f.manager().getEntries();
-    expect(() => writer.assertReadable()).toThrow();
+    await expect(writer.assertReadable()).rejects.toThrow();
     expect(() =>
       runWithCliHistoryWriter(writer, () =>
         f.manager().appendMessage({
@@ -568,12 +580,12 @@ describe("CLI transcript account boundary", () => {
         if (!writer) {
           throw new Error("Missing admitted history writer");
         }
-        writer.assertReadable();
+        await writer.assertReadable();
         await f.withRun(replacementRunId, async (replacement) => {
           await claimAgentSessionWriter(replacement);
-          expect
-            .soft(() => writer?.assertReadable())
-            .toThrow(
+          await expect
+            .soft(writer.assertReadable())
+            .rejects.toThrow(
               replacementRunId === params.runId
                 ? "admitted run authority is no longer active"
                 : "CLI history authority changed",

@@ -20,9 +20,11 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   cwd?: string;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
   input?: string;
+  prepareInput?: () => void | Promise<void>;
   secretInput?: SpawnSecretInput;
   stderrDestination?: Writable;
   stdoutConsumption?: "awaited";
+  terminateOnHostLoss?: true;
   oomScoreWrapperSelected: boolean;
   onWorkerMessage?: (message: unknown) => void;
   windowsShellCommand?: string;

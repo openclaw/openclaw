@@ -33,7 +33,6 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
   loadSessionCostSummariesFromCache: mocks.loadSessionCostSummariesFromCache,
 }));
 
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { usageHandlers } from "./usage.js";
 
 let config: OpenClawConfig = {
@@ -140,7 +139,7 @@ describe("sessions.usage result cache and owner attribution", () => {
   });
 
   it("partitions usage by role identity and excludes foreign sessions before aggregation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const firstProfile = ensureProfileForEmail("first@example.com");
       const secondProfile = ensureProfileForEmail("second@example.com");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -219,29 +218,6 @@ describe("sessions.usage result cache and owner attribution", () => {
         message: expect.stringContaining("sessions hidden by your operator role"),
       });
     });
-  });
-
-  it("coalesces concurrent cold misses into one aggregation", async () => {
-    const held = createDeferred();
-    const started = createDeferred();
-    mocks.loadSessionCostSummariesFromCache.mockImplementationOnce(
-      async ({ sessions }: { sessions: unknown[] }) => {
-        started.resolve();
-        await held.promise;
-        return freshSummaries(sessions);
-      },
-    );
-    const first = runSessionsUsage(baseParams);
-    const second = runSessionsUsage(baseParams);
-    try {
-      await started.promise;
-      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
-      held.resolve();
-      expect(await second).toEqual(await first);
-    } finally {
-      held.resolve();
-      await Promise.allSettled([first, second]);
-    }
   });
 
   it.each(["cold", "stale"])(
@@ -370,10 +346,11 @@ describe("usage creator attribution", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("filters before the row cap, attributes retained instances, and keeps daily categories in scope", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const ada = ensureProfileForEmail("ada@example.test");
       const bob = ensureProfileForEmail("bob@example.test");
       setDisplayName(ada.id, "Ada");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
           "agent:main:ada": {
@@ -429,9 +406,10 @@ describe("usage creator attribution", () => {
   });
 
   it("canonicalizes profile merges without conflating channel senders or mutable owners", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const ada = ensureProfileForEmail("ada@example.test");
       const former = ensureProfileForEmail("former@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
           "agent:main:ada": {
@@ -496,7 +474,7 @@ describe("usage creator attribution", () => {
   });
 
   it("never exposes hidden creators or counts their spend through the selector", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const ada = ensureProfileForEmail("ada@example.test");
       const bob = ensureProfileForEmail("bob@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };

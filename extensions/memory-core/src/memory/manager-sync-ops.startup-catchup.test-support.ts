@@ -95,7 +95,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Startup catch-up harness does not acquire embedding providers");
   };
-  protected readonly cfg = {} as OpenClawConfig;
+  protected readonly cfg: OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
@@ -153,9 +153,10 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     database: MemoryIndexDatabase,
     private readonly indexSessionUpdates = false,
     private readonly subscribeToRealEvents = false,
-    private readonly deferSessionIndex = false,
+    cfg: OpenClawConfig = {},
   ) {
     super();
+    this.cfg = cfg;
     this.sources.add("sessions");
     this.publishedDatabase = database;
   }
@@ -164,13 +165,13 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     sourceRows: SourceStateRow[],
     indexSessionUpdates = false,
     subscribeToRealEvents = false,
-    deferSessionIndex = false,
+    cfg: OpenClawConfig = {},
   ): Promise<SessionStartupCatchupHarness> {
     return new SessionStartupCatchupHarness(
       await createStartupHarnessDatabase(sourceRows),
       indexSessionUpdates,
       subscribeToRealEvents,
-      deferSessionIndex,
+      cfg,
     );
   }
 
@@ -179,7 +180,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
       this.publishedDatabase,
       this.indexSessionUpdates,
       false,
-      this.deferSessionIndex,
+      this.cfg,
     );
   }
 
@@ -213,7 +214,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   async runArchiveSyncForTest(): Promise<void> {
     await this.syncArchiveFiles({
       needsFullReindex: false,
-      deferIndex: this.deferSessionIndex,
     });
   }
 
@@ -313,7 +313,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
         ? this.runSync(params).then(() => undefined)
         : this.syncArchiveFiles({
             needsFullReindex: false,
-            deferIndex: this.deferSessionIndex,
           }).then(() => undefined)
       : Promise.resolve();
     await this.pendingSyncWork;

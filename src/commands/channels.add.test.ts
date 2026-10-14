@@ -1045,7 +1045,7 @@ describe("channelsAddCommand", () => {
 
     expect(writtenChannel("qqbot")).toMatchObject({
       appId: "app-id",
-      clientSecret: "secret",
+      clientSecret: { source: "store", provider: "default", id: expect.any(String) },
       dmPolicy: "open",
       allowFrom: ["openclaw:approval-disabled"],
     });
@@ -1089,7 +1089,7 @@ describe("channelsAddCommand", () => {
 
     expect(getBundledChannelSetupPlugin).toHaveBeenCalledWith("telegram");
     expect(writtenChannel("telegram").enabled).toBe(true);
-    expect(writtenChannel("telegram").botToken).toBe("123456:token");
+    expect(writtenChannel("telegram").botToken).toMatchObject({ source: "store" });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });

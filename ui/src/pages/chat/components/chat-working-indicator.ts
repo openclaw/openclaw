@@ -6,6 +6,7 @@ import type {
 import { icons } from "../../../components/icons.ts";
 import "../../../components/elapsed-time.tsx";
 import "../../../components/working-phrase.ts";
+import "./chat-retry-status.tsx";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { renderThemeBrandIcon } from "../../../components/theme-brand-icon.ts";
 import { t } from "../../../i18n/index.ts";
@@ -60,12 +61,12 @@ export function renderChatWorkingIndicator(
     /** Shows the session's subagents; without it their count is plain text. */
     onOpenSubagents?: () => void;
     startupLabel?: string;
+    retryAt?: number;
     outputTokens?: number | null;
     presentation?: "standalone" | "continuation";
   } = {},
 ) {
   // Keep the transcript indicator until roster hydration supplies live child activity.
-  // Waiting copy belongs to the composer, including view-only conversations.
   if (options.waitingSubagents && options.subagentActivity !== undefined) {
     return options.subagentActivity;
   }
@@ -98,6 +99,8 @@ export function renderChatWorkingIndicator(
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
   const outputTokens = options.outputTokens;
+  const hasOutputTokens = outputTokens !== null && outputTokens !== undefined;
+  const statusLabelHidden = working && !continuation && indicator !== "none";
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   const status = html`
@@ -117,7 +120,7 @@ export function renderChatWorkingIndicator(
                     : indicator === "brand"
                       ? "chat-reading-indicator--brand"
                       : selectWorkingClawSurprise(part.key, {
-                          eligible: !waitingApproval,
+                          eligible: !waitingApproval && !options.startupLabel,
                         })
                 }"
                 aria-hidden="true"
@@ -127,13 +130,34 @@ export function renderChatWorkingIndicator(
             `
       }
       <span class="chat-working-indicator__status">
-        <span class=${working && !continuation && indicator !== "none" ? "sr-only" : ""}
-          >${statusLabel}</span
+        <span class=${statusLabelHidden ? "sr-only" : ""}
+          >${
+            !waitingApproval && options.retryAt !== undefined
+              ? html`<openclaw-chat-retry-status
+                  .retryAt=${options.retryAt}
+                ></openclaw-chat-retry-status>`
+              : statusLabel
+          }</span
         >
+        ${
+          hasOutputTokens
+            ? html`
+                ${statusLabelHidden ? nothing : html`<span aria-hidden="true">·</span>`}
+                <span class="chat-working-indicator__tokens"
+                  >${outputTokensLabel(outputTokens)}</span
+                >
+              `
+            : nothing
+        }
         ${
           waitingApproval
             ? nothing
             : html`
+                ${
+                  options.startupLabel || hasOutputTokens
+                    ? html`<span aria-hidden="true">·</span>`
+                    : nothing
+                }
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}
@@ -141,23 +165,16 @@ export function renderChatWorkingIndicator(
               `
         }
         ${
-          outputTokens !== null && outputTokens !== undefined
+          !hasOutputTokens && working
             ? html`
-                <span aria-hidden="true">·</span>
-                <span class="chat-working-indicator__tokens"
-                  >${outputTokensLabel(outputTokens)}</span
-                >
+                <openclaw-working-phrase
+                  aria-hidden="true"
+                  .startMs=${part.startedAt}
+                  .seed=${part.key}
+                  .phrases=${options.workingPhrases}
+                ></openclaw-working-phrase>
               `
-            : working
-              ? html`
-                  <openclaw-working-phrase
-                    aria-hidden="true"
-                    .startMs=${part.startedAt}
-                    .seed=${part.key}
-                    .phrases=${options.workingPhrases}
-                  ></openclaw-working-phrase>
-                `
-              : nothing
+            : nothing
         }
         ${
           runningSubagents > 0
@@ -206,15 +223,15 @@ export function renderTurnRecapRow(
               >${renderThemeBrandIcon(icons.claw)}</span
             >`
       }
-      <span>${t("chat.turnRecap.doneIn", { duration })}</span>
       ${
         tokens === null
           ? nothing
           : html`
-              <span class="chat-turn-recap__sep" aria-hidden="true">·</span>
               <span>${tokens}</span>
+              <span class="chat-turn-recap__sep" aria-hidden="true">·</span>
             `
       }
+      <span>${t("chat.turnRecap.doneIn", { duration })}</span>
     </div>
   `;
 }

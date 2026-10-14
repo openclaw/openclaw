@@ -126,7 +126,7 @@ suite.define(() => {
           const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
           await agentScope.locator(".agent-select__trigger").click();
           await agentScope
-            .locator("wa-dropdown-item[data-agent-option]")
+            .locator(".agent-select__option[data-agent-option]")
             .filter({ hasText: "All agents" })
             .click();
           await gateway.waitForRequest("sessions.usage", { match: { agentScope: "all" } });

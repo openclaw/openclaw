@@ -38,17 +38,9 @@ function cloneToolCall(toolCall: QaBusToolCall): QaBusToolCall {
 }
 
 function cloneEvent(event: QaBusEvent): QaBusEvent {
-  switch (event.kind) {
-    case "inbound-message":
-    case "outbound-message":
-    case "message-edited":
-    case "message-deleted":
-    case "reaction-added":
-      return { ...event, message: cloneMessage(event.message) };
-    case "thread-created":
-      return { ...event, thread: { ...event.thread } };
-  }
-  throw new Error("Unsupported QA bus event kind");
+  return event.kind === "thread-created"
+    ? { ...event, thread: { ...event.thread } }
+    : { ...event, message: cloneMessage(event.message) };
 }
 
 export function buildQaBusSnapshot(params: {

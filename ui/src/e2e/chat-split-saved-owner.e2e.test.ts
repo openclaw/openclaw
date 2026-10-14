@@ -1,9 +1,9 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -170,12 +170,7 @@ suite.define(() => {
         const currentUrl = page.url();
         await cells.first().click();
         expect(page.url()).toBe(currentUrl);
-        await page.evaluate(async () => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          await app.runtime.context.revalidate("chat");
-        });
+        await evaluateControlUiContext(page, (context) => context.revalidate("chat"));
         await waitForCommittedChatRoute(page);
         expect(await cells.first().locator("openclaw-chat-pane").count()).toBe(0);
         await openHomeFullPage(page);
@@ -249,9 +244,7 @@ suite.define(() => {
         expect(await cells.first().textContent()).toContain("Choose a conversation");
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.locator(".sidebar-agent-card__main").click();
-        await sidebar
-          .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
-          .click();
+        await sidebar.locator('.sidebar-agent-menu [data-value="command:capabilities"]').click();
         await expect.poll(() => cells.first().locator("openclaw-chat-pane").count()).toBe(1);
         await expect
           .poll(() => cells.first().locator(".agent-chat__composer-combobox textarea").inputValue())

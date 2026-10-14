@@ -18,8 +18,8 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
-  closeOrphanedOperatorApprovals,
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
   getOperatorApprovalDetailed,
@@ -28,7 +28,7 @@ import {
   listTerminalOperatorApprovals,
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
   OperatorApprovalHistoryCursorError,
-  pruneTerminalOperatorApprovals,
+  recoverOperatorApprovalsOnStartup,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
 import { operatorApprovalOperations } from "./operator-approval-store.worker.js";
@@ -216,7 +216,7 @@ describe("operator approval store", () => {
     ).toEqual(["plugin-new"]);
   });
 
-  it("filters an audience before applying the replay limit across scan pages", async () => {
+  it("filters an audience before applying the replay limit", async () => {
     const databaseOptions = getSuiteDatabaseOptions();
     for (let index = 0; index < 256; index += 1) {
       const id = `unrelated-${String(index).padStart(3, "0")}`;
@@ -250,7 +250,7 @@ describe("operator approval store", () => {
     ).toMatchObject([{ id: "target-after-first-page" }]);
   });
 
-  it("filters reviewers before the replay limit across scan pages", async () => {
+  it("filters reviewers before the replay limit", async () => {
     const databaseOptions = getSuiteDatabaseOptions();
     for (let index = 0; index < 256; index += 1) {
       const id = `unrelated-reviewer-${String(index).padStart(3, "0")}`;
@@ -284,6 +284,57 @@ describe("operator approval store", () => {
     ).toMatchObject([{ id: "authorized-after-first-page" }]);
   });
 
+  it.each([undefined, "agent:main:child"])(
+    "repairs corrupt pending rows and releases a limited replay scan (audience=%s)",
+    async (audienceSessionKey) => {
+      const databaseOptions = getSuiteDatabaseOptions();
+      for (const id of ["a-corrupt", "b-match", "c-match"]) {
+        await insertOperatorApproval({ approval: approval(id), databaseOptions });
+      }
+      const database = openOpenClawStateDatabase(databaseOptions);
+      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb
+          .updateTable("operator_approvals")
+          .set({ presentation_json: "{not-json" })
+          .where("approval_id", "=", "a-corrupt"),
+      );
+
+      const listing = listPendingOperatorApprovals({
+        audienceSessionKey,
+        limit: 1,
+        nowMs: 2_000,
+        databaseOptions,
+      });
+      // A later decision must not overtake the list's corrupt-row repair.
+      const denying = forceDenyOperatorApproval({
+        id: "b-match",
+        reason: "no-route",
+        resolver: { kind: "system", id: null },
+        nowMs: 2_000,
+        databaseOptions,
+      });
+      const records = await listing;
+      await denying;
+      expect(records.map((record) => record.id)).toEqual(audienceSessionKey ? ["b-match"] : []);
+      expect(rawApprovalRow(databaseOptions, "a-corrupt")).toMatchObject({
+        status: "denied",
+        terminal_reason: "storage-corrupt",
+      });
+      expect(
+        (
+          await listPendingOperatorApprovals({
+            audienceSessionKey,
+            limit: 1,
+            nowMs: 2_000,
+            databaseOptions,
+          })
+        ).map((record) => record.id),
+      ).toEqual(["c-match"]);
+    },
+  );
+
   it("reads the default clock after waiting for the SQLite write lock", async () => {
     const databaseOptions = createDatabaseOptions();
     const createdAtMs = 1_000;
@@ -311,14 +362,20 @@ describe("operator approval store", () => {
     try {
       writer.exec("BEGIN IMMEDIATE");
       expect(Date.now()).toBeLessThan(expiresAtMs);
-      const result = await withSqliteWriteAdmissionService(database.db, releaseWriter, async () =>
-        operatorApprovalOperations["operatorApprovals.get"](
-          { id: "lock-delayed-clock" },
-          {
-            open: () => database,
-            stateOptions: () => ({ path: database.path, env: databaseOptions.env ?? process.env }),
-          },
-        ),
+      const result = await withSqliteWriteAdmissionService(
+        requireNativeSqliteDatabase(database.db),
+        releaseWriter,
+        async () =>
+          operatorApprovalOperations["operatorApprovals.get"](
+            { id: "lock-delayed-clock" },
+            {
+              open: () => database,
+              stateOptions: () => ({
+                path: database.path,
+                env: databaseOptions.env ?? process.env,
+              }),
+            },
+          ),
       );
 
       expect(releaseWriter).toHaveBeenCalledOnce();
@@ -673,7 +730,7 @@ describe("operator approval store", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    const result = closeOrphanedOperatorApprovals({
+    const result = await recoverOperatorApprovalsOnStartup({
       runtimeEpoch: "runtime-b",
       nowMs: 2_000,
       databaseOptions,
@@ -681,6 +738,7 @@ describe("operator approval store", () => {
 
     expect(result).toMatchObject({
       affected: 1,
+      pruned: 0,
       records: [
         {
           id: "orphan",
@@ -692,6 +750,9 @@ describe("operator approval store", () => {
         },
       ],
     });
+    expect(
+      await getOperatorApproval({ id: "orphan", nowMs: 2_000, databaseOptions }),
+    ).toMatchObject({ status: "cancelled", terminalReason: "gateway-restart" });
     expect(
       await getOperatorApproval({ id: "current", nowMs: 2_000, databaseOptions }),
     ).toMatchObject({
@@ -808,7 +869,13 @@ describe("operator approval store", () => {
       databaseOptions,
     });
 
-    expect(pruneTerminalOperatorApprovals({ nowMs, databaseOptions })).toBe(1);
+    expect(
+      await recoverOperatorApprovalsOnStartup({
+        runtimeEpoch: "runtime-a",
+        nowMs,
+        databaseOptions,
+      }),
+    ).toMatchObject({ pruned: 1 });
     expect(rawApprovalRow(databaseOptions, "old-terminal")).toBeUndefined();
     expect(rawApprovalRow(databaseOptions, "recent-terminal")).toBeDefined();
     expect(rawApprovalRow(databaseOptions, "still-pending")).toBeDefined();

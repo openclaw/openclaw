@@ -20,6 +20,7 @@ export const CloudWorkerSnapshotPolicy = defineSolidBridge(
   "openclaw-cloud-worker-snapshot-policy",
   (_props, host) => {
     host.style.display = "contents";
+    host.classList.add("cloud-environments__refresh");
     const context = useApplication();
     const [draft, setDraft] = createSignal<PolicyDraft | null>(null, { ownedWrite: true });
     const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
@@ -113,17 +114,14 @@ export const CloudWorkerSnapshotPolicy = defineSolidBridge(
       });
     }
     return (
-      <SettingsSection
-        title={t("cloudWorkersPage.snapshots.retentionPolicy")}
-        description={t("cloudWorkersPage.snapshots.retentionHelp")}
-      >
+      <SettingsSection title={t("cloudWorkersPage.environments.retention")}>
         <For each={["refreshAfter", "retainUnused"] as const}>
           {(key) => (
             <SettingsRow
               title={t(`cloudWorkersPage.snapshots.${key}`)}
-              description={t(`cloudWorkersPage.snapshots.${key}Help`)}
               control={
                 <input
+                  title={t(`cloudWorkersPage.snapshots.${key}Help`)}
                   class="settings-input"
                   aria-label={t(`cloudWorkersPage.snapshots.${key}`)}
                   value={values()[key]}
@@ -156,7 +154,7 @@ export const CloudWorkerSnapshotPolicy = defineSolidBridge(
           }
         />
         <SettingsRow
-          title={t("cloudWorkersPage.snapshots.policyApplies")}
+          title=""
           control={
             <button
               class="btn btn--sm"

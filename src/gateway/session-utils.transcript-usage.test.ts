@@ -1,7 +1,11 @@
 import "./session-utils-provider.test-support.js";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { buildSessionRowFixture } from "./session-list.test-support.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
@@ -12,6 +16,8 @@ import {
   seedSessionEntries,
   withStateDirEnv,
 } from "./session-utils.test-support.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type RowParams = Parameters<typeof buildSessionRowFixture>[0];
 async function buildGatewaySessionRow(params: RowParams) {
@@ -34,8 +40,34 @@ async function buildGatewaySessionRow(params: RowParams) {
   });
 }
 
+test("session rows retain authoritative transcript zero without promoting legacy zero", () => {
+  for (const state of ["available", "unavailable", undefined] as const) {
+    const entry: SessionEntry = { sessionId: "zero", updatedAt: 1 };
+    const row = buildSessionRowFixture({
+      cfg: createModelDefaultsConfig({ primary: "ollama/llama3.2" }),
+      key: "agent:main:zero",
+      store: {},
+      storePath: "/unused/sessions.json",
+      entry,
+      transcriptUsage: {
+        ...(state ? { usageReport: { state } } : {}),
+        totalTokens: 0,
+        totalTokensFresh: state === "available",
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+      rowContext: buildSessionListRowMetadataContext({ now: 1 }),
+      lightweightListRow: true,
+    });
+    expect(row.totalTokens).toBe(state === "available" ? 0 : undefined);
+    expect(row.totalTokensFresh).toBe(state === "available");
+  }
+});
+
 test("selected global rows read transcript usage from the selected agent", async () => {
   await withStateDirEnv("session-utils-selected-global-usage-", async ({ stateDir }) => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const sessionId = "selected-global-usage";
     for (const [agentId, input] of [
       ["main", 10],
@@ -61,9 +93,7 @@ test("selected global rows read transcript usage from the selected agent", async
     }
 
     const row = await buildGatewaySessionRow({
-      cfg: {
-        agents: { entries: { main: {}, work: {} } },
-      } as OpenClawConfig,
+      cfg,
       key: "global",
       agentId: "work",
       storePath: path.join(stateDir, "agents", "work", "sessions", "sessions.json"),
@@ -77,6 +107,8 @@ test("selected global rows read transcript usage from the selected agent", async
 
 test("SQLite unavailable context blocks old totals until a later valid snapshot", async () => {
   await withStateDirEnv("session-utils-unavailable-usage-", async ({ stateDir }) => {
+    const cfg = createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" });
+    setRuntimeConfigSnapshot(cfg);
     const sessionId = "unavailable-usage";
     const sessionKey = "agent:main:main";
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -107,7 +139,7 @@ test("SQLite unavailable context blocks old totals until a later valid snapshot"
     });
 
     const legacyRow = await buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" }),
+      cfg,
       storePath,
       store: { [sessionKey]: entry },
       key: sessionKey,
@@ -138,7 +170,7 @@ test("SQLite unavailable context blocks old totals until a later valid snapshot"
     });
 
     const unavailableRow = await buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" }),
+      cfg,
       storePath,
       store: { [sessionKey]: entry },
       key: sessionKey,
@@ -171,7 +203,7 @@ test("SQLite unavailable context blocks old totals until a later valid snapshot"
       ],
     });
     const validRow = await buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" }),
+      cfg,
       storePath,
       store: { [sessionKey]: entry },
       key: sessionKey,

@@ -14,12 +14,10 @@ import {
   assertSessionCreationLabelAvailable,
   type SessionCreationSnapshot,
 } from "./session-accessor.sqlite-creation-read.js";
-import { preparedSessionDeletionRequiresNativeTransaction } from "./session-accessor.sqlite-deletion.js";
 import {
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { applySessionEntryCreationReplacement } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   initializeSessionTranscriptInWorker,
@@ -32,7 +30,6 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionEntryCreateWithTranscriptContext,
   SessionEntryCreateWithTranscriptOptions,
@@ -40,11 +37,8 @@ import type {
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCommitContext,
 } from "./session-accessor.types.js";
-import { createSessionActorEntryWithTranscript } from "./session-actor-entry-adapter.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { createSessionActorEntryWithTranscriptInScope } from "./session-actor-entry-adapter.js";
 import { publishSessionStateArchivesInWorker } from "./session-archive-publication.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
-import { createIncognitoSessionEntryWithTranscript } from "./session-incognito-entry-creation.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 type CreationScope = ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
@@ -65,19 +59,16 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
   options: SessionEntryCreateWithTranscriptOptions,
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
-  const memory = getSessionActorStorageBinding({ ...scope, storePath: scope.path });
+  const memory = await createSessionActorEntryWithTranscriptInScope(
+    { ...scope, storePath: scope.path },
+    createEntry,
+    options,
+  );
   if (memory) {
-    return createSessionActorEntryWithTranscript(memory, scope.env, createEntry, options);
-  }
-  const binding = captureIncognitoSessionBinding({ ...scope, storePath: scope.path });
-  if (binding) {
-    return createIncognitoSessionEntryWithTranscript(binding, scope, createEntry, options);
+    return memory;
   }
   const databaseOptions = { ...toDatabaseOptions(scope), path: scope.path };
-  const useWorker =
-    isMainThread &&
-    supportsOpenClawAgentDatabaseExecution(databaseOptions) &&
-    !preparedSessionDeletionRequiresNativeTransaction();
+  const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const retained = useWorker ? retainSessionHistoryWorkerDatabase(databaseOptions) : undefined;
   try {
     let source: CreationSource;
@@ -92,10 +83,15 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
         });
       let snapshot = (await read()).creation;
       if (!snapshot) {
-        await prepareSessionEntryReplacementDatabase(databaseOptions, () => {
-          reader.assertCurrent();
-          options.commitGuard?.();
-        });
+        await prepareSessionEntryReplacementDatabase(
+          databaseOptions,
+          () => {
+            reader.assertCurrent();
+            options.commitGuard?.();
+          },
+          undefined,
+          options.followRegistration,
+        );
         snapshot = (await read()).creation;
       }
       if (!snapshot) {
@@ -259,17 +255,9 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
               assertCurrent();
               assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
             },
-            afterFreshUpsertsInTransaction: (database) => {
-              if (created.transcriptEvents) {
-                appendTranscriptEventsInTransaction(
-                  database,
-                  { ...scope, sessionKey: normalizedKey, sessionId: created.entry.sessionId },
-                  created.transcriptEvents,
-                );
-              }
-              if (owner && !replaceSessionOwnerInTransaction(database, normalizedKey, owner)) {
-                throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
-              }
+            creation: {
+              preparedTranscript,
+              ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
             },
             onLifecycleCommitted: () => options.onLifecycleCommitted?.(created.entry),
             afterCommitted,

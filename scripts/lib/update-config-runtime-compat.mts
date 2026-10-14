@@ -57,8 +57,9 @@ export function isUpdateConfigRuntimeAlias(
   if (!contents.includes(target) || !contents.endsWith(bindings)) {
     return false;
   }
-  // 2026.9.5 through 2026.10.5-beta.1 shipped the older diagnostic templates. Retain only
-  // those exact bodies for that upgrade window; the target and generated bindings vary.
+  // 2026.9.5 through 2026.10.3 and 2026.10.5-beta.3 shipped the older reader templates.
+  // Retain only those exact bodies for that upgrade window; the target and generated
+  // bindings vary.
   const body = contents
     .slice(0, -bindings.length)
     .replace(target, 'const target = new URL("./", import.meta.url).href;');
@@ -66,6 +67,7 @@ export function isUpdateConfigRuntimeAlias(
     "f1e325b58b57ccc6f958a025bcb068bdcdc773fde0c61dc7913179c1540f2607",
     "dc8d98455b7518b7eb4f4777dee6c089d2524a7e8f9dba4b5866ec551ec03931",
     "49fbd87500f7e9b14f67c786702adf8491b8c99890a76b7f42cc836dffaef6d1",
+    "13537ac90acba261750673c3940edbf19b9d620790b2cbef3fe9b3a2288e7ea4",
   ].includes(createHash("sha256").update(body).digest("hex"));
 }
 
@@ -79,11 +81,18 @@ export function buildUpdateConfigRuntimeAlias(
   const worker = String.raw`
 const fs = require("node:fs");
 // Reserve stdout for the response; config diagnostics must not corrupt its frame.
+const stdoutWrite = process.stdout.write.bind(process.stdout);
 globalThis.console = new (require("node:console").Console)(process.stderr, process.stderr);
 process.stdout.write = process.stderr.write.bind(process.stderr);
+// Opening process.stdout makes a pipe non-blocking, so a direct fd write can stop
+// partway. The stream queues the rest and flushes it before the natural exit; never
+// call process.exit here. Only one frame is written, so a failure cannot append another.
+let sent = false;
 function send(result) {
   const payload = JSON.stringify(result);
-  fs.writeFileSync(1, Buffer.byteLength(payload) + "\n" + payload);
+  if (sent) return;
+  sent = true;
+  stdoutWrite(Buffer.byteLength(payload) + "\n" + payload);
 }
 (async () => {
   try {
@@ -151,7 +160,7 @@ function finish(exit, output, logger) {
   if (exit.status === 0 && !exit.error && !exit.tooLarge && result?.ok === true) return result.value;
   const characters = Array.from(failureReason(result, exit).replace(/[\\s\\u0000-\\u001f\\u007f]+/g, " ").trim());
   const reason = characters.length > 500 ? characters.slice(0, 499).join("") + "…" : characters.join("");
-  const error = new Error("Candidate config read failed: " + reason + ". The existing service definition was left unchanged. Retry with the updated CLI.");
+  const error = new Error("Candidate config read failed: " + reason + ". The existing service definition was left unchanged. After the update finishes, run openclaw gateway install --force with the same --profile or --dev option as this update to refresh it.");
   error.code = "candidate-config-read-failed";
   console.warn("[update:warning:" + error.code + "] " + error.message);
   throw error;

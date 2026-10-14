@@ -256,7 +256,7 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
 async function readGitAuthor(env: NodeJS.ProcessEnv, cwd: string) {
   const result = await runIdentityCommand(
     ["git", "config", "--null", "--get-regexp", "^user\\.(name|email)$"],
-    env,
+    { ...env, GIT_NO_LAZY_FETCH: "1" },
     cwd,
   );
   const author: { name: string | null; email: string | null } = { name: null, email: null };
@@ -552,14 +552,24 @@ export async function prepareGitHubPublicationIdentity(
 export async function prepareGitHubPublicationOptionsIdentity(
   params: GitHubIdentityPreparation & { assertCurrent?: () => void },
 ) {
+  let nativeStale = false;
   const { prepared, stale } = await prepareSharedGitHubIdentity(
     { ...params, allowStale: true },
-    readCachedNativeGitHubToken,
+    (env, requireAbsentProof, host) =>
+      readCachedNativeGitHubToken(env, requireAbsentProof, host, {
+        onStale: () => {
+          nativeStale = true;
+        },
+      }),
   );
   if (!prepared) {
     throw new GitHubIdentityError("unavailable");
   }
-  return { source: prepared.source, account: prepared.account, ...(stale ? { stale } : {}) };
+  return {
+    source: prepared.source,
+    account: prepared.account,
+    ...(stale || nativeStale ? { stale: true as const } : {}),
+  };
 }
 
 export function prepareGitHubReadIdentity(

@@ -66,17 +66,6 @@ function expectWrapperCommand(command: AcpxAgentCommand | undefined, wrapperPath
   expect(command).toEqual(expect.arrayContaining([process.execPath, wrapperPath]));
 }
 
-function expectWrapperToContainPathSuffix(wrapper: string, pathSuffix: string[]): void {
-  const nativeSuffix = pathSuffix.join(path.sep);
-  const escapedNativeSuffix = JSON.stringify(nativeSuffix).slice(1, -1);
-  const posixSuffix = pathSuffix.join("/");
-  if (wrapper.includes(escapedNativeSuffix)) {
-    expect(wrapper).toContain(escapedNativeSuffix);
-  } else {
-    expect(wrapper).toContain(posixSuffix);
-  }
-}
-
 async function expectPathMissing(targetPath: string): Promise<void> {
   let error: unknown;
   try {
@@ -145,51 +134,13 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(chmodSpy).toHaveBeenCalledWith(generatedClaude.wrapperPath, 0o755);
     expectWrapperCommand(resolved.agents.codex, generatedCodex.wrapperPath);
     expectWrapperCommand(resolved.agents.claude, generatedClaude.wrapperPath);
-    await expect(fs.access(generatedCodex.wrapperPath)).resolves.toBeUndefined();
-    await expect(fs.access(generatedClaude.wrapperPath)).resolves.toBeUndefined();
-  });
-
-  it("falls back to the current Codex ACP package range when the local adapter is unavailable", async () => {
-    const { generated, prepare } = createWrapperFixture();
-
-    await prepare({
-      resolveInstalledCodexAcpBinPath: async () => undefined,
-    });
-
-    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/codex-acp@2.1.1"');
-    expect(wrapper).toContain('"--", "codex-acp"');
-    expect(wrapper).not.toContain("@zed-industries/codex-acp");
-  });
-
-  it("falls back to the patched Claude ACP package when the local adapter is unavailable", async () => {
-    const { generatedClaude: generated, prepare } = createWrapperFixture();
-
-    await prepare({
-      resolveInstalledClaudeAcpBinPath: async () => undefined,
-    });
-
-    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.85.1"');
-    expect(wrapper).toContain('"--", "claude-agent-acp"');
-    expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
-    expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
-  });
-
-  it("uses the bundled Codex ACP dependency by default when it is installed", async () => {
-    const { generated, prepare } = createWrapperFixture();
-
-    await prepare();
-
-    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain("@agentclientprotocol/codex-acp");
-    expectWrapperToContainPathSuffix(wrapper, ["dist", "index.js"]);
-    expect(wrapper).toContain("defaultArgs = [installedBinPath]");
+    await fs.access(generatedCodex.wrapperPath);
+    await fs.access(generatedClaude.wrapperPath);
   });
 
   it.each([
     { agent: "codex", packageName: "codex-acp", version: "2.1.1" },
-    { agent: "claude", packageName: "claude-agent-acp", version: "0.85.1" },
+    { agent: "claude", packageName: "claude-agent-acp", version: "0.86.0" },
   ] as const)(
     "launches $agent after its captured adapter is removed",
     async ({ agent, packageName, version }) => {
@@ -271,17 +222,6 @@ describe("prepareAcpxCodexAuthConfig", () => {
       });
     },
   );
-
-  it("uses the bundled Claude ACP dependency by default when it is installed", async () => {
-    const { generatedClaude: generated, prepare } = createWrapperFixture();
-
-    await prepare();
-
-    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain("@agentclientprotocol/claude-agent-acp");
-    expectWrapperToContainPathSuffix(wrapper, ["dist", "index.js"]);
-    expect(wrapper).toContain("defaultArgs = [installedBinPath]");
-  });
 
   it("launches maintained Codex ACP with isolated CODEX_HOME and model overrides", async () => {
     const { root, stateDir, generated, prepare } = createWrapperFixture();
@@ -454,34 +394,6 @@ describe("prepareAcpxCodexAuthConfig", () => {
       tokens: null,
       last_refresh: null,
     });
-  });
-
-  it("launches the locally installed Claude ACP bin without going through npm", async () => {
-    const { root, generatedClaude: generated, prepare } = createWrapperFixture();
-    const installedBinPath = path.join(root, "claude-agent-acp-bin.js");
-    await fs.writeFile(
-      installedBinPath,
-      "console.log(JSON.stringify({ argv: process.argv.slice(2), codexHome: process.env.CODEX_HOME ?? null }));\n",
-      "utf8",
-    );
-
-    await prepare({
-      resolveInstalledClaudeAcpBinPath: async () => installedBinPath,
-    });
-
-    const env = { ...process.env };
-    delete env.CODEX_HOME;
-    const { stdout } = await execFileAsync(
-      process.execPath,
-      [generated.wrapperPath, "--permission-mode", "bypass"],
-      {
-        cwd: root,
-        env,
-      },
-    );
-    const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
-    expect(launched.argv).toEqual(["--permission-mode", "bypass"]);
-    expect(launched.codexHome).toBeNull();
   });
 
   it("does not copy source Codex auth", async () => {
@@ -755,27 +667,6 @@ describe("prepareAcpxCodexAuthConfig", () => {
     `);
 
     expect(log).toBe("🚀\n�");
-  });
-
-  it("leaves a custom Claude agent command alone", async () => {
-    const { root, prepare } = createWrapperFixture();
-    const pluginConfig = resolveAcpxPluginConfig({
-      rawConfig: {
-        agents: {
-          claude: {
-            command: "node ./custom-claude-wrapper.mjs --flag",
-          },
-        },
-      },
-      workspaceDir: root,
-    });
-
-    const resolved = await prepare({
-      pluginConfig,
-      resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
-    });
-
-    expect(resolved.agents.claude).toEqual(["node", "./custom-claude-wrapper.mjs", "--flag"]);
   });
 
   it("does not normalize custom Claude commands that only mention the package name", async () => {

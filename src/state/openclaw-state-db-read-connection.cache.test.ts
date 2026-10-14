@@ -7,13 +7,18 @@ import {
   trackSqliteStatementExecutions,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
+import {
+  buildAcpDatabaseSessionKey,
+  deleteAcpSessionMetaRows,
+  upsertAcpSessionMetaRow,
+} from "../acp/runtime/session-meta-keys.js";
 import * as executionIdentityContext from "../audit/execution-identity-context.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -137,15 +142,20 @@ function acpFixture() {
   const key = buildAcpDatabaseSessionKey("agent:main:acp:admission", "main");
   const command = { type: "acpSessions.metadata" as const, entries: [{ keys: [key] }] };
   const insert = (sessionKey: string, runtimeName: string) =>
-    peer
-      .prepare(
-        "INSERT INTO acp_sessions (session_key, backend, agent, runtime_session_name, mode, state, last_activity_at, updated_at) VALUES (?, 'fixture', 'main', ?, 'persistent', 'idle', 1, 1)",
-      )
-      .run(sessionKey, runtimeName);
+    upsertAcpSessionMetaRow(peer, {
+      session_key: sessionKey,
+      backend: "fixture",
+      agent: "main",
+      runtime_session_name: runtimeName,
+      mode: "persistent",
+      state: "idle",
+      last_activity_at: 1,
+      updated_at: 1,
+    });
   return { ...state, peer, key, command, insert };
 }
 
-it("batches ACP rows with revision admission and retains the following warm lookup", async () => {
+it("retains ACP cohorts across unrelated writes and refreshes committed ACP changes", async () => {
   const { peer, key, command, workerRead, insert } = acpFixture();
   const read = () => workerRead(command);
   const native = sqlite.requireNodeSqlite();
@@ -178,10 +188,12 @@ it("batches ACP rows with revision admission and retains the following warm look
         ),
       ).toHaveLength(0);
       await check("inserted", 0);
-      peer.prepare("UPDATE acp_sessions SET runtime_session_name='updated'").run();
+      peer.prepare("UPDATE config_machine_state SET updated_at_ms=2").run();
+      await check("inserted", 0);
+      insert(key, "updated");
       await check("updated", 1);
       await check("updated", 0);
-      peer.prepare("DELETE FROM acp_sessions").run();
+      deleteAcpSessionMetaRows(peer, [key]);
       await check(null, 1);
       await check(null, 0);
     } finally {
@@ -198,7 +210,7 @@ it("keeps ACP authorizer refusal through batched admission", async () => {
     insert(key, "private");
     expect(await workerRead(command)).toMatchObject({ ok: true });
     const reader = read(({ db }) => db);
-    reader.setAuthorizer((action, table) =>
+    requireNativeSqliteDatabase(reader).setAuthorizer((action, table) =>
       action === constants.SQLITE_READ && table === "acp_sessions"
         ? constants.SQLITE_DENY
         : constants.SQLITE_OK,
@@ -261,7 +273,7 @@ it("refreshes ACP rows while retaining the admitted same-file format", async () 
     peer
       .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
       .run(CONTENT_VERSION_KEY, String(OPENCLAW_STATE_SCHEMA_VERSION + 1));
-    peer.exec("UPDATE acp_sessions SET runtime_session_name = 'after'");
+    insert(key, "after");
     const observation = observeSqliteReadSql(sqlite.requireNodeSqlite().StatementSync.prototype);
     try {
       expect(await workerRead(command)).toMatchObject({
@@ -579,7 +591,7 @@ it.skipIf(typeof sqlite.requireNodeSqlite().DatabaseSync.prototype.setAuthorizer
     const reader = read(({ db }) => db);
     expect(value()).toBe(1);
     let allowed = true;
-    reader.setAuthorizer((action, table) =>
+    requireNativeSqliteDatabase(reader).setAuthorizer((action, table) =>
       !allowed && action === constants.SQLITE_READ && table === "config_machine_state"
         ? constants.SQLITE_DENY
         : constants.SQLITE_OK,
@@ -652,8 +664,10 @@ it.each(["between reads", "during inspection"] as const)(
     const { pathname, read, workerRead, workerValue } = fixture();
     const reader = read(({ db }) => db);
     const peer = sqlite.openNodeSqliteDatabase(pathname);
-    const schemaQueries = trackSqliteStatementExecutions(reader, ["schema"], (sql) =>
-      /\b(?:sqlite_schema|sqlite_master)\b/iu.test(sql) ? "schema" : null,
+    const schemaQueries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(reader),
+      ["schema"],
+      (sql) => (/\b(?:sqlite_schema|sqlite_master)\b/iu.test(sql) ? "schema" : null),
     );
     const original = executionIdentityContext.inspectExecutionIdentityRunInDatabase;
     const inspect = vi.spyOn(executionIdentityContext, "inspectExecutionIdentityRunInDatabase");

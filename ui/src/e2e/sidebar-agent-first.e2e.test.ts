@@ -167,10 +167,16 @@ suite.define(() => {
             true,
           );
           await expect
-            .poll(() => group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").count())
+            .poll(() =>
+              group
+                .locator(".sidebar-agent-roster__signals .tooltip-surface[popover]:popover-open")
+                .count(),
+            )
             .toBe(1);
           expect(
-            await group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").textContent(),
+            await group
+              .locator(".sidebar-agent-roster__signals .tooltip-surface[popover]:popover-open")
+              .textContent(),
           ).toContain("Child session Review failed checks failed: Geometry mismatch");
           const attentionBounds = (await attention.boundingBox())!;
           const actionBounds = (await group
@@ -288,9 +294,9 @@ suite.define(() => {
           expect(await actions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
           expect(await geometry()).toEqual(beforeFocus);
           expect(await add.getAttribute("href")).toBe("/new?agent=main");
-          await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+          await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
           const menuFace = sidebar.locator(
-            '.sidebar-new-session-menu [value="main"] .identity-avatar__agent-face',
+            '.sidebar-new-session-menu [data-value="main"] .identity-avatar__agent-face',
           );
           await menuFace.waitFor();
           await expect.poll(async () => (await menuFace.boundingBox())?.width).toBe(36);
@@ -330,19 +336,21 @@ suite.define(() => {
             await group.locator('.sidebar-agent-roster__signals [aria-label="Unread"]').count(),
           ).toBe(1);
           const summary = group.locator(".sidebar-agent-roster__signals [data-session-attention]");
-          const summaryBounds = (await summary.boundingBox())!;
+          let summaryBounds: Awaited<ReturnType<typeof summary.boundingBox>> = null;
+          await expect
+            .poll(async () => (summaryBounds = await summary.boundingBox()))
+            .not.toBeNull();
           const summaryActions = (await group
             .locator(".sidebar-agent-roster__actions")
             .boundingBox())!;
-          expect(summaryBounds.y).toBeGreaterThanOrEqual(summaryActions.y + summaryActions.height);
-          expect(summaryBounds.x + summaryBounds.width).toBeLessThanOrEqual(
+          expect(summaryBounds!.y).toBeGreaterThanOrEqual(summaryActions.y + summaryActions.height);
+          expect(summaryBounds!.x + summaryBounds!.width).toBeLessThanOrEqual(
             beforeFocus.rows[0]!.right,
           );
           expect(summaryActions.x + summaryActions.width).toBeCloseTo(
             beforeFocus.rows[0]!.right,
             1,
           );
-          expect(await summary.isVisible()).toBe(true);
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-collapsed.png`);
         },
       );

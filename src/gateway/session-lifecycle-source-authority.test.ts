@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
@@ -13,6 +13,7 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import {
   appendTranscriptMessage,
@@ -45,19 +46,15 @@ import {
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 
-const routing = vi.hoisted(() => ({ loadSessionEntry: vi.fn() }));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: routing.loadSessionEntry,
-}));
-
 let state: OpenClawTestState;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", label: "lifecycle-source" });
 });
 afterAll(async () => state?.cleanup());
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 afterEach(() => {
-  routing.loadSessionEntry.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -107,12 +104,6 @@ async function recoveryFixture(name: string) {
       },
     },
   );
-  // Routing is already prepared by the caller; this boundary owns patch and source SQL.
-  routing.loadSessionEntry.mockReturnValue({
-    ...target,
-    canonicalKey: sessionKey,
-    entry: loadSessionEntry(target),
-  });
   const source = createHarnessCompletionSourceAssertion({ claim, storePath: target.storePath });
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "lifecycle-source", source);
   const admittedRunContext = await admission.admit("embedded");
@@ -300,11 +291,6 @@ it("keeps a recovered tool caller's source preparation through in-process Stop a
       startedAt: 1_000,
       lifecycleRunId: runId,
       activeWriterRunId: runId,
-    });
-    routing.loadSessionEntry.mockReturnValue({
-      ...target,
-      canonicalKey: target.sessionKey,
-      entry: loadSessionEntry(target),
     });
     const caller = expectDefined(
       createAdmittedGatewayToolCallerIdentity({

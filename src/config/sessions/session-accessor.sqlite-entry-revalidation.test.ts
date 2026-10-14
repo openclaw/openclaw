@@ -23,6 +23,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   loadExactSessionEntry,
@@ -52,6 +53,7 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   tempDirs.cleanup();
 });
 
@@ -66,6 +68,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-entry-revalidation-")),
     };
     scope = { agentId: "main", env, sessionKey };
+    setRuntimeConfigSnapshot({});
     await upsertSessionEntryCore(scope, {
       label: "original",
       sessionId: "session-1",
@@ -396,7 +399,7 @@ describe("SQLite session entry patch commit revalidation", () => {
             "UPDATE session_nodes SET entry_json = substr(entry_json, 1, length(entry_json) - 1) || ? WHERE session_key = ?",
           )
           .run(
-            ',"lifecycleRevision":42,"lifecycleRunId":"old","lifecycleRunId":null,"activeWriterRunId":false,"subagentRecovery":{"lastRunId":23,"sessionLifecycleRunId":null}}',
+            ',"lifecycleRevision":42,"lifecycleRunId":"old","lifecycleRunId":null,"activeWriterRunId":false,"deviceFolder":{"deviceId":"paired-host","path":"/home/example/project"},"subagentRecovery":{"lastRunId":23,"sessionLifecycleRunId":null}}',
             sessionKey,
           );
       } finally {
@@ -406,6 +409,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       const expected = {
         sessionId: "session-1",
         lifecycleRevision: 42,
+        deviceFolder: { deviceId: "paired-host", path: "/home/example/project" },
         lifecycleRunId: null,
         activeWriterRunId: false,
         subagentRecovery: { lastRunId: 23, sessionLifecycleRunId: null },
@@ -465,7 +469,7 @@ describe("SQLite session entry patch commit revalidation", () => {
 
   it("commits an unchanged persisted row after evicting the host handle during preparation", async () => {
     const persisted = await patchEntry("ordinary", () => {
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       expect(database.db.isOpen).toBe(false);
       return { label: "renamed" };
     });
@@ -540,7 +544,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       patchEntry("lifecycle", () => {
         setCanonicalSqliteSessionMainKey(database, "work");
         setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
         expect(database.db.isOpen).toBe(false);
         return null;
       }),

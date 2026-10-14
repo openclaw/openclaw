@@ -91,23 +91,44 @@ describe("subagent child authority policy", () => {
     }
   });
 
-  it("reports legacy suppression once across row publication copies", () => {
-    const entry: SubagentRunRecord = {
+  it("summarizes 5,000 legacy runs once per process, deduplicating only by run ID", () => {
+    const warn = vi.fn();
+    const entries: SubagentRunRecord[] = Array.from({ length: 5000 }, (_, index) => ({
       ...owned,
-      runId: "legacy-warning-policy",
-      createdAt: 23,
+      runId: `legacy-population-${index}`,
+      createdAt: index,
       requesterDisplayKey: "parent",
-      task: "legacy warning",
+      task: "legacy population",
       cleanup: "keep",
       execution: { status: "running" },
       childSessionIdentity: undefined,
-    };
-    const warn = vi.fn();
-    warnLegacySubagentAuthority(entry, warn);
-    warnLegacySubagentAuthority({ ...entry }, warn);
+    }));
+    const verified = { ...entries[0]!, childSessionIdentity: identity };
+    const mismatch = { ...entries[0]!, childSessionKey: "global" };
+    warnLegacySubagentAuthority([], warn);
+    warnLegacySubagentAuthority([verified, mismatch], warn);
+    expect(warn).not.toHaveBeenCalled();
+
+    warnLegacySubagentAuthority(
+      [
+        verified,
+        mismatch,
+        ...entries.flatMap((entry) => [
+          entry,
+          { ...entry, createdAt: entry.createdAt + 1, generation: 2 },
+        ]),
+      ],
+      warn,
+    );
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining("child-session effects suppressed"),
-      { runId: entry.runId },
+      {
+        count: 5000,
+        sampleRunIds: ["legacy-population-0", "legacy-population-1", "legacy-population-2"],
+      },
     );
+    warnLegacySubagentAuthority(entries, warn);
+    warnLegacySubagentAuthority([{ ...entries[0]!, runId: "later-legacy-run" }], warn);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

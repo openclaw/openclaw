@@ -1,5 +1,6 @@
 import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { projectSessionEntryPredicateChange } from "../config/sessions/session-accessor.sqlite-sharing-acquisition.js";
 import {
   pluginStatePublication,
   pluginStateReadDependenciesAffected,
@@ -49,6 +50,7 @@ export function createSessionRowPublication(owner: {
           publishedSource: row.publishedSource,
           storedEntry: entry,
           sharingEntry: entry,
+          entryAcquisitionPending: true,
         });
         return;
       }
@@ -150,6 +152,13 @@ export function createSessionRowPublication(owner: {
       previousFacts.entry.modelSelectionLocked === entry.modelSelectionLocked &&
       previousFacts.entry.pluginOwnerId === entry.pluginOwnerId &&
       previousFacts.entry.previousSessionId === entry.previousSessionId;
+    const activitySummaryWatermark =
+      projection?.activitySummaryWatermark ??
+      (sameSession ? previousFacts.activitySummaryWatermark : undefined);
+    const sameTranscript =
+      sameSession &&
+      previousFacts.activitySummaryWatermark?.generation === activitySummaryWatermark?.generation &&
+      previousFacts.activitySummaryWatermark?.maxSeq === activitySummaryWatermark?.maxSeq;
     // Entry-only writes preserve Board/transcript facts. Shared facets retain their
     // independent lifetime; a changed binding requires preparation by that owner.
     const databaseFacts: records.RetainedSessionRowDatabaseFacts | undefined =
@@ -158,7 +167,11 @@ export function createSessionRowPublication(owner: {
             sessionKey: row.key,
             entry,
             hasBoard: projection.hasBoard,
-            activitySummaryWatermark: projection.activitySummaryWatermark,
+            activitySummaryWatermark,
+            transcriptPreview: sameTranscript ? previousFacts.transcriptPreview : undefined,
+            transcriptTerminalModel: sameTranscript
+              ? previousFacts.transcriptTerminalModel
+              : undefined,
             runtimeOwnership: sameRuntimeOwner ? previousFacts.runtimeOwnership : undefined,
             runtimeOwnershipDependencies: sameRuntimeOwner
               ? previousFacts.runtimeOwnershipDependencies
@@ -175,6 +188,24 @@ export function createSessionRowPublication(owner: {
                 : undefined,
           }
         : undefined;
+    const participantEntry =
+      !prepared && !change.factsInvalidated && facts?.kind === "participants"
+        ? projectSessionEntryPredicateChange({ entry: row.sharingEntry }, facts)
+        : undefined;
+    if (participantEntry) {
+      const next = freezeJsonSnapshot(participantEntry);
+      const retained =
+        previousFacts && previousFacts.entry === row.sharingEntry
+          ? { ...previousFacts, entry: next }
+          : undefined;
+      records.invalidateDatabaseFacts(row, retained);
+      if (row.sharingEntry === row.storedEntry) {
+        acquirePublishedEntry(row, next, retained);
+      } else {
+        owner.defer({ ...row, sharingEntry: next });
+      }
+      return;
+    }
     if (
       !prepared &&
       !change.factsInvalidated &&
@@ -310,17 +341,14 @@ export function subscribeSessionRowPublications({
         ) {
           continue;
         }
-        row.databaseFactsRevision++;
-        row.pendingDatabaseFacts = undefined;
-        if (row.retainedDatabaseFacts) {
-          row.retainedDatabaseFacts = {
+        records.invalidateDatabaseFacts(
+          row,
+          row.retainedDatabaseFacts && {
             ...row.retainedDatabaseFacts,
             runtimeOwnership: undefined,
             runtimeOwnershipDependencies: undefined,
-          };
-        }
-        row.preparedRuntimeOwnership = undefined;
-        row.runtimeOwnershipDependencies = undefined;
+          },
+        );
         dirty.add(records.identity(row));
         changed.push(row);
       }
@@ -338,9 +366,11 @@ export function subscribeSessionRowPublications({
     sessionChanges.subscribeFacts(invalidateMembership),
     sessionChanges.subscribeProjection(mark),
     // Participant writers publish facts before their display-only lifecycle notice.
-    onSessionLifecycleEvent((change) =>
-      mark(change.reason === "participants" ? { ...change, facts: { kind: "unchanged" } } : change),
-    ),
+    onSessionLifecycleEvent((change) => {
+      if (change.reason !== "participants") {
+        mark(change);
+      }
+    }),
     onSessionIdentityMutation(mutateGeneration),
   ];
 }

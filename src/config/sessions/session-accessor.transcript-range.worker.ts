@@ -206,7 +206,7 @@ export function readClosedTranscriptTurnInDatabase(
               "identity.parent_id",
               "active.message_position",
               "rewrite.generation",
-              transcriptEventNavigationSql("event").as("event_json"),
+              transcriptEventNavigationSql(connection, "event").as("event_json"),
             ])
             .where("identity.session_id", "=", target.sessionId)
             .where("identity.event_id", "=", anchor.entryId)

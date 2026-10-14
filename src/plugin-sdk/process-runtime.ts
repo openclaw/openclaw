@@ -15,7 +15,7 @@ export {
   type SpawnResult,
 } from "../process/exec.js";
 export { withCommandProcessScope } from "../process/exec-spawn.js";
-export { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
+export { prepareOomScoreAdjustedSpawn, spawnOomScoreAdjusted } from "../process/linux-oom-score.js";
 export type { OomScoreAdjustedSpawn, OomWrapOptions } from "../process/linux-oom-score.js";
 export { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 export { createCpuTrackedWorker } from "../infra/worker-cpu.js";
@@ -39,3 +39,10 @@ export {
   isPidDefinitelyDead,
 } from "../shared/pid-alive.js";
 export { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
+
+export {
+  createOwnedStdioProcess,
+  closeOwnedStdioProcess,
+  type OwnedStdioProcess,
+  type OwnedStdioProcessOptions,
+} from "../process/owned-stdio.js";

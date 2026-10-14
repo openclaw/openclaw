@@ -206,6 +206,48 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-provider-key");
   });
 
+  it.each(["llama-cpp", "llmman"])(
+    "honors managed %s auth with a retained missing SecretRef at HTTP",
+    async (provider) => {
+      const ref = {
+        source: "env",
+        provider: "default",
+        id: "MISSING_MANAGED_EMBEDDING_KEY",
+      } as const;
+      vi.stubEnv(ref.id, undefined);
+      vi.stubEnv("LLMMAN_API_KEY", "synthetic-env-fallback");
+      const options: EmbeddingProviderCreateOptions = {
+        config: {
+          models: {
+            providers: {
+              [provider]: {
+                api: "openai-completions",
+                baseUrl,
+                apiKey: ref,
+                localService: { command: "/fixture/server" },
+                models: [],
+              },
+            },
+          },
+        },
+        provider,
+        model: "fixture-model",
+      };
+      const embed = async () => {
+        const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
+        return result.provider?.embed("hello");
+      };
+      if (provider === "llmman") {
+        await expect(embed()).rejects.toBeInstanceOf(UnresolvedSecretInputError);
+        expect(requests).toEqual([]);
+      } else {
+        await expect(embed()).resolves.toEqual(vector);
+        expect(requests[0]?.headers.authorization).toBe("Bearer llama-cpp-local");
+        expect(options.config.models?.providers?.[provider]?.apiKey).toEqual(ref);
+      }
+    },
+  );
+
   it.each([false, true])(
     "keeps metadata-only profile names literal with owned store = %s",
     async (ownedStore) => {
@@ -439,7 +481,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     },
     { name: "whitespace key", apiKey: "   ", authorization: undefined },
     { name: "omitted key", apiKey: undefined, authorization: undefined },
-  ])("preserves configured $name authentication at HTTP", async ({ apiKey, authorization }) => {
+  ])("keeps $name authentication with auth.order at HTTP", async ({ apiKey, authorization }) => {
     const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-profile-"));
     const profileId = "tenant-embeddings:default";
     try {
@@ -458,7 +500,10 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
       );
       const result = await openAICompatibleEmbeddingProviderAdapter.create({
         config: {
-          auth: { profiles: { [profileId]: { provider: "tenant-embeddings", mode: "api_key" } } },
+          auth: {
+            profiles: { [profileId]: { provider: "tenant-embeddings", mode: "api_key" } },
+            order: { "tenant-embeddings": [profileId] },
+          },
           agents: {
             ownership: "explicit",
             entries: { ops: {}, research: { agentDir } },

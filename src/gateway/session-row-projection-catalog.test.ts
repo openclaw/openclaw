@@ -47,11 +47,20 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     expect(read).not.toHaveBeenCalled();
     expect(refreshed).not.toHaveBeenCalled();
     const first = createDeferredCore();
+    const reading = createDeferredCore<typeof next>();
+    read.mockReturnValueOnce(reading.promise);
+    catalog.invalidate();
+    const inFlight = catalog.refresh();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: first.promise });
     next = new Map([
       ["main", undefined],
       ["other", other],
     ]);
+    reading.resolve(next);
+    await inFlight;
+    expect(catalog.current).toBe(original);
+    expect(refreshed).not.toHaveBeenCalled();
+    read.mockClear();
     await catalog.refresh();
     expect(catalog.current).toBe(original);
     expect(refreshed).not.toHaveBeenCalled();
@@ -61,9 +70,18 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
     await catalog.refresh();
     expect(catalog.current).toBe(original);
-    next = view(8_192);
+    const successor = createDeferredCore();
+    notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: successor.promise });
     first.resolve();
     await first.promise;
+    await catalog.refresh();
+    expect(catalog.current).toBe(original);
+    expect(refreshed).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+
+    next = view(8_192);
+    successor.resolve();
+    await successor.promise;
     notifyPreparedModelRuntimePublication({ phase: "published" });
     await catalog.refresh();
     expect(refreshed).toHaveBeenLastCalledWith(new Set());
@@ -96,7 +114,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     expect(catalog.current).toBe(next);
 
     const replacementRegistry = createEmptyPluginRegistry();
-    // First replace the policy owner, then its metadata; both retire global fallback facts.
+    // Registry and metadata identities alone do not change row policy.
     for (const nextMetadata of [metadataSnapshot, createPluginMetadataSnapshotFixture()]) {
       next = new Map([
         [
@@ -110,8 +128,37 @@ it("retains completed catalog facts during runtime replacement and adopts comple
       ]);
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
       await catalog.refresh();
-      expect(refreshed).toHaveBeenLastCalledWith(undefined);
+      expect(refreshed).toHaveBeenLastCalledWith(new Set());
       expect(catalog.current).toBe(next);
+    }
+    const harnessMetadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "unregistered-harness",
+          origin: "global",
+          activation: { onAgentHarnesses: ["synthetic"] },
+        },
+      ],
+    });
+    for (const config of [
+      {},
+      { plugins: { entries: { "unregistered-harness": { enabled: false } } } },
+    ]) {
+      next = new Map([
+        [
+          "other",
+          createPreparedGatewayModelCatalog({
+            entries: other.entries,
+            pluginRegistry: replacementRegistry,
+            metadataSnapshot: harnessMetadata,
+            config,
+          }),
+        ],
+      ]);
+      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+      await catalog.refresh();
+      // Config still controls an unloaded harness even with identical index and registrations.
+      expect(refreshed).toHaveBeenLastCalledWith(new Set(["other"]));
     }
   } finally {
     catalog.dispose();

@@ -93,6 +93,32 @@ describe("embedded-agent active-run steering", () => {
     expect(queueMessage).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])(
+    "checks source admission before V1 transport (revoked=%s)",
+    async (revoked) => {
+      let current = true;
+      const queueMessage = vi.fn(async () => {});
+      start({
+        messageInjection: {
+          isAvailable: () => {
+            current = !revoked;
+            return true;
+          },
+          queueMessage,
+        },
+      });
+      const outcome = await queueAsync(sessionId, "plugin guidance", {
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Plugin is no longer loaded");
+          }
+        },
+      });
+      expect(outcome.queued).toBe(!revoked);
+      expect(queueMessage).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    },
+  );
+
   it.each([true, false])("claims pending answers without steering: %s", async (claimed) => {
     const queueMessage = vi.fn(async () => {});
     start({
@@ -120,8 +146,8 @@ describe("embedded-agent active-run steering", () => {
       const runId = "hidden-question-owner",
         ownerRun = createQueueTestRun({ prompt: "pending question" });
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(ownerRun));
-      const fingerprint = operation.bindToolAuthorityRoute({
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(ownerRun));
+      const fingerprint = await operation.bindToolAuthorityRouteAsync({
         provider: ownerRun.run.provider,
         model: ownerRun.run.model,
       });

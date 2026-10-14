@@ -1,9 +1,11 @@
 import { quickJsWorkerTestEntrypoint } from "../../extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts";
 import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
+import { codexHistoryWorkerEntrypoint } from "../../extensions/codex/session-history-worker-entrypoint.ts";
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
 import { memoryForgetPlanningObserverEntrypoint } from "../../extensions/memory-core/src/memory-forget-planning-observer-entrypoint.test-support.ts";
+import { memoryAdmissionRestartEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
 import { vectorKnnParentEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts";
 import { realtimeAudioTestEntrypoints } from "../../extensions/openai/realtime-audio-worker-entrypoints.test-support.ts";
@@ -272,6 +274,7 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/parallels/parallels-exec.py",
   ".github/workflows/plugin-npm-release.yml",
   "scripts/lib/vitest-worker-bootstrap.mts",
+  "scripts/lib/vitest-worker-descriptor.mts",
 ];
 
 // Test-only roots share the invocation generation without changing package entries.
@@ -307,9 +310,11 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(realtimeAudioTestEntrypoints),
     quickJsWorkerTestEntrypoint,
     codexCatalogPageWorkerEntrypoint,
+    codexHistoryWorkerEntrypoint,
     nativeWorkerTestEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
+    memoryAdmissionRestartEntrypoint,
     memoryForgetFaultEntrypoint,
     memoryForgetPlanningObserverEntrypoint,
     sqliteReadOnlyCompileCacheParentEntrypoint,

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,12 +9,17 @@ import {
   claimMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import * as entryAdmission from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as entryPatch from "../../config/sessions/session-entry-patch.js";
@@ -141,6 +146,9 @@ async function createAcknowledgedClaim() {
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
+
   it.each(["absent", "persisted"] as const)(
     "leaves source-less lifecycle admission to its existing writer when the recorder is %s",
     async (mode) => {
@@ -192,6 +200,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     "settles source-less execution custody through $completion for $owner without claiming delivery authority",
     ({ completion, owner, metadata }) =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const scope = {
           agentId: "main",
           storePath: path.join(state.sessionsDir(), "sessions.json"),
@@ -282,7 +291,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
   describe("placement observations", () => {
     const placementDirs = useStateDatabaseTempDirs();
 
-    async function createPlacementAdmission() {
+    async function createPlacementAdmission(local = false) {
       const root = placementDirs.make("openclaw-reply-placement-admission-");
       const scope = {
         agentId: "main",
@@ -294,11 +303,13 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const service = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase({ path: path.join(root, "placement.sqlite") }),
       });
-      await service.startDispatch({
-        agentId: scope.agentId,
-        sessionKey: scope.sessionKey,
-        sessionId: entry.sessionId,
-      });
+      if (!local) {
+        await service.startDispatch({
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          sessionId: entry.sessionId,
+        });
+      }
       const context: placementContext.SessionWorkerPlacementContext = {
         workerSessionPlacementService: service,
       };
@@ -359,6 +370,31 @@ describe("createReplyRestartRecoveryClaimController", () => {
       }
     });
 
+    it("admits a follow-up while the preceding local turn finishes during session preparation", async () => {
+      await using fixture = await createPlacementAdmission(true);
+      const predecessor = await fixture.service.claimTurn({
+        ...fixture.scope,
+        sessionId: fixture.entry.sessionId,
+        owner: { kind: "local" },
+        runId: "preceding-run",
+        claimId: "preceding-claim",
+      });
+      const load = entryAdmission.loadSessionEntryForAdmission;
+      using read = vi.spyOn(entryAdmission, "loadSessionEntryForAdmission");
+      read.mockImplementationOnce(async (...args) => {
+        const entry = await load(...args);
+        await fixture.service.releaseTurn(predecessor);
+        return entry;
+      });
+
+      await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
+      expect(fixture.recorder.hasPersisted()).toBe(true);
+      expect(await fixture.service.getAsync(fixture.entry.sessionId)).toMatchObject({
+        state: "local",
+        turnClaim: null,
+      });
+    });
+
     it("refuses an unavailable placement observation instead of reading synchronously", async () => {
       await using fixture = await createPlacementAdmission();
       fixture.context.workerSessionPlacementService = {
@@ -384,16 +420,17 @@ describe("createReplyRestartRecoveryClaimController", () => {
       "service-removal",
       "pending-input-persisted",
       "terminal-source",
-    ] as const)("revalidates %s while placement preparation is pending", async (change) => {
+    ] as const)("revalidates %s while session preparation is pending", async (change) => {
       await using fixture = await createPlacementAdmission();
       const prepared = createDeferred();
       const resume = createDeferred();
-      const prepare = fixture.service.prepareRuntimeRefresh.bind(fixture.service);
-      vi.spyOn(fixture.service, "prepareRuntimeRefresh").mockImplementation(async (sessionId) => {
-        const observation = await prepare(sessionId);
+      const load = entryAdmission.loadSessionEntryForAdmission;
+      using read = vi.spyOn(entryAdmission, "loadSessionEntryForAdmission");
+      read.mockImplementationOnce(async (...args) => {
+        const entry = await load(...args);
         prepared.resolve();
         await resume.promise;
-        return observation;
+        return entry;
       });
       const admission = fixture.controller.admitUserTurn(fixture.recorder);
       const outcome = admission.catch((error: unknown) => error);

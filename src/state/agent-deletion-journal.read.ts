@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -8,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -51,9 +51,6 @@ export async function readAgentDeletionRecoveryHoldsInWorker(
     { type: "agentRecovery.holds", input: { statePath } },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.holds")) {
-    throw new Error("Unexpected agent recovery holds result");
-  }
   return reply?.held ?? [];
 }
 
@@ -66,15 +63,12 @@ export async function readAgentDeletionJournalForCreation(
     { type: "agentRecovery.creationJournal", input: { agentId: normalizeAgentId(agentId) } },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.creationJournal")) {
-    throw new Error("Unexpected agent creation journal result");
-  }
   return reply?.journal;
 }
 
 /** Completed cleanup still retains a deletion tombstone. */
 export function readAgentDeletionJournalStatusInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): AgentDeletionJournalStatus {
   const cached = getAgentDeletionJournalStatus(database, agentId);
@@ -106,9 +100,6 @@ export async function readAgentDeletionJournalStatusInWorker(
       { type: "agentDeletionJournal.status", agentId: normalizeAgentId(agentId) },
       { current: true, signal },
     );
-    if (reply && (!reply.ok || reply.type !== "agentDeletionJournal.status")) {
-      throw new Error("Unexpected agent deletion journal read result");
-    }
     return reply?.status ?? "absent";
   });
 }
@@ -126,7 +117,7 @@ export function parseAgentDeletionDatabasePaths(value: string): string[] {
 
 /** Read existing deletion history without initializing or repairing the journal. */
 export function readRetainedAgentDeletionsFromDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   statePath: string,
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): AgentDeletionJournalDisposition {
@@ -259,9 +250,6 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
       { context: readContext, current: true },
     );
     assertReadCurrent();
-    if (reply && (!reply.ok || reply.type !== "agentDatabaseDeletion.snapshot")) {
-      throw new Error("Unexpected agent database deletion snapshot result");
-    }
     return { snapshot: reply?.snapshot, assertCurrent: assertReadCurrent };
   };
   const read = () => readSnapshot(context);

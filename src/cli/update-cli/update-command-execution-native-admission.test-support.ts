@@ -1,3 +1,5 @@
+import "../../snapshot/database-backup.js";
+import "../../infra/backup-sqlite-snapshot.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -5,13 +7,14 @@ import * as bindings from "../../daemon/managed-gateway-bindings.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import * as services from "../../daemon/service.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
-import { bindExecutionGuards } from "./update-command-execution.test-support.js";
+import { bindExecutionGuards, schemaContext } from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import * as verification from "./update-command-verification.js";
@@ -26,6 +29,69 @@ export function registerNativeAdmissionTests({
   mocks,
   successfulUpdate,
 }: Fixtures) {
+  it.each(["auto", "installed", "git-to-package"] as const)(
+    "refuses an engine-incompatible package before publication with %s admission",
+    async (route) =>
+      withTestDir({ prefix: "engine-before-activation-" }, async (dir) => {
+        const anchor = path.join(dir, "plugins", "workboard", "workboard.sqlite");
+        const candidate = path.join(dir, "candidate");
+        await fs.mkdir(path.dirname(anchor), { recursive: true });
+        await fs.mkdir(candidate);
+        await fs.writeFile(path.join(candidate, "package.json"), '{"name":"openclaw"}');
+        const runtime = path.join(dir, "entry.js");
+        await fs.writeFile(runtime, "original runtime");
+        {
+          using db = openNodeSqliteDatabase(anchor);
+          db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+          db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
+            "e3b4e990-c0f1-4ec7-a5d1-4e1c6824f80f",
+            "postgres",
+            "retained_workboard",
+          );
+        }
+        const before = await fs.readFile(anchor);
+        const context = schemaContext("default");
+        const env = { OPENCLAW_STATE_DIR: dir };
+        mocks.captureSchemaContext.mockResolvedValue({
+          ...context,
+          env,
+          readEnv: env,
+          config: { plugins: { entries: { workboard: { enabled: true } } } },
+        });
+        mocks.captureManagedPreflight.mockResolvedValue(undefined);
+        const params = executionParams("package");
+        params.root = dir;
+        if (route === "git-to-package") {
+          params.installKind = "git";
+        } else if (route === "installed") {
+          params.opts.admission = "installed";
+        }
+        const events: string[] = [];
+        mocks.runPackageUpdate.mockImplementation(
+          async ({
+            validateCandidate,
+          }: {
+            validateCandidate: (root: string) => Promise<unknown>;
+          }) => {
+            await validateCandidate(candidate);
+            events.push("publish");
+            return successfulUpdate;
+          },
+        );
+        const result = await executeMutableUpdate(await bindExecutionGuards(params));
+        expect(result?.result).toMatchObject({
+          status: "error",
+          reason: "database-engine-preflight",
+        });
+        expect(events).toEqual([]);
+        expect(mocks.serviceStopped).toBe(false);
+        expect(mocks.validateCanary).not.toHaveBeenCalled();
+        expect(await fs.readFile(anchor)).toEqual(before);
+        expect(await fs.readdir(path.dirname(anchor))).toEqual(["workboard.sqlite"]);
+        expect(await fs.readFile(runtime, "utf8")).toBe("original runtime");
+      }),
+  );
+
   it.each(["package", "staged", "git"] as const)(
     "refuses an unsupported native receiver before activation: %s",
     async (route) =>

@@ -333,13 +333,20 @@ call. Collection is stored before summarization, which may take several minutes.
 
 ### Schedule
 
-| Key                           | Default   | Behavior                                                                                                      |
-| ----------------------------- | --------- | ------------------------------------------------------------------------------------------------------------- |
-| `schedule.closedDayUtc`       | `"00:05"` | Daily run time in `HH:MM` UTC, before jitter. Generates yesterday's closed report and today's partial report. |
-| `schedule.intradayEveryHours` | `4`       | Refresh today's report on aligned UTC hour boundaries; integer from `0` to `24`. `0` disables intraday runs.  |
-| `schedule.jitterMinutes`      | `5`       | Maximum random delay added to scheduled runs; integer from `0` to `59`.                                       |
-| `schedule.weekly`             | `true`    | Refresh the current ISO week aggregate after daily collection.                                                |
-| `schedule.monthly`            | `true`    | Refresh the current month aggregate after daily collection.                                                   |
+| Key                           | Default   | Behavior                                                                                                             |
+| ----------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
+| `schedule.enabled`            | `true`    | Run automatic collection and catch-up. `false` keeps stored reports, work sessions, and manual generation available. |
+| `schedule.closedDayUtc`       | `"00:05"` | Daily run time in `HH:MM` UTC, before jitter. Generates yesterday's closed report and today's partial report.        |
+| `schedule.intradayEveryHours` | `4`       | Refresh today's report on aligned UTC hour boundaries; integer from `0` to `24`. `0` disables intraday runs.         |
+| `schedule.jitterMinutes`      | `5`       | Maximum random delay added to scheduled runs; integer from `0` to `59`.                                              |
+| `schedule.weekly`             | `true`    | Refresh the current ISO week aggregate after daily collection.                                                       |
+| `schedule.monthly`            | `true`    | Refresh the current month aggregate after daily collection.                                                          |
+
+To retain report readers without automatic collection, set `schedule.enabled: false`.
+Status reports `scheduleEnabled: false` and an empty `nextDue` object. Manual
+`generate` commands can still collect a requested day and refresh its configured
+weekly and monthly aggregates. This setting does not disable the plugin or change
+its source credential requirements.
 
 Only one run executes at a time. Scheduled work waits for an active run;
 manual generation is rejected while another run is active. Runs have a

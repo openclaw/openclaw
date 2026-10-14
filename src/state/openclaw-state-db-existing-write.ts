@@ -10,9 +10,11 @@ import {
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import {
   assertSqliteSchemaContains,
+  getCanonicalSqliteNamedIndexContracts,
   getCanonicalSqliteTableNames,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   assertTransactionUsable,
@@ -164,6 +166,12 @@ function createExistingOpenClawStateWriter(
       .digest("hex")}`,
     (value) => (typeof value === "number" ? value : undefined),
   );
+  const ensureAdditiveSchema = contract.initializeAdditiveSchema
+    ? createSqliteSchemaEnsurer(() => contract.schemaSql, {
+        tables: getCanonicalSqliteTableNames(contract.schemaSql),
+        indexes: getCanonicalSqliteNamedIndexContracts(contract.schemaSql).map(({ name }) => name),
+      })
+    : undefined;
   let closed = false;
   return {
     run<T>(operation: ExistingWriteOperation<T>, currentOptions: ExistingWriteOptions) {
@@ -228,7 +236,8 @@ function createExistingOpenClawStateWriter(
               ...contract.schemaCompatibility,
               allowedMissingTables: getCanonicalSqliteTableNames(contract.schemaSql),
             });
-            db.exec(contract.schemaSql); // sqlite-allow-raw -- Declared canonical feature-local additive DDL only.
+            admitSqliteSchema(db);
+            ensureAdditiveSchema?.(db);
             assertSqliteSchemaContains(
               db,
               pathname,

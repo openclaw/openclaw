@@ -1,6 +1,6 @@
 import { createMemo, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
@@ -44,6 +44,8 @@ const SESSION_GROUP_MODE_LABELS = {
 } as const satisfies Record<SessionsGroupBy, string>;
 
 export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JSX.Element {
+  let trigger!: HTMLButtonElement;
+  let popover: PopoverHandle | undefined;
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
     ["activeMinutes", "minutes", "sessionsView.active"],
@@ -78,24 +80,35 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
   return (
     <>
       <button
+        ref={(node) => {
+          trigger = node;
+        }}
         id="sessions-filter-popover-trigger"
         type="button"
         class={["btn btn--sm sessions-filter-popover__trigger", { active: active() }]}
         title={t("sessionsView.filters")}
         aria-label={t("sessionsView.filters")}
         aria-haspopup="dialog"
+        aria-controls="sessions-filter-popover"
         aria-expanded="false"
+        onClick={() => popover?.overlay.request(!popover.overlay.open)}
       >
         <Icon name="listFilter" />
       </button>
-      <wa-popover
-        ref={syncPopoverLabel}
+      <Popover
+        id="sessions-filter-popover"
+        ref={(handle) => {
+          popover = handle;
+        }}
+        anchor={trigger}
+        label={t("sessionsView.filters")}
         class="sessions-filter-popover"
-        for="sessions-filter-popover-trigger"
         placement="bottom-end"
-        without-arrow
-        onWa-show={syncPopoverExpanded}
-        onWa-hide={syncPopoverExpanded}
+        onOpenChange={(open) => {
+          if (open) {
+            popover?.overlay.surface.focus({ preventScroll: true });
+          }
+        }}
       >
         <div class="sessions-filter-popover__panel">
           <div class="sessions-filter-popover__fields">
@@ -189,7 +202,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
             </button>
           ) : undefined}
         </div>
-      </wa-popover>
+      </Popover>
     </>
   );
 }

@@ -3,16 +3,14 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
-  applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
   loadExactSessionEntry,
   loadTranscriptEvents,
+  resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
@@ -23,22 +21,24 @@ import {
 
 describe("internal session effects", () => {
   const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-internal-session-effects-");
-  it("keeps hidden effects from an incognito run in the sentinel store", async () => {
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
-    try {
-      const target = await prepareInternalSessionEffectsSession({
-        agentId: "main",
-        runId: "incognito-run",
-        storePath,
-      });
+  it("keeps hidden effects from an incognito run in its memory owner", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDirs.make() }, async () => {
+      const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+      try {
+        const target = await prepareInternalSessionEffectsSession({
+          agentId: "main",
+          runId: "incognito-run",
+          storePath,
+        });
 
-      expect(target.sessionKey).toMatch(
-        /^agent:main:internal-session-effects:incognito-incognito-run-/,
-      );
-      expect(loadExactSessionEntry(target)?.entry.incognito).toBe(true);
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-    }
+        expect(target.sessionKey).toMatch(
+          /^agent:main:internal-session-effects:incognito-incognito-run-/,
+        );
+        expect(loadExactSessionEntry(target)?.entry.incognito).toBe(true);
+      } finally {
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+      }
+    });
   });
 
   it("does not archive an incognito internal-effects transcript during rotation", async () => {
@@ -71,29 +71,28 @@ describe("internal session effects", () => {
         }
         const nextTranscript = path.join(dir, "next-internal.jsonl");
 
-        await applySessionEntryLifecycleMutation({
+        const reset = await resetSessionEntryLifecycle({
           agentId: "main",
-          activeSessionKey: target.sessionKey,
           storePath,
-          upserts: [
-            {
-              sessionKey: target.sessionKey,
-              entry: {
-                ...previousEntry,
-                sessionFile: nextTranscript,
-                sessionId: "internal-session-effects-rotated",
-                updatedAt: Date.now(),
-              },
-              resetBoundary: { context: "preserve-tail", reason: "reset", cwd: dir },
-            },
-          ],
-          skipMaintenance: true,
+          target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+          buildNextEntry: () => ({
+            ...previousEntry,
+            sessionFile: nextTranscript,
+            sessionId: "internal-session-effects-rotated",
+            updatedAt: Date.now(),
+          }),
+          resetBoundary: { context: "preserve-tail", reason: "reset", cwd: dir },
         });
 
+        expect(reset.archivedTranscripts).toEqual([]);
+        expect(loadExactSessionEntry(target)?.entry).toMatchObject({
+          sessionId: "internal-session-effects-rotated",
+          sessionFile: nextTranscript,
+        });
         expect(await fs.readdir(dir)).toContain("private-internal.jsonl");
         expect((await fs.readdir(dir)).some((name) => name.includes(".reset."))).toBe(false);
       } finally {
-        closeOpenClawAgentDatabasesForTest();
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
       }
     });
   });

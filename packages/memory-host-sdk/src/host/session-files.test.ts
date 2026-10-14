@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -90,6 +91,10 @@ async function upsertTestSessionEntries(
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
+  beforeEach(async () => {
+    await captureRuntimeConfigAsyncReader()();
+  });
+
   it("surfaces unexpected archive-directory scan failures", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
@@ -270,6 +275,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    await captureRuntimeConfigAsyncReader()();
     await upsertTestSessionEntries(storePath, {
       "agent:main:chat:custom": {
         sessionFile: "custom-thread.jsonl",

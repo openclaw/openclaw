@@ -332,18 +332,21 @@ describe("transcript payload storage boundary", () => {
         db
           .selectFrom("transcript_events")
           .select((eb) => [
-            transcriptEventNavigationSql().as("navigation"),
-            transcriptEventResetNavigationSql().as("reset"),
-            transcriptEventModelNavigationSql().as("model"),
-            transcriptEventModelBytesSql(sql.lit(0)).as("modelBytes"),
-            transcriptEventModelBytesSql(sql.lit(1)).as("modelWithoutCheckpointBytes"),
-            transcriptEventWithoutCustomDataBytesSql().as("withoutCustomDataBytes"),
+            transcriptEventNavigationSql(database).as("navigation"),
+            transcriptEventResetNavigationSql(database).as("reset"),
+            transcriptEventModelNavigationSql(database).as("model"),
+            transcriptEventModelBytesSql(database, sql.lit(0)).as("modelBytes"),
+            transcriptEventModelBytesSql(database, sql.lit(1)).as("modelWithoutCheckpointBytes"),
+            transcriptEventWithoutCustomDataBytesSql(database).as("withoutCustomDataBytes"),
             eb
-              .fn<string>("json_extract", [transcriptEventNavigationSql(), eb.val("$.type")])
+              .fn<string>("json_extract", [
+                transcriptEventNavigationSql(database),
+                eb.val("$.type"),
+              ])
               .as("first_type"),
             eb
               .fn<string>("json_extract", [
-                transcriptEventNavigationSql(),
+                transcriptEventNavigationSql(database),
                 eb.val("$.message.role"),
               ])
               .as("first_role"),
@@ -355,16 +358,16 @@ describe("transcript payload storage boundary", () => {
         db
           .selectFrom("transcript_events")
           .select((eb) => [
-            projectResetBoundaryNavigationSql(nativeFixtureEvent).as("reset"),
-            projectModelContextNavigationSql(nativeFixtureEvent).as("model"),
+            projectResetBoundaryNavigationSql(database, nativeFixtureEvent).as("reset"),
+            projectModelContextNavigationSql(database, nativeFixtureEvent).as("model"),
             eb
               .fn<number>("octet_length", [
-                projectModelContextEventSql(nativeFixtureEvent, sql.lit(0)),
+                projectModelContextEventSql(database, nativeFixtureEvent, sql.lit(0)),
               ])
               .as("modelBytes"),
             eb
               .fn<number>("octet_length", [
-                projectModelContextEventSql(nativeFixtureEvent, sql.lit(1)),
+                projectModelContextEventSql(database, nativeFixtureEvent, sql.lit(1)),
               ])
               .as("modelWithoutCheckpointBytes"),
             eb
@@ -428,6 +431,7 @@ describe("transcript payload storage boundary", () => {
                 .selectFrom("transcript_events")
                 .select(
                   projectModelContextEventSql(
+                    database,
                     nativeFixtureEvent,
                     sql.val(omitCheckpoint),
                     omission,
@@ -443,11 +447,12 @@ describe("transcript payload storage boundary", () => {
                   .selectFrom("transcript_events")
                   .select((eb) =>
                     projectModelContextEventSql(
+                      database,
                       transcriptEventJsonSql(database),
                       eb.val(omitCheckpoint),
                       omission,
                       eb.fn("json_extract", [
-                        transcriptEventNavigationSql(),
+                        transcriptEventNavigationSql(database),
                         eb.val("$.message.role"),
                       ]),
                     ).as("event"),

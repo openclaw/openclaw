@@ -6,7 +6,10 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/shared-
 import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "../../gateway/session-sharing.test-utils.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
@@ -15,11 +18,16 @@ import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.js";
 import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 it.each([false, true])(
   "retains foreign input authority through transcript rewrite (revoked: %s)",
   async (revoked) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
+      ensureUserProfilesSchema({});
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = roleClient("view", "foreign-mirror-member");
       const profileId = expectDefined(client.authenticatedUserProfile, "fixture profile").profileId;
       const source = {

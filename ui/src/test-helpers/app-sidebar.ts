@@ -1,3 +1,4 @@
+import { flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type {
   SessionCatalogPullRequestSummary,
@@ -7,8 +8,8 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import { createApplicationNavigationPreferences } from "../app/bootstrap-navigation-preferences.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type {
   ApplicationContext,
@@ -17,12 +18,8 @@ import type {
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { ApplicationOverlays } from "../app/overlays-types.ts";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
-import type { SessionDataController } from "../components/session-data-controller.ts";
-import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
-import type { ContextualSidebar } from "../components/sidebar-context-state.ts";
+import type { AppSidebarElement, AppSidebarOwner } from "../components/app-sidebar.tsx";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
-import type { GatewayStatus } from "../lib/gateway-status.ts";
 import {
   createSessionCapability,
   type SessionCapability,
@@ -39,12 +36,12 @@ import {
   hiddenScopeUpgradeCapability,
 } from "./application-context.ts";
 import { gatewayHelloForMethods, SESSION_MUTATION_TEST_METHODS } from "./gateway-methods.ts";
+import { waitForSolid } from "./solid-settle.ts";
 
-// The attention widget owns independent health RPC tests. Keep those requests
-// out of sidebar client call-order assertions.
-// Sidebar attention is inert in this harness; cover attention rendering in
-// sidebar-attention.test.ts, not app-sidebar cases.
-vi.mock("../components/sidebar-attention.ts", () => ({}));
+// mock-isolation: Keep attention health RPCs out of sidebar call-order assertions; sidebar-attention.test.ts owns its rendering.
+vi.mock("../components/sidebar-attention.tsx", () => ({
+  SidebarAttention: () => document.createElement("openclaw-sidebar-attention"),
+}));
 
 export type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
 type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
@@ -54,59 +51,8 @@ const sidebarSessionGatewayBindings = new WeakMap<
   (gateway: ApplicationGateway, selection: ApplicationContext["agentSelection"]) => void
 >();
 
-export type SidebarLifecycleState = HTMLElement & {
-  basePath: string;
-  hiddenSessionCatalogIds: ReadonlySet<string>;
-  activeRouteId?: string;
-  contextualSidebar?: ContextualSidebar;
-  router?: AppSidebarSessionNavigationElement["router"];
-  enabledRouteIds?: readonly NavigationRouteId[];
-  connected: boolean;
-  connectionStatus: GatewayStatus | null;
-  lastError: string | null;
-  storedOutboxes: AppSidebarSessionNavigationElement["storedOutboxes"];
-  terminalAvailable: boolean;
-  catalogOpenTarget: "viewer" | "terminal";
-  canPairDevice: boolean;
-  sidebarEntries: readonly string[];
-  sidebarAgentsMode: "chip" | "roster";
-  navigationVisible: boolean;
-  sidebarLiveActivity: boolean;
-  onUpdateSidebarEntries?: (entries: string[]) => void;
-  pinnedAgentIds: readonly string[];
-  readonly sessionOwnerFilterId: string | null;
-  setSessionOwnerFilter: AppSidebarSessionNavigationElement["setSessionOwnerFilter"];
-  sessionKey: string;
-  onNavigate: (
-    routeId: string,
-    options?: { pathname?: string; search?: string; hash?: string },
-  ) => void;
-  dismissTransientMenus: () => boolean;
-  readonly sessionData: SessionDataController;
-  readonly sidebarMenus: AppSidebarSessionNavigationElement["sidebarMenus"];
-  findSidebarSessionByKey: AppSidebarSessionNavigationElement["findSidebarSessionByKey"];
-  findSidebarHovercardRowByKey: AppSidebarSessionNavigationElement["findSidebarHovercardRowByKey"];
-  readonly sessionOrganizer: SessionOrganizerController;
-  listSessionGroupFolders(path?: string): Promise<{
-    path: string;
-    home: string;
-    entries: Array<{ name: string; path: string; type: "directory" | "file" }>;
-  }>;
-  inspectSessionGroupRepository(path?: string): Promise<"git" | "not_git" | "unavailable">;
-  requestUpdate: () => void;
-  updateComplete: Promise<boolean>;
-  updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
-  updateBusy: boolean;
-  canUpdate: boolean;
-  onUpdate: () => void;
-  refreshRequired: boolean;
-  onRefresh: () => void;
-  onRetryConnect?: () => void;
-  onOpenPalette?: () => void;
-  onToggleSidebar?: () => void;
-  onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
-  variant: "panel" | "drawer";
-};
+export type SidebarLifecycleState = AppSidebarElement &
+  Omit<AppSidebarOwner, keyof AppSidebarElement>;
 
 export type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
@@ -262,6 +208,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
+  const groupsUpdate = vi.fn<SessionCapability["groupsUpdate"]>(async () => "completed");
   const create = vi.fn(() => Promise.resolve("agent:main:fork"));
   const patch = vi.fn((key: string, _patch: Parameters<SessionCapability["patch"]>[1]) =>
     Promise.resolve(successfulSessionPatch(key)),
@@ -374,6 +321,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsPut,
     groupsRename,
     groupsDelete,
+    groupsUpdate,
     create,
     patch,
     archiveVisibility: archiveState.visibility,
@@ -507,6 +455,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsPut,
     groupsRename,
     groupsDelete,
+    groupsUpdate,
     create,
     patch,
     patchMany,
@@ -570,6 +519,7 @@ export function createContext(
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     ...lifecycle,
+    navigation: createApplicationNavigationPreferences(lifecycle.theme),
     sessions,
     plugins: {
       registrations: () => [],
@@ -591,39 +541,88 @@ export function createContext(
 export async function mountSidebar(
   gateway: ApplicationGateway,
   sessions: SessionCapability,
-  variant: SidebarLifecycleState["variant"] = "panel",
+  _variant: "panel" | "drawer" = "panel",
   agentsList: AgentsListResult | null = null,
   approvalQueue: readonly ExecApprovalRequest[] = [],
   agentIdentity?: AgentIdentityCapability,
 ) {
   const context = createContext(gateway, sessions, agentsList, approvalQueue, agentIdentity);
-  return mountSidebarContext(context, variant);
+  return mountSidebarContext(context, _variant);
+}
+
+/** Create the test facade; append its real hostElement to mount it. */
+export async function createSidebarElement(): Promise<SidebarLifecycleState> {
+  const { getAppSidebarOwner } = await import("../components/app-sidebar.tsx");
+  const element = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
+  // Test access crosses the production host/owner boundary without copying either.
+  return new Proxy(element, {
+    get(target, key) {
+      const owner = getAppSidebarOwner(target);
+      if (key === "hostElement") {
+        return target;
+      }
+      if (key === "updateComplete") {
+        return target.updateComplete.then(() => {
+          flush();
+          return getAppSidebarOwner(target)?.updateComplete ?? true;
+        });
+      }
+      const source = Reflect.has(target, key) ? target : owner;
+      const value = source && Reflect.get(source, key);
+      return typeof value === "function" && !vi.isMockFunction(value) ? value.bind(source) : value;
+    },
+    set(target, key, value) {
+      if (Reflect.has(target, key)) {
+        return Reflect.set(target, key, value);
+      }
+      const owner = getAppSidebarOwner(target);
+      if (!owner) {
+        return false;
+      }
+      const written = Reflect.set(owner, key, value);
+      owner.requestUpdate();
+      return written;
+    },
+  }) as SidebarLifecycleState;
 }
 
 export async function mountSidebarContext(
   context: ApplicationContext,
-  variant: SidebarLifecycleState["variant"] = "panel",
+  _variant: "panel" | "drawer" = "panel",
   activeRouteId?: RouteId,
 ) {
+  const { getAppSidebarOwner } = await import("../components/app-sidebar.tsx");
   const provider = createApplicationContextProvider(context);
-  const sidebar = document.createElement(
-    "openclaw-app-sidebar",
-  ) as unknown as SidebarLifecycleState;
+  const sidebar = await createSidebarElement();
+  const element = sidebar.hostElement;
+  let mode = context.theme.settings.sidebarAgentsMode ?? "chip";
+  sidebar.sidebarAgentsMode = mode;
+  onTestFinished(
+    context.theme.subscribe(() => {
+      const next = context.theme.settings.sidebarAgentsMode ?? "chip";
+      if (next !== mode) {
+        mode = next;
+        sidebar.sidebarAgentsMode = next;
+      }
+    }),
+  );
   seedSidebarEveryonePreference(context.gateway);
-  Object.assign(sidebar, { variant });
   if (activeRouteId) {
     sidebar.activeRouteId = activeRouteId;
   }
-  provider.append(sidebar);
+  provider.append(element);
   document.body.append(provider);
   await sidebar.updateComplete;
-  const sidebarWithPreloads = sidebar as unknown as {
-    preloadCatalogRenderer: () => Promise<unknown>;
-  };
+  await waitForSolid(() => {
+    if (!getAppSidebarOwner(element)) {
+      throw new Error("Sidebar owner is not mounted");
+    }
+  });
+  const owner = getAppSidebarOwner(element)!;
   await Promise.all([
     import("../components/app-sidebar-session-narration.ts"),
-    sidebarWithPreloads.preloadCatalogRenderer(),
-    sidebar.sidebarMenus.preloadMenuRenderer(),
+    owner.preloadCatalogRenderer(),
+    owner.sidebarMenus.preloadMenuRenderer(),
   ]);
   await sidebar.updateComplete;
   if (sidebar.querySelector("openclaw-channel-avatar")) {

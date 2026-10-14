@@ -403,7 +403,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("wizard")
     .description("Interactive update wizard")
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--timeout <seconds>", "Set a per-step deadline in seconds")
+    .option("--timeout <seconds>", "Set an overall update budget in seconds")
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,

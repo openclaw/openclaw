@@ -59,8 +59,52 @@ it("preserves hot, cold, missing and repeated IDs across metadata batch boundari
       expect(readTranscriptStatsBatchFromDatabase(database, ids)).toEqual(
         Array.from({ length: count }, (_, index) => expected[index % expected.length]),
       );
+      expect(
+        readTranscriptStatsBatchFromDatabase(database, ids, { includeGeneration: true }),
+      ).toEqual(
+        ids.map((id, index) =>
+          Object.assign({}, expected[index % expected.length], {
+            generation: null,
+            cold: id === "cold",
+          }),
+        ),
+      );
     }
     expect(readTranscriptStatsBatchFromDatabase(database, [])).toEqual([]);
+  });
+});
+
+it("carries committed rewrite identity and bounds in the same stats snapshot", async () => {
+  await withOpenClawTestState({ label: "transcript-stats-generation" }, async (state) => {
+    const { database, options } = createFixture(state);
+    const read = () =>
+      readTranscriptStatsBatchFromDatabase(database, ["hot"], { includeGeneration: true })[0];
+    expect(read()).toMatchObject({ generation: null, maxSeq: 0, eventCount: 1, cold: false });
+    runOpenClawAgentWriteTransaction((current) => {
+      current.db.exec(`
+        INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
+        VALUES ('hot', 'rewritten', 2);
+      `);
+      createTranscriptEventInserter(
+        current.db,
+        "hot",
+      )({
+        seq: 1,
+        eventJson: '{"type":"message","id":"after-rewrite"}',
+        createdAt: 2,
+      });
+    }, options);
+    expect(read()).toMatchObject({ generation: "rewritten", maxSeq: 1, eventCount: 2 });
+    expect(() =>
+      runOpenClawAgentWriteTransaction((current) => {
+        current.db.exec(`
+          UPDATE transcript_rewrite_watermarks SET generation = 'rolled-back' WHERE session_id = 'hot';
+          DELETE FROM transcript_events WHERE session_id = 'hot';
+        `);
+        throw new Error("rollback fixture");
+      }, options),
+    ).toThrow("rollback fixture");
+    expect(read()).toMatchObject({ generation: "rewritten", maxSeq: 1, eventCount: 2 });
   });
 });
 

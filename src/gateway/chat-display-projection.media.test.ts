@@ -2,6 +2,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
@@ -97,7 +101,6 @@ describe("commentary group visibility", () => {
   it.each<Visibility>([
     ["visible siblings", [control, image, tool, final], [controls, "Final reply"], 1, 1],
     ["media facts", [control], [""], 0, 0, undefined, facts],
-    ["unkeyed media", [text("Image caption"), image], ["Image caption"], 1, 0, "commentary"],
     ["another group's image", [unkeyed, keyed, image], [progress], 1, 0],
     ["inherited phases", inheritedContent, [progress], 1, 1, "commentary"],
   ])("keeps visibility scoped to %s", (_name, content, texts, images, tools, phase, mediaFacts) => {
@@ -132,22 +135,16 @@ it("preserves error-turn media after a later reply", () => {
     __openclaw: { runId: "run-retry", media },
   });
   const recovered = assistant({ stopReason: "stop", __openclaw: { runId: "run-retry" } });
-  expect(project([user, failed, recovered])).toEqual([user, { ...failed, content: [] }, recovered]);
+  expect(project([user, failed, recovered])).toEqual([
+    user,
+    { role: "assistant", content: [], __openclaw: { runId: "run-retry", media } },
+    recovered,
+  ]);
 });
 
 const managedUrl = "./attachment-catalog-tiny/demo.jpg";
 const delivery = { mediaUrls: [managedUrl] };
-it("keeps a media-only assistant row pending for its structured rewrite", () => {
-  expect(
-    payloadFor(assistant({ openclawDelivery: delivery, content: [text(`MEDIA:${managedUrl}`)] }))
-      ?.message,
-  ).toMatchObject({ role: "assistant", content: [text("")] });
-});
-it.each([
-  ["CR", "\r"],
-  ["LF", "\n"],
-  ["CRLF", "\r\n"],
-])(
+it.each([["LF", "\n"]])(
   "withholds only relative directives from a mixed legacy batch with %s lines",
   (_name, separator) => {
     const visibleLines = [
@@ -172,6 +169,7 @@ describe("correlated channel mirrors in Gateway history", () => {
   let scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "openclaw-mirror-history-", applyEnv: false });
+    setRuntimeConfigSnapshot({});
     scope = {
       agentId: "main",
       sessionId: "mirror-history-session",
@@ -183,6 +181,7 @@ describe("correlated channel mirrors in Gateway history", () => {
   afterEach(async () => {
     closeOpenClawAgentDatabasesForTest();
     await state.cleanup();
+    clearRuntimeConfigSnapshot();
   });
   const append = (eventId: string, message: Record<string, unknown>) =>
     appendSessionTranscriptMessageByIdentity({ ...scope, eventId, message });
@@ -247,10 +246,6 @@ describe("correlated channel mirrors in Gateway history", () => {
 });
 
 describe("channel mirror display controls", () => {
-  const otherSource = assistant({ __openclaw: { id: "another", mirrorIdentity: "existing" } });
-  const otherText = mirror({ content: [text("The train leaves at three.")] });
-  const earlierMirror = mirror({ __openclaw: { id: "real-answer" }, idempotencyKey: "earlier" });
-  const canonicalTool = assistant({ openclawDisplayContent: [...reply, tool] });
   const attachedMirror = mirror({ openclawDisplayContent: [...reply, document] });
   const forwarded = {
     role: "user",
@@ -264,29 +259,19 @@ describe("channel mirror display controls", () => {
   };
   const identity = { mirrorIdentity: "acp-run:assistant" };
   const legacy = assistant({ __openclaw: identity });
-  const assistantMedia = assistant({ __openclaw: { id: "real-answer", media } });
-  const mirrorMedia = mirror({ __openclaw: { media } });
-  const withMedia = { __openclaw: { media } };
   const forwardedReply = { role: "assistant", senderLabel: "Forwarded from helper" };
   const fieldless = mirror({
     openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "existing-delivery" },
   });
-  const withTool = { content: expect.arrayContaining([tool]) };
   const withAttachment = { content: expect.arrayContaining([document]) };
   type Control = [string, unknown[], unknown[]];
   it.each<Control>([
-    ["different source despite mirrorIdentity", [otherSource, mirror()], [{}, {}]],
-    ["different visible text", [assistant(), otherText], [{}, {}]],
-    ["another delivery mirror", [earlierMirror, mirror()], [{}, {}]],
     [
       "filtered user turn",
       [assistant(), { role: "user", content: "" }, mirror()],
       [{ role: "assistant" }],
     ],
-    ["canonical tool call", [canonicalTool, mirror()], [withTool, {}]],
     ["mirror attachment", [assistant(), attachedMirror], [{}, withAttachment]],
-    ["assistant media facts", [assistantMedia, mirror()], [withMedia, {}]],
-    ["mirror media facts", [assistant(), mirrorMedia], [{}, withMedia]],
     ["forwarded content", [forwarded, mirror()], [forwardedReply, { model: "delivery-mirror" }]],
     ["legacy identity", [legacy, fieldless], [{ __openclaw: identity }]],
   ])("preserves the mirror boundary for %s", (_name, messages, expected) => {

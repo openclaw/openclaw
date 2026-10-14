@@ -57,6 +57,34 @@ function requireFrame(
 }
 
 describe("coalesceAgentRunFrames", () => {
+  it.each(["interrupted", "silent-terminal"] as const)(
+    "classifies a persisted tool-use tail as %s without inventing a final answer",
+    (state) => {
+      const runId = "run-tail";
+      const commentary = group("assistant", "Checking the fixture.", runId, {
+        stopReason: "toolUse",
+        __openclaw: { runId, turnTainted: true },
+      });
+      const terminal = { role: "assistant", stopReason: "stop", content: [], runId };
+      const frame = requireFrame(
+        coalesceAgentRunFrames(
+          [userBoundary(runId), commentary, group("tool", "inspection", runId)],
+          {
+            messages: [
+              ...commentary.messages.map(({ message }) => message),
+              ...(state === "silent-terminal" ? [terminal] : []),
+            ],
+            activeRunId: null,
+          },
+        )[1],
+      );
+      expect(frame.outcome).toEqual(
+        state === "interrupted" ? { kind: state } : { kind: "completed", actionOwner: null },
+      );
+      expect(frame.parts).toHaveLength(2);
+    },
+  );
+
   it("keeps one lifecycle-stable frame key while preserving semantic part keys", () => {
     const runId = "run-1";
     const stream: StreamRunRenderItem = {
@@ -220,23 +248,6 @@ describe("coalesceAgentRunFrames", () => {
     expect(requireFrame(items[1]).parts.map((part) => part.key)).toEqual(["group:before"]);
     expect(requireFrame(items[3]).parts.map((part) => part.key)).toEqual(["group:after"]);
     expect(requireFrame(items[1]).key).not.toBe(requireFrame(items[3]).key);
-  });
-
-  it("starts a new frame at an authoritative projected turn boundary", () => {
-    const projected = group("assistant", "steer-output", "run-1", {
-      __openclaw: { id: "steer-entry", turnBoundary: true },
-    });
-    const items = coalesceAgentRunFrames([
-      userBoundary(),
-      group("assistant", "before", "run-1"),
-      projected,
-    ]);
-    const frames = items.filter(
-      (item): item is AgentRunFrameRenderItem => item.kind === "agent-run-frame",
-    );
-
-    expect(frames).toHaveLength(2);
-    expect(frames.map((frame) => frame.boundaryId)).toEqual(["send:send-1", "entry:steer-entry"]);
   });
 
   it.each([

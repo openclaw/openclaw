@@ -8,6 +8,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import type {
@@ -27,6 +28,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import {
@@ -103,7 +105,12 @@ describe("worker plugin state", () => {
 
   it("keeps a session-bound comparison from claiming state after its session changes", async () => {
     await withOpenClawTestState({ label: "plugin-state-session-current" }, async (state) => {
-      const target = { agentId: "main", sessionKey: "agent:main:claim", env: state.env };
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:claim",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }),
+        env: state.env,
+      };
       const entry = { sessionId: "claim-session", updatedAt: 1, lifecycleRevision: "original" };
       await upsertSessionEntryCore(target, entry);
       const read = await withSessionEntryReadOnlyInWorker(
@@ -159,6 +166,7 @@ describe("worker plugin state", () => {
       const targets = ["lease", "mutation"].map((key) => ({
         agentId: "main",
         sessionKey: `agent:main:${key}`,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }),
         env: state.env,
       }));
       for (const target of targets) {
@@ -357,12 +365,12 @@ describe("worker plugin state", () => {
           .spyOn(worker, "postMessage")
           .mockImplementation((message, transferList) => {
             const request = asOptionalRecord(message);
+            const command =
+              request?.type === "execute" && request.input instanceof Uint8Array
+                ? asOptionalRecord(deserialize(request.input))?.type
+                : undefined;
             nativePost(message, transferList);
-            if (
-              request?.type === "execute" &&
-              request.input instanceof Uint8Array &&
-              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
-            ) {
+            if (command === "pluginState." + operation) {
               posted.resolve();
             }
           });
@@ -675,7 +683,7 @@ describe("worker plugin state", () => {
       const options = { namespace, maxEntries: expected.length };
       const sync = createPluginStateSyncKeyedStore(pluginId, options);
       const store = createPluginStateKeyedStore(pluginId, options);
-      const { db } = openOpenClawStateDatabase();
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
       const reads = trackSqliteStatementExecutions(db, ["listing"], (sql) =>
         sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "listing" : null,
       );

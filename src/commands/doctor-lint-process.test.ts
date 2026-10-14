@@ -3,7 +3,10 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
-import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import {
+  buildUpdateRehearsalPathEnv,
+  UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV,
+} from "../infra/update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import type { SpawnResult } from "../process/exec-result.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
@@ -78,7 +81,7 @@ it.each([
       termination: "signal",
     });
   });
-  const completion = runUpdateDoctorLintProcess({ json: true }, 0);
+  const completion = runUpdateDoctorLintProcess({ json: true }, { disposalDeadlineMs: 0 });
   await expect(completion).resolves.toBe(0);
   expect(stdout).toHaveBeenCalledWith(report);
   expect(stderr).toHaveBeenCalledWith(
@@ -86,6 +89,20 @@ it.each([
       /\[warning\] Doctor disposal timed out after \d+ms; checks completed\.\n/,
     ),
   );
+});
+
+it("hands the worker this command's budget anchor", async () => {
+  let anchor: string | undefined;
+  vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (_argv, options) => {
+    assert(typeof options !== "number");
+    anchor = options.env?.[UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV];
+    options.onOutputChunk?.(Buffer.from(report), "stdout");
+    return workerResult();
+  });
+  await expect(
+    runUpdateDoctorLintProcess({ json: true }, { commandStartedAtMs: 1_234 }),
+  ).resolves.toBe(0);
+  expect(anchor).toBe("1234");
 });
 
 it.each([
@@ -109,7 +126,9 @@ it.each([
       options.onOutputChunk?.(Buffer.from(report), "stdout");
       return workerResult({ code, signal, cleanup: "forced", termination });
     });
-    await expect(runUpdateDoctorLintProcess({ json: true }, 0)).resolves.toBe(2);
+    await expect(
+      runUpdateDoctorLintProcess({ json: true }, { disposalDeadlineMs: 0 }),
+    ).resolves.toBe(2);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("exited unexpectedly"));
     expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("[warning] Doctor disposal"));
   },
@@ -126,7 +145,7 @@ it.each(["caller", "signal barrier", "combined"])(
       options.onOutputChunk?.(Buffer.from(report), "stdout");
       return worker.promise;
     });
-    const completion = runUpdateDoctorLintProcess({ json: true }, 0);
+    const completion = runUpdateDoctorLintProcess({ json: true }, { disposalDeadlineMs: 0 });
     const cancellation = mode === "caller" ? caller.abort() : waitForSignalExitBarriers();
     if (mode === "combined") {
       caller.abort(new Error("private caller reason"));
@@ -167,7 +186,7 @@ it.each([
     options.onOutputChunk?.(Buffer.from(report), "stdout");
     return worker.promise;
   });
-  const completion = runUpdateDoctorLintProcess({ json: true }, 0);
+  const completion = runUpdateDoctorLintProcess({ json: true }, { disposalDeadlineMs: 0 });
   if (failure.output) {
     process.stdout.emit("error", new Error("private output token=synthetic-doctor-secret"));
   }

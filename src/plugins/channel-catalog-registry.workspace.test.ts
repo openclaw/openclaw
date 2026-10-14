@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
@@ -14,11 +14,11 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 
 const tempDirs = createTempDirTracker();
 const databasePaths = new Set<string>();
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   clearPluginMetadataLifecycleCaches();
   for (const databasePath of databasePaths) {
-    closeOpenClawStateDatabaseByPath(databasePath);
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
   }
   databasePaths.clear();
   tempDirs.cleanup();

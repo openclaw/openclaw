@@ -138,7 +138,7 @@ export function registerReplyCompactionCases({
             ? { authProfileOverride: "openai:missing", authProfileOverrideSource: "user" as const }
             : {}),
         });
-        const sessionManager = SessionManager.open(
+        const sessionManager = await SessionManager.openAsync(
           { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey: "main", storePath },
           tempDirs.make("openclaw-reply-compaction-"),
         );

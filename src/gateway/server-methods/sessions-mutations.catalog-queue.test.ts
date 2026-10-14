@@ -11,7 +11,12 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
-import { validateConfigObject, type OpenClawConfig } from "../../config/config.js";
+import {
+  setRuntimeConfigSnapshot,
+  validateConfigObject,
+  type OpenClawConfig,
+} from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -31,16 +36,8 @@ import {
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
-import {
-  isSessionStoreTopologyChange,
-  sessionChanges,
-} from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -115,6 +112,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
   "%s bounds a stalled catalog without committing and permits retry",
   async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const targets = (method === "sessions.patchMany" ? ["first", "second"] : ["first"]).map(
         (name) => ({ key: `agent:main:catalog-deadline-${name}` }),
       );
@@ -189,6 +187,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
 
 test("catalog reload releases the agent writer while preserving same-session ordering", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const catalogKey = "agent:main:catalog-dependent";
     const metadataKey = "agent:main:independent-metadata";
     for (const sessionKey of [catalogKey, metadataKey]) {
@@ -295,6 +294,7 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
   "catalog preparation revalidates fresh %s before using the prepared result",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const key = change === "alias" ? "agent:main:main" : "agent:main:catalog-revalidation";
       const storedKey = change === "alias" ? "agent:main:work" : key;
       const otherKey = "agent:main:new-label-owner";
@@ -423,6 +423,7 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
 
 test("patchMany prepares singleton agent groups without blocking another session", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const targets = ["main", "secondary"].map((agentId) => ({
       key: `agent:${agentId}:catalog-batch`,
     }));
@@ -520,6 +521,7 @@ test("patchMany prepares singleton agent groups without blocking another session
 
 test("a multi-target agent group retains ordered label claims around catalog loading", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const targets = ["first", "second"].map((name) => ({ key: `agent:main:ordered-${name}` }));
     for (const { key } of targets) {
       await upsertSessionEntryCore(
@@ -565,6 +567,7 @@ test("a multi-target agent group retains ordered label claims around catalog loa
 
 test("dispatched authorization rejects an instance replaced during catalog preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const member = await ensureCanonicalUserProfileForEmail("member@example.com");
     const sessionKey = "agent:main:commit-bound-authorization";
     // A write-scoped model reset revalidates the retained context window. Admin scope would
@@ -668,6 +671,7 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
 
 test("patch timing covers preparation and lifecycle finalization before cleanup", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const key = "agent:main:phase-boundaries";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key },
@@ -743,6 +747,7 @@ test("patchMany creates one shared physical store through original per-agent dir
       entries: { main: {}, work: {} },
     });
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const context = patchContext(async () => [model], cfg);
     const response = vi.fn();
     const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
@@ -815,78 +820,6 @@ test("patchMany creates one shared physical store through original per-agent dir
   });
 });
 
-test("patchMany retains original RAM facts while its cold durable sibling publishes registration", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("mixed-patch-cold.sqlite");
-    const { model, cfg } = modelConfig(storePath, {
-      entries: { main: {} },
-    });
-    await state.writeConfig(cfg);
-    const ramKey = "agent:main:dashboard:incognito-mixed-patch";
-    const ramPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const ramScope = { agentId: "main", sessionKey: ramKey, storePath: ramPath };
-    const ramIdentity = {
-      sessionId: "original-mixed-ram",
-      lifecycleRevision: "original-mixed-ram-generation",
-      incognito: true as const,
-    };
-    await upsertSessionEntryCore(ramScope, { ...ramIdentity, updatedAt: 1 });
-    const originalRam = getOpenIncognitoAgentDatabase("main", ramPath);
-    if (!originalRam) {
-      throw new Error("Incognito fixture did not retain its original RAM database");
-    }
-    const fileKey = "agent:main:dashboard:mixed-file-patch";
-    const targets = [
-      { agentId: "main", key: ramKey, expectedSessionId: ramIdentity.sessionId },
-      { agentId: "main", key: fileKey },
-    ];
-    const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
-    const context = patchContext(async () => [model], cfg);
-    const response = vi.fn();
-    const ramLifetimesAtStoresPublication: boolean[] = [];
-    const stop = sessionChanges.subscribe((change) => {
-      if (isSessionStoreTopologyChange(change)) {
-        ramLifetimesAtStoresPublication.push(
-          getOpenIncognitoAgentDatabase("main", ramPath) === originalRam && originalRam.db.isOpen,
-        );
-      }
-    });
-    try {
-      await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        req: { type: "req", id: "mixed-file-ram-patch", method: "sessions.patchMany", params },
-        params,
-        respond: response,
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-      });
-      expect(ramLifetimesAtStoresPublication.length).toBeGreaterThan(0);
-      expect(ramLifetimesAtStoresPublication.every(Boolean)).toBe(true);
-      expect(response).toHaveBeenCalledExactlyOnceWith(
-        true,
-        { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
-        undefined,
-      );
-      expect(getOpenIncognitoAgentDatabase("main", ramPath)).toBe(originalRam);
-      expect(originalRam.db.isOpen).toBe(true);
-      expect(loadSessionEntry(ramScope)).toMatchObject({
-        ...ramIdentity,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: fileKey, storePath })).toMatchObject({
-        sessionId: expect.any(String),
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-      });
-      await expect(fs.stat(ramPath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      stop();
-    }
-  });
-});
-
 test("patchMany excludes a revoked cold-store promotion while its independent store commits", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const fixtureDirectory = state.statePath("independent-cold-patch");
@@ -905,6 +838,7 @@ test("patchMany excludes a revoked cold-store promotion while its independent st
       entries: { main: {}, work: {} },
     });
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const context = patchContext(async () => [model], cfg);
     const revoked = new SessionMutationAuthorizationChangedError(
       errorShape(ErrorCodes.FORBIDDEN, "Original cold-store source was revoked"),

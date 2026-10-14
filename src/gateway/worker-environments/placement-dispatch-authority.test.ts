@@ -6,6 +6,10 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -14,6 +18,7 @@ import {
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -25,7 +30,7 @@ import {
   identifiedClient,
   sessionSharingTestContext,
 } from "../server-methods/sessions-sharing.test-support.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
@@ -34,6 +39,8 @@ import { createWorkerTunnelManager } from "./tunnel.js";
 import { fakeRunner, PWD_COMMAND, startTestTunnel, success } from "./tunnel.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const cfg = {};
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("worker placement cancellation and reclaim authority", () => {
   let root: string;
@@ -47,12 +54,14 @@ describe("worker placement cancellation and reclaim authority", () => {
     });
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot(cfg);
     root = tempDirs.make("openclaw-reclaim-auth-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -125,7 +134,7 @@ describe("worker placement cancellation and reclaim authority", () => {
       expect(settled).not.toHaveBeenCalled();
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       expect(harness.log).not.toContain("activation");
-      await expect(fs.access(knownHostsPath)).resolves.toBeUndefined();
+      await fs.access(knownHostsPath);
     } finally {
       childClosed.resolve({
         ...success(),
@@ -360,39 +369,43 @@ describe("worker placement dispatch authority", () => {
   };
 
   it("stops after requested placement acknowledgment before node readiness", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const database = openOpenClawStateDatabase({ env: state.env });
-      const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-      const harness = await createHarness(database, store, { workspacePath: state.workspaceDir });
-      const readNodeReadiness = vi.fn(async () => ({ available: true, node: deviceNode }));
-      bindDeviceWorkerAvailability(harness.environments, readNodeReadiness);
-      let authorized = true;
+    await withOpenClawTestState(
+      { scenario: "minimal", prepareProfileCatalog: true },
+      async (state) => {
+        setRuntimeConfigSnapshot(cfg);
+        const database = openOpenClawStateDatabase({ env: state.env });
+        const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+        const harness = await createHarness(database, store, { workspacePath: state.workspaceDir });
+        const readNodeReadiness = vi.fn(async () => ({ available: true, node: deviceNode }));
+        bindDeviceWorkerAvailability(harness.environments, readNodeReadiness);
+        let authorized = true;
 
-      await expect(
-        harness.service.dispatch(
-          {
-            ...REQUEST,
-            profileId: "device:device-1",
-            deviceId: deviceNode.nodeId,
-            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-          },
-          (placement) => {
-            if (placement.state === "requested") {
-              authorized = false;
-            }
-          },
-          () => {
-            if (!authorized) {
-              throw new Error("session creator authority closed after acknowledgment");
-            }
-          },
-        ),
-      ).rejects.toThrow("session creator authority closed after acknowledgment");
+        await expect(
+          harness.service.dispatch(
+            {
+              ...REQUEST,
+              profileId: "device:device-1",
+              deviceId: deviceNode.nodeId,
+              devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+            },
+            (placement) => {
+              if (placement.state === "requested") {
+                authorized = false;
+              }
+            },
+            () => {
+              if (!authorized) {
+                throw new Error("session creator authority closed after acknowledgment");
+              }
+            },
+          ),
+        ).rejects.toThrow("session creator authority closed after acknowledgment");
 
-      expect(readNodeReadiness).not.toHaveBeenCalled();
-      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
-      expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed", turnClaim: null });
-    });
+        expect(readNodeReadiness).not.toHaveBeenCalled();
+        expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+        expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed", turnClaim: null });
+      },
+    );
   });
 
   it.each([
@@ -405,120 +418,129 @@ describe("worker placement dispatch authority", () => {
   ])(
     "stops after membership revocation during $boundary",
     async ({ boundary, completedEffects }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const database = openOpenClawStateDatabase({ env: state.env });
-        const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-        const harness = await createHarness(database, store, { workspacePath: state.workspaceDir });
-        const scope = { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey };
-        const owner = ensureProfileForEmail("dispatch-owner@example.test");
-        const member = ensureProfileForEmail("dispatch-member@example.test");
-        await upsertSessionEntryCore(scope, {
-          sessionId: REQUEST.sessionId,
-          updatedAt: 1,
-          visibility: "read-only",
-          createdActor: { type: "human", source: "profile", id: owner.id },
-        });
-        addSessionMember(scope, {
-          identityId: member.id,
-          addedBy: owner.id,
-          expectedSessionId: REQUEST.sessionId,
-        });
-        const result = resolveSessionMutationAuthorization({
-          client: identifiedClient(member.id),
-          context: sessionSharingTestContext(vi.fn()),
-          method: "sessions.dispatch",
-          requestParams: { key: REQUEST.sessionKey, deviceId: "device-1" },
-        });
-        expect(result.error).toBeNull();
-        if (!result.authorization) {
-          throw new Error("dispatch fixture did not admit its session member");
-        }
-        const revokeAt = (phase: string) => {
-          if (phase === boundary) {
-            expect(
-              removeSessionMember(scope, member.id, undefined, REQUEST.sessionId),
-            ).not.toBeNull();
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async (state) => {
+          setRuntimeConfigSnapshot(cfg);
+          const database = openOpenClawStateDatabase({ env: state.env });
+          const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+          const harness = await createHarness(database, store, {
+            workspacePath: state.workspaceDir,
+          });
+          const scope = { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey };
+          const owner = ensureProfileForEmail("dispatch-owner@example.test");
+          const member = ensureProfileForEmail("dispatch-member@example.test");
+          await upsertSessionEntryCore(scope, {
+            sessionId: REQUEST.sessionId,
+            updatedAt: 1,
+            visibility: "read-only",
+            createdActor: { type: "human", source: "profile", id: owner.id },
+          });
+          addSessionMember(scope, {
+            identityId: member.id,
+            addedBy: owner.id,
+            expectedSessionId: REQUEST.sessionId,
+          });
+          const result = await resolveSessionMutationAuthorizationAsync({
+            client: identifiedClient(member.id),
+            context: sessionSharingTestContext(vi.fn(), cfg),
+            method: "sessions.dispatch",
+            requestParams: { key: REQUEST.sessionKey, deviceId: "device-1" },
+          });
+          using _ = { [Symbol.dispose]: () => result.authorization?.release?.() };
+          expect(result.error).toBeNull();
+          if (!result.authorization) {
+            throw new Error("dispatch fixture did not admit its session member");
           }
-        };
-        let readinessObserved = false;
-        bindDeviceWorkerAvailability(harness.environments, async () => {
-          if (!readinessObserved) {
-            readinessObserved = true;
-            revokeAt("readiness");
-          }
-          return { available: true, node: deviceNode };
-        });
-        const deviceIdentity = {
-          providerId: "device",
-          profileId: "device:device-1",
-          profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
-          nodeDeviceId: deviceNode.nodeId,
-          sshEndpoint: null,
-          sharedHost: true,
-        };
-        const ready = { ...harness.ready, ...deviceIdentity };
-        let current: ReturnType<typeof harness.environments.get> = ready;
-        vi.mocked(harness.environments.get).mockImplementation(() => current);
-        vi.mocked(harness.environments.createWithRequest).mockImplementation(async () => {
-          harness.log.push("create");
-          revokeAt("provisioning");
-          return ready;
-        });
-        const attach = vi.mocked(harness.environments.attachSession).getMockImplementation()!;
-        vi.mocked(harness.environments.attachSession).mockImplementation(async (request) => {
-          const credential = await attach(request);
-          current = { ...harness.attached, ...deviceIdentity };
-          revokeAt("attachment");
-          return credential;
-        });
-        const startTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
-        vi.mocked(harness.environments.startTunnel).mockImplementation(async (request) => {
-          const tunnel = await startTunnel(request);
-          const sync = tunnel.syncWorkspace.bind(tunnel);
-          tunnel.syncWorkspace = async (syncRequest) => {
-            const synced = await sync(syncRequest);
-            revokeAt("workspace sync");
-            return synced;
+          const revokeAt = (phase: string) => {
+            if (phase === boundary) {
+              expect(
+                removeSessionMember(scope, member.id, undefined, REQUEST.sessionId),
+              ).not.toBeNull();
+            }
           };
-          revokeAt("tunnel");
-          return tunnel;
-        });
-        const destroy = vi.mocked(harness.environments.destroy).getMockImplementation()!;
-        vi.mocked(harness.environments.destroy).mockImplementation(async (environmentId) => {
-          current = await destroy(environmentId);
-          return current;
-        });
+          let readinessObserved = false;
+          bindDeviceWorkerAvailability(harness.environments, async () => {
+            if (!readinessObserved) {
+              readinessObserved = true;
+              revokeAt("readiness");
+            }
+            return { available: true, node: deviceNode };
+          });
+          const deviceIdentity = {
+            providerId: "device",
+            profileId: "device:device-1",
+            profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
+            nodeDeviceId: deviceNode.nodeId,
+            sshEndpoint: null,
+            sharedHost: true,
+          };
+          const ready = { ...harness.ready, ...deviceIdentity };
+          let current: ReturnType<typeof harness.environments.get> = ready;
+          vi.mocked(harness.environments.get).mockImplementation(() => current);
+          vi.mocked(harness.environments.createWithRequest).mockImplementation(async () => {
+            harness.log.push("create");
+            revokeAt("provisioning");
+            return ready;
+          });
+          const attach = vi.mocked(harness.environments.attachSession).getMockImplementation()!;
+          vi.mocked(harness.environments.attachSession).mockImplementation(async (request) => {
+            const credential = await attach(request);
+            current = { ...harness.attached, ...deviceIdentity };
+            revokeAt("attachment");
+            return credential;
+          });
+          const startTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
+          vi.mocked(harness.environments.startTunnel).mockImplementation(async (request) => {
+            const tunnel = await startTunnel(request);
+            const sync = tunnel.syncWorkspace.bind(tunnel);
+            tunnel.syncWorkspace = async (syncRequest) => {
+              const synced = await sync(syncRequest);
+              revokeAt("workspace sync");
+              return synced;
+            };
+            revokeAt("tunnel");
+            return tunnel;
+          });
+          const destroy = vi.mocked(harness.environments.destroy).getMockImplementation()!;
+          vi.mocked(harness.environments.destroy).mockImplementation(async (environmentId) => {
+            current = await destroy(environmentId);
+            return current;
+          });
 
-        await expect(
-          harness.service.dispatch(
-            {
-              ...REQUEST,
-              profileId: deviceIdentity.profileId,
-              deviceId: deviceNode.nodeId,
-              devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-              inheritedProfile: {
-                providerId: deviceIdentity.providerId,
-                profileSnapshot: deviceIdentity.profileSnapshot,
+          await expect(
+            harness.service.dispatch(
+              {
+                ...REQUEST,
+                profileId: deviceIdentity.profileId,
+                deviceId: deviceNode.nodeId,
+                devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+                inheritedProfile: {
+                  providerId: deviceIdentity.providerId,
+                  profileSnapshot: deviceIdentity.profileSnapshot,
+                },
               },
-            },
-            (placement) => {
-              if (placement.state === "starting") {
-                revokeAt("activation");
-              }
-            },
-            result.authorization.assertCurrent,
-          ),
-        ).rejects.toMatchObject({
-          error: { details: { code: "SESSION_PARTICIPATION_REQUIRED" } },
-        });
+              (placement) => {
+                if (placement.state === "starting") {
+                  revokeAt("activation");
+                }
+              },
+              result.authorization.assertCurrent,
+            ),
+          ).rejects.toMatchObject({
+            error: { details: { code: "SESSION_PARTICIPATION_REQUIRED" } },
+          });
 
-        expect(harness.log.filter((event) => effects.includes(event))).toEqual(
-          effects.slice(0, completedEffects),
-        );
-        expect(harness.log).not.toContain("placement:active");
-        expect(harness.environments.destroy).toHaveBeenCalledTimes(completedEffects === 0 ? 0 : 1);
-        expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed", turnClaim: null });
-      });
+          expect(harness.log.filter((event) => effects.includes(event))).toEqual(
+            effects.slice(0, completedEffects),
+          );
+          expect(harness.log).not.toContain("placement:active");
+          expect(harness.environments.destroy).toHaveBeenCalledTimes(
+            completedEffects === 0 ? 0 : 1,
+          );
+          expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed", turnClaim: null });
+        },
+      );
     },
   );
 });

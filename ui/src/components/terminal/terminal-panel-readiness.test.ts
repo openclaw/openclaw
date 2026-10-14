@@ -122,6 +122,8 @@ describe("terminal panel readiness", () => {
       panel.page = panel.fullscreen = panel.embedded = true;
       panel.routeTarget = { catalog };
       document.body.append(panel);
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
 
       await vi.waitFor(() => {
         expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(

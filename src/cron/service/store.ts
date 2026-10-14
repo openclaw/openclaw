@@ -38,6 +38,18 @@ import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, { revision: number }>();
 
+/** Advance a complete resident store after its committed row postimages are installed. */
+export function noteLoadedCronStoreCommit(state: CronServiceState, observedRevision: number): void {
+  const storeKey = cronStoreKey(state.deps.storePath);
+  const current = getCronJobsStoreRevision(storeKey);
+  const loaded = loadedCronStoreRevisions.get(state)?.revision;
+  noteCronJobsStoreCommit(storeKey);
+  // A sibling publication during the worker await still requires a full reload.
+  if (loaded === observedRevision && current === observedRevision) {
+    loadedCronStoreRevisions.set(state, { revision: getCronJobsStoreRevision(storeKey) });
+  }
+}
+
 function warnInvalidPersistedCronJob(params: {
   state: CronServiceState;
   raw: Record<string, unknown>;
@@ -399,7 +411,7 @@ export async function persistCronJobMutation(params: {
     source.assertCurrent();
     if (
       params.agentId !== undefined &&
-      state.deps.isAgentAvailable?.(params.agentId, undefined, { deletionBlocked: false }) === false
+      state.deps.isAgentAvailable?.(params.agentId, { deletionBlocked: false }) === false
     ) {
       throw new Error(describeUnavailableCronAgent(params.agentId));
     }

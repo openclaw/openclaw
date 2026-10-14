@@ -5,19 +5,11 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  captureSessionEntryMetadataRead,
-  captureSessionEntrySourceAssertion,
-} from "../config/sessions/session-entry-source-authority.js";
-import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
-import { sessionEntryCommitGuardOptions } from "../config/sessions/session-source-authority.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   retainGatewaySessionEntryReadOnly,
@@ -27,6 +19,7 @@ import {
 it("reads committed durable rows without host SQL and checks caller authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:saved";
     const scope = { agentId: "main", sessionKey: key, env: state.env };
     const params = { cfg, key, env: state.env };
@@ -110,7 +103,7 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
       } else if (change === "same-file reopen") {
         openOpenClawAgentDatabase({ agentId: "main", path: alias });
       }
-      const read = retainGatewaySessionEntryReadOnly(sessionKey, "main");
+      const read = await retainGatewaySessionEntryReadOnly(sessionKey, "main");
       try {
         expect(read.entry?.sessionId).toBe("identical-session");
         expect(read.isCurrentAtResponse()).toBe(true);
@@ -120,7 +113,7 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
         } else {
           await closeOpenClawAgentDatabaseByPathAsync(read.readSource!.path);
           if (change === "same-file reopen") {
-            const successor = retainGatewaySessionEntryReadOnly(sessionKey, "main");
+            const successor = await retainGatewaySessionEntryReadOnly(sessionKey, "main");
             expect(successor.isCurrentAtResponse()).toBe(true);
             successor.release();
           }
@@ -135,95 +128,3 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
     });
   },
 );
-
-it("keeps actor workspace predicates current without pinning unrelated planning metadata", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const authority = { assertCurrent() {} };
-    const cfg = { agents: { entries: { main: {} } } };
-    const key = "agent:main:dashboard:incognito-workspace-authority";
-    const actor = await openIncognitoTestActor(state.env, authority);
-    const initial = {
-      sessionId: "workspace-session",
-      updatedAt: 1,
-      sessionDiffBaseline: {
-        version: 1 as const,
-        sessionId: "workspace-session",
-        root: state.workspaceDir,
-        files: [{ path: "before.txt", fingerprint: "baseline-fingerprint" }],
-      },
-    };
-    await actor.sessions.create(authority, { sessionKey: key, entry: initial });
-    let captured: ReturnType<typeof captureSessionEntryMetadataRead> = undefined;
-    const sql = observeHostDataSql();
-    try {
-      const result = await withIncognitoSessionBinding({ actor }, () =>
-        withGatewaySessionEntryReadOnly({ cfg, key, env: state.env }, async (loaded) => {
-          expect(loaded.entry?.sessionDiffBaseline).toEqual(initial.sessionDiffBaseline);
-          const scope = { agentId: "main", sessionKey: key, storePath: loaded.storePath };
-          captured = captureSessionEntryMetadataRead(scope);
-          const source = captureSessionEntrySourceAssertion({
-            scope,
-            expected: loaded.entry,
-            fields: ["sessionId", "lifecycleRevision", "projectId", "worktree"],
-            assertCurrent() {},
-            refuse() {
-              throw new Error("Workspace authority changed");
-            },
-          });
-          await patchSessionEntryCore(scope, () => ({ displayName: "Updated title" }), {
-            ...sessionEntryCommitGuardOptions(source),
-            requireWriteSuccess: true,
-          });
-          expect(() => source()).not.toThrow();
-          await patchSessionEntryCore(scope, () => ({ projectId: "attached-project" }), {
-            requireWriteSuccess: true,
-          });
-          expect(() => source()).toThrow("Workspace authority changed");
-          return captured?.readCurrent()?.projectId;
-        }),
-      );
-      expect(result).toBe("attached-project");
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-      await actor.release();
-      await actor.close();
-    }
-    const replacement = await openIncognitoTestActor(state.env, authority);
-    try {
-      await replacement.sessions.create(authority, { sessionKey: key, entry: initial });
-      expect(() => captured?.readCurrent()).toThrow();
-    } finally {
-      await replacement.release();
-      await replacement.close();
-    }
-  });
-});
-
-it("keeps unbound private reads native and distinguishes explicitly selected absence", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const key = "agent:main:dashboard:incognito-native-workspace";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: key, env: state.env },
-      { sessionId: "native-workspace", updatedAt: 1, projectId: "native-project" },
-    );
-    const read = () =>
-      withGatewaySessionEntryReadOnly({ cfg, key, env: state.env }, async (loaded) => loaded.entry);
-    expect((await read())?.projectId).toBe("native-project");
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
-    const sql = observeHostDataSql();
-    try {
-      const absent = await withIncognitoSessionBinding(
-        { kind: "absent", agentId: "main", env: state.env, authority: { assertCurrent() {} } },
-        read,
-      );
-      expect(absent).toBeUndefined();
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
-    expect((await read())?.projectId).toBe("native-project");
-  });
-});

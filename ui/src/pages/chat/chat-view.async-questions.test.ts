@@ -11,9 +11,9 @@ import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-suppo
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import {
   installTranscriptDomMocks,
@@ -21,7 +21,7 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
-const container = createComposerContainer();
+let container: ReturnType<typeof createComposerContainer>;
 const audience = {
   role: "assistant",
   content: "Which audience?",
@@ -39,6 +39,7 @@ const terminal = (runId: string) => ({
 });
 beforeEach(() => {
   installTranscriptDomMocks();
+  container = createComposerContainer();
   document.body.append(container);
 });
 afterEach(() => {

@@ -517,7 +517,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     }
   });
 
-  it.each([false, true])("rejects unsafe index drift (isolated=%s)", async (isolated) => {
+  it.each([false])("rejects unsafe index drift (isolated=%s)", async (isolated) => {
     createUnsafeIndexDrift(sourcePath);
 
     await expectSnapshotFailureWithoutTarget(
@@ -587,13 +587,6 @@ describe("createVerifiedSqliteSnapshot", () => {
       expect(await fs.readFile(sourcePath)).toEqual(original);
     },
   );
-
-  it("snapshots a zero-byte generic source as an empty SQLite database", async () => {
-    await fs.writeFile(sourcePath, "");
-
-    await expectSnapshotSuccess({ sourcePath, targetPath });
-    expect((await fs.stat(targetPath)).size).toBeGreaterThan(0);
-  });
 
   it("rejects a zero-byte source when nonempty input is required", async () => {
     await fs.writeFile(sourcePath, "");

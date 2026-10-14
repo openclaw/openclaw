@@ -9,9 +9,9 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { deleteRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
+import { resolveRepository } from "./repository-paths.js";
 import * as runLease from "./run-lease.js";
 import { hasLiveWorktreeRunLease } from "./run-lease.test-support.js";
-import { resolveRepository } from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,

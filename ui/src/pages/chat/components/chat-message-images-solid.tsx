@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal, onCleanup, useContext } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, untrack, useContext } from "solid-js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import {
   reserveExternalWindowForDeferredNavigation,
@@ -7,9 +7,13 @@ import {
 } from "../../../lib/open-external-url.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
-import { renderChatImageActions } from "./chat-image-actions.ts";
+import { ChatImageActions } from "./chat-image-actions.tsx";
+import {
+  MIN_CHAT_IMAGE_PREVIEW_WIDTH,
+  resolveChatImagePreviewSize,
+} from "./chat-image-preview-size.ts";
 import {
   isManagedOutgoingMediaSource,
   loadAssistantAttachmentAvailability,
@@ -44,7 +48,6 @@ import {
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
 const CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS = 30_000;
-const MIN_CHAT_IMAGE_PREVIEW_WIDTH = 160;
 
 type RetainedInlineImage = {
   status: "retaining";
@@ -672,36 +675,23 @@ function ImageFrame(props: {
   const title = () => imageTitle(image());
   const compact = () => props.model.state === "unavailable";
   const pending = () => props.model.state === "loading";
-  const sized = () =>
-    Number.isFinite(image().width) &&
-    (image().width ?? 0) > 0 &&
-    Number.isFinite(image().height) &&
-    (image().height ?? 0) > 0;
-  const dimensions = () => {
-    const ratio = sized() ? image().width! / image().height! : 3 / 2;
-    const width = sized()
-      ? image().width! < MIN_CHAT_IMAGE_PREVIEW_WIDTH
-        ? MIN_CHAT_IMAGE_PREVIEW_WIDTH
-        : Math.min(image().width!, 400, 360 * ratio)
-      : 400;
-    const actualWidth = compact() ? Math.max(MIN_CHAT_IMAGE_PREVIEW_WIDTH, width) : width;
-    return { width: actualWidth, height: Math.min(360, actualWidth / ratio) };
-  };
+  const loadOriginal = () => loadManagedImageBlob(image().url, props.options, image().artifactId);
+  // A mounted preview keeps its initial frame when the upload receipt adds dimensions.
+  // Fresh history mounts use those durable dimensions; older facts retain a stable fallback.
+  const dimensions = untrack(() => resolveChatImagePreviewSize(props.model.image));
   return (
     <span
       ref={props.presentation.observeFrame}
       class={[
-        "chat-image-frame",
+        "chat-image-frame chat-image-frame--image",
         {
-          "chat-image-frame--image": sized() || pending() || compact(),
           "chat-image-frame--managed": props.model.managed && !compact(),
           "chat-image-frame--compact": compact(),
         },
       ]}
       style={{
-        "--chat-image-width": `${dimensions().width}px`,
-        "--chat-image-min-width": `${MIN_CHAT_IMAGE_PREVIEW_WIDTH}px`,
-        "--chat-image-ratio": compact() ? "auto" : `${dimensions().width} / ${dimensions().height}`,
+        "--chat-image-width": `${compact() ? Math.max(MIN_CHAT_IMAGE_PREVIEW_WIDTH, dimensions.width) : dimensions.width}px`,
+        "--chat-image-ratio": compact() ? "auto" : `${dimensions.width} / ${dimensions.height}`,
       }}
       aria-busy={pending() ? "true" : "false"}
       role={pending() ? "status" : undefined}
@@ -744,11 +734,7 @@ function ImageFrame(props: {
         </span>
       </Show>
       <Show when={props.model.managed && props.model.previewUrl && !compact()}>
-        <LitContent
-          value={renderChatImageActions(title(), () =>
-            loadManagedImageBlob(image().url, props.options, image().artifactId),
-          )}
-        />
+        <ChatImageActions title={title()} readOriginalBlob={loadOriginal} />
       </Show>
     </span>
   );

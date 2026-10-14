@@ -9,7 +9,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserChannelIdentity } from "../state/user-channel-identities.js";
-import { prepareUserProfileCatalog, readUserProfileIdentity } from "../state/user-profile-list.js";
+import {
+  prepareUserProfileCatalog,
+  readResidentUserProfileIdentity,
+} from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -120,14 +123,14 @@ it.each(["person", "shared owner"] as const)(
         queries.mockRestore();
       }
       expect(resolveUserChannelIdentity(identity)).toBeUndefined();
-      expect(readUserProfileIdentity(person.id)?.role).toBe("admin");
-      expect(readUserProfileIdentity(secondary.id)?.profileId).toBe(person.id);
+      expect(readResidentUserProfileIdentity(person.id)?.role).toBe("admin");
+      expect(readResidentUserProfileIdentity(secondary.id)?.profileId).toBe(person.id);
     });
   },
 );
 
 it("rejects malformed or conflicting assignments without changing the saved binding", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const admin = ensureProfileForEmail("admin@example.test");
     const other = ensureProfileForEmail("other@example.test");
     const link = { profileId: admin.id, identity };

@@ -27,8 +27,9 @@ vi.mock("../infra/delivery-queue-sqlite.js", async () => {
 vi.mock("../infra/outbound/delivery-queue-media-spool.js", () => ({
   pruneOrphanedDeliveryQueueMedia: pruneOrphanedDeliveryQueueMediaMock,
 }));
+// mock-isolation: Delivery cleanup must not start the unrelated device expiry worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
-  pruneExpiredDevicePairSetupCompletions: vi.fn(async () => 0),
+  startDevicePairSetupMaintenance: vi.fn(async () => 0),
 }));
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;

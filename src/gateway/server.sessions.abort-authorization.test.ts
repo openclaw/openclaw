@@ -295,8 +295,17 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
     }
     const run = await startNativeRun(owner, requester);
     try {
+      const result = await rpcReq(stopper.ws, "sessions.abort", {
+        key: run.sessionKey,
+        runId: run.runId,
+      });
       expect(
-        await rpcReq(stopper.ws, "sessions.abort", { key: run.sessionKey, runId: run.runId }),
+        result,
+        JSON.stringify({
+          result,
+          controllerAborted: run.entry.controller.signal.aborted,
+          nativeAbortCalls: run.nativeAbort.mock.calls.length,
+        }),
       ).toMatchObject({
         ok: true,
         payload: { status: "aborted", abortedRunId: run.runId },
@@ -369,7 +378,8 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
     };
     setActiveEmbeddedRun("recovered-session", handle, sessionKey);
     try {
-      expect(await rpcReq(owner.ws, "sessions.abort", { key: sessionKey, runId })).toMatchObject({
+      const result = await rpcReq(owner.ws, "sessions.abort", { key: sessionKey, runId });
+      expect(result, JSON.stringify(result.error)).toMatchObject({
         ok: true,
         payload: { status: "aborted", abortedRunId: runId },
       });

@@ -1,10 +1,11 @@
-import { assertSyncTransactionResult, assertPostgresTransactionUsable } from "../sql-connection.js";
+import {
+  assertSyncTransactionResult,
+  assertPostgresTransactionUsable,
+  sqlPublicationAnchor,
+} from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../sqlite-worker-operation-admission.js";
+import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 
 function assertPostgresOperationCurrent(): void {
@@ -20,16 +21,12 @@ export function runPostgresTransactionSync<T>(
   options?: { withCommit?: (commit: () => void) => void },
   readOnly = false,
   reserved = false,
-  admitWorker = true,
 ): T {
   assertPostgresTransactionUsable(db);
   assertPostgresOperationCurrent();
-  return withSqlitePostCommitPublications(db.anchor, () => {
+  return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () => {
     const nested = db.isTransaction && !reserved;
     try {
-      if (!nested && !readOnly && admitWorker && currentSqliteWorkerOperationAdmission.getStore()) {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      }
       if (nested) {
         db.exec("SAVEPOINT openclaw_tx_nested");
       } else if (!db.isTransaction) {
@@ -47,14 +44,12 @@ export function runPostgresTransactionSync<T>(
       } else {
         const scope = currentSqliteWorkerOperationAdmission.getStore();
         if (!readOnly && scope?.active) {
-          deferSqliteWorkerCommitReceipt(db.anchor, {});
+          deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(db), {});
         }
         const commit = () => {
           assertPostgresOperationCurrent();
-          if (!readOnly && admitWorker && scope) {
-            requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-          }
-          db.exec("COMMIT");
+          // End read snapshots without publishing the connection's COMMIT write receipt.
+          db.exec(readOnly ? "ROLLBACK" : "COMMIT");
         };
         if (options?.withCommit) {
           assertSyncTransactionResult(options.withCommit(commit));

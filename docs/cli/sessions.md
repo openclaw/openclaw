@@ -407,7 +407,9 @@ Flags:
 
 When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
-traffic. Use `--store <path>` for explicit offline repair of a SQLite database or
+traffic. Once connected, the CLI waits for cleanup to finish without a fixed
+request deadline; connection startup still has a timeout. Use `--store <path>`
+for explicit offline repair of a SQLite database or
 legacy store selector.
 
 Automatic offline fallback applies only when the configured local Gateway cannot
@@ -536,7 +538,9 @@ openclaw sessions compact "agent:work:main" --agent work --json
   does not impose a client deadline by default; the Gateway owns the
   configured compaction lifecycle.
 - With `--max-lines <n>`, it permanently truncates the SQLite transcript to the
-  last `n` lines. This path does not create a backup archive.
+  last `n` lines. The Gateway finishes rebuilding the retained transcript's
+  indexes in its storage worker before reporting success, so the next turn does
+  not wait for background index maintenance. This path does not create a backup archive.
 - `--agent <id>`: agent that owns the session; required for `global` keys.
 - `--url` / `--token` / `--password`: Gateway connection overrides.
 - `--timeout <ms>`: optional client-side RPC timeout in milliseconds.

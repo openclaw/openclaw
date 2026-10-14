@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
@@ -20,7 +20,7 @@ function statusKey(agentId: string): SqliteDatabaseAdmissionKey<AgentDeletionJou
 
 /** The journal writer publishes after commit through the existing database-fact transport. */
 export function publishAgentDeletionJournalStatus(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
   status: AgentDeletionJournalStatus,
 ): void {
@@ -29,17 +29,26 @@ export function publishAgentDeletionJournalStatus(
 
 /** Offline repairs and raw fixture mutations discard only the affected agent's fact. */
 export function invalidateAgentDeletionJournalStatus(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): void {
   publishSqliteDatabaseAdmission(database, statusKey(agentId), null);
 }
 
 export function getAgentDeletionJournalStatus(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): AgentDeletionJournalStatus | undefined {
   return getSqliteDatabaseAdmission(database, statusKey(agentId)) ?? undefined;
+}
+
+/** Synchronous guards consume the same committed fact as asynchronous turn admission. */
+export function getOrLoadAgentDeletionJournalStatus(
+  statePath: string,
+  agentId: string,
+  load: () => AgentDeletionJournalStatus | undefined,
+): AgentDeletionJournalStatus | undefined {
+  return getOrLoadSqliteDatabaseAdmissionForPath(statePath, statusKey(agentId), load) ?? undefined;
 }
 
 const pendingLoads = resolveGlobalSingleton(
@@ -54,7 +63,7 @@ export async function loadAgentDeletionJournalStatus(
   load: () => Promise<AgentDeletionJournalStatus>,
 ): Promise<AgentDeletionJournalStatus> {
   const key = statusKey(agentId);
-  const cached = getOrLoadSqliteDatabaseAdmissionForPath(statePath, key, () => undefined);
+  const cached = getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined);
   if (cached) {
     return cached;
   }
@@ -64,7 +73,7 @@ export async function loadAgentDeletionJournalStatus(
     pending = (async () => {
       const loaded = await load();
       // A deletion committed during the read owns the newer fact.
-      return getOrLoadSqliteDatabaseAdmissionForPath(statePath, key, () => loaded) ?? loaded;
+      return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => loaded) ?? loaded;
     })();
     pendingLoads.set(pendingKey, pending);
   }

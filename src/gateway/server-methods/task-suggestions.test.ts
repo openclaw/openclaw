@@ -4,6 +4,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -75,6 +79,7 @@ async function createRoleSuggestion(sessionKey: string): Promise<string> {
 }
 
 async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false) {
+  setRuntimeConfigSnapshot(taskRoleConfig(role));
   const profile = ensureProfileForEmail(`task-${role}@example.test`);
   const owner = ownsSource ? profile : ensureProfileForEmail(`task-${role}-owner@example.test`);
   await upsertSessionEntryCore(
@@ -94,6 +99,7 @@ async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false
 }
 
 vi.mock("./chat-send-handler.js", () => ({ handleChatSend: mocks.handleChatSend }));
+
 beforeEach(async () => {
   await dismissPendingTaskSuggestions();
   mocks.handleChatSend.mockReset();
@@ -105,6 +111,7 @@ afterEach(async () => {
   await dismissPendingTaskSuggestions();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("task suggestion gateway methods", () => {
@@ -526,6 +533,7 @@ describe("task suggestion gateway methods", () => {
 
   it("restores a session-mode suggestion after delivery failure without deleting its source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
         { sessionId: "source-session", updatedAt: 1 },

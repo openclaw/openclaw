@@ -4,6 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 const saveMediaBufferMock = vi.hoisted(() =>
@@ -39,6 +40,7 @@ import {
   DEFAULT_WORKER_PENDING_BYTES,
   getWorkerComputeCapacity,
 } from "../infra/worker-task-capacity.js";
+import { resizeToJpeg } from "../media/image-ops.js";
 import {
   canonicalizePersistedUserMessageMedia,
   readPersistedMediaFacts,
@@ -265,6 +267,106 @@ describe("composer attachment origin", () => {
 });
 
 describe("persistInboundImagesForTranscript", () => {
+  it.each([
+    { storage: "inline", suppliedDimensions: {} },
+    { storage: "offloaded", suppliedDimensions: { width: 999, height: 777 } },
+  ])(
+    "retains byte-derived dimensions in $storage upload transcript facts",
+    async ({ storage, suppliedDimensions }) => {
+      const png = createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 });
+      const bytes = storage === "offloaded" ? Buffer.concat([png, Buffer.alloc(2_000_000)]) : png;
+      const parsed = await parseMessageWithAttachments(
+        "Inspect this",
+        normalizeRpcAttachmentsToChatAttachments([
+          {
+            fileName: "upload.png",
+            mimeType: "image/png",
+            content: bytes.toString("base64"),
+            ...suppliedDimensions,
+          },
+        ]),
+      );
+      expect(parsed.imageOrder).toEqual([storage]);
+      expect(storage === "inline" ? parsed.images[0] : parsed.offloadedRefs[0]).toMatchObject({
+        width: 32,
+        height: 16,
+      });
+      const persisted = await persistInboundImagesForTranscript({
+        images: parsed.images,
+        offloadedRefs: parsed.offloadedRefs,
+        log: { warn: vi.fn() },
+        logContext: "chat.send",
+      });
+      const message = buildPersistedUserTurnMessage({
+        text: "Inspect this",
+        media: persisted.entries.map((entry) => entry.fact),
+      });
+      expect(message).toMatchObject({
+        __openclaw: {
+          media: [{ kind: "image", fileName: "upload.png", width: 32, height: 16 }],
+        },
+      });
+      expect(readPersistedMediaFacts(message)?.[0]).toMatchObject({ width: 32, height: 16 });
+    },
+  );
+
+  it("persists displayed JPEG axes after EXIF rotation rather than caller dimensions", async () => {
+    const jpeg = await resizeToJpeg({
+      buffer: createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 }),
+      maxSide: 32,
+      quality: 92,
+      withoutEnlargement: true,
+    });
+    const orientation = Buffer.from(
+      "ffe1002245786966000049492a0008000000010012010300010000000600000000000000",
+      "hex",
+    );
+    const bytes = Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]);
+    const parsed = await parseMessageWithAttachments("Portrait", [
+      {
+        fileName: "portrait.jpg",
+        mimeType: "image/jpeg",
+        content: bytes.toString("base64"),
+        width: 32,
+        height: 16,
+      },
+    ]);
+    const persisted = await persistInboundImagesForTranscript({
+      images: parsed.images,
+      offloadedRefs: parsed.offloadedRefs,
+      log: { warn: vi.fn() },
+      logContext: "chat.send",
+    });
+    expect(parsed.images[0]).toMatchObject({ width: 16, height: 32 });
+    expect(persisted.entries[0]?.fact).toMatchObject({ width: 16, height: 32 });
+    expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
+  });
+
+  it("leaves unreadable image dimensions unknown instead of persisting caller guesses", async () => {
+    const parsed = await parseMessageWithAttachments(
+      "Inspect",
+      [
+        pngAttachment({
+          content: Buffer.from("89504e470d0a1a0a0000000000000000", "hex").toString("base64"),
+          width: 999,
+          height: 777,
+        }),
+      ],
+      { supportsImages: false },
+    );
+    const persisted = await persistInboundImagesForTranscript({
+      images: parsed.images,
+      offloadedRefs: parsed.offloadedRefs,
+      log: { warn: vi.fn() },
+      logContext: "chat.send",
+    });
+    expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
+    expect(parsed.offloadedRefs[0]?.width).toBeUndefined();
+    expect(parsed.offloadedRefs[0]?.height).toBeUndefined();
+    expect(persisted.entries[0]?.fact.width).toBeUndefined();
+    expect(persisted.entries[0]?.fact.height).toBeUndefined();
+  });
+
   it("does not turn a rejected upload commit into a best-effort omission after policy re-enables", async () => {
     const denied = new SessionMutationAuthorizationChangedError({
       code: "FORBIDDEN",
@@ -330,6 +432,8 @@ describe("persistInboundImagesForTranscript", () => {
         kind: "image",
         fileName,
         sizeBytes: 5,
+        width: 1,
+        height: 1,
       },
     ]);
     expect(saveMediaBufferMock).toHaveBeenLastCalledWith(
@@ -405,7 +509,7 @@ describe("persistInboundImagesForTranscript", () => {
 });
 
 describe("parseMessageWithAttachments", () => {
-  it("parses large clipboard data URL images without full base64 decoding", async () => {
+  it("parses large clipboard data URL images without full base64 decoding on the caller thread", async () => {
     const png = Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(1_900_000)]);
     const base64 = png.toString("base64");
     const fromSpy = vi.spyOn(Buffer, "from");
@@ -586,54 +690,16 @@ describe("parseMessageWithAttachments validation errors", () => {
     },
   );
 
-  it("keeps image sniff fallback for generic image attachments", async () => {
-    const { parsed, logs } = await parseWithWarnings("see this", [
-      pngAttachment({ type: "file", mimeType: "application/octet-stream", fileName: "dot" }),
-    ]);
-    expectSingleInlinePng(parsed);
-    expect(parsed.offloadedRefs).toHaveLength(0);
-    expect(logs).toHaveLength(0);
-  });
-
-  it("offloads images for text-only models instead of dropping them", async () => {
-    const logs: string[] = [];
-    const infos: string[] = [];
-    const parsed = await parseTextOnlyAttachments("see this", [pngAttachment()], logs, infos);
-
-    try {
-      expect(parsed.images).toHaveLength(0);
-      expect(parsed.imageOrder).toEqual(["offloaded"]);
-      expect(parsed.offloadedRefs).toHaveLength(1);
-      const offloaded = expectDefined(parsed.offloadedRefs[0], "offloaded image ref");
-      expect(offloaded.mimeType).toBe("image/png");
-      expect(parsed.message).toBe(`see this\n[media attached: ${offloaded.mediaRef}]`);
-      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe("see this");
-      expect(parsed.media).toEqual([
-        {
-          path: offloaded.path,
-          url: offloaded.mediaRef,
-          contentType: "image/png",
-          kind: "image",
-          fileName: "dot.png",
-          sizeBytes: 68,
-        },
-      ]);
-      expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
-      expect(logs).toHaveLength(0);
-    } finally {
-      await cleanupOffloadedRefs(parsed.offloadedRefs);
-    }
-  });
-
   it("caps text-only image offloads", async () => {
     const logs: string[] = [];
+    const infos: string[] = [];
     const attachments = Array.from({ length: 11 }, (_, index): ChatAttachment => ({
       type: "image",
       mimeType: "image/png",
       fileName: `dot-${index}.png`,
       content: PNG_1x1,
     }));
-    const parsed = await parseTextOnlyAttachments("see these", attachments, logs);
+    const parsed = await parseTextOnlyAttachments("see these", attachments, logs, infos);
 
     try {
       expect(parsed.images).toHaveLength(0);
@@ -649,6 +715,7 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(logs).toEqual([
         "attachment dot-10.png: dropping image because text-only offload limit 10 was reached",
       ]);
+      expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
     }

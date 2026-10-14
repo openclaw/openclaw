@@ -1,4 +1,7 @@
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { CommandLane } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
@@ -26,6 +29,7 @@ export async function runWithMainSessionRecoveryAdmission<T>(params: {
   admission?: MainSessionRecoveryAdmission;
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
+  signal?: AbortSignal;
   isCurrent: () => boolean;
   run: (admission: MainSessionRecoveryAdmission) => Promise<T>;
 }): Promise<T | undefined> {
@@ -41,6 +45,17 @@ export async function runWithMainSessionRecoveryAdmission<T>(params: {
   }
   if (params.admission) {
     return params.admission.shouldContinue() ? await params.run(params.admission) : undefined;
+  }
+
+  // Backlog waits precede session ownership, retry charges and Gateway queue deadlines.
+  // Exact retries must remain interruptible by reset without holding a session admission.
+  await enqueueCommandInLane(CommandLane.Background, async () => {}, {
+    abortSignal: params.signal
+      ? AbortSignal.any([params.signal, getGatewayRestartDrainSignal()])
+      : getGatewayRestartDrainSignal(),
+  });
+  if (!shouldContinue() || !params.isCurrent()) {
+    return undefined;
   }
 
   const ownershipChanged = new Error("restart recovery session ownership changed before dispatch");

@@ -16,6 +16,7 @@ import type {
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { TranscriptTurnAdmission } from "../config/sessions/transcript-turn-admission.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
@@ -120,7 +121,7 @@ export type UserTurnTranscriptTarget = {
   agentId: string;
   threadId?: string | number;
   cwd?: string;
-  config?: unknown;
+  config?: OpenClawConfig;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
@@ -219,7 +220,7 @@ export type UserTurnTranscriptRecorder = {
     authority?: import("../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   }) => Promise<boolean>;
   getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
-  /** @deprecated Await completeProcessingAsync; synchronous compatibility ends at the next Plugin SDK major. */
+  /** @deprecated Await completeProcessingAsync. Final compatibility day: 2026-12-31. */
   completeProcessing?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome | undefined;
   completeProcessingAsync?: (
     outcome: AgentRunTerminalOutcome,
@@ -264,6 +265,7 @@ export type UserTurnTranscriptRecorder = {
       expectedSessionId?: string;
       expectedSessionState?: SessionTranscriptTurnExpectedState;
       sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+      beforeFreshMessageCommit?: SessionSourceAssertion;
       /** Allow a later explicit persistence attempt when this attempt appends nothing. */
       retryIfUnpersisted?: boolean;
     },

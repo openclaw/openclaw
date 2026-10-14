@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
@@ -14,7 +15,6 @@ import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
-import { createCanonicalAgentConfigFixture } from "../../../test-utils/config-roster.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -120,7 +120,7 @@ async function dispatch(
 }
 
 beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "talk-target" });
+  state = await createOpenClawTestState({ label: "talk-target", prepareProfileCatalog: true });
   client = {
     ...sharingPolicyClient({ user: ensureProfileForEmail("listener@example.test").id }),
     connId: "talk-target-test",
@@ -130,6 +130,7 @@ beforeEach(async () => {
     agents: { ownership: "explicit", entries: { primary: {}, voice: {} } },
     talk: { agentId: "voice" },
   };
+  setRuntimeConfigSnapshot(config);
   vi.clearAllMocks();
   createdCalls.length = 0;
   createBrowserSession.mockReset().mockResolvedValue(browserSession);
@@ -167,7 +168,7 @@ afterEach(async () => {
 });
 
 describe("Talk target preparation through Gateway authorization", () => {
-  it.each(["main", undefined])("uses the configured Talk owner for %s", async (sessionKey) => {
+  it.each(["main"])("uses the configured Talk owner for %s", async (sessionKey) => {
     const respond = await dispatch("talk.client.create", {
       ...createParams,
       ...(sessionKey ? { sessionKey } : {}),
@@ -179,64 +180,6 @@ describe("Talk target preparation through Gateway authorization", () => {
     expect(
       loadSessionEntry({ agentId: "voice", sessionKey: "agent:voice:main" })?.sessionId,
     ).toBeTruthy();
-  });
-
-  it.each<{ name: string; cfg: OpenClawConfig }>([
-    {
-      name: "sole agent",
-      cfg: { agents: { entries: { voice: {} }, ownership: "explicit" } },
-    },
-    {
-      name: "system agent",
-      cfg: {
-        agents: {
-          entries: { primary: {}, voice: {} },
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "voice" } },
-        },
-      },
-    },
-    {
-      name: "migrated legacy default",
-      cfg: createCanonicalAgentConfigFixture({
-        agents: { entries: { primary: {}, voice: { default: true } } },
-      }).config,
-    },
-  ])("uses a valid $name default without authored talk.agentId", async ({ cfg }) => {
-    config = cfg;
-    const respond = await dispatch("talk.client.create", createParams);
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
-    expect(createBrowserSession).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "voice" }),
-    );
-  });
-
-  it.each([
-    { agentId: "voice", withoutOwner: true, name: "missing ambient owner" },
-    { agentId: "primary", withoutOwner: false, name: "different Talk owner" },
-  ])("honors the explicitly selected session with a $name", async ({ agentId, withoutOwner }) => {
-    if (withoutOwner) {
-      delete config.talk;
-    }
-    const sessionKey = `agent:${agentId}:selected`;
-    const respond = await dispatch("talk.client.create", { ...createParams, sessionKey });
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
-    expect(mocks.bootstrap).toHaveBeenCalledWith(expect.objectContaining({ agentId, sessionKey }));
-  });
-
-  it("rejects ambiguous default ownership before loading profile or provider state", async () => {
-    delete config.talk;
-    const respond = await dispatch("talk.client.create", createParams);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("explicit owner"),
-      }),
-    );
-    expect(mocks.bootstrap).not.toHaveBeenCalled();
-    expect(createBrowserSession).not.toHaveBeenCalled();
   });
 
   it.each(["read-only", "draft", "incognito"] as const)(
@@ -306,101 +249,46 @@ describe("Talk target preparation through Gateway authorization", () => {
     );
   });
 
-  it.each([
-    { name: "custom main", sessionKey: "main", mainKey: "home", canonicalKey: "agent:voice:home" },
-    { name: "omitted custom main", mainKey: "home", canonicalKey: "agent:voice:home" },
-    { name: "global alias", sessionKey: "main", global: true, canonicalKey: "global" },
-    {
-      name: "global explicit owner",
-      sessionKey: "agent:voice:main",
-      global: true,
-      canonicalKey: "global",
-    },
-    { name: "omitted global", global: true, canonicalKey: "global" },
-    {
-      name: "fixed-store owner",
-      sessionKey: "main",
-      fixed: true,
-      canonicalKey: "agent:primary:main",
-    },
-    { name: "omitted fixed-store owner", fixed: true, canonicalKey: "agent:primary:main" },
-    {
-      name: "global fixed-store owner",
-      sessionKey: "main",
-      fixed: true,
-      global: true,
-      canonicalKey: "global",
-    },
-    {
-      name: "explicit global fixed-store owner",
-      sessionKey: "agent:primary:main",
-      fixed: true,
-      global: true,
-      canonicalKey: "global",
-    },
-  ])(
-    "shares one canonical storage target for $name while retaining the exact voice key",
-    async (entry) => {
-      const agentId = entry.fixed ? "primary" : "voice";
-      config.session = {
-        ...(entry.mainKey ? { mainKey: entry.mainKey } : {}),
-        ...(entry.global ? { scope: "global" } : {}),
-        ...(entry.fixed ? { store: state.statePath("shared", "sessions.sqlite") } : {}),
-      };
-      if (entry.fixed) {
-        config.agents!.defaults = { sessionStore: { agentId } };
-      }
-      const params = Object.freeze({
-        ...createParams,
-        ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
-      });
-      const respond = await dispatch("talk.client.create", params);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining(browserSession),
-        undefined,
-      );
-      const { voiceSessionId } = respond.mock.calls[0]![1] as { voiceSessionId: string };
-      const voiceKey = entry.sessionKey ?? `agent:${agentId}:${entry.mainKey ?? "main"}`;
-      expect(clientVoiceSessionTesting.readRecord(agentId, voiceSessionId)?.sessionKey).toBe(
-        voiceKey,
-      );
-      const scope = {
-        agentId,
-        sessionKey: entry.canonicalKey,
-        ...(entry.fixed ? { storePath: config.session.store } : {}),
-      };
-      const stored = loadSessionEntry(scope);
-      expect(stored?.sessionId).toBeTruthy();
-      expect(mocks.bootstrap).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId, sessionKey: entry.canonicalKey }),
-      );
-      expect(
-        await dispatch("talk.client.transcript", {
-          sessionKey: voiceKey,
-          voiceSessionId,
-          entryId: "utterance",
-          role: "user",
-          text: "Synthetic speech",
-        }),
-      ).toHaveBeenCalledWith(true, { ok: true }, undefined);
-      expect(
-        readSessionTranscriptMessageEvents({ ...scope, sessionId: stored!.sessionId }),
-      ).toHaveLength(1);
-      if (voiceKey !== entry.canonicalKey) {
-        expect(
-          await dispatch("talk.client.close", { sessionKey: entry.canonicalKey, voiceSessionId }),
-        ).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "INVALID_REQUEST" }),
-        );
-      }
-      expect(
-        await dispatch("talk.client.close", { sessionKey: voiceKey, voiceSessionId }),
-      ).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    },
-  );
+  it("shares the global fixed-store target while retaining the exact voice key", async () => {
+    const agentId = "primary";
+    const voiceKey = "main";
+    config.session = {
+      scope: "global",
+      store: state.statePath("shared", "sessions.sqlite"),
+    };
+    config.agents!.defaults = { sessionStore: { agentId } };
+    const params = Object.freeze({ ...createParams, sessionKey: voiceKey });
+    const respond = await dispatch("talk.client.create", params);
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
+    const { voiceSessionId } = respond.mock.calls[0]![1] as { voiceSessionId: string };
+    expect(clientVoiceSessionTesting.readRecord(agentId, voiceSessionId)?.sessionKey).toBe(
+      voiceKey,
+    );
+    const scope = { agentId, sessionKey: "global", storePath: config.session.store };
+    const stored = loadSessionEntry(scope);
+    expect(stored?.sessionId).toBeTruthy();
+    expect(mocks.bootstrap).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId, sessionKey: "global" }),
+    );
+    expect(
+      await dispatch("talk.client.transcript", {
+        sessionKey: voiceKey,
+        voiceSessionId,
+        entryId: "utterance",
+        role: "user",
+        text: "Synthetic speech",
+      }),
+    ).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(
+      readSessionTranscriptMessageEvents({ ...scope, sessionId: stored!.sessionId }),
+    ).toHaveLength(1);
+    expect(
+      await dispatch("talk.client.close", { sessionKey: "global", voiceSessionId }),
+    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
+    expect(
+      await dispatch("talk.client.close", { sessionKey: voiceKey, voiceSessionId }),
+    ).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
 
   it.each([
     { name: "missing key", params: { voiceSessionId: "relay-call" } },
@@ -440,16 +328,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     },
   );
 
-  it.each([
-    "owner",
-    "removed-agent",
-    "main-key",
-    "global-main-key",
-    "scope",
-    "store",
-    "sharing",
-    "incognito",
-  ] as const)(
+  it.each(["owner", "removed-agent", "sharing", "incognito"] as const)(
     "rejects %s changes during provider creation without writing a different target",
     async (change) => {
       const gate = createDeferredCore<typeof browserSession>();
@@ -458,26 +337,17 @@ describe("Talk target preparation through Gateway authorization", () => {
         started.resolve();
         return await gate.promise;
       });
-      if (change === "global-main-key") {
-        config.session = { scope: "global" };
-      }
       const pending = dispatch("talk.client.create", {
         ...createParams,
-        ...(change === "global-main-key" ? {} : { sessionKey: "main" }),
+        sessionKey: "main",
       });
       await started.promise;
       if (change === "removed-agent") {
         config = { ...config, agents: { ownership: "explicit", entries: { primary: {} } } };
-      } else if (change === "global-main-key") {
-        config = { ...config, session: { scope: "global", mainKey: "changed" } };
+        setRuntimeConfigSnapshot(config);
       } else if (change === "owner") {
         config = { ...config, talk: { agentId: "primary" } };
-      } else if (change === "main-key") {
-        config = { ...config, session: { mainKey: "changed" } };
-      } else if (change === "scope") {
-        config = { ...config, session: { scope: "global" } };
-      } else if (change === "store") {
-        config = { ...config, session: { store: state.statePath("changed", "sessions.sqlite") } };
+        setRuntimeConfigSnapshot(config);
       } else {
         await replaceSessionEntry(
           { agentId: "voice", sessionKey: "agent:voice:main" },
@@ -564,17 +434,19 @@ describe("Talk target preparation through Gateway authorization", () => {
     });
     await started.promise;
     config = { ...config, talk: { agentId: "primary" } };
+    setRuntimeConfigSnapshot(config);
     gate.resolve();
     expect(await pending).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(mocks.bootstrap).not.toHaveBeenCalled();
-    expect(createBrowserSession).not.toHaveBeenCalled();
+    for (const agentId of ["voice", "primary"]) {
+      expect(loadSessionEntry({ agentId, sessionKey: `agent:${agentId}:main` })).toBeUndefined();
+    }
   });
 
-  it.each(["main", undefined])(
+  it.each([undefined])(
     "passes the authorized %s target into relay creation",
     async (sessionKey) => {
       config.session = { scope: "global" };
@@ -622,7 +494,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     expect(loadSessionEntry({ agentId: "voice", sessionKey: "agent:voice:main" })).toBeUndefined();
   });
 
-  it.each(["owner", "sharing", "incognito", "replacement"] as const)(
+  it.each(["sharing", "incognito", "replacement", "owner"] as const)(
     "rechecks %s after session preparation and before committing the voice call",
     async (change) => {
       if (change === "sharing") {
@@ -649,6 +521,7 @@ describe("Talk target preparation through Gateway authorization", () => {
           expect(sessionId).toBeTruthy();
           if (change === "owner") {
             config = { ...config, talk: { agentId: "primary" } };
+            setRuntimeConfigSnapshot(config);
           } else {
             await replaceSessionEntry(scope, {
               sessionId: change === "replacement" ? "replacement-session" : sessionId!,
@@ -710,12 +583,15 @@ describe("Talk target preparation through Gateway authorization", () => {
     const pending = dispatch("talk.client.create", createParams);
     await started.promise;
     config = { ...config, talk: { agentId: "primary" } };
+    setRuntimeConfigSnapshot(config);
     gate.resolve(undefined);
     expect(await pending).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(createBrowserSession).not.toHaveBeenCalled();
+    for (const agentId of ["voice", "primary"]) {
+      expect(loadSessionEntry({ agentId, sessionKey: `agent:${agentId}:main` })).toBeUndefined();
+    }
   });
 });

@@ -219,7 +219,7 @@ export function createProviderAuthAvailability(
     return filterAuthProfileIds(store, profileIds, params).length > 0;
   }
 
-  /** @deprecated Use isProviderApiKeyConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isProviderApiKeyConfiguredAsync. Final compatibility day: 2026-12-31. */
   function isProviderApiKeyConfigured(
     params: Parameters<typeof isProviderApiKeyConfiguredFromStore>[0],
   ): boolean {
@@ -263,11 +263,16 @@ export function createProviderAuthAvailability(
     return isProviderApiKeyConfiguredFromStore({ ...params, store }, persistedCredential);
   }
 
-  /** @deprecated Use listUsableProviderAuthProfileIdsAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use listUsableProviderAuthProfileIdsAsync. Final compatibility day: 2026-12-31. */
   function listUsableProviderAuthProfileIds(params: ProviderAuthProfileLookup): {
     agentDir: string;
     profileIds: string[];
   } {
+    warnPluginSdkDeprecation({
+      family: "auth-profile-sync-operations",
+      method: "listUsableProviderAuthProfileIds",
+      replacement: "await listUsableProviderAuthProfileIdsAsync()",
+    });
     try {
       const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
       return { agentDir, profileIds: filterAuthProfileIds(store, profileIds, params) };
@@ -276,8 +281,13 @@ export function createProviderAuthAvailability(
     }
   }
 
-  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Final compatibility day: 2026-12-31. */
   function isProviderAuthProfileConfigured(params: ProviderAuthProfileLookup): boolean {
+    warnPluginSdkDeprecation({
+      family: "auth-profile-sync-operations",
+      method: "isProviderAuthProfileConfigured",
+      replacement: "await isProviderAuthProfileConfiguredAsync()",
+    });
     return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
   }
 

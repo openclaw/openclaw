@@ -151,7 +151,7 @@ secrets.providers.*.path secrets.providers.*.source skills.allowBundled
 skills.entries.*.apiKey skills.entries.*.config skills.entries.*.enabled
 skills.entries.*.env skills.install.allowUploadedArchives skills.install.nodeManager
 skills.load.allowSymlinkTargets skills.load.extraDirs
-skills.workshop.autonomous.mode talk.provider talk.providers.*.apiKey
+skills.workshop.autonomous.channelNotices skills.workshop.autonomous.mode talk.provider talk.providers.*.apiKey
 talk.realtime.brain talk.realtime.mode talk.realtime.provider
 talk.realtime.model talk.realtime.providers.*.apiKey talk.realtime.speakerVoice talk.speechLocale
 tools.alsoAllow tools.deny tools.exec
@@ -178,6 +178,7 @@ const ADVANCED_TUNING_PATHS = new Set([
   "agents.defaults.heartbeat.every",
   "agents.entries.*.tools.github.allowInSandbox",
   "session.maintenance.preserveRecent",
+  "tools.sessions.allowThreadTargets",
 ]);
 
 function splitPath(path: string): string[] {

@@ -10,6 +10,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -59,11 +63,14 @@ describe("ManagedWorktreeService canonical paths", () => {
     stateDir = path.join(root, "state");
     await fs.mkdir(stateDir, { recursive: true });
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    resetConfigRuntimeState();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -81,6 +88,10 @@ describe("ManagedWorktreeService canonical paths", () => {
     await expect(service.resolveRepositoryIdentity(repo)).rejects.toThrow(
       "synthetic repository read failure",
     );
+    await expect(service.resolveRepositoryPaths(repo)).resolves.toEqual({
+      canonicalRoot: repo,
+      sourceRoot: repo,
+    });
   });
 
   it("repairs the live repository before snapshotting and a queued restore", async ({ signal }) => {
@@ -283,6 +294,7 @@ describe("configured managed worktree root", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -421,10 +433,12 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
     repo = await fs.realpath(repo);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
   });
 
   afterEach(async () => {
+    resetConfigRuntimeState();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });

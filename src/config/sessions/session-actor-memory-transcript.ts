@@ -16,6 +16,7 @@ import {
   applySessionGoalOperation,
   prepareSessionTurnGoalMessage,
 } from "./goals-operation-policy.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { TranscriptMessageAppendResult } from "./session-accessor.types.js";
 import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-actor-contract.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
@@ -82,7 +83,8 @@ export function createSessionActorMemoryTranscript(options: {
   const bindScope = (scope: MetadataInput["scope"]) => {
     if (
       (scope.agentId !== undefined && scope.agentId !== agentId) ||
-      (scope.sessionKey !== undefined && scope.sessionKey !== state.hot.target.sessionKey) ||
+      (scope.sessionKey !== undefined &&
+        resolveSqliteSessionKey(scope.sessionKey, agentId) !== state.hot.target.sessionKey) ||
       (scope.storePath !== undefined && scope.storePath !== path) ||
       !sessionMatchesExpectedTranscriptTurn(
         state.hot.entry ? { entry: state.hot.entry } : undefined,

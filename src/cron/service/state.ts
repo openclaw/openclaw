@@ -127,7 +127,7 @@ export type CronServiceDeps = {
   resolveDefaultAgentId?: () => string | undefined;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[] | Promise<string[]>;
-  /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
+  /** Revalidate resident policy using the worker's deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
@@ -253,9 +253,11 @@ export type CronServiceDeps = {
     /** Persists the transport-owned terminal fact before Gateway work admission releases. */
     onDeliverySettled: (outcome: CronFailureNotificationDelivery) => Promise<void>;
   }) => Promise<void>;
+  /** Uses the same resolved timeout as the owner-conversation agent turn. */
+  failureRepairTimeoutMs?: number;
   /**
-   * Starts one ordinary turn in the conversation that owns a failing job, as if that
-   * conversation had received `message`; its reply goes to the conversation's own route.
+   * Runs one ordinary turn in the conversation that owns a failing job, resolving
+   * only after settlement; its authored reply goes to the conversation's own route.
    */
   runCronFailureRepair?: (request: CronFailureRepairRequest) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
@@ -265,6 +267,7 @@ export type CronServiceDeps = {
 export type CronFailureRepairRequest = {
   jobId: string;
   repairId: string;
+  timeoutMs: number;
   agentId?: string;
   sessionKey: string;
   message: string;
@@ -282,7 +285,7 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
 
 /** Dependencies consumed by job policy before its mutation is committed. */
 export type CronJobPolicyContext = {
-  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log">;
+  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs">;
   /** Resolved by the host for this exact job while its recovery transaction holds the row. */
   preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };

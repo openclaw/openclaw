@@ -8,6 +8,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "./install.npm-spec.test-support.js";
 import { runPluginPayloadSmokeCheck } from "./payload-verification.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 import {
   packPlugins,
   registryPackages,
@@ -39,8 +41,6 @@ import { syncPluginsForUpdateChannel } from "./update-channel.js";
 
 const tempDirs = createTempDirTracker();
 const servers: http.Server[] = [];
-const envKeys = ["NPM_CONFIG_REGISTRY", "npm_config_registry"] as const;
-const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -49,19 +49,26 @@ afterEach(async () => {
       server.close(() => resolve());
     });
   }
-  for (const key of envKeys) {
-    const original = originalEnv[key];
-    if (original === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = original;
-    }
-  }
+  vi.unstubAllEnvs();
   tempDirs.cleanup();
 });
 
 async function makeInstallFixture(label: string) {
   const rootDir = tempDirs.make(`openclaw-${label}-`);
+  const userconfig = path.join(rootDir, "empty.npmrc");
+  const globalconfig = path.join(rootDir, "global.npmrc");
+  await Promise.all([fs.writeFile(userconfig, ""), fs.writeFile(globalconfig, "")]);
+  // These cases exercise npm installs, not discovery of the operator's npm policies.
+  for (const [key, value] of Object.entries({
+    userconfig,
+    globalconfig,
+    cache: path.join(rootDir, "pack-cache"),
+    allow_git: "all",
+    allow_remote: "all",
+  })) {
+    vi.stubEnv(`NPM_CONFIG_${key.toUpperCase()}`, value);
+    vi.stubEnv(`npm_config_${key}`, value);
+  }
   return { rootDir, npmRoot: path.join(rootDir, "managed-npm") };
 }
 
@@ -84,8 +91,8 @@ async function useStaticRegistry(packages: RegistryPackage[]): Promise<string> {
 }
 
 function useRegistry(registry: string): void {
-  process.env.NPM_CONFIG_REGISTRY = registry;
-  process.env.npm_config_registry = registry;
+  vi.stubEnv("NPM_CONFIG_REGISTRY", registry);
+  vi.stubEnv("npm_config_registry", registry);
 }
 
 describe("installPluginFromNpmSpec e2e", () => {
@@ -262,25 +269,24 @@ describe("installPluginFromNpmSpec e2e", () => {
       const stateDir = path.join(rootDir, "state");
       const configPath = path.join(stateDir, "openclaw.json");
       const reportPath = path.join(rootDir, "install-result.json");
-      const npmConfigPath = path.join(rootDir, "empty.npmrc");
-      const npmGlobalConfigPath = path.join(rootDir, "global.npmrc");
-      await fs.writeFile(npmConfigPath, "");
-      await fs.writeFile(npmGlobalConfigPath, "");
-      // Import in a fresh process so the hook payload owner resolves this isolated state root.
+      // Reuse compiled modules while keeping the hook payload owner's state in a fresh process.
+      const installCommandUrl = resolveRuntimeWorkerUrl(
+        pluginProcessRuntimeEntrypoints.installCommand,
+      );
       const script = `
         import { existsSync } from "node:fs";
         import fs from "node:fs/promises";
         import path from "node:path";
         import { randomUUID } from "node:crypto";
-        import { runPluginInstallCommand } from ${JSON.stringify(new URL("../cli/plugins-install-command.ts", import.meta.url).href)};
-        import { writeConfigFile } from ${JSON.stringify(new URL("../config/config.ts", import.meta.url).href)};
-        import { readHookInstalls } from ${JSON.stringify(new URL("../hooks/installs.ts", import.meta.url).href)};
-        import { readPersistedInstalledPluginIndexInstallRecords } from ${JSON.stringify(new URL("./installed-plugin-index-records.ts", import.meta.url).href)};
+        import { runPluginInstallCommand } from ${JSON.stringify(installCommandUrl.href)};
+        import { writeConfigFile } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.config).href)};
+        import { readHookInstalls } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.hookInstalls).href)};
+        import { readPersistedInstalledPluginIndexInstallRecordsAsync } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.installedPluginRecords).href)};
         import {
           claimAgentRunDelegatedAuthority,
           releaseAgentRunDelegatedAuthority,
           validateAgentRunDelegatedAuthority,
-        } from ${JSON.stringify(new URL("../infra/agent-run-registry.ts", import.meta.url).href)};
+        } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.delegatedAuthority).href)};
         const [packageName, registry, reportPath] = JSON.parse(process.argv[1]);
         await writeConfigFile({});
         const configBefore = await fs.readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8");
@@ -335,7 +341,7 @@ describe("installPluginFromNpmSpec e2e", () => {
           observations[stage] = {
             exitCode, authorityClosed, error: errors.join("\\n"),
             configUnchanged: configBefore === await fs.readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8"),
-            pluginInstalls: readPersistedInstalledPluginIndexInstallRecords() ?? {},
+            pluginInstalls: (await readPersistedInstalledPluginIndexInstallRecordsAsync()) ?? {},
             hookInstalls: readHookInstalls(),
             npmPayloads: npmEntries.filter((entry) => entry.endsWith(path.join("node_modules", packageName))),
             hookPayload: existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "hooks", packageName)),
@@ -346,9 +352,8 @@ describe("installPluginFromNpmSpec e2e", () => {
       `;
       try {
         const result = await runNodeScript(
-          [
-            "--import",
-            "tsx",
+          (workerArgv) => [
+            ...workerArgv(installCommandUrl).slice(0, -1),
             "--input-type=module",
             "--eval",
             script,
@@ -362,12 +367,9 @@ describe("installPluginFromNpmSpec e2e", () => {
             OPENCLAW_AGENT_DIR: undefined,
             NPM_CONFIG_REGISTRY: registry,
             npm_config_registry: registry,
+            // npm pack seeds its cache; cancellation must observe a real tarball download.
             NPM_CONFIG_CACHE: path.join(rootDir, "npm-cache"),
             npm_config_cache: path.join(rootDir, "npm-cache"),
-            NPM_CONFIG_USERCONFIG: npmConfigPath,
-            npm_config_userconfig: npmConfigPath,
-            NPM_CONFIG_GLOBALCONFIG: npmGlobalConfigPath,
-            npm_config_globalconfig: npmGlobalConfigPath,
           },
           150_000,
           { maxBuffer: 64 * 1024, requireProcessTreeExit: true },

@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
-  type SqliteCommitReceipt,
   type SqliteCommittedFact,
 } from "../../infra/sqlite-commit-receipt.js";
 import {
@@ -18,6 +17,7 @@ import {
   type SessionRowChange,
 } from "../../sessions/session-row-changes.js";
 import { advanceSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import { isSessionTranscriptTerminalModel } from "../../sessions/transcript-terminal-model.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -25,22 +25,11 @@ import {
   readPreparedSessionEntryPublicationSource,
   preparedSharingChanges,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
-
-/** Context postimage; exact anchor membership still belongs to the native projection reader. */
-export type SessionTranscriptAuthority = SessionTranscriptContextVersion & {
-  sessionId: string;
-  sessionKey: string;
-  leafEventId: string | null;
-  indexedSeq: number | null;
-  activeMessageCount: number | null;
-  needsRebuild: number | null;
-};
-export type SessionTranscriptAuthorityReceipt = SqliteCommitReceipt<
+import { prepareSessionActorTranscriptAuthority } from "./session-actor-transaction.js";
+import type {
   SessionTranscriptAuthority,
-  SessionEntryPublicationSource
->;
+  SessionTranscriptAuthorityReceipt,
+} from "./session-transcript-authority.types.js";
 
 const staged = resolveGlobalSingleton(
   Symbol.for("openclaw.transcriptAuthorityStaged"),
@@ -138,7 +127,7 @@ export function publishSessionTranscriptAuthority(
 ): void {
   publishTranscriptFact(database, context.sessionKey, {
     kind: "postimage",
-    value: Object.freeze(context),
+    value: Object.freeze(prepareSessionActorTranscriptAuthority(database, context)),
   });
 }
 
@@ -200,8 +189,15 @@ export function publishUnchangedSessionTranscriptReceipts(
   ) {
     throw new Error("Transcript materialization changed its content authority receipt");
   }
+  publishCommittedSessionTranscriptReceipts(receipts);
+}
+
+/** The native settlement owner publishes these while it still holds the writer FIFO. */
+export function publishCommittedSessionTranscriptReceipts(
+  receipts: readonly SessionTranscriptAuthorityReceipt[] | undefined,
+): void {
   sessionChanges.emitBatch(
-    receipts.flatMap((receipt) =>
+    (receipts ?? []).flatMap((receipt) =>
       receiptChanges(receipt, undefined, receipt.source.canonicalPath ?? receipt.source.filename),
     ),
   );
@@ -245,7 +241,13 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       (row.generation !== null && typeof row.generation !== "string") ||
       (row.leafEventId !== null && typeof row.leafEventId !== "string") ||
       ![row.rawSeq, row.updatedAt, row.indexedSeq, row.activeMessageCount].every(nullableNumber) ||
-      (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1)
+      (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1) ||
+      (row.lastMessagePreview !== undefined &&
+        row.lastMessagePreview !== null &&
+        typeof row.lastMessagePreview !== "string") ||
+      (row.terminalModel !== undefined &&
+        row.terminalModel !== null &&
+        !isSessionTranscriptTerminalModel(row.terminalModel))
     ) {
       return false;
     }

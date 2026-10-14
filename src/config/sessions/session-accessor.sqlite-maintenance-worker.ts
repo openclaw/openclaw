@@ -13,11 +13,13 @@ import type {
 import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import type { SqliteReclamationClaim } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
+import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
 
 export function runSessionMaintenanceMetadataInWorker(params: {
   plan: SessionMaintenanceMetadataCommand & { databaseOptions: ReclamationDatabaseOptions };
   claim: SqliteReclamationClaim;
   assertCurrent: () => void;
+  assertMaintenanceCommitAllowed?: (plans?: readonly SessionMaintenancePreservationPlan[]) => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
   signal: AbortSignal;
   diagnostics?: SqliteSessionReclamationDiagnostics;
@@ -45,6 +47,7 @@ export function runSessionMaintenanceMetadataInWorker(params: {
               preparationId,
               protection: {
                 activeSessionKeys: plan.input.activeSessionKeys,
+                preparedAgeFactCurrent: plan.input.preparedAgeFactCurrent,
                 preservation: plan.input.preservation,
               },
             }
@@ -57,6 +60,11 @@ export function runSessionMaintenanceMetadataInWorker(params: {
     },
     {
       identityAgentId: plan.databaseOptions.agentId,
+      beforeCommit(publication) {
+        if (plan.kind === "maintenance-plan") {
+          params.assertMaintenanceCommitAllowed?.(publication.maintenancePlans);
+        }
+      },
       onResult(result) {
         const openDatabase = getOpenClawAgentDatabaseIfOpen(plan.databaseOptions);
         const database =

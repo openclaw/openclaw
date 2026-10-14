@@ -2,24 +2,17 @@ import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
+import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
-import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
-import {
-  prepareIncognitoSessionHistoryRead,
-  type IncognitoSessionHistoryBinding,
-} from "./session-incognito-history-read.js";
-import {
-  prepareSessionTranscriptAnchorMessageReader,
-  readSessionTranscriptAnchorFactsInDatabase,
-  type SessionTranscriptAnchorSelection,
-} from "./session-transcript-anchor-read.kernel.js";
+  readSessionActorTranscriptAnchorsFromReplica,
+  readSessionActorTranscriptReplica,
+} from "./session-actor-replica.js";
+import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
+import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
 import {
@@ -31,6 +24,7 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 import {
   getOwnedSessionTranscriptReader,
   readOwnedSessionTranscriptEntry,
+  readOwnedSessionTranscriptState,
 } from "./transcript-write-context.js";
 
 type AnchorScope = SessionTranscriptReadScope & { sessionKey: string };
@@ -42,7 +36,6 @@ export async function readSessionTranscriptAnchorsAsync(
   signal?: AbortSignal,
   /** Consume only a current snapshot, while its original writer FIFO and reader remain retained. */
   onRead?: (facts: SessionTranscriptAnchorFacts) => void,
-  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptAnchorFacts> {
   const consume = (facts: SessionTranscriptAnchorFacts) => {
     const consumed = onRead?.(facts);
@@ -51,21 +44,47 @@ export async function readSessionTranscriptAnchorsAsync(
       throw new Error("Transcript anchor consumers must remain synchronous");
     }
   };
-  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
-  if (incognito) {
-    const { actor, authority, target } = prepareIncognitoSessionHistoryRead(
-      incognito,
-      scope,
-      signal,
-    );
-    const facts = await actor.sessions.history(
-      authority,
-      { type: "session.history.anchors", input: { ...selection, ...target } },
-      signal,
-      onRead ? consume : undefined,
-    );
-    authority.assertCurrent();
+  const memory = captureSessionActorTranscriptRead(scope, signal);
+  if (memory) {
+    const facts = memory.missing
+      ? {
+          anchors: [],
+          ...(selection.includeMetadata
+            ? { metadata: { present: false, observedAt: null, updatedAt: null } }
+            : {}),
+          ...(selection.replayValidation?.allowInitial
+            ? { replayValidated: "initial" as const }
+            : {}),
+        }
+      : await memory.read("session.history.anchors", selection);
+    memory.assertCurrent();
+    consume(facts);
     return facts;
+  }
+  signal?.throwIfAborted();
+  const hot = readOwnedSessionTranscriptState(scope);
+  if (scope.storePath) {
+    const target = {
+      agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+      path: scope.storePath,
+      sessionId: scope.sessionId,
+    };
+    const facts =
+      (hot &&
+        readSessionActorTranscriptAnchors(
+          hot,
+          target,
+          selection,
+          readSessionActorTranscriptReplica(hot)?.tail,
+        )) ??
+      readSessionActorTranscriptAnchorsFromReplica(
+        { ...target, sessionKey: scope.sessionKey },
+        selection,
+      );
+    if (facts) {
+      consume(structuredClone(facts));
+      return structuredClone(facts);
+    }
   }
   const selected =
     selection.afterSeq === undefined &&
@@ -121,30 +140,6 @@ export async function readSessionTranscriptAnchorsAsync(
   signal?.throwIfAborted();
   return withSessionTranscriptReadSource(
     captured,
-    () => {
-      const resolved = resolveSqliteTranscriptScope(captured);
-      const options = toDatabaseOptions(resolved);
-      const database = getOpenClawAgentDatabaseIfOpen(options);
-      const read = (
-        readMessage?: Parameters<typeof readSessionTranscriptAnchorFactsInDatabase>[3],
-      ) => {
-        signal?.throwIfAborted();
-        if (getOpenClawAgentDatabaseIfOpen(options) !== database) {
-          throw new Error("Transcript anchors changed their captured native database owner");
-        }
-        // Process-held transcripts must never be reopened by a durable reader.
-        const facts = database
-          ? readOpenClawAgentDatabase(database, (reader) =>
-              readSessionTranscriptAnchorFactsInDatabase(reader, resolved, request, readMessage),
-            ).value
-          : empty;
-        consume(facts);
-        return facts;
-      };
-      return !database || request.includeMessagesForRunId === undefined
-        ? read()
-        : prepareSessionTranscriptAnchorMessageReader(request).then(read);
-    },
     async (source) => {
       if (!source.expectedIdentity) {
         consume(empty);
@@ -247,14 +242,11 @@ export async function readSessionTranscriptAnchorsFromSource(
 export async function readActiveTranscriptEntryAnchorAsync(
   scope: AnchorScope & { entryId: string },
   signal?: AbortSignal,
-  incognito?: IncognitoSessionHistoryBinding,
 ) {
   const result = await readSessionTranscriptAnchorsAsync(
     scope,
     { entryIds: [scope.entryId] },
     signal,
-    undefined,
-    incognito,
   );
   return result.anchors[0];
 }

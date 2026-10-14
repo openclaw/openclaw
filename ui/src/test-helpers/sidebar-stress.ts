@@ -3,7 +3,7 @@ import { SESSION_PLACEMENT_STATES } from "../../../packages/gateway-protocol/src
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "./app-sidebar.ts";
-import "../components/app-sidebar.ts";
+import "../components/app-sidebar.tsx";
 export const owner = {
   type: "human",
   id: "nora",

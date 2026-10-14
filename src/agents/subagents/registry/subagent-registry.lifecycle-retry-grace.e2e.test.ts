@@ -2,7 +2,8 @@
 // lifecycle events race gateway waits or transient announce failures.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
@@ -122,8 +123,10 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Registry fixtures supply requester depth without opening a session database.
 vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
+  getSubagentDepthFromSessionStoreInWorker: async () => 0,
 }));
 
 describe("subagent registry lifecycle error grace", () => {
@@ -142,10 +145,12 @@ describe("subagent registry lifecycle error grace", () => {
       lifecycleHandler = handler;
       return noop;
     });
-    loadConfigMock.mockClear().mockReturnValue({
+    const config: OpenClawConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" },
-    });
+    };
+    setRuntimeConfigSnapshot(config);
+    loadConfigMock.mockClear().mockReturnValue(config);
     agentCallPlan = [];
     agentCallGates = new Map();
     chatHistoryBySessionKey = new Map();
@@ -226,6 +231,7 @@ describe("subagent registry lifecycle error grace", () => {
         process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
       }
       await testState.cleanup();
+      clearRuntimeConfigSnapshot();
     }
   });
 

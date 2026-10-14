@@ -122,6 +122,7 @@ import {
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
 let compactTesting: typeof import("./compact.hooks.owner-test-support.js");
+let configRuntime: typeof import("../../config/runtime-snapshot.js");
 
 let TEST_STORE_PATH: string;
 let TEST_SESSION_ID: string;
@@ -130,12 +131,6 @@ const compactionFixture = useCompactHooksSessionFixture(TEST_SESSION_KEY);
 let TEST_SESSION_FILE: string;
 let TEST_WORKSPACE_DIR: string;
 const TEST_CUSTOM_INSTRUCTIONS = "focus on decisions";
-type SessionHookEvent = {
-  type?: string;
-  action?: string;
-  sessionKey?: string;
-  context?: Record<string, unknown>;
-};
 function plannedCompactionPluginSelections(
   config: OpenClawConfig,
   metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] }),
@@ -274,27 +269,32 @@ function createPreparedCodexCompactionPlans(modelId = "gpt-5.5") {
   };
 }
 
-const sessionHook = (action: string): SessionHookEvent | undefined =>
-  triggerInternalHookMock.mock.calls.find((call) => {
-    const event = call[0] as SessionHookEvent | undefined;
-    return event?.type === "session" && event.action === action;
-  })?.[0] as SessionHookEvent | undefined;
-
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
   compactTesting = await import("./compact.hooks.owner-test-support.js");
-  compactEmbeddedAgentSessionDirect = (params) =>
-    loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
-  compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
+  configRuntime = await import("../../config/runtime-snapshot.js");
+  compactEmbeddedAgentSessionDirect = (params) => {
+    configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
+    return loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
+  };
+  compactEmbeddedAgentSession = (params, host) => {
+    configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
+    return loaded.compactEmbeddedAgentSession(params, host);
+  };
   TEST_STORE_PATH = await compactionFixture.prepare();
 });
 
 beforeEach(async () => {
+  configRuntime.setRuntimeConfigSnapshot({});
   ({
     workspaceDir: TEST_WORKSPACE_DIR,
     sessionFile: TEST_SESSION_FILE,
     sessionId: TEST_SESSION_ID,
   } = await compactionFixture.prepareSession());
+});
+
+afterEach(() => {
+  configRuntime.clearRuntimeConfigSnapshot();
 });
 
 describe("compactEmbeddedAgentSessionDirect hooks", () => {
@@ -1418,24 +1418,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
     expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamMock, 1), {
       authProfileId: "openai:default",
-    });
-  });
-
-  it("applies validated transcript before hooks even when it becomes empty", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
-    const { sanitizeSessionHistory } = await import("./replay-history.js");
-    vi.mocked(sanitizeSessionHistory).mockResolvedValueOnce([]);
-
-    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
-
-    expect(result.ok).toBe(true);
-
-    const beforeContext = sessionHook("compact:before")?.context;
-    expectRecordFields(beforeContext, {
-      messageCountOriginal: 0,
-      tokenCountOriginal: 0,
-      messageCount: 0,
-      tokenCount: 0,
     });
   });
 

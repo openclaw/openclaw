@@ -1,8 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { buildConfigSchemaCore } from "./schema.js";
+import { validateConfigObjectRaw } from "./validation-core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("experimental database config", () => {
+  it.each([
+    { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
+    { source: "file", provider: "database", id: "/dsn" },
+    { source: "exec", provider: "database", id: "dsn" },
+  ])("accepts a bootstrap connection from $source", (connection) => {
+    const database = { engine: "postgres", postgres: { connection } };
+    expect(OpenClawSchema.parse({ database }).database).toEqual(database);
+  });
+
+  it.each(["sqlite", "postgres"])(
+    "reports a store-backed DSN for Doctor with %s selected",
+    (engine) => {
+      const result = validateConfigObjectRaw({
+        database: {
+          engine,
+          postgres: {
+            connection: { source: "store", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
+          },
+        },
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        issues: [
+          {
+            path: "database.postgres.connection",
+            message: expect.stringMatching(/use an env, file or exec SecretRef/),
+          },
+        ],
+      });
+    },
+  );
+
   it("accepts an optional engine and a sensitive SecretRef connection", () => {
     expect(OpenClawSchema.parse({}).database).toBeUndefined();
     const database = {

@@ -437,7 +437,8 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         }
         return;
       }
-      const triageNotice = "Update failed. Preparing triage diagnostics...";
+      const triageNotice = "Preparing triage diagnostics...";
+      const triageCompleted = "Triage diagnostics saved; no repair agent was started.";
       if (!scenario.endsWith("error")) {
         expect(result.stdout + result.stderr, failure).not.toContain(triageNotice);
         expect(result.stdout + result.stderr, failure).not.toContain("triage-fixture-prompt.md");
@@ -457,7 +458,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           expect(triageIndex, failure).toBeGreaterThan(result.stdout.indexOf(terminal));
           expect(promptIndex, failure).toBeGreaterThan(triageIndex);
           expect(guidanceIndex, failure).toBeGreaterThan(promptIndex);
-          expect(result.stdout.trimEnd().endsWith("openclaw triage --run"), failure).toBe(true);
+          expect(result.stdout.trimEnd().endsWith(triageCompleted), failure).toBe(true);
         } else {
           expect(result.stdout.trimEnd().endsWith(terminal), failure).toBe(true);
         }
@@ -468,6 +469,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       if (scenario.endsWith("error")) {
         expect(result.stderr, failure).not.toContain("Process still alive after terminal output");
         expect(result.stderr, failure).toContain(triageNotice);
+        expect(result.stderr, failure).toContain(triageCompleted);
         expect(result.stderr, failure).toContain('"promptPath":');
         expect(result.stderr, failure).toContain("triage-fixture-prompt.md");
         expect(result.stderr, failure).not.toContain("Triage could not complete:");
@@ -501,14 +503,25 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         expect(report.body).toContain("Reason code: doctor-failed");
         expect(report.body).toContain("Failed phase finalize-doctor: exit 1");
         expect(report.body).toContain("Recovery outcome: not serving (timeout)");
+        expect(report.body).toContain(
+          "Gateway readiness was not verified; service status: unknown. Check openclaw gateway status --deep.",
+        );
         expect(run.steps.filter((step) => step.step === "gateway recovery verification")).toEqual([
           {
             step: "gateway recovery verification",
             status: "failed",
             exitCode: 1,
-            detail:
-              "Exit code: 1; Gateway did not settle; startup phase: waiting for managed service",
-            failureFacts: [{ check: "settled", code: "timeout", message: expect.any(String) }],
+            detail: expect.stringContaining(
+              "Gateway readiness was not verified; service status: unknown; startup phase: waiting for managed service.",
+            ),
+            failureFacts: [
+              {
+                check: "settled",
+                code: "timeout",
+                message:
+                  "Gateway readiness was not verified; service status: unknown; startup phase: waiting for managed service. Check openclaw gateway status --deep.",
+              },
+            ],
           },
         ]);
         expect({

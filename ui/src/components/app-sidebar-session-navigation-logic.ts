@@ -38,7 +38,7 @@ import {
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
+import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
@@ -424,22 +424,13 @@ export function resolveActiveSidebarAgent(input: {
 
 export function resolveLatestSidebarAgentSession(input: {
   agentId: string;
-  sessionData: {
-    sessionsAgentId: string | null;
-    sessionsResult: SessionsListResult | null;
-    sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
-  };
+  result: SessionsListResult | null;
   context: ApplicationContext | undefined;
 }): SessionRow | null {
-  const { sessionData } = input;
   const normalized = normalizeAgentId(input.agentId);
-  const rows =
-    normalized === normalizeAgentId(sessionData.sessionsAgentId ?? "")
-      ? (sessionData.sessionsResult?.sessions ?? [])
-      : (sessionData.sessionResultsByAgent[normalized]?.sessions ?? []);
   // Unprefixed keys belong to the system default agent. Keeping them for
   // another agent would resume the wrong conversation with the raw key.
-  const visible = filterVisibleSessionRows(rows, {
+  const visible = filterVisibleSessionRows(input.result?.sessions ?? [], {
     agentId: normalized,
     defaultAgentId: resolveUiDefaultAgentId({
       agentsList: input.context?.agents.state.agentsList,

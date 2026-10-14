@@ -1,5 +1,6 @@
 import { parseControlUiSessionPath } from "@openclaw/session-url-contract/parse";
 import { afterEach, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -15,6 +16,7 @@ afterEach(() => closeOpenClawAgentDatabasesForTest());
 it("resolves only current public instances before choosing a URL candidate", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
     const privateKey = "agent:main:dashboard:12345678-bbbb-4000-8000-000000000002";
     const scope = { agentId: "main", sessionKey: key };
@@ -55,6 +57,9 @@ it("resolves only current public instances before choosing a URL candidate", asy
         expect(await resolve(path)).toBeNull();
       }
       const captured = await resolve("/chat/main/12345678");
+      await patchSessionEntryCore({ ...scope, sessionKey: privateKey }, () => ({ updatedAt: 3 }));
+      await projection.ensureMaterialized();
+      expect(captured?.isCurrent()).toBe(true);
       await patchSessionEntryCore(scope, () => ({ publicShare: undefined }));
       expect(captured?.isCurrent()).toBe(false);
       expect(await resolve("/chat/main/12345678")).toBeNull();

@@ -281,7 +281,9 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       terminalStatus === "completed"
         ? ("done" as const)
         : terminalStatus === "aborted"
-          ? ("killed" as const)
+          ? payload.stopReason === "restart"
+            ? ("interrupted" as const)
+            : ("killed" as const)
           : terminalStatus === "timeout"
             ? ("timeout" as const)
             : ("failed" as const);
@@ -417,6 +419,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       ? typeof payload.seq === "number" && {
           phase: "retrying" as const,
           seq: payload.seq,
+          ...(payload.retry.retryAt === undefined ? {} : { retryAt: payload.retry.retryAt }),
           message: t("chat.startupStatus.retrying", {
             attempt: String(payload.retry.attempt),
             maxAttempts: String(payload.retry.maxAttempts),

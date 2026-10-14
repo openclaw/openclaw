@@ -5,7 +5,10 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -111,11 +114,6 @@ describe("memory-core transcript and promotion boundaries", () => {
   it("preserves sensitive interactive transcript content during dreaming ingestion", async () => {
     const workspaceDir = await createWorkspace("redaction-dreaming-");
     const safeControlText = "Safe control text survives transcript ingestion.";
-    await seedInteractiveTranscript({
-      sessionId: "redaction-dreaming",
-      timestamp: "2026-08-03T18:00:00.000Z",
-      content: `${safeControlText} ${RAW_DREAMING_SECRET}`,
-    });
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { workspace: workspaceDir, userTimezone: "UTC" },
@@ -138,6 +136,12 @@ describe("memory-core transcript and promotion boundaries", () => {
         },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
+    await seedInteractiveTranscript({
+      sessionId: "redaction-dreaming",
+      timestamp: "2026-08-03T18:00:00.000Z",
+      content: `${safeControlText} ${RAW_DREAMING_SECRET}`,
+    });
 
     await expect(
       runDreamingSweepPhases({

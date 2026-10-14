@@ -172,6 +172,80 @@ function createRetargetedWindowsRootFixture(prefix: string, basename: string) {
 }
 
 describe("plugin package facts", () => {
+  it.skipIf(process.platform === "win32")(
+    "reuses checked entry canonical paths until metadata invalidation",
+    () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-checked-realpath-"));
+      const source = path.join(root, "index.js");
+      fs.writeFileSync(source, "export default {};\n");
+      const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+      const cache = createPluginCache();
+      withPluginCache(cache, () => {
+        expect(
+          checkPluginCacheEntry({
+            rootDir: root,
+            relativePath: "index.js",
+            rejectHardlinks: true,
+          }),
+        ).toMatchObject({ ok: true, path: source, exists: true });
+        nativeRealpath.mockClear();
+        expect(pluginCacheRealpathSync(source)).toBe(source);
+        expect(pluginCacheRealpathSync(source, true)).toBe(source);
+        expect(nativeRealpath).not.toHaveBeenCalled();
+
+        fs.unlinkSync(source);
+        invalidatePluginCacheMetadata(cache);
+        expect(pluginCacheRealpathSync(source, true)).toBeNull();
+        expect(pluginCacheRealpathSync(source)).toBeNull();
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "shares metadata ancestors without trusting them at the file-open boundary",
+    () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-metadata-ancestors-"));
+      const icons = path.join(root, "assets");
+      const firstSource = path.join(icons, "0.svg");
+      const outside = fs.realpathSync(tempDirs.make("plugin-metadata-outside-"));
+      fs.mkdirSync(icons);
+      const sources = Array.from({ length: 8 }, (_, i) => path.join(icons, `${i}.svg`));
+      for (const source of sources) {
+        fs.writeFileSync(source, "<svg/>\n");
+      }
+      fs.writeFileSync(path.join(outside, "0.svg"), "outside\n");
+      const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+      const realpath = vi.spyOn(fs, "realpathSync");
+      const lstat = vi.spyOn(fs, "lstatSync");
+      const cache = createPluginCache();
+      withPluginCache(cache, () => {
+        for (const source of sources) {
+          expect(pluginCacheRealpathSync(source)).toBe(source);
+          expect(pluginCacheRealpathSync(source)).toBe(source);
+          expect(lstat.mock.calls.filter(([filePath]) => filePath === source)).toHaveLength(1);
+        }
+        // A common ancestor needs filesystem resolution; each sibling must not walk it again.
+        expect(realpath.mock.calls.length + nativeRealpath.mock.calls.length).toBeLessThanOrEqual(
+          1,
+        );
+
+        fs.renameSync(icons, path.join(root, "previous-assets"));
+        fs.symlinkSync(outside, icons, "dir");
+        expect(pluginCacheRealpathSync(firstSource)).toBe(firstSource);
+        expect(
+          readPluginCacheFile({
+            rootDir: root,
+            relativePath: "assets/0.svg",
+            rejectHardlinks: true,
+          }).ok,
+        ).toBe(false);
+
+        invalidatePluginCacheMetadata(cache);
+        expect(pluginCacheRealpathSync(firstSource)).toBe(path.join(outside, "0.svg"));
+      });
+    },
+  );
+
   it("preserves JavaScript realpath identities for canonical paths, aliases, and traversal", () => {
     const root = fs.realpathSync(tempDirs.make("plugin-realpath-"));
     const packageDir = path.join(root, "package");
@@ -303,9 +377,9 @@ describe("plugin package facts", () => {
     },
   );
 
-  it.each(["native", "javascript"] as const)(
-    "reuses the provider catalog source resolved by the %s filesystem path",
-    (resolver) => {
+  it.each(["regular", "symlink"] as const)(
+    "reuses the provider catalog source resolved from a %s file",
+    (kind) => {
       const dir = fs.realpathSync(tempDirs.make("plugin-provider-source-"));
       const providerDiscoverySource = path.join(dir, "provider-discovery.js");
       fs.writeFileSync(
@@ -317,23 +391,18 @@ describe("plugin package facts", () => {
           configSchema: { type: "object" },
         }),
       );
-      fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
-      const nativeRealpath = fs.realpathSync.native;
-      const nativeRealpathSpy = vi.spyOn(fs.realpathSync, "native");
-      if (resolver === "javascript") {
-        nativeRealpathSpy.mockImplementation((filePath, options) => {
-          // Exercise metadata fallback without disabling fs-safe's native
-          // canonicalization when it admits the manifest descriptor.
-          if (filePath === providerDiscoverySource) {
-            throw new Error("native realpath unavailable");
-          }
-          return nativeRealpath(filePath, options);
-        });
+      if (kind === "symlink") {
+        const target = path.join(dir, "catalog.js");
+        fs.writeFileSync(target, "export default {};\n", "utf8");
+        fs.symlinkSync(target, providerDiscoverySource);
+      } else {
+        fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
       }
       const realpathSpy = vi.spyOn(fs, "realpathSync");
-      const resolverSpy = resolver === "native" ? nativeRealpathSpy : realpathSpy;
+      const lstatSpy = vi.spyOn(fs, "lstatSync");
 
       withPluginCache(createPluginCache(), () => {
+        let firstReadCounts: number[] | undefined;
         for (let build = 0; build < 2; build += 1) {
           const registry = loadPluginManifestRegistryCore({
             installRecords: {},
@@ -347,9 +416,12 @@ describe("plugin package facts", () => {
             ],
           });
           expect(registry.plugins[0]?.providerDiscoverySource).toBe(providerDiscoverySource);
-          expect(
-            resolverSpy.mock.calls.filter(([filePath]) => filePath === providerDiscoverySource),
-          ).toHaveLength(1);
+          const readCounts = [realpathSpy, lstatSpy].map(
+            (spy) =>
+              spy.mock.calls.filter(([filePath]) => filePath === providerDiscoverySource).length,
+          );
+          firstReadCounts ??= readCounts;
+          expect(readCounts).toEqual(firstReadCounts);
         }
       });
     },

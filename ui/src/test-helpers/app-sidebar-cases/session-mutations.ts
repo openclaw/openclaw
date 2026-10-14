@@ -3,6 +3,7 @@ import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import "../../lib/toast-host.ts";
 import { publishSidebarSessionList } from "../../components/session-data-controller-events.ts";
 import {
   pauseSessionPlacementRecovery,
@@ -324,7 +325,9 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
-        detail: { item: { value: "assign-owner:human:profile-bob" } },
+        detail: {
+          item: menu.querySelector('wa-dropdown-item[value="assign-owner:human:profile-bob"]')!,
+        },
       }),
     );
 
@@ -350,7 +353,7 @@ describe("AppSidebar session mutation feedback", () => {
     selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
-        detail: { item: { value: selfItem?.getAttribute("value") } },
+        detail: { item: selfItem },
       }),
     );
 

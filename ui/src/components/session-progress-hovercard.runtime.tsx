@@ -17,7 +17,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { AppSidebarElement } from "./app-sidebar.tsx";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
@@ -80,6 +80,7 @@ class SessionProgressHovercardController {
   private animateNextOpen = true;
   private skipDelayTimer: number | null = null;
   private lastProgressCard: ProgressCard | null = null;
+  private renderedRevision: string | null = null;
   private readonly hovercard = new PortaledHovercardController(
     () => this.close(true),
     CLOSE_DELAY_MS,
@@ -285,7 +286,7 @@ class SessionProgressHovercardController {
     }
     const agentId =
       parseAgentSessionKey(sessionKey)?.agentId ??
-      target.closest<AppSidebarSessionNavigationElement>("openclaw-app-sidebar")?.expandedAgentId();
+      target.closest<AppSidebarElement>("openclaw-app-sidebar")?.expandedAgentId();
     if (!agentId) {
       return;
     }
@@ -297,6 +298,7 @@ class SessionProgressHovercardController {
     ) {
       if (trigger !== this.activeTrigger) {
         this.hovercard.reset();
+        this.renderedRevision = null;
         this.activeTrigger = trigger;
         this.hovercard.markTrigger(trigger);
         if (this.open) {
@@ -385,7 +387,7 @@ class SessionProgressHovercardController {
       return;
     }
     const sidebarRow = this.host
-      .querySelector<AppSidebarSessionNavigationElement>("openclaw-app-sidebar")
+      .querySelector<AppSidebarElement>("openclaw-app-sidebar")
       ?.findSidebarHovercardRowByKey(sessionKey);
     const pullRequests = this.pullRequests?.get(artifactKey);
     const currentProgressCard = this.progressCards?.get(session);
@@ -432,9 +434,12 @@ class SessionProgressHovercardController {
           }
         : null,
     });
-    if (this.hovercard.card?.dataset.revision === revision) {
+    // Empty renders retire their portal; retain the revision so our trigger mutation
+    // cannot remount the same empty input in a MutationObserver loop.
+    if (this.renderedRevision === revision) {
       return;
     }
+    this.renderedRevision = revision;
     const mountedCard = this.hovercard.card;
     const focusedCardElement =
       mountedCard?.contains(document.activeElement) && document.activeElement instanceof HTMLElement
@@ -460,7 +465,6 @@ class SessionProgressHovercardController {
         card.dataset.instant = "true";
       }
     }
-    card.dataset.revision = revision;
     card.setAttribute("aria-label", t("sessionHovercard.ariaLabel"));
     const input: SessionHovercardInput = {
       row: sidebarRow,
@@ -469,12 +473,19 @@ class SessionProgressHovercardController {
       personActivity: this.personActivity(),
       automationLink: this.applicationContext
         ? {
+            gateway: this.applicationGateway,
+            sessionKey,
+            agentId: session.agentId!,
             href: `${pathForRoute("cron", this.applicationContext.basePath)}?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
-            navigate: () => {
+            navigate: (jobId) => {
               const context = this.applicationContext;
+              const search = new URLSearchParams({ session: sessionKey, agent: session.agentId! });
+              if (jobId) {
+                search.set("job", jobId);
+              }
               this.close();
               context?.navigate("cron", {
-                search: `?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
+                search: `?${search}`,
               });
             },
           }
@@ -574,6 +585,7 @@ class SessionProgressHovercardController {
     this.open = false;
     this.animateNextOpen = true;
     this.lastProgressCard = null;
+    this.renderedRevision = null;
     this.activeTargetObserver.disconnect();
     this.progressCards?.unwatch(this);
     this.releasePullRequestStore();

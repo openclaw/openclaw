@@ -6,19 +6,20 @@ import type {
   SessionVisibility,
 } from "../../../api/types.ts";
 import {
+  PersonAvatarLink,
+  PersonName,
+  StandalonePersonLink,
+} from "../../../components/person-activity-link-solid.tsx";
+import {
   personActivityLink,
-  renderPersonAvatarLink,
-  renderPersonName,
-  renderStandalonePersonLink,
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
 import { handlePeopleMenuKeydown } from "../../../components/searchable-people-menu.ts";
-import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 
 registerEnglishCatalog(registerSessionPeopleEnglish);
 
@@ -258,20 +259,15 @@ function SharingContent(props: ChatSessionSharingProps) {
             <div class="chat-pane__sharing-owner">
               <span class="chat-pane__sharing-member-icon" aria-hidden="true">
                 <Show when={person().type === "human"} fallback={<Icon name="bot" />}>
-                  <LitContent
-                    value={renderPersonAvatarLink(
-                      renderSessionOwnerChip(person(), "header", "owned", props.ownerViewing),
-                      ownerActivity(),
-                    )}
-                  />
+                  <PersonAvatarLink link={ownerActivity()}>
+                    {renderSessionOwnerChip(person(), "header", "owned", props.ownerViewing)}
+                  </PersonAvatarLink>
                 </Show>
               </span>
-              <LitContent
-                value={renderPersonName(
-                  person().label ?? person().id ?? t("chat.sessionSharing.owner"),
-                  ownerActivity(),
-                  "session-menu__text",
-                )}
+              <PersonName
+                label={person().label ?? person().id ?? t("chat.sessionSharing.owner")}
+                link={ownerActivity()}
+                class="session-menu__text"
               />
             </div>
           </>
@@ -354,7 +350,7 @@ function SharingContent(props: ChatSessionSharingProps) {
                   >
                     <span slot="icon" class="chat-pane__sharing-member-icon" aria-hidden="true">
                       <Show when={identity().type === "human"} fallback={<Icon name="bot" />}>
-                        <LitContent value={renderSessionOwnerChip(identity(), "header")} />
+                        {renderSessionOwnerChip(identity(), "header")}
                       </Show>
                     </span>
                     <span
@@ -394,6 +390,7 @@ function SharingContent(props: ChatSessionSharingProps) {
 }
 
 export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: boolean }) {
+  const [opened, setOpened] = createSignal(false);
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => props.state?.result?.owner ?? props.session?.owner?.actor;
   const canManage = () => props.session && canManageChatSessionSharing(props.session);
@@ -416,16 +413,15 @@ export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: b
           <Show when={visibility() === "draft"}>
             <Show when={props.showOwner && owner()}>
               {(person) => (
-                <LitContent
-                  value={renderStandalonePersonLink(
-                    renderSessionOwnerChip(person(), "header", "owned", props.ownerViewing),
-                    personActivityLink(
-                      person().identity?.type === "profile" ? person().identity?.id : undefined,
-                      props.personActivity,
-                      person().label,
-                    ),
+                <StandalonePersonLink
+                  link={personActivityLink(
+                    person().identity?.type === "profile" ? person().identity?.id : undefined,
+                    props.personActivity,
+                    person().label,
                   )}
-                />
+                >
+                  {renderSessionOwnerChip(person(), "header", "owned", props.ownerViewing)}
+                </StandalonePersonLink>
               )}
             </Show>
             <span class="chat-pane__draft-indicator" title={t("chat.sessionSharing.draft")}>
@@ -441,6 +437,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: b
             placement="bottom-end"
             onKeyDown={handlePeopleMenuKeydown}
             onWa-show={() => {
+              setOpened(true);
               if (!props.openDisabledReason) {
                 props.onOpen();
               }
@@ -465,7 +462,9 @@ export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: b
               <SharingIcon visibility={visibility()} />
               <span>{t("chat.sessionSharing.share")}</span>
             </button>
-            <SharingContent {...props} />
+            <Show when={opened()}>
+              <SharingContent {...props} />
+            </Show>
           </wa-dropdown>
         </Show>
       </Show>

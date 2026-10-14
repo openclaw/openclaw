@@ -12,6 +12,29 @@ export type ConfigRecoveryEffect<T> = {
   ) => T | Promise<T>;
 };
 
+export async function commitRecoveryFileIfCurrent(params: {
+  health: ReturnType<typeof captureConfigHealthStateStore>;
+  beforeCommit?: () => void;
+  write: (assertCurrent: () => void) => Promise<unknown>;
+}): Promise<boolean> {
+  let superseded: Error | undefined;
+  try {
+    await params.write(() => {
+      params.beforeCommit?.();
+      if (!params.health.isCurrent()) {
+        superseded = new Error("Config recovery observation was superseded");
+        throw superseded;
+      }
+    });
+    return true;
+  } catch (error) {
+    if (superseded && error === superseded) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export function createConfigRecoveryStatEffect(
   deps: Pick<NormalizedConfigIoDeps, "fs">,
   configPath: string,

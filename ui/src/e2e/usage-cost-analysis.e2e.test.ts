@@ -594,7 +594,7 @@ suite.define(() => {
           has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
         });
         await providerFilter.locator(".usage-filter-trigger").click();
-        await providerFilter.locator('wa-dropdown-item[value="command:select-all"]').click();
+        await providerFilter.locator('[data-value="command:select-all"]').click();
         await expect.poll(() => providerFilter.locator(".settings-count").textContent()).toBe("2");
         await expect
           .poll(async () => (await sessionLabels.allTextContents()).toSorted())
@@ -605,8 +605,8 @@ suite.define(() => {
               path.join(suite.artifactDir, "usage-filter-repair"),
               "01-provider-alternatives.png",
             ),
-            await takeControlUiViewportScreenshot(page, providerFilter.locator('[part="menu"]'), [
-              providerFilter.locator('wa-dropdown-item[value="option:openai"]'),
+            await takeControlUiViewportScreenshot(page, providerFilter.locator('[role="menu"]'), [
+              providerFilter.locator('[data-value="option:openai"]'),
             ]),
           );
         }
@@ -620,7 +620,7 @@ suite.define(() => {
             .poll(async () => (await sessionLabels.allTextContents()).toSorted())
             .toEqual(["Research Review", "Team Planning"]);
           await providerFilter.locator(".usage-filter-trigger").click();
-          const openai = providerFilter.locator('wa-dropdown-item[value="option:openai"]');
+          const openai = providerFilter.locator('[data-value="option:openai"]');
           await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
           await openai.click();
           await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Research Review"]);
@@ -877,7 +877,7 @@ suite.define(() => {
         const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
         await agentScope.locator(".agent-select__trigger").click();
         await agentScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "All agents" })
           .click();
         await expect
@@ -913,30 +913,46 @@ suite.define(() => {
           .toContain("openai");
         const messagesHint = page.locator("#usage-summary-hint-messages");
         const messagesTooltipHost = messagesHint.locator("xpath=..");
-        const messagesTooltip = messagesTooltipHost.locator("wa-tooltip");
+        const messagesTooltip = messagesTooltipHost.locator(".tooltip-surface[popover]");
         await messagesHint.hover();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await page.mouse.move(1, 1);
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
 
         await page.keyboard.press("Tab");
         await messagesHint.focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await page.getByRole("button", { name: "Cost", exact: true }).focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
 
         await messagesHint.click();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await expect
           .poll(() => messagesTooltipHost.locator('[slot="content"]').textContent())
           .toContain("Total user and assistant messages in range.");
         await page.getByRole("button", { name: "Cost", exact: true }).click();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
         await page.keyboard.press("Tab");
         await messagesHint.focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await messagesHint.press("Escape");
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
         const providerCards = page.locator(".provider-usage-card");
         await expect.poll(() => providerCards.count()).toBe(3);
         await expect

@@ -3,7 +3,7 @@ import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singl
 type SignalExitBarrier = () => Promise<void>;
 type CliExitSignal = "SIGINT" | "SIGTERM";
 
-type SignalExitOwner = (code: number | string) => void;
+type SignalExitOwner = (code: number | string, reason?: string) => void;
 // Process custody outlives the Gateway generations that reset ordinary barriers.
 const processExitOwner = resolveGlobalSingleton<{ current?: SignalExitOwner }>(
   Symbol.for("openclaw.signalExitOwner"),
@@ -67,9 +67,9 @@ let pendingSignalExitDrain: Promise<void> | undefined;
 let pendingProcessExit: Promise<number | string> | undefined;
 
 /** Broken output must not bypass a maintenance owner's asynchronous recovery. */
-export function exitAfterSignalExitBarriers(code: number | string): void {
+export function exitAfterSignalExitBarriers(code: number | string, reason?: string): void {
   if (processExitOwner.current) {
-    processExitOwner.current(code);
+    processExitOwner.current(code, reason);
     return;
   }
   if (pendingProcessExit) {
@@ -89,7 +89,7 @@ export function exitAfterSignalExitBarriers(code: number | string): void {
       const finalCode =
         (exitCode === 0 || exitCode === "0") && outcome != null ? outcome : exitCode;
       if (processExitOwner.current) {
-        processExitOwner.current(finalCode);
+        processExitOwner.current(finalCode, reason);
       } else {
         process.exitCode = finalCode;
       }
@@ -166,8 +166,11 @@ function handleCliSignal(signal: CliExitSignal): void {
 
 const onCliSigint = () => handleCliSignal("SIGINT");
 const onCliSigterm = () => handleCliSignal("SIGTERM");
-const onCliSigpipe = () => {
-  if (cliSignalOwners > 0) {
+// Any EPIPE write raises SIGPIPE, including a child's closed stdin, so the
+// signal only keeps Node's ignore disposition; EPIPE on our output decides exit.
+const onCliSigpipe = () => {};
+const onCliOutputError = (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE" && cliSignalOwners > 0) {
     exitAfterSignalExitBarriers(141);
   }
 };
@@ -181,6 +184,9 @@ export function installCliDoctorSignalExitHandlers(): void {
   cliDoctorSignalOwner = true;
   if (!process.listeners("SIGPIPE").includes(onCliSigpipe)) {
     process.on("SIGPIPE", onCliSigpipe);
+    // Run before console capture's generic EPIPE exit so closed output reports 141.
+    process.stdout.prependListener("error", onCliOutputError);
+    process.stderr.prependListener("error", onCliOutputError);
   }
 }
 

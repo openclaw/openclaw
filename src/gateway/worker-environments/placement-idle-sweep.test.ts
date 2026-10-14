@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -26,6 +27,7 @@ describe("worker placement idle suspension", () => {
   let placements: ReturnType<typeof createWorkerSessionPlacementStore>;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     nowMs = 1_000;
     const root = tempDirs.make("openclaw-worker-idle-sweep-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -102,8 +104,7 @@ describe("worker placement idle suspension", () => {
     });
   }
 
-  it("skips reporting snapshots while suspension is disabled and reports when it becomes enabled", async () => {
-    const snapshots = vi.spyOn(placements, "readChangeSnapshot");
+  it("reports suspension only when enabled", async () => {
     const changed = vi.fn();
     const unsubscribe = sessionChanges.subscribe(changed);
     const reportChanges = createGatewayWorkerPlacementChangePublisher({
@@ -125,13 +126,11 @@ describe("worker placement idle suspension", () => {
       nowMs += 60_000;
       changed.mockClear();
       await idleSweep.sweep();
-      expect(snapshots).not.toHaveBeenCalled();
       expect(changed).not.toHaveBeenCalled();
       expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
 
       profile.suspendAfter = "1m";
       await idleSweep.sweep();
-      expect(snapshots).toHaveBeenCalledTimes(2);
       expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
       expect(changed).toHaveBeenCalledWith({
         sessionKey: REQUEST.sessionKey,

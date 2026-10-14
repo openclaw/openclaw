@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 
+const CLAUDE_CLI_AUTH_TIMEOUT_MS = 10_000;
+
 const CLAUDE_CLI_AUTH_METHODS = [
   "claude.ai",
   "api_key",
@@ -21,7 +23,8 @@ type ClaudeCliAuthStatus =
       authMethod?: (typeof CLAUDE_CLI_AUTH_METHODS)[number];
       email?: string;
     }
-  | { status: "missing" | "unreadable" };
+  | { status: "missing" | "unreadable" }
+  | { status: "timeout"; timeoutMs: number };
 
 /** Ask Claude CLI whether its own login is usable without reading token material. */
 export async function probeClaudeCliAuthStatus(params?: {
@@ -45,20 +48,26 @@ export async function probeClaudeCliAuthStatus(params?: {
       maxOutputBytes: 64 * 1024,
       maxCombinedOutputBytes: 64 * 1024,
       terminateOnOutputLimit: true,
-      timeoutMs: 3_000,
+      timeoutMs: CLAUDE_CLI_AUTH_TIMEOUT_MS,
       signal: params?.signal,
       killProcessTree: true,
     });
     params?.signal?.throwIfAborted();
+    if (result.termination === "timeout") {
+      return { status: "timeout", timeoutMs: CLAUDE_CLI_AUTH_TIMEOUT_MS };
+    }
     if (result.termination !== "exit" || result.code === null) {
       return { status: "unreadable" };
     }
-    if (result.code !== 0) {
+    const parsed: unknown = JSON.parse(result.stdout);
+    if (!isRecord(parsed) || typeof parsed.loggedIn !== "boolean") {
+      return { status: "unreadable" };
+    }
+    if (!parsed.loggedIn) {
       return { status: "missing" };
     }
-    const parsed: unknown = JSON.parse(result.stdout);
-    if (!isRecord(parsed) || parsed.loggedIn !== true) {
-      return { status: "missing" };
+    if (result.code !== 0) {
+      return { status: "unreadable" };
     }
     const authMethod = CLAUDE_CLI_AUTH_METHODS.find((method) => method === parsed.authMethod);
     const email = authMethod === "claude.ai" ? normalizeOptionalString(parsed.email) : undefined;

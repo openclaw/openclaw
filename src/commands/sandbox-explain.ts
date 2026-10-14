@@ -19,7 +19,7 @@ import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js"
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionStorePathCore,
@@ -112,7 +112,7 @@ export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
 
   const requestedSession = opts.session?.trim();
   const requestedAgent = opts.agent?.trim();

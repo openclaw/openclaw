@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
   prepareUserProfileCatalog,
 } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
@@ -96,6 +96,7 @@ it.each(["failed delivery", "self downgrade"] as const)(
     const state = await createOpenClawTestState({
       layout: "state-only",
       prefix: "users-role-delivery-",
+      prepareProfileCatalog: true,
     });
     let release = () => {};
     try {
@@ -144,7 +145,7 @@ it.each(["failed delivery", "self downgrade"] as const)(
         },
         client,
       );
-      expect(readUserProfileIdentity(changed.id)?.role).toBe("reader");
+      expect(readResidentUserProfileIdentity(changed.id)?.role).toBe("reader");
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
         "operator.read",
       ]);

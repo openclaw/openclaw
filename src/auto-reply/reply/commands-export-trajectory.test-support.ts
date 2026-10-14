@@ -235,19 +235,22 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(command).toMatch(/'?--request-json-base64'?\s+'?[A-Za-z0-9_-]+'?/u);
     expect(command).toMatch(/'?--json'?$/u);
     expect(command).not.toContain("Invoke-Expression");
-    expect(readEncodedRequestFromCommand(command).output).toBe("bad';");
+    expect(readEncodedRequestFromCommand(command).output).toBe("bad'; Invoke-Expression evil ;'");
   });
 
-  it("rejects oversized output paths before requesting exec approval", async () => {
-    const { execCalls } = mockCommandBoundaries();
-    const params = makeParams();
-    params.command.commandBodyNormalized = `/export-trajectory ${"a".repeat(513)}`;
+  it.each(["a".repeat(513), `reports/${"a ".repeat(253)}a`])(
+    "rejects oversized output paths before requesting exec approval: %s",
+    async (outputPath) => {
+      const { execCalls } = mockCommandBoundaries();
+      const params = makeParams();
+      params.command.commandBodyNormalized = `/export-trajectory ${outputPath}`;
 
-    const reply = await buildExportTrajectoryCommandReply(params);
+      const reply = await buildExportTrajectoryCommandReply(params);
 
-    expect(reply.text).toContain("Output path is too long");
-    expect(execCalls).toHaveLength(0);
-  });
+      expect(reply.text).toContain("Output path is too long");
+      expect(execCalls).toHaveLength(0);
+    },
+  );
 
   it("rejects oversized encoded export requests before requesting exec approval", async () => {
     const { execCalls } = mockCommandBoundaries();

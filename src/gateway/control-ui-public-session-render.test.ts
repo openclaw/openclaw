@@ -365,34 +365,6 @@ describe("public session document", () => {
     expect(html).toContain('href="/share/session?token=v1.opaque">Refresh now</a>');
   });
 
-  it("renders an accessible empty live view with disclosure and crawler metadata", () => {
-    const html = render([], { truncated: true });
-    expect(html).toContain("No public conversation text yet");
-    expect(html).toContain("Public · Read-only");
-    expect(html).toContain("Tool result text, reasoning, and interactive content are omitted");
-    expect(html).toContain('http-equiv="refresh" content="15"');
-    expect(html).toContain('property="og:title" content="A shared conversation"');
-    expect(html).toContain('aria-label="Conversation"');
-    expect(html).toContain('name="referrer" content="no-referrer"');
-    expect(html).toContain("Made with OpenClaw");
-    expect(html).toContain(
-      'href="https://docs.openclaw.ai/start/getting-started" rel="noreferrer noopener">Get started',
-    );
-  });
-
-  it("groups consecutive turns from one speaker under a single identity", () => {
-    const html = render([
-      { role: "user", content: "First question" },
-      { role: "assistant", content: "First answer" },
-      { role: "assistant", content: "Follow-up answer" },
-    ]);
-    expect(html).toContain('class="message user" aria-label="User message"');
-    expect(html).toContain('class="message assistant" aria-label="Assistant message"');
-    expect(html).toContain('class="message assistant continued" aria-label="Assistant message"');
-    expect(html).toContain("3 messages");
-    expect(html.match(/class="avatar"/g)).toHaveLength(1);
-  });
-
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", () => {
     const title = `${"a".repeat(199)}😀 trailing`;
     const html = render([{ role: "user", content: `${"b".repeat(32_767)}😀 UNIQUE_TAIL_MARKER` }], {

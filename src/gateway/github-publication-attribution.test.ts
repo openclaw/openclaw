@@ -17,6 +17,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -27,6 +28,7 @@ import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublicati
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
@@ -306,6 +308,12 @@ describe("Gateway GitHub publication attribution", () => {
       childSessionKey: childKey,
       incognito: false,
       requesterInternalKey: SESSION_KEY,
+      parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+        cfg: config,
+        key: SESSION_KEY,
+        agentId: "main",
+        projection: "full",
+      }),
       creationPolicy: { actor: { type: "agent", id: "main" } },
       completionOwnerSessionKey: SESSION_KEY,
       modelPatch: {},
@@ -355,9 +363,17 @@ describe("Gateway GitHub publication attribution", () => {
       { identity: { type: "profile", id: people[0]!.id }, promptedAt: 2, sessionAgentId: "main" },
     );
     setUserPreferences(people[2]!.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
-    const { loadGatewaySessionEntryReadOnly } =
-      await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
-    mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnly);
+    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+      typeof import("./session-utils-store-worker.js")
+    >("./session-utils-store-worker.js");
+    mocks.loadSession.mockImplementation((key: string, options?: { agentId?: string }) =>
+      loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getRuntimeConfig(),
+        key,
+        ...options,
+        readOnly: true,
+      }),
+    );
     const coordinator = createGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),

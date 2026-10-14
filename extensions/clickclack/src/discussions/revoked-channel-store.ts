@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { preparePluginStateRead } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
@@ -149,6 +150,25 @@ export function isClickClackDiscussionChannelRevoked(params: {
     nativeStoresByRuntime.set(params.runtime, store);
   }
   return revocationApplies(store.lookup(revokedChannelKey(params)), params.binding);
+}
+
+export async function prepareClickClackDiscussionChannelRevocation(params: {
+  runtime: PluginRuntime;
+  serverBaseUrl: string;
+  channelId: string;
+}) {
+  const facts = await preparePluginStateRead(getStore(params.runtime), revokedChannelKey(params));
+  return {
+    isRevoked: (binding?: ClickClackDiscussionBinding) => {
+      if (binding && revokedChannelKey(binding) !== revokedChannelKey(params)) {
+        return true;
+      }
+      return facts
+        ? revocationApplies(facts.read(), binding)
+        : isClickClackDiscussionChannelRevoked({ ...params, binding });
+    },
+    release: () => facts?.release(),
+  };
 }
 
 export async function isClickClackDiscussionChannelRevokedAsync(params: {

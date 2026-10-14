@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -59,6 +60,8 @@ function identifiedClient(scopes: string[], profileId = "viewer@example.com"): G
   };
 }
 
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 describe("artifact session authorization", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -102,9 +105,10 @@ describe("artifact session authorization", () => {
   });
 
   it("denies direct and indirect incognito selectors while preserving admin access", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       const sessionKey = "agent:main:dashboard:incognito-artifacts";
       const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
@@ -165,7 +169,8 @@ describe("artifact session authorization", () => {
   ] as const)(
     "hides $name artifacts behind direct and run selectors",
     async ({ visibility, cfg, role }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withOpenClawTestState(profileState, async () => {
+        setRuntimeConfigSnapshot(cfg ?? {});
         const viewerProfile = ensureProfileForEmail("viewer@example.com");
         const ownerProfile = ensureProfileForEmail("owner@example.com");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -217,9 +222,11 @@ describe("artifact session authorization", () => {
   it.each(["shared", "read-only", "suggest"] as const)(
     "allows reading foreign %s artifacts without participation",
     async (visibility) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withOpenClawTestState(profileState, async () => {
+        setRuntimeConfigSnapshot({});
         const owner = ensureProfileForEmail("artifact-owner@example.test");
         const viewer = roleClient("view", "artifact-reader");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const sessionKey = "agent:main:readable-artifacts";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
@@ -241,7 +248,8 @@ describe("artifact session authorization", () => {
   );
 
   it("preserves solo and system reads while denying identityless reads with roles", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:solo-artifacts";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },

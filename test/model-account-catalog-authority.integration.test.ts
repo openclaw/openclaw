@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import { loadSelectedProviderAccountCatalog } from "../src/agents/models-config.providers.catalog-context.js";
 import { createPreparedAccountCatalogAccess } from "../src/agents/prepared-model-runtime.catalog-auth.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   upsertSessionEntryCore,
@@ -219,6 +220,7 @@ describe("Gateway automatic account dispatch authority", () => {
         {
           layout: "state-only",
           prefix: "catalog-link-authority-",
+          prepareProfileCatalog: true,
           agentEnv: "main",
           env: WITHOUT_OPENAI_ENV_AUTH,
         },
@@ -255,6 +257,7 @@ describe("Gateway automatic account dispatch authority", () => {
             },
           };
           await state.writeConfig(cfg);
+          setRuntimeConfigSnapshot(cfg);
           if (saved) {
             await replaceSessionEntry(
               { agentId: "main", sessionKey },

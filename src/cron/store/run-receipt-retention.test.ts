@@ -74,7 +74,6 @@ describe("pending cron receipt retention", () => {
         claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
-          resolveAgentId: (current) => current.agentId!,
         }),
       );
       history.push(receipt.receiptId);
@@ -133,6 +132,7 @@ describe("pending cron receipt retention", () => {
             database: db,
             receiptSchema: prepareCronRunReceiptWriteSchema(db),
             handle: pending!,
+            pendingReceiptId: pending!.receiptId,
             status: "ok",
             finishedAtMs: now,
           }),

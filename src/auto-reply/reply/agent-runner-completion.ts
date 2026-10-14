@@ -13,7 +13,6 @@ import { buildRestartRecoveryExpectedState } from "../../config/sessions/session
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { withNativeIncognitoTurnCompletion } from "./agent-runner-completion.native.js";
 import type {
   AgentTurnCompletion,
   AgentTurnRestartClaimCleanup,
@@ -53,20 +52,6 @@ export async function withAgentTurnCompletion<T>(
   };
   assertCurrent();
   retainReplyOperationUntilComplete(operation);
-  const native = await withNativeIncognitoTurnCompletion(
-    {
-      agentId: params.agentId,
-      storePath,
-      sessionKey,
-      writer,
-      assertCurrent,
-      publish: (published) => params.publish(published),
-    },
-    consume,
-  );
-  if (native) {
-    return native.value;
-  }
   const result = await withSessionActor(
     { agentId: params.agentId, storePath, sessionKey },
     { assertCurrent, assertReadable: assertCurrent },
@@ -105,6 +90,11 @@ export async function withAgentTurnCompletion<T>(
         return project().entry;
       };
       const completion: AgentTurnCompletion = {
+        assertCurrent() {
+          assertCurrent();
+          actor.assertCurrent();
+          return actor.snapshot(authority)?.entry;
+        },
         current: () => project().entry,
         refresh,
         patch(reducer) {
@@ -129,14 +119,14 @@ export async function withAgentTurnCompletion<T>(
           }
           const committed: { receipt?: SessionActorReceipt } = {};
           const outcome = await runSessionActorCommand(actor, authority, async (current) => {
-            snapshot = current ?? (await actor.read(authority));
+            snapshot = current ?? actor.snapshot(authority) ?? (await actor.read(authority));
             ({ reducers } = project());
             restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
             return actor.completeTurn(
               {
                 commandId: randomUUID(),
                 phaseId: `complete:${operationKey}`,
-                expected: snapshot.version,
+                expected: actor.target.database.kind === "memory" ? undefined : snapshot.version,
                 reducers,
                 bookkeeping: {
                   sessionId: expected.sessionId,

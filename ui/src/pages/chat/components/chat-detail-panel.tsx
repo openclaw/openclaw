@@ -213,23 +213,18 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     invalidate();
     fileEditorLoad = import("./file-editor-view.ts")
       .then(async ({ createFileEditorView }) => {
-        const current = visibleContent;
-        if (version !== fileOperationVersion || current?.kind !== "file") {
+        if (version !== fileOperationVersion) {
           return;
         }
         const editor = await createFileEditorView({
           parent,
-          content: fileDraftContent ?? current.content,
-          name: current.name,
+          content: fileDraftContent ?? content.content,
+          name: content.name,
           editable: fileEditing,
           wrap: fileWrap,
           onSave: saveFile,
         });
-        if (
-          version !== fileOperationVersion ||
-          !updatingHost.isConnected ||
-          visibleContent?.kind !== "file"
-        ) {
+        if (version !== fileOperationVersion || !updatingHost.isConnected) {
           editor.destroy();
           return;
         }
@@ -238,7 +233,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
         fileEditor = editor;
         fileDraftContent = null;
         editor.onDocChanged((nextContent) => {
-          const draft = captureFileEditorDraft(current, {
+          const draft = captureFileEditorDraft(content, {
             // Reload synchronization may normalize display text without a user edit.
             editing: fileEditing && !fileReloading,
             content: nextContent,
@@ -472,11 +467,11 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       return;
     }
     const outcome = await content.edit.save({ content: nextContent, expectedHash });
-    if (version !== fileOperationVersion || visibleContent?.kind !== "file") {
+    if (version !== fileOperationVersion) {
       return;
     }
     if (outcome.ok) {
-      updateSavedFile(visibleContent, nextContent, outcome.hash);
+      updateSavedFile(content, nextContent, outcome.hash);
     } else if (outcome.code === "conflict") {
       fileSaveNotice = { kind: "conflict" };
     } else {
@@ -506,60 +501,51 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       return;
     }
     const version = fileOperationVersion;
-    let onLatest: (
-      latest: Awaited<ReturnType<NonNullable<FileSidebarContent["edit"]>["fetchLatest"]>>,
-    ) => void | Promise<void>;
-    if (action === "reload") {
-      fileSaving = true;
-      fileReloading = true;
+    const localContent = currentFileText();
+    fileSaving = true;
+    fileReloading = action === "reload";
+    if (fileReloading) {
       fileEditor?.setEditable(false);
-      onLatest = (latest) => {
-        if (version !== fileOperationVersion || visibleContent?.kind !== "file") {
-          return;
-        }
-        if (!latest) {
-          fileSaveNotice = {
-            kind: "error",
-            message: t("chat.detailPanel.reloadFailed"),
-          };
-          return;
-        }
-        fileEditor?.setContent(latest.content);
-        fileDraftContent = fileEditor ? null : latest.content;
-        htmlPreview.discard(latest.content);
-        updateSavedFile(visibleContent, latest.content, latest.hash);
-        // A reload can bring back content that no longer qualifies for edit
-        // mode (e.g. the agent rewrote the file with mixed line endings);
-        // drop the edit capability instead of letting a save corrupt it.
-        if (!latest.editable && visibleContent?.kind === "file") {
-          setFileDraft(visibleContent, null);
-          fileEditing = false;
-          fileDirty = false;
-          const { edit: _removed, ...readOnly } = visibleContent;
-          visibleContent = readOnly;
-        }
-      };
-    } else {
-      // Overwrite deliberately replaces whatever is on disk (even content that
-      // would fail the edit gates) with the local editor text the user chose.
-      const localContent = currentFileText();
-      fileSaving = true;
-      onLatest = async (latest) => {
+    }
+    invalidate();
+    trackFileOperation(
+      content.edit.fetchLatest().then(async (latest) => {
         if (version !== fileOperationVersion) {
           return;
         }
         if (!latest) {
           fileSaveNotice = {
             kind: "error",
-            message: t("chat.detailPanel.overwriteLoadFailed"),
+            message: t(
+              action === "reload"
+                ? "chat.detailPanel.reloadFailed"
+                : "chat.detailPanel.overwriteLoadFailed",
+            ),
           };
           return;
         }
-        await saveFileContent(content, localContent, latest.hash, version);
-      };
-    }
-    invalidate();
-    trackFileOperation(content.edit.fetchLatest().then(onLatest), version);
+        if (action === "overwrite") {
+          // Overwrite uses the local text captured at the user's click, not the fetched text.
+          await saveFileContent(content, localContent, latest.hash, version);
+          return;
+        }
+        fileEditor?.setContent(latest.content);
+        fileDraftContent = fileEditor ? null : latest.content;
+        htmlPreview.discard(latest.content);
+        updateSavedFile(content, latest.content, latest.hash);
+        // A reload can bring back content that no longer qualifies for edit
+        // mode (e.g. the agent rewrote the file with mixed line endings);
+        // drop the edit capability instead of letting a save corrupt it.
+        if (!latest.editable) {
+          setFileDraft(content, null);
+          fileEditing = false;
+          fileDirty = false;
+          const { edit: _removed, ...readOnly } = content;
+          visibleContent = readOnly;
+        }
+      }),
+      version,
+    );
   }
 
   function trackFileOperation(operation: Promise<unknown>, version: number) {

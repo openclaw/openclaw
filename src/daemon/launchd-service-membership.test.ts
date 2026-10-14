@@ -29,6 +29,27 @@ import {
 registerLaunchdAncestryTests();
 
 describe("LaunchAgent service membership", () => {
+  it("restarts from a verified external terminal with unreadable ancestors", async () => {
+    const env = createDefaultLaunchdEnv();
+    getSelfAndAncestorPidsSync.mockReturnValue(new Set(launchdCallerPids));
+    nativeServiceMembership.mockReturnValue("outside");
+
+    await expect(
+      withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+        restartLaunchAgent(launchAgentControlFixture(env)),
+      ),
+    ).resolves.toEqual({ outcome: "completed" });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["print", serviceId],
+      ["enable", serviceId],
+      ["kickstart", "-k", serviceId],
+    ]);
+    expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
+  });
+
   it("surfaces detached handoff failures", async () => {
     const env = createDefaultLaunchdEnv();
     nativeServiceMembership.mockReturnValue("inside");

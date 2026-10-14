@@ -88,17 +88,7 @@ final class AppVoiceRuntime {
             presentation: environment.wakePresentation,
             actions: { [weak state] in
                 guard let state else { return nil }
-                let sessions = state.voiceRuntime.sessions
-                return .init(
-                    send: { sessions.sendNow(token: $0, reason: $1) },
-                    updateEditedText: { sessions.updateEditedText(token: $0, text: $1) },
-                    didPresent: { state.earBoostActive = true },
-                    didDismiss: { token, outcome in
-                        if outcome == .empty { state.blinkOnce() }
-                        if outcome == .sent { state.celebrateSend() }
-                        state.earBoostActive = false
-                        sessions.overlayDidDismiss(token: token)
-                    })
+                return VoiceWakeOverlayController.liveActions(state: state)
             })
         let sessions = VoiceSessionCoordinator(
             overlay: overlay,

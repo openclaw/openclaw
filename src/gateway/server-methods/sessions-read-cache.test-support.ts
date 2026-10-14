@@ -1,6 +1,7 @@
 import { afterEach, expect, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
@@ -8,7 +9,7 @@ import {
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
-import { readUserProfileIdentity } from "../../state/user-profile-list.js";
+import { readUserProfileSnapshotSync } from "../../state/user-profile-identity.read.js";
 import {
   disposeSessionReadContexts,
   trackSessionReadProfileSubscription,
@@ -114,11 +115,17 @@ export function identifiedClient(profileId: string): GatewayClient {
   };
   const refresh = () => {
     const identity = client.authenticatedUserProfile?.profileId ?? profileId;
-    const resolved = readUserProfileIdentity(identity);
+    const { profiles } = readUserProfileSnapshotSync();
+    const source = profiles.find((profile) => profile.id === identity);
+    const canonical = source?.mergedInto ?? source?.id ?? identity;
+    const profile = profiles.find((candidate) => candidate.id === canonical);
     client.preparedSessionProfile = {
-      profileId: resolved?.profileId ?? identity,
-      aliases: resolved?.aliases ?? new Set([identity]),
-      role: resolved?.role ?? null,
+      profileId: canonical,
+      aliases: new Set([
+        canonical,
+        ...profiles.filter((candidate) => candidate.mergedInto === canonical).map(({ id }) => id),
+      ]),
+      role: profile?.role ?? null,
     };
   };
   refresh();
@@ -162,6 +169,7 @@ export async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
     agents: { entries: { main: {}, work: {} } },
   };
+  setRuntimeConfigSnapshot(config);
   for (const [agentId, name, updatedAt, owner, overrides] of [
     ["main", "active", 400, "owner@example.com", {}],
     ["main", "draft", 300, "owner@example.com", { visibility: "draft" }],

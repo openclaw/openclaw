@@ -186,9 +186,18 @@ it.each([
         );
         const retained = readRows(repaired);
         for (const key of ["windows", "events", "search"] as const) {
-          expect(retained[key]).toEqual(
-            original[key].filter((row) => row.session_id === "retained"),
-          );
+          const expected = [];
+          for (const row of original[key]) {
+            if (row.session_id !== "retained") {
+              continue;
+            }
+            expected.push(
+              key === "windows" && schemaVersion === 24
+                ? { ...row, row_transcript_json: null, row_transcript_updated_at: null }
+                : row,
+            );
+          }
+          expect(retained[key]).toEqual(expected);
         }
         expect(() => openOpenClawAgentDatabase(options)).not.toThrow();
       } else {
@@ -600,7 +609,7 @@ describe("media persistence gateway lifecycle recovery", () => {
     const nowMs = 1_000_000;
     for (let index = 0; index < 3; index += 1) {
       const bootId = recordGatewayBootStart(env, nowMs + index);
-      completeGatewayBootLifecycle(
+      await completeGatewayBootLifecycle(
         bootId,
         {
           outcome: "startup_failed",

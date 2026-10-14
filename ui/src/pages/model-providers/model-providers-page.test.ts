@@ -6,6 +6,7 @@ import type { ModelsProbeResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import "../../lib/toast-host.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DefaultsDraft } from "./data.ts";

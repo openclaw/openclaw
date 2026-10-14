@@ -48,7 +48,11 @@ import {
 } from "../auto-reply/reply/queue/state.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  getRuntimeConfig,
+  registerConfigWriteListener,
+} from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import {
@@ -79,12 +83,13 @@ import {
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "../gateway/session-utils-store-worker.js";
+import {
   getSessionDefaults,
   listAgentsForGateway,
-  loadSessionEntry,
-  loadGatewaySessionEntryReadOnly,
   resolveCanonicalGatewaySessionStoreKey,
-  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
@@ -208,9 +213,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribeQuestions = this.questionBroker.subscribe((event) => {
       this.emit(event.event, event.payload);
     });
-    const config = getRuntimeConfig();
     // Local mode shares the Gateway's session-store readiness checks.
     this.sessionProjection = (async () => {
+      const config = await captureRuntimeConfigAsyncReader()();
       const { runSessionStartupMigration } =
         await import("../config/sessions/startup-migration.js");
       await runSessionStartupMigration({
@@ -317,7 +322,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
     let pendingQueue: LocalRunState["pendingQueue"];
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-      const { cfg, canonicalKey, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
+      const { cfg, canonicalKey, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getRuntimeConfig(),
+        key: opts.sessionKey,
+        ...loadOptions,
+      });
       const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
       if (activeSessionId) {
         const claimed = await claimPendingEmbeddedAgentQuestionAnswer(
@@ -566,11 +575,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTargetWithStore({
+    const target = await resolveGatewaySessionStoreTargetInWorker({
       cfg,
       key: opts.key,
       agentId: opts.agentId,
-      exactRead: true,
     });
     const applied = await applySessionPatchProjection<{ ok: false; error: ErrorShape }>({
       ...(opts.label === undefined ? { sessionKeys: target.storeKeys } : {}),
@@ -581,6 +589,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           key: opts.key,
           store: store as Record<string, SessionEntry>,
           agentId: opts.agentId,
+          target,
         });
         return { primaryKey, candidateKeys: migratedTarget.storeKeys };
       },
@@ -622,7 +631,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
     await this.ready;
-    if (loadGatewaySessionEntryReadOnly(key, opts).entry?.incognito === true) {
+    if (
+      (await loadGatewaySessionEntryReadOnlyInWorker({ cfg: getRuntimeConfig(), key, ...opts }))
+        .entry?.incognito === true
+    ) {
       throw new Error("Incognito sessions cannot reset in place.");
     }
     const result = await performGatewaySessionReset({
@@ -692,7 +704,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
       storePath,
       store,
       entry,
-    } = loadSessionEntry(params.sessionKey, loadOptions);
+    } = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: params.sessionKey,
+      ...loadOptions,
+    });
     if (!entry?.sessionId) {
       throw new Error("/btw requires an active session with existing context.");
     }
@@ -784,10 +800,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { agentId, canonicalKey, storePath, entry } = loadSessionEntry(
-      opts.sessionKey,
-      loadOptions,
-    );
+    const { agentId, canonicalKey, storePath, entry } =
+      await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getRuntimeConfig(),
+        key: opts.sessionKey,
+        ...loadOptions,
+      });
     const parsed = parseGoalCommand(opts.command.trim());
     if (!parsed) {
       throw new Error("invalid goal command");
@@ -807,10 +825,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async runUsageCostCommand(opts: Parameters<NonNullable<TuiBackend["runUsageCostCommand"]>>[0]) {
     await this.ready;
-    const { cfg, agentId, canonicalKey, storePath, entry } = loadSessionEntry(
-      opts.sessionKey,
-      opts.agentId ? { agentId: opts.agentId } : undefined,
-    );
+    const { cfg, agentId, canonicalKey, storePath, entry } =
+      await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getRuntimeConfig(),
+        key: opts.sessionKey,
+        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      });
     const { formatSessionUsageCostSummary } =
       await import("../auto-reply/reply/commands-session-cost.runtime.js");
     return {
@@ -1270,7 +1290,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
-      const { agentId, canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
+      const { agentId, canonicalKey, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getRuntimeConfig(),
+        key: params.sessionKey,
+        ...loadOptions,
+      });
       const result = await agentCommandFromIngress(
         {
           // The per-message timestamp prefix is applied at the single LLM

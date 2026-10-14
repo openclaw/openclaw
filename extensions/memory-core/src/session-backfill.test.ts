@@ -3,6 +3,7 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -49,6 +50,7 @@ async function createIsolatedWorkspace(prefix: string): Promise<string> {
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(workspaceDir, "openclaw.json"));
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  await captureRuntimeConfigAsyncReader()();
   return workspaceDir;
 }
 
@@ -169,7 +171,7 @@ describe("runSessionBackfill", () => {
     await seedCanonicalTranscript("source", [
       {
         role: "user",
-        content: "Do not publish from a superseded physical source.",
+        content: "Do not publish a forgotten source.",
         timestamp: "2026-01-02T12:00:00.000Z",
         owner: true,
       },

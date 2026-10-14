@@ -8,6 +8,7 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -153,8 +154,10 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
   const sourceOwner = roleClient("view", "linked-recovery-owner");
   sourceOwner.connect.scopes = ["operator.sessions.write"];
   const broadWriter = roleClient("write", "linked-recovery-writer");
-  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   broadWriter.connect.scopes = ["operator.write"];
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(sourceOwner);
+  prepareGatewayRecipientProfile(broadWriter);
   const cfg = recoveryConfig(storePath);
   const revokedRole = rolePolicyConfig().gateway!.roles!;
   const writeRole = revokedRole.definitions.write;
@@ -239,7 +242,7 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
     id: "linked-recovery-explicit-member",
     key: sourceKey,
   });
-  expect(granted).toMatchObject({
+  expect(granted, JSON.stringify(granted)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -257,8 +260,9 @@ test("sessions.recover retains source revocation for its accepted own successor"
   const sourceKey = "agent:main:dashboard:narrow-own-recovery";
   const sourceSessionId = "narrow-own-recovery-source";
   const owner = roleClient("view", "narrow-recovery-owner");
-  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   owner.connect.scopes = ["operator.sessions.write"];
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(owner);
   await seedRecoverableSession({
     sourceKey,
     sourceSessionId,
@@ -279,7 +283,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
     hasCurrentClientAuthority: requestAuthority.isCurrent,
   });
 
-  expect(recovered).toMatchObject({
+  expect(recovered, JSON.stringify(recovered)).toMatchObject({
     ok: true,
     payload: { key: expect.any(String), continuation: { status: "started" } },
   });

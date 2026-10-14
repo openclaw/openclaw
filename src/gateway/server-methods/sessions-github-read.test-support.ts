@@ -1,7 +1,8 @@
 import { vi } from "vitest";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import { getRuntimeConfig } from "../../config/io.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { prepareUserGitHubConnection } from "../../state/user-github-connections.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -53,6 +54,7 @@ export async function withReadFixture(
         },
       });
     }
+    await captureRuntimeConfigAsyncReader()();
     const profile = options.personal
       ? ensureProfileForEmail("publication-reader@example.test")
       : undefined;
@@ -113,9 +115,10 @@ function createFixture(
     .fn<() => Promise<SessionGitHubStatusResult | null>>()
     .mockResolvedValue(null);
   const personalLifecycle = createPersonalGitHubOAuthLifecycle();
-  const personalConnectionStatus = vi.fn(async (action: PersonalGitHubAction) =>
-    personalGitHubStatus(action),
-  );
+  const personalConnectionStatus = vi.fn(async (action: PersonalGitHubAction) => {
+    await prepareUserGitHubConnection(action.owner);
+    return personalGitHubStatus(action);
+  });
   const requestForSession = vi.fn();
   const pullRequests = { subscribe: vi.fn(), unsubscribe: vi.fn(), read: vi.fn(), stop: vi.fn() };
   // Only these services belong to the read handler; the authorization helpers stay real.

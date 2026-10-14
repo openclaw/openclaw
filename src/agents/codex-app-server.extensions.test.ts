@@ -9,6 +9,7 @@ import {
 import { listAgentToolResultMiddlewares } from "../plugins/agent-tool-result-middleware.js";
 import { listCodexAppServerExtensionFactories } from "../plugins/codex-app-server-extension-factory.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import {
   cleanupTempPluginTestEnvironment,
   createTempPluginDir,
@@ -43,7 +44,8 @@ function createBundledTempDir(): string {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await clearActivePluginRegistry();
   clearRuntimeConfigSnapshot();
   cleanupTempPluginTestEnvironment(
     tempDirs,
@@ -86,6 +88,7 @@ describe("agent tool result middleware", () => {
       onlyPluginIds: ["tool-result-middleware"],
     };
 
+    setRuntimeConfigSnapshot(options.config);
     loadOpenClawPlugins(options);
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
     expect(listAgentToolResultMiddlewares("openclaw")).toHaveLength(0);
@@ -310,6 +313,7 @@ describe("Codex app-server extension factories", () => {
       onlyPluginIds: ["codex-ext"],
     };
 
+    setRuntimeConfigSnapshot(options.config);
     loadOpenClawPlugins(options);
     expect(listCodexAppServerExtensionFactories()).toHaveLength(1);
 

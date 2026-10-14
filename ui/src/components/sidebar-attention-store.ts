@@ -1,5 +1,6 @@
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import type {
   SidebarAttentionStoreController as StoreController,
   SidebarAttentionStoreSources,
@@ -57,7 +58,8 @@ export class SidebarAttentionStoreController implements StoreController {
   private cronRefresh: { generation: number; requested: boolean } | null = null;
   private cronRefreshNeeded = false;
   private cronRetryAt?: number;
-  private modelAuthRefresh: { generation: number; requested: boolean } | null = null;
+  private modelAuthRefresh: { generation: number; agentId: string; requested: boolean } | null =
+    null;
   private readonly stopSubscriptions: Array<() => void>;
   private outboxRuntime: typeof import("../pages/chat/chat-outbox-owner.ts") | null = null;
   private disposed = false;
@@ -74,10 +76,8 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopSubscriptions = [
       sources.gateway.subscribe(() => this.synchronizeGateway()),
       sources.gateway.subscribeEvents((event) => {
-        if (event.event === "cron") {
+        if (event.event === "cron" || event.event === "config.changed") {
           this.load(false);
-        } else if (event.event === "config.changed") {
-          this.load();
         } else if (modelAuthEventInvalidates(event)) {
           this.load(true, false);
         }
@@ -272,7 +272,11 @@ export class SidebarAttentionStoreController implements StoreController {
   private load(refreshModelAuth = true, refreshCron = true): void {
     const gateway = this.sources.gateway.snapshot;
     const client = gateway.client;
-    if (!isGatewayAvailable(gateway) || !client) {
+    if (
+      !isGatewayAvailable(gateway) ||
+      !client ||
+      !hasOperatorReadAccess(gateway.hello?.auth ?? null)
+    ) {
       return;
     }
     const owner = this.owner();
@@ -286,7 +290,6 @@ export class SidebarAttentionStoreController implements StoreController {
       isGatewayAvailable(this.sources.gateway.snapshot) &&
       this.sources.gateway.snapshot.client === client &&
       this.ownerEquals(owner, this.owner()) &&
-      this.sources.agentSelection.state.selectedId === agentScope.selectedId &&
       this.sources.agentSelection.state.scopeId === agentScope.scopeId;
     const publishSource = (scope: {
       cronInventoryComplete: boolean;
@@ -386,20 +389,27 @@ export class SidebarAttentionStoreController implements StoreController {
       agentScope.selectedId
     ) {
       this.modelAuthRefreshAt = undefined;
-      if (this.modelAuthRefresh?.generation === generation) {
+      if (
+        this.modelAuthRefresh?.generation === generation &&
+        this.modelAuthRefresh.agentId === agentScope.selectedId
+      ) {
         // Only explicit freshness loads queue auth work; cron events cannot
         // invalidate a pending auth response or schedule another auth request.
         this.modelAuthRefresh.requested ||= refreshModelAuth;
       } else {
-        const refresh = { generation, requested: true };
         const agentId = agentScope.selectedId;
+        const refresh = { generation, agentId, requested: true };
+        const currentAuth = () =>
+          current() &&
+          this.modelAuthRefresh === refresh &&
+          this.sources.agentSelection.state.selectedId === agentId;
         this.modelAuthRefresh = refresh;
         void (async () => {
           try {
-            while (refresh.requested && current()) {
+            while (refresh.requested && currentAuth()) {
               refresh.requested = false;
               const status = await loadModelAuthStatus(client, { agentId }).catch(() => null);
-              if (current()) {
+              if (currentAuth()) {
                 this.modelAuthStatus = status;
                 this.modelAuthAgentId = agentId;
                 this.modelAuthRefreshAt = status ? nextModelAuthStatusRefreshAt(status) : undefined;
@@ -427,7 +437,11 @@ export class SidebarAttentionStoreController implements StoreController {
       this.dismissalKey = key;
       this.dismissed = loadDismissals(key);
     }
-    if (snapshot.phase !== "connected" || !snapshot.client) {
+    if (
+      snapshot.phase !== "connected" ||
+      !snapshot.client ||
+      !hasOperatorReadAccess(snapshot.hello?.auth ?? null)
+    ) {
       this.loadGeneration += 1;
       this.loadedOwner = null;
       this.loadedClient = null;
@@ -454,6 +468,18 @@ export class SidebarAttentionStoreController implements StoreController {
       agentScope.selectedId === this.loadedAgentScope.selectedId &&
       agentScope.scopeId === this.loadedAgentScope.scopeId
     ) {
+      return;
+    }
+    if (
+      !ownerChanged &&
+      snapshot.client === this.loadedClient &&
+      agentScope.scopeId === this.loadedAgentScope.scopeId
+    ) {
+      // Chat selection changes auth ownership, not the Inbox inventory's filter.
+      this.modelAuthStatus = null;
+      this.modelAuthAgentId = null;
+      this.load(true, false);
+      this.onChange();
       return;
     }
     let scopeChanged = false;

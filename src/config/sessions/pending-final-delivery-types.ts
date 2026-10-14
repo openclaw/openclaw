@@ -4,9 +4,13 @@ export type PendingFinalDeliveryState = {
   createdAt: number;
   context?: DeliveryContext;
   intentId?: string;
+  /** Original admitted source; survives claim cleanup before the queued final settles. */
+  sourceRunId?: string;
   deliveries?: Array<{
     id: string;
     state: "prepared" | "queued" | "delivered" | "suppressed" | "unknown";
+    /** Same-route identified evidence for the complete logical member, not just its last send. */
+    receipt?: { platformMessageId: string; resultCount: number };
   }>;
 } & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 

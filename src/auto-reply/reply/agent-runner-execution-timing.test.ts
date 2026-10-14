@@ -12,6 +12,7 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   createMinimalRunAgentTurnParams,
+  getRawExecuteAgentTurnForTest,
   fallbackAttemptOptions,
   initialFallbackAttemptOptions,
   setupAgentRunnerExecutionTestState,
@@ -19,12 +20,10 @@ import {
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 
-vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }));
-
 const state = await setupAgentRunnerExecutionTestState();
 
 it("settles the turn's attribution before model-routing hooks run", async () => {
-  const { executeAgentTurn } = await import("./agent-runner-execution.js");
+  const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const capture = createDeferred();
   const entered = createDeferred();
   const hook = vi.fn(async () => undefined);
@@ -59,7 +58,7 @@ it("settles the turn's attribution before model-routing hooks run", async () => 
 });
 
 it("announces a remote native run before its worker starts writing replies", async () => {
-  const { executeAgentTurn } = await import("./agent-runner-execution.js");
+  const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const onAgentRunStart = vi.fn();
   const finishObservation = vi.fn(() => {
     throw new Error("synthetic timing sink failure");
@@ -103,7 +102,7 @@ it("announces a remote native run before its worker starts writing replies", asy
 it.each(["settled", "pending"] as const)(
   "uses the starting fallback candidate's facts after a prior %s preparation",
   async (preparationState) => {
-    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
     const onAgentRunStart = vi.fn();
     const fallbackModel = "claude-opus-4-6";
     const pendingObservations = new Set<number>();
@@ -202,7 +201,7 @@ it.each(["settled", "pending"] as const)(
 );
 
 it("keeps native start facts when an earlier event's preparation settles late", async () => {
-  const { executeAgentTurn } = await import("./agent-runner-execution.js");
+  const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const onAgentRunStart = vi.fn();
   const entered = createDeferred();
   const fallback =
@@ -251,7 +250,7 @@ it("keeps native start facts when an earlier event's preparation settles late", 
 it.each(["embedded preparation", "fallback preparation"])(
   "times %s failure between successful turns without borrowing the previous start",
   async (failureBoundary) => {
-    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
     let now = 1_000_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     const session: InternalSessionEntry = { sessionId: "session", updatedAt: now };

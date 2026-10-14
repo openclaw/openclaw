@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import {
   runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
@@ -129,14 +130,19 @@ vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
 // mock-isolation: Use test-owned read state while retaining real persistence publications.
 vi.mock("./subagent-registry-state.js", async (importOriginal) => {
   const {
+    clearSubagentRunsReadCacheForTest,
     consumeFreshSubagentRegistryRows,
+    countActiveSubagentRunsForSession,
+    prepareSubagentRegistrationRows,
     publishSubagentRunsAfterAtomicStore,
     rememberRestoredSubagentRunNotification,
   } = await importOriginal<typeof import("./subagent-registry-state.js")>();
   return {
+    clearSubagentRunsReadCacheForTest,
     consumeFreshSubagentRegistryRows,
+    countActiveSubagentRunsForSession,
+    prepareSubagentRegistrationRows,
     rememberRestoredSubagentRunNotification,
-    clearSubagentRunsReadCacheForTest: mocks.clearSubagentRunsReadCacheForTest,
     getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
     getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
     ...(await import("../../subagent-test-fixtures.test-helpers.js")).createSubagentStateMock(
@@ -233,12 +239,14 @@ describe("subagent registry seam flow", () => {
       hasHooks: (hookName: string) => hookName === "subagent_ended",
       runSubagentEnded,
     } as never);
-  const mockSingleCollectorConcurrency = () =>
+  const mockSingleCollectorConcurrency = () => {
     mocks.getRuntimeConfig.mockReturnValue({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const, store: mocks.resolveStorePath() },
     });
+    setRuntimeConfigSnapshot(mocks.getRuntimeConfig());
+  };
   const getLifecycleHandler = () => {
     const handler = expectDefined(mocks.onAgentEvent.mock.calls.at(-1)?.[0], "lifecycle handler");
     return (
@@ -307,6 +315,7 @@ describe("subagent registry seam flow", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const, store: mocks.resolveStorePath() },
     });
+    setRuntimeConfigSnapshot(mocks.getRuntimeConfig());
     mocks.resolveAgentIdFromSessionKey.mockImplementation((sessionKey: string) => {
       return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
     });
@@ -350,6 +359,7 @@ describe("subagent registry seam flow", () => {
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
     await mod.resetSubagentRegistryForTests({ persist: false });
     swarmSchedulerTesting.reset();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     vi.useRealTimers();
   });

@@ -5,6 +5,7 @@ import { StatementSync } from "node:sqlite";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
@@ -18,6 +19,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../../src/state/openclaw-agent-db.js";
 import { tableExists } from "../../../../src/state/openclaw-state-db-schema-helpers.js";
+import { openOpenClawStateDatabase } from "../../../../src/state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -40,6 +42,31 @@ function pauseDirectoryDiscovery(sessionsDir: string) {
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
+  it("discovers the caller's configured store without a global runtime snapshot", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("memory-session-corpus", "sessions.json");
+      await upsertSessionEntryCore(
+        { sessionKey: "agent:main:chat:owned", storePath },
+        { sessionId: "owned", updatedAt: 1 },
+      );
+      clearRuntimeConfigSnapshot();
+
+      const entries = await listSessionTranscriptCorpusEntriesForAgent("main", {
+        config: { session: { store: storePath } },
+        includeContentRevision: false,
+        readOnly: true,
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        sessionId: "owned",
+        sessionKey: "agent:main:chat:owned",
+        storePath,
+        transcriptSource: "sqlite",
+      });
+    });
+  });
+
   it.each([
     { includeContentRevision: true, archiveTablePresent: true, readOnly: false },
     { includeContentRevision: false, archiveTablePresent: true, readOnly: false },
@@ -50,6 +77,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     "preserves corpus selection with content revisions $includeContentRevision and archive table $archiveTablePresent (readOnly: $readOnly)",
     async ({ includeContentRevision, archiveTablePresent, readOnly }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionsDir = state.sessionsDir();
         await fs.mkdir(sessionsDir, { recursive: true });
         const archivePath = path.join(
@@ -104,6 +132,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     "classifies prompt-rich entries without decoding saved prompts (readOnly: $readOnly, retained: $includeRetainedSqlite)",
     async ({ readOnly, includeRetainedSqlite }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:corpus-metadata";
         const storePath = path.join(state.sessionsDir(), "sessions.json");
         const persisted = await upsertSessionEntryCore(
@@ -177,6 +206,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
 
   it("preserves admitted metadata parsing when readonly corpus discovery crosses the worker", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:admitted-corpus";
       const sessionId = "admitted-corpus";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
@@ -230,16 +260,45 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     });
   });
 
+  it("reads worker content revisions without claiming an agent database lease", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const sessionKey = "agent:main:revision-corpus";
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      await upsertSessionEntryCore(
+        { sessionKey, storePath },
+        { sessionId: "revision-corpus", updatedAt: 10 },
+      );
+      const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const leases = openOpenClawStateDatabase({ env: state.env }).db.prepare(
+        "SELECT lease_id FROM agent_database_leases WHERE path = ?",
+      );
+      const admitted = new Set(leases.all(agentPath).map((row) => row.lease_id));
+
+      const entries = await listSessionTranscriptCorpusEntriesForAgent("main", {
+        config: { session: { store: storePath } },
+        includeContentRevision: true,
+      });
+
+      expect(entries).toEqual([
+        expect.objectContaining({ sessionKey, contentRevision: expect.stringMatching(/^sqlite:/) }),
+      ]);
+      // Pooled history Workers outlive the request; a writable open would leave their lease.
+      expect(leases.all(agentPath).filter((row) => !admitted.has(row.lease_id))).toEqual([]);
+    });
+  });
+
   it.each([false, true])(
     "yields during filesystem discovery while retaining its store and reading fresh entries (readOnly: %s)",
     async (readOnly) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionsDir = state.statePath("custom-sessions");
         const storePath = path.join(sessionsDir, "sessions.json");
         await fs.mkdir(sessionsDir, { recursive: true });
         await state.writeConfig({ session: { store: storePath } });
-        clearRuntimeConfigSnapshot();
         clearConfigCache();
+        setRuntimeConfigSnapshot({ session: { store: storePath } });
         await upsertSessionEntryCore(
           { sessionKey: "agent:main:chat:original", storePath },
           { sessionId: "original", updatedAt: 1 },
@@ -259,8 +318,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           await state.writeConfig({
             session: { store: state.statePath("replacement", "sessions.json") },
           });
-          clearRuntimeConfigSnapshot();
           clearConfigCache();
+          setRuntimeConfigSnapshot({
+            session: { store: state.statePath("replacement", "sessions.json") },
+          });
           await upsertSessionEntryCore(
             { sessionKey: "agent:main:chat:fresh", storePath },
             { sessionId: "fresh", updatedAt: 2 },
@@ -282,13 +343,14 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     "retains the custom store's registry environment while discovery is pending (readOnly: %s)",
     async (readOnly) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionsDir = state.statePath("custom-sessions");
         const storePath = path.join(sessionsDir, "sessions.json");
         const unsuffixedDatabase = path.join(sessionsDir, "openclaw-agent.sqlite");
         await fs.mkdir(sessionsDir, { recursive: true });
         await state.writeConfig({ session: { store: storePath } });
-        clearRuntimeConfigSnapshot();
         clearConfigCache();
+        setRuntimeConfigSnapshot({ session: { store: storePath } });
         registerOpenClawAgentDatabase({ agentId: "ops", path: unsuffixedDatabase });
         const { entered, release, realpathSpy } = pauseDirectoryDiscovery(sessionsDir);
         const listing = listSessionTranscriptCorpusEntriesForAgent("main", {

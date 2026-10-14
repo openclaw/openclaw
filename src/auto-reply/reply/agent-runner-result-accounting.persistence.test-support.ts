@@ -57,18 +57,23 @@ export async function createAgentAccountingPersistenceFixture({
   storePath,
   root,
   fixtureId,
+  incognito = false,
   registerOperation,
 }: {
   storePath: string;
   root: string;
   fixtureId: number;
+  incognito?: boolean;
   registerOperation: (operation: ReplyOperation) => void;
 }) {
-  const sessionKey = `agent:main:accounting-${fixtureId}`;
+  const sessionKey = incognito
+    ? `agent:main:dashboard:incognito-accounting-${fixtureId}`
+    : `agent:main:accounting-${fixtureId}`;
   const sessionId = `accounting-session-${fixtureId}`;
   const runId = `context-pressure-run-${fixtureId}`;
   const entry: InternalSessionEntry = {
     sessionId,
+    ...(incognito ? { incognito: true } : {}),
     lifecycleRevision: "generation-1",
     activeWriterRunId: runId,
     updatedAt: 1,
@@ -351,7 +356,11 @@ export async function createAgentAccountingPersistenceFixture({
 }
 
 export function observeCompletionCommands(
-  options: { hideCommittedReceipt?: boolean; beforeCommit?: () => void } = {},
+  options: {
+    hideCommittedReceipt?: boolean;
+    beforeCommit?: () => void;
+    afterRead?: () => void | Promise<void>;
+  } = {},
 ) {
   const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
   const commands: string[] = [];
@@ -371,7 +380,13 @@ export function observeCompletionCommands(
               run({
                 execute(command, commandOptions) {
                   commands.push(command.type);
-                  return worker.execute(command, commandOptions);
+                  const result = worker.execute(command, commandOptions);
+                  return command.type === "session.actor.read" && options.afterRead
+                    ? result.then(async (value) => {
+                        await options.afterRead?.();
+                        return value;
+                      })
+                    : result;
                 },
               }),
             runOptions,

@@ -5,6 +5,8 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import "../../../lib/toast-host.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as payloads from "../attachment-payload-store.ts";
 import {
   chatAttachmentBatchBytes,
@@ -331,11 +333,12 @@ describe("chat attachment read failures", () => {
       "first.png",
       "third.png",
     ]);
-    await toastHost.updateComplete;
-    expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
-    expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
-      "Too large to send: second.png",
-    );
+    await waitForSolid(() => {
+      expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
+        "Too large to send: second.png",
+      );
+    });
   });
 
   it("reserves the batch budget for ready attachments and overlapping in-flight reads", async () => {
@@ -362,9 +365,10 @@ describe("chat attachment read failures", () => {
     expect(
       reads.project(attachments).map(({ attachment }) => attachment.fileName ?? attachment.id),
     ).toEqual(["ready", "reading.png"]);
-    await toastHost.updateComplete;
-    expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
-      "Too large to send: overflow.png",
+    await waitForSolid(() =>
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
+        "Too large to send: overflow.png",
+      ),
     );
   });
 
@@ -413,11 +417,12 @@ describe("chat attachment read failures", () => {
       "first.txt",
       "fits.txt",
     ]);
-    await toastHost.updateComplete;
-    expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
-    expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
-      "Too large to send: overflow.txt",
-    );
+    await waitForSolid(() => {
+      expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
+        "Too large to send: overflow.txt",
+      );
+    });
   });
 
   it("rejects oversized non-resizable images against hello policy before encoding", async () => {

@@ -25,7 +25,8 @@ export type MutableSession = {
     reset: () => void;
     state: {
       messages: unknown[];
-      systemPrompt?: string;
+      systemPrompt: string;
+      tools: Agent["state"]["tools"];
     };
   };
   prompt: (

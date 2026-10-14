@@ -8,6 +8,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
+import { recordCodexThreadForkSettings } from "./client-fork-settings.js";
 import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import {
@@ -213,6 +214,7 @@ export async function resumeExistingCodexThread(
       }),
     );
     acceptedConfiguration = configuration;
+    recordCodexThreadForkSettings(params.client, resumeBinding.threadId, resumeParams);
     assertCodexThreadAcceptsDirectInput(response.thread);
     configuration.assertConfigured();
     if (requestModelProvider && response.modelProvider !== requestModelProvider) {
@@ -497,6 +499,7 @@ export async function startFreshCodexThread(
     }
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
+  recordCodexThreadForkSettings(params.client, response.thread.id, startParams);
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
   const rejectUncommittedThread = async (cause: unknown): Promise<never> => {
     const cleanupConfirmed = await discardUnattestedCodexPluginThread({
@@ -625,7 +628,10 @@ export async function startFreshCodexThread(
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
     // Restricted ephemeral threads also need creation policy for fenced warm reuse.
     liveThreadEphemeralPolicy: startParams.ephemeral
-      ? createCodexEphemeralThreadPolicy(params)
+      ? createCodexEphemeralThreadPolicy(
+          { ...params, config: startParams.config },
+          context.effectiveConfig.config,
+        )
       : undefined,
     // Transient starts do not own the persisted binding, so their native
     // subscriptions must be released instead of entering the warm cache.

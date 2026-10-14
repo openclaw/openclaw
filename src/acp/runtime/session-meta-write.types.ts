@@ -1,12 +1,28 @@
-import type { readLegacyAcpMigrationContextInDatabase } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
-import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   AcpSessionControlBinding,
   AcpSessionControlConstraint,
   AcpSessionSourceReadInput,
 } from "./session-meta-control.types.js";
 import type { AcpSessionReadInput } from "./session-meta-read.types.js";
+
+export type AcpSessionMutationParams = {
+  assertCommitAllowed?: () => void;
+  expectedControlBinding?: AcpSessionControlBinding;
+  sessionKey: string;
+  agentId?: string;
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+  now?: () => number;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+  mutate: (
+    current: SessionAcpMeta | undefined,
+    entry: SessionEntry | undefined,
+  ) => SessionAcpMeta | null | undefined;
+};
 
 export type AcpSessionMutationSource =
   | AcpSessionSourceReadInput["source"]
@@ -16,13 +32,6 @@ export type AcpSessionMutationSource =
       agentId: string;
       path: string;
       snapshot: { entry: SessionEntry | undefined; sources: [] };
-    }
-  | {
-      kind: "ephemeral";
-      agentId: string;
-      path: string;
-      identity: AgentDatabaseIncognitoIdentity;
-      snapshot: ReturnType<typeof readLegacyAcpMigrationContextInDatabase>;
     };
 
 export type AcpSessionMutationDecision =

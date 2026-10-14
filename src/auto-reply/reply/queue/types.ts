@@ -8,7 +8,10 @@ import type {
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
-import type { ReplyDeliveryObserver } from "../../../agents/reply-completion.js";
+import type {
+  ReplyDeliveryFactsObserver,
+  ReplyDeliveryObserver,
+} from "../../../agents/reply-completion.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { ChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../../config/sessions.js";
@@ -100,6 +103,7 @@ type FollowupRunObservers = Pick<
   awaitSessionDiffBaseline?: () => Promise<void>;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
   onDeliberateSilentTerminalReply?: () => void;
 };
 
@@ -162,6 +166,8 @@ export type FollowupRun = {
     predecessor: Promise<boolean>;
     settle: (accepted: boolean) => void;
   };
+  /** Internal Goal nudge; admission must still observe this exact active Goal. */
+  goalContinuation?: import("../goal-continuation.js").GoalContinuation;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** This continuation owes last-resort feedback if it also stalls, including claimed input. */
@@ -224,6 +230,7 @@ export type FollowupRun = {
     | "authProfileId"
     | "authProfileIdSource"
     | "thinkLevel"
+    | "thinkingExplicit"
     | "fastMode"
     | "fastModeAutoOnSeconds"
     | "verboseLevel"

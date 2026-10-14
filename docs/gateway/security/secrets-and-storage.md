@@ -58,6 +58,15 @@ Hardening: keep permissions tight (`700` on dirs, `600` on files); use full-disk
 
 `openclaw doctor` can warn and offer to tighten these.
 
+Normal config writes, recovery, and secret-file updates preserve the permissions
+of an existing state root, including an operator-configured group-shared root.
+New state roots and private subdirectories remain `700`; config, backups, and
+secret files remain `600`. This does not make a group-writable state root a
+security boundary against that group: members can replace directory entries
+even when they cannot read the original files. Share the state root only with
+trusted administrators. For sidecars that should access only workspace files,
+configure a workspace outside the private state root instead.
+
 ### Workspace `.env` files
 
 OpenClaw loads workspace-local `.env` files for agents and tools, but never lets them silently override gateway runtime controls:
@@ -75,7 +84,7 @@ OpenClaw stores session transcripts in the [per-agent SQLite database](/referenc
 
 Gateway logs may include tool summaries, errors, and URLs; session transcripts can include pasted secrets, file contents, command output, and links.
 
-- Logs, diagnostics, and support exports mask sensitive values. Session transcripts, tool arguments, tool results, and `.env` reads preserve their original text, including credentials.
+- File logs store raw records with owner-only (`0600`) permissions. Log tails (`logs.tail`), console output, diagnostics/support bundles, and remote/OTel export mask sensitive values independently. Direct file reads are raw; protect them like the agent/state databases. Session transcripts, tool arguments, tool results, and `.env` reads preserve their original text, including credentials.
 - Add custom patterns for logs and diagnostics via `logging.redactPatterns` (tokens, hostnames, internal URLs); these patterns do not alter model context or transcripts.
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
 - Prune old session transcripts and log files if you do not need long retention.

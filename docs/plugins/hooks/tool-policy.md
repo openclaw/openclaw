@@ -181,8 +181,10 @@ export default definePluginEntry({
 });
 ```
 
-Add the file to `plugins.load.paths`; the default hybrid reload mode applies
-the change:
+Add the file to `plugins.load.paths` and enable it; the default hybrid reload
+mode applies the change. A standalone file uses its file name as the plugin id
+(`maintenance-access.ts` is `maintenance-access`), so keep it equal to the
+`id` passed to `definePluginEntry`:
 
 ```json5
 {
@@ -205,6 +207,7 @@ the change:
   ],
   plugins: {
     load: { paths: ["~/.openclaw/policies/maintenance-access.ts"] },
+    entries: { "maintenance-access": { enabled: true } },
   },
 }
 ```

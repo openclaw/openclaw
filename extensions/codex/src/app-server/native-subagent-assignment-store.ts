@@ -1,4 +1,4 @@
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createPreparedNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
@@ -17,26 +17,12 @@ export function createNativeSubagentSessionAuthority(
   if (!parent) {
     return undefined;
   }
-  const assertCurrent = () => {
-    if (parent.source.nativeSource) {
-      parent.source();
-    } else {
-      parent.source.assertScopeCurrent();
-    }
-  };
-  const entryCurrent = parent.entryCurrent;
-  return {
-    ...createNativeSessionBindingAuthority([], assertCurrent),
-    prepareMutation: async () => ({
-      assertCurrent,
-      sessionEntryCurrent: entryCurrent
-        ? {
-            sources: [entryCurrent.source],
-            assertCurrent: ([entry]) => entryCurrent.assertCurrent(entry),
-          }
-        : undefined,
-    }),
-  };
+  return createPreparedNativeSessionBindingAuthority({
+    lineage: [],
+    source: parent.source,
+    entryChecks: parent.entryCurrent ? [parent.entryCurrent] : [],
+    assertCurrent: () => parent.source.assertScopeCurrent(),
+  });
 }
 
 export function createNativeSubagentAssignmentStore(params: {

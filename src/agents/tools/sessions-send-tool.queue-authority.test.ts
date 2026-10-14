@@ -59,7 +59,8 @@ describe("sessions_send direct queue source authority", () => {
   ] as const)(
     "checks the %s source at the real final enqueue and preserves accepted input",
     async (source) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
+      await withOpenClawTestState(stateOptions, async (state) => {
         const crossAgent = source.startsWith("send-");
         const peerPolicy = source.startsWith("peer-");
         const asks = peerPolicy || source === "ask-revoked";
@@ -271,7 +272,10 @@ describe("sessions_send direct queue source authority", () => {
               ...cfg,
               agents: {
                 ...cfg.agents,
-                entries: { ...cfg.agents.entries, main: { tools: { agentToAgent: { send: [] } } } },
+                entries: {
+                  ...cfg.agents.entries,
+                  main: { tools: { agentToAgent: { send: [] } } },
+                },
               },
             });
           if (source === "send-revoked") {
@@ -333,11 +337,11 @@ describe("sessions_send direct queue source authority", () => {
           ).toBe(true);
         } finally {
           resumePreparation.resolve();
-          await Promise.allSettled([pending]);
           releaseAgentRunDelegatedAuthority(authority);
+          questions.close();
+          await Promise.allSettled([pending]);
           clearActiveEmbeddedRun(sessionId, handle, sessionKey);
           unregisterClosed();
-          questions.close();
           await questions.drain();
           session.dispose();
         }

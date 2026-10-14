@@ -18,11 +18,8 @@ import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { hasBinary } from "../loading/config.js";
-import {
-  loadWorkspaceSkills,
-  prepareWorkspaceSkills,
-  readWorkspaceSkillSources,
-} from "../loading/workspace-skill-loader.js";
+import { loadWorkspaceSkills, prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { closeSkillsWatchers } from "../runtime/refresh.js";
 import { readSkillResourceFiles } from "../runtime/resources.js";

@@ -388,14 +388,7 @@ suite.define(() => {
       await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
       await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
       await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
-          }),
-        )
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
         .toBe("connected");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -439,7 +432,7 @@ suite.define(() => {
         .waitFor();
       expect(await page.locator(".sidebar-issues-button").count()).toBe(1);
       expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await page.locator('[data-navigation-view="sessions"]').click();
       await page.locator("openclaw-app-sidebar .sidebar-issues-button").waitFor();
 
       await gateway.setMethodResponse("cron.list", FAILED_CRON_RESPONSE);

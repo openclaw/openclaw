@@ -90,6 +90,19 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     }
   });
 
+  it("does not recover an absent incognito heartbeat target from a legacy store", async () => {
+    const sessionKey = "agent:ops:dashboard:incognito-heartbeat";
+    const cfg = cfgWithSession(sessionKey);
+    writeStore(cfg, {
+      [sessionKey]: { sessionId: "legacy-incognito", updatedAt: 1 },
+    });
+
+    const warnings = await describeHeartbeatSessionTargetIssues(cfg);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`resolved to ${sessionKey}`);
+    expect(warnings[0]).toContain("has no entry");
+  });
+
   it("does not warn when an explicit heartbeat recipient does not need session history", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
     const agent = cfg.agents?.entries?.ops;

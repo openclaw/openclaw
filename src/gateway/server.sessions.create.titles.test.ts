@@ -290,7 +290,7 @@ test.each(["generator error", "delayed title"])(
       }
     };
     const delayed = failure === "delayed title";
-    titleMocks.generate.mockImplementationOnce(() => {
+    titleMocks.generate.mockImplementation(() => {
       titleStarted.resolve();
       return delayed ? title.promise : Promise.reject(new Error("boom"));
     });
@@ -314,12 +314,12 @@ test.each(["generator error", "delayed title"])(
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload?.runStarted).toBe(true);
       await waitForPreparation(dispatchStarted.promise);
+      await waitForPreparation(titleStarted.promise);
       const branch = loadSessionEntry(target)?.worktree?.branch;
       expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
-      expect(titleMocks.generate).not.toHaveBeenCalled();
+      expect(titleMocks.generate).toHaveBeenCalledOnce();
       dispatchFinished.resolve();
       await settleWorkspaceRuns(context, storePath, key);
-      await titleStarted.promise;
       if (delayed) {
         expect(loadSessionEntry(target)?.displayName).toBeUndefined();
         title.resolve("Late investigation title");
@@ -334,7 +334,7 @@ test.each(["generator error", "delayed title"])(
         );
       }
       expect(loadSessionEntry(target)?.worktree?.branch).toBe(branch);
-      expect(titleMocks.generate).toHaveBeenCalledOnce();
+      expect(titleMocks.generate).toHaveBeenCalledTimes(delayed ? 1 : 2);
     } finally {
       title.resolve("Fixture cleanup");
       dispatchFinished.resolve();

@@ -12,6 +12,10 @@ import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engi
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -126,7 +130,9 @@ describe("memory manager reindex recovery", () => {
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
     resetPluginStateStoreForTests();
+    clearRuntimeConfigSnapshot();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -158,6 +164,7 @@ describe("memory manager reindex recovery", () => {
   }
 
   async function openManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {
+    setRuntimeConfigSnapshot(cfg);
     const { getMemorySearchManager } = await import("./index.js");
     const result = await getMemorySearchManager({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
@@ -541,7 +548,8 @@ describe("memory manager reindex recovery", () => {
     const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
     await memoryManager.sync({ reason: "baseline", force: true });
     const harness = memoryManager as unknown as ReindexHarness; // SAFETY: this fixture owns the manager and provider.
-    const databasePath = harness.db.location();
+    const db = harness.db;
+    const databasePath = db.location();
     if (!databasePath) {
       throw new Error("Expected the fixture's file-backed memory index");
     }
@@ -575,7 +583,7 @@ describe("memory manager reindex recovery", () => {
       expect(closed).toBe(false);
       reservation.release();
       await Promise.all([sync, close, reservation.done]);
-      expect(harness.db.isOpen).toBe(false);
+      expect(db.isOpen).toBe(false);
       using reader = new DatabaseSync(databasePath, { readOnly: true });
       expect(reader.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
         { text: "Accepted sync survives close." },

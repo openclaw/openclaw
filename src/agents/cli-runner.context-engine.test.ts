@@ -6,7 +6,11 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
-import { prepareSystemAgentRunAdmission, type AdmittedRunContext } from "./admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+  type AdmittedRunContext,
+} from "./admitted-run-context.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
 
@@ -218,6 +222,28 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     for (const hook of Object.values(hooks)) {
       expect(hook).not.toHaveBeenCalled();
     }
+  });
+
+  it("publishes the generated response before backend cleanup can throw", async () => {
+    const context = buildPreparedContext(createContextEngine());
+    context.preparedBackend.cleanup = async () => {
+      throw new Error("backend cleanup failed");
+    };
+    const publishResultContent = vi.fn();
+    const diagnosticLifecycle = {
+      setPhase: vi.fn(),
+      setExecutionContext: vi.fn(),
+      publishCapturedContent: vi.fn(),
+      publishResultContent,
+    };
+
+    await expect(runPreparedCliAgent(context, diagnosticLifecycle)).rejects.toThrow(
+      "backend cleanup failed",
+    );
+    expect(publishResultContent).toHaveBeenCalledOnce();
+    expect(publishResultContent.mock.calls[0]?.[0]).toMatchObject({
+      meta: expect.objectContaining({ finalAssistantRawText: "final answer" }),
+    });
   });
 
   it("runs a native control command on the existing session without turn side effects", async () => {
@@ -517,5 +543,46 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(ingestBatch).not.toHaveBeenCalled();
     expect(maintain).toHaveBeenCalledTimes(1);
     expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("keeps a committed CLI reply successful after operator model authority revokes post-commit", async () => {
+    let revoked = false;
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "operator-profile",
+      scopes: [],
+      assertCurrent: () => {
+        if (revoked) {
+          throw new Error("operator model execution authority is no longer active");
+        }
+      },
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "run-auth-revoked",
+      "main",
+      "cli-context-engine-test",
+      undefined,
+      authority,
+    );
+    try {
+      const admitted = await admission.admit("embedded");
+      const context = buildPreparedContext(createContextEngine());
+      context.params.admittedRunContext = admitted;
+      // Revoke after the final reply commits: cleanup runs inside settlement
+      // between the committed complete() and the return, so the wrapper must
+      // not re-assert authority afterwards; the committed turn stays successful.
+      context.preparedBackend.cleanup = async () => {
+        revoked = true;
+      };
+      prepareMock.mockResolvedValue(context);
+
+      const result = await runCliAgent(context.params);
+
+      expect(revoked).toBe(true);
+      expect(result.meta.error).toBeUndefined();
+      expect(result.payloads?.[0]).toMatchObject({ text: expect.stringContaining("final answer") });
+    } finally {
+      admission.close();
+    }
   });
 });

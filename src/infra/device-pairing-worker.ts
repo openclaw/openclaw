@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { reserveWorkerEnvironmentNativePublication } from "../gateway/worker-environments/store-native-publication.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -27,6 +28,14 @@ export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
       }
     },
 );
+
+const setupChanges = resolveGlobalSingleton(
+  Symbol.for("openclaw.devicePairSetupChanges"),
+  () => new Set<(databasePath: string) => void>(),
+);
+
+export const onDevicePairSetupChange = (listener: (databasePath: string) => void) =>
+  registerListener(setupChanges, listener);
 
 // The broker owns this private channel; domain kernels supply the discriminated facts.
 function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
@@ -55,114 +64,11 @@ function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
 }
 
 function commitReceipt(value: unknown): DevicePairingCommitReceipt {
-  if (
-    !isRecord(value) ||
-    value.kind !== "devicePairing" ||
-    typeof value.beforeRevision !== "string" ||
-    typeof value.revision !== "string" ||
-    !Array.isArray(value.changed) ||
-    !value.changed.every(
-      (entry) =>
-        isRecord(entry) &&
-        typeof entry.deviceId === "string" &&
-        (entry.binding === null ||
-          (isRecord(entry.binding) &&
-            typeof entry.binding.identity === "string" &&
-            (entry.binding.generation === undefined ||
-              typeof entry.binding.generation === "string"))),
-    )
-  ) {
+  if (!isRecord(value) || value.kind !== "devicePairing") {
     throw new Error("Invalid pairing commit receipt");
   }
-  let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
-  if (value.tokensReplaced !== undefined) {
-    const replaced = value.tokensReplaced;
-    if (
-      !isRecord(replaced) ||
-      typeof replaced.deviceId !== "string" ||
-      !Array.isArray(replaced.roles) ||
-      !replaced.roles.every((role) => typeof role === "string")
-    ) {
-      throw new Error("Invalid pairing token replacement receipt");
-    }
-    tokensReplaced = { deviceId: replaced.deviceId, roles: replaced.roles };
-  }
-  let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
-  if (value.workerEnvironment !== undefined) {
-    const environment = value.workerEnvironment;
-    if (
-      !isRecord(environment) ||
-      typeof environment.environmentId !== "string" ||
-      typeof environment.nodeDeviceId !== "string" ||
-      typeof environment.updatedAtMs !== "number"
-    ) {
-      throw new Error("Invalid pairing worker-environment receipt");
-    }
-    workerEnvironment = {
-      environmentId: environment.environmentId,
-      nodeDeviceId: environment.nodeDeviceId,
-      updatedAtMs: environment.updatedAtMs,
-    };
-  }
-  let nodeApproval: DevicePairingCommitReceipt["nodeApproval"];
-  if (value.nodeApproval !== undefined) {
-    const approved = value.nodeApproval;
-    if (
-      !isRecord(approved) ||
-      typeof approved.nodeId !== "string" ||
-      typeof approved.pairingIdentity !== "string" ||
-      (approved.previousPairingGeneration !== undefined &&
-        typeof approved.previousPairingGeneration !== "string") ||
-      typeof approved.nextPairingGeneration !== "string" ||
-      !isRecord(approved.surface) ||
-      !Array.isArray(approved.surface.caps) ||
-      !approved.surface.caps.every((cap) => typeof cap === "string") ||
-      !Array.isArray(approved.surface.commands) ||
-      !approved.surface.commands.every((command) => typeof command === "string")
-    ) {
-      throw new Error("Invalid node approval receipt");
-    }
-    let permissions: Record<string, boolean> | undefined;
-    if (approved.surface.permissions !== undefined) {
-      if (!isRecord(approved.surface.permissions)) {
-        throw new Error("Invalid node approval permissions receipt");
-      }
-      permissions = {};
-      for (const [key, allowed] of Object.entries(approved.surface.permissions)) {
-        if (typeof allowed !== "boolean") {
-          throw new Error("Invalid node approval permissions receipt");
-        }
-        permissions[key] = allowed;
-      }
-    }
-    nodeApproval = {
-      nodeId: approved.nodeId,
-      pairingIdentity: approved.pairingIdentity,
-      previousPairingGeneration: approved.previousPairingGeneration,
-      nextPairingGeneration: approved.nextPairingGeneration,
-      surface: { caps: approved.surface.caps, commands: approved.surface.commands, permissions },
-    };
-  }
-  return {
-    kind: "devicePairing",
-    beforeRevision: value.beforeRevision,
-    revision: value.revision,
-    ...(tokensReplaced ? { tokensReplaced } : {}),
-    ...(workerEnvironment ? { workerEnvironment } : {}),
-    ...(nodeApproval ? { nodeApproval } : {}),
-    changed: value.changed.map((entry) => ({
-      deviceId: entry.deviceId,
-      binding:
-        entry.binding === null
-          ? null
-          : {
-              identity: entry.binding.identity,
-              ...(entry.binding.generation === undefined
-                ? {}
-                : { generation: entry.binding.generation }),
-            },
-    })),
-  };
+  // SAFETY: The private mutation worker builds this typed receipt after native COMMIT.
+  return value as DevicePairingCommitReceipt;
 }
 
 export function executeDevicePairingMutation<Key extends keyof DevicePairingWorkerOperations>(
@@ -273,6 +179,15 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       } finally {
         mutation?.finish(!admission || admission.settlement?.kind === "completed");
         removeService?.();
+        // Unknown outcomes can have committed; retry discovery without reviving authority.
+        if (
+          captured.type === "bootstrap.consume" ||
+          captured.type === "bootstrap.confirm" ||
+          captured.type === "bootstrap.ensure" ||
+          captured.type === "bootstrap.readCompletion"
+        ) {
+          notifyListeners(setupChanges, context.admission.databasePath);
+        }
       }
     }
   });

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -39,6 +40,7 @@ describe("worker placement dispatch", () => {
     });
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-dispatch-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });

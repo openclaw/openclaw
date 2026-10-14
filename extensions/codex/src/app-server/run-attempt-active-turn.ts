@@ -6,7 +6,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -171,6 +171,7 @@ export function activateCodexAttemptTurn(
     activeTurnId,
     {
       agentHookContext: hookContext,
+      hasDeliveredFinalSourceReply: () => toolBridge.telemetry.finalSourceReplyDelivered === true,
       initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
@@ -181,19 +182,22 @@ export function activateCodexAttemptTurn(
           toolBridge.availableTools.some((tool) => tool.name === "message")),
       onAsyncDelivery: async (delivery) => {
         return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
-          params:
-            prepareReplyMedia && projectionParams.onBlockReply
-              ? {
-                  ...projectionParams,
-                  onBlockReply: async (payload, options) => {
-                    const prepared = await prepareReplyMedia({ kind: "payload", payload });
-                    if (prepared.kind !== "payload") {
-                      throw new Error("Reply media preparation returned the wrong result kind");
-                    }
+          params: projectionParams.onBlockReply
+            ? {
+                ...projectionParams,
+                onBlockReply: async (payload, options) => {
+                  const prepared = prepareReplyMedia
+                    ? await prepareReplyMedia({ kind: "payload", payload })
+                    : { kind: "payload" as const, payload };
+                  if (prepared.kind !== "payload") {
+                    throw new Error("Reply media preparation returned the wrong result kind");
+                  }
+                  if (!toolBridge.telemetry.finalSourceReplyDelivered) {
                     await projectionParams.onBlockReply?.(prepared.payload, options);
-                  },
-                }
-              : projectionParams,
+                  }
+                },
+              }
+            : projectionParams,
           cwd: effectiveCwd,
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
@@ -419,7 +423,7 @@ export function activateCodexAttemptTurn(
         await codexTranscriptMirrorRuntime.mirror({
           assertCurrent: composeSessionTranscriptWriteAssertion([
             connection.assertLegacyCurrent,
-            createNativeSessionBindingAuthority([], assertSteeringActive).assertLegacyCurrent,
+            createNativeSessionBindingScope(assertSteeringActive).assertLegacyCurrent,
           ]),
           agentId: sessionAgentId,
           sessionKey: contextSessionKey,

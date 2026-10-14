@@ -45,6 +45,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, default: { ...actual, open }, open };
 });
 
+// Root ignores directory permissions, so a read-only parent cannot force the
+// in-place fallback there; those cases would silently prove atomic replacement.
+const readOnlyParentRejectsWrites = process.getuid?.() !== 0;
+
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
@@ -103,7 +107,7 @@ it.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
   },
 );
 
-it.runIf(process.platform !== "win32")(
+it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
   "uses the checked in-place fallback when the parent rejects a sibling temp file",
   async () => {
     const original = "# Long-Term Memory\n\n- existing entry\n";
@@ -125,7 +129,7 @@ it.runIf(process.platform !== "win32")(
 
 it.each([
   { label: "atomic replacement", readOnlyParent: false },
-  { label: "in-place fallback", readOnlyParent: true },
+  ...(readOnlyParentRejectsWrites ? [{ label: "in-place fallback", readOnlyParent: true }] : []),
 ])("rejects a changed preimage before $label", async ({ readOnlyParent }) => {
   const original = "# Long-Term Memory\n\n- original entry\n";
   const externalEdit = `${original}- external edit\n`;
@@ -162,7 +166,7 @@ it("rejects a changed preimage before removing a memory file", async () => {
   expect(await fs.readFile(memoryPath, "utf-8")).toBe(externalEdit);
 });
 
-it.runIf(process.platform !== "win32")(
+it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
   "completes the restore across short writes before truncating",
   async () => {
     const original = "# Long-Term Memory\n\n- existing entry that must survive\n";

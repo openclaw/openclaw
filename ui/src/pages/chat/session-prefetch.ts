@@ -457,26 +457,40 @@ export class SessionPrefetchController implements ReactiveController {
   hostConnected(): void {
     // Home is a sibling of the page. Observe every pane on this socket through
     // its shell, including lifecycle edges that cannot bubble after removal.
-    this.paneRoot = this.host.closest("openclaw-app-shell") ?? this.host;
-    this.paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
-    this.paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
-    this.paneRoot.addEventListener("pointerover", this.handleNavigationIntent);
-    this.paneRoot.addEventListener("focusin", this.handleNavigationIntent);
+    this.bindPaneRoot(this.host.closest("openclaw-app-shell") ?? this.host);
     this.prefetcher.connect();
     this.sync();
   }
 
   hostUpdated(): void {
+    // Solid constructs the page before attachment; its commit supplies the shell.
+    const paneRoot = this.host.closest("openclaw-app-shell") ?? this.host;
+    if (paneRoot !== this.paneRoot) {
+      this.bindPaneRoot(paneRoot);
+    }
     this.sync();
   }
 
   hostDisconnected(): void {
+    this.unbindPaneRoot();
+    this.clearSubscriptions();
+    this.prefetcher.disconnect();
+  }
+
+  private bindPaneRoot(root: Element): void {
+    this.unbindPaneRoot();
+    this.paneRoot = root;
+    this.paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener("pointerover", this.handleNavigationIntent);
+    this.paneRoot.addEventListener("focusin", this.handleNavigationIntent);
+  }
+
+  private unbindPaneRoot(): void {
     this.paneRoot.removeEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
     this.paneRoot.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
     this.paneRoot.removeEventListener("pointerover", this.handleNavigationIntent);
     this.paneRoot.removeEventListener("focusin", this.handleNavigationIntent);
-    this.clearSubscriptions();
-    this.prefetcher.disconnect();
   }
 
   private readonly handleNavigationIntent = (event: Event) => {

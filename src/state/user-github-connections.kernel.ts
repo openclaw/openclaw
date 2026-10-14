@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import {
   PersonalGitHubStateError,
@@ -9,7 +8,6 @@ import {
   writePersonalGitHubSecret,
 } from "../secrets/store/secret-store-hidden-github.kernel.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import type { DB } from "./openclaw-state-db.generated.js";
 import { stageUserGitHubConnectionCommit } from "./user-github-connection-events.js";
 import {
   userGitHubConnectionSchema,
@@ -18,10 +16,9 @@ import {
   type UserGitHubTokenPair,
 } from "./user-github-connections.types.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
-import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 function publishAfterCommit(
-  db: DatabaseSync,
+  db: EngineConnection,
   changedOwners: string[],
   retiredProfileIds: string[],
   capture?: (receipt: UserGitHubConnectionCommit) => void,
@@ -67,7 +64,7 @@ function registerTokens(tokens: UserGitHubTokenPair): void {
 /** Display fallback to a tombstone is never credential ownership. */
 export function resolvePersonalGitHubOwnerInDatabase(
   profile: string,
-  db: DatabaseSync,
+  db: EngineConnection,
 ): string | undefined {
   if (!tableExists(db, "user_profiles")) {
     return undefined;
@@ -76,19 +73,19 @@ export function resolvePersonalGitHubOwnerInDatabase(
   return resolved && !resolved.merged_into ? resolved.id : undefined;
 }
 
-function requireOwner(db: DatabaseSync, owner: string): void {
+function requireOwner(db: EngineConnection, owner: string): void {
   if (resolvePersonalGitHubOwnerInDatabase(owner, db) !== owner) {
     throw new Error("Personal GitHub owner changed; reconnect and try again.");
   }
 }
 
-function readConnection(db: DatabaseSync, owner: string): UserGitHubConnection | undefined {
+function readConnection(db: EngineConnection, owner: string): UserGitHubConnection | undefined {
   const raw = readPersonalGitHubSecret(db, owner);
   return raw === undefined ? undefined : parseUserGitHubConnection(raw);
 }
 
 export function readUserGitHubConnectionInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
 ): UserGitHubConnection | undefined {
   requireOwner(db, owner);
@@ -96,7 +93,7 @@ export function readUserGitHubConnectionInDatabase(
 }
 
 export function readCanonicalUserGitHubConnectionInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   profile: string,
 ): { owner: string; connection: UserGitHubConnection | undefined } | undefined {
   const owner = resolvePersonalGitHubOwnerInDatabase(profile, db);
@@ -104,7 +101,7 @@ export function readCanonicalUserGitHubConnectionInDatabase(
 }
 
 export function writeUserGitHubConnectionInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
   next: UserGitHubConnection,
   current: UserGitHubConnection | undefined,
@@ -127,7 +124,7 @@ export function disconnectedUserGitHubConnection(): UserGitHubConnection {
 }
 
 export function cancelUserGitHubAuthorizationInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
   requestId: string,
   capture?: (receipt: UserGitHubConnectionCommit) => void,
@@ -145,7 +142,7 @@ export function cancelUserGitHubAuthorizationInDatabase(
 }
 
 export function disconnectUserGitHubConnectionInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
   capture?: (receipt: UserGitHubConnectionCommit) => void,
 ): UserGitHubConnection {
@@ -170,7 +167,7 @@ function connectionProfiles(record: UserGitHubConnection | undefined): string[] 
 
 // Only explicit replacement may repair corruption. A broken merge target must
 // count as disconnected state so it never adopts the source's credentials.
-function readConnectionForReplacement(db: DatabaseSync, owner: string) {
+function readConnectionForReplacement(db: EngineConnection, owner: string) {
   try {
     return readConnection(db, owner);
   } catch (error) {
@@ -183,7 +180,7 @@ function readConnectionForReplacement(db: DatabaseSync, owner: string) {
 
 /** Transfer only this live source, never credentials stranded on historical aliases. */
 export function mergeUserGitHubConnection(
-  db: DatabaseSync,
+  db: EngineConnection,
   source: string,
   target: string,
   capture?: (receipt: UserGitHubConnectionCommit) => void,
@@ -210,36 +207,4 @@ export function mergeUserGitHubConnection(
     ),
     capture,
   );
-}
-
-export function listUserGitHubConnectionsInDatabase(db: DatabaseSync): Array<{
-  owner: string;
-  connection: UserGitHubConnection;
-}> {
-  if (!tableExists(db, "secret_store_entries") || !tableExists(db, "user_profiles")) {
-    return [];
-  }
-  const query = getNodeSqliteKysely<
-    Pick<DB, "secret_store_entries"> & Pick<UserProfilesDatabase, "user_profiles">
-  >(db);
-  return executeSqliteQuerySync(
-    db,
-    query
-      .selectFrom("secret_store_entries")
-      .innerJoin("user_profiles", "user_profiles.id", "secret_store_entries.scope_id")
-      .select(["scope_id", "value"])
-      .where("scope_kind", "=", "identity")
-      .where("name", "=", "github-connection")
-      .where("kind", "=", "secret")
-      .where("allowed_hosts", "is", null)
-      .where("deleted_at_ms", "is", null)
-      .where("merged_into", "is", null)
-      .orderBy("scope_id"),
-  ).rows.flatMap((row) => {
-    try {
-      return [{ owner: row.scope_id, connection: parseUserGitHubConnection(row.value) }];
-    } catch {
-      return [];
-    }
-  });
 }

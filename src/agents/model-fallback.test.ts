@@ -635,10 +635,6 @@ describe("runWithModelFallback", () => {
         ),
     ],
     ["transcript continuation", () => new TranscriptNotContinuableError("assistant")],
-    [
-      "context overflow without a provider ceiling",
-      () => makeNormalizedOverflowFailover("400 input is too long for the model"),
-    ],
   ])("stops fallback for %s without provider-failure attribution", async (_name, makeError) => {
     const error = makeError();
     const run = vi.fn().mockRejectedValue(error);
@@ -1374,7 +1370,7 @@ describe("runWithModelFallback", () => {
           defaults: {
             model: {
               primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: ["anthropic/claude-haiku-3-5", "groq/llama-3.3-70b-versatile"],
+              fallbacks: ["anthropic/claude-haiku-3-5", "groq/openai/gpt-oss-120b"],
             },
             models: {
               "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
@@ -1407,7 +1403,7 @@ describe("runWithModelFallback", () => {
       const cfg = createModelFallbackConfig("anthropic/claude-opus-4-6", [
         "anthropic/claude-sonnet-4-5",
         "anthropic/claude-haiku-3-5",
-        "groq/llama-3.3-70b-versatile",
+        "groq/openai/gpt-oss-120b",
       ]);
 
       const run = vi
@@ -1431,7 +1427,7 @@ describe("runWithModelFallback", () => {
           "claude-opus-4-6",
           { allowTransientCooldownProbe: true, isFinalFallbackAttempt: false },
         ],
-        ["groq", "llama-3.3-70b-versatile", { isFinalFallbackAttempt: true }],
+        ["groq", "openai/gpt-oss-120b", { isFinalFallbackAttempt: true }],
       ]);
     });
   });

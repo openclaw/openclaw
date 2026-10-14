@@ -16,7 +16,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { settleRoster } from "./roster.test-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 await import("../../components/viewer-facepile.ts");
 
@@ -78,7 +78,7 @@ describe("AppSidebar new session navigation", () => {
     await sidebar.updateComplete;
 
     const newSessionLink = sidebar.querySelector<HTMLAnchorElement>(
-      ".sidebar-session-toolbar .sidebar-new-session",
+      ".sidebar-rail .sidebar-new-session",
     );
     expect(sidebar.querySelectorAll(".sidebar-new-session")).toHaveLength(1);
     expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
@@ -96,9 +96,7 @@ describe("AppSidebar new session navigation", () => {
 
     sidebar.connected = true;
     await sidebar.updateComplete;
-    const link = sidebar.querySelector<HTMLAnchorElement>(
-      ".sidebar-session-toolbar .sidebar-new-session",
-    )!;
+    const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session")!;
     expect(link.getAttribute("aria-label")).toBe("New conversation");
     expect(link.getAttribute("href")).toBe("/control/new?agent=research");
     expect(link.hasAttribute("aria-disabled")).toBe(false);
@@ -113,9 +111,22 @@ describe("AppSidebar new session navigation", () => {
       expect(event.defaultPrevented).toBe(false);
       expect(onOpenNewSession).not.toHaveBeenCalled();
     }
-    link.click();
-    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
-    onOpenNewSession.mockClear();
+    for (const view of ["pages", "sessions", "online"] as const) {
+      for (const collapsed of [false, true]) {
+        sidebar.navigationView = view;
+        sidebar.navigationCollapsed = collapsed;
+        await sidebar.updateComplete;
+        const current = sidebar.querySelector<HTMLAnchorElement>(
+          ".sidebar-rail .sidebar-new-session",
+        );
+        expect(current).toBe(link);
+        expect(sidebar.querySelectorAll(".sidebar-new-session")).toHaveLength(1);
+        expect(sidebar.querySelector(".sidebar-session-toolbar .sidebar-new-session")).toBeNull();
+        current!.click();
+        expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+        onOpenNewSession.mockClear();
+      }
+    }
   });
 
   it("opens a catalog-targeted draft from its new-session action", async () => {
@@ -229,10 +240,11 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     const rows = [
       ...sidebar.querySelectorAll<HTMLElement>(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
+        ".sidebar-agent-menu .sidebar-agent-menu__agent-switch",
       ),
     ];
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
+    await sidebar.updateComplete;
     // createSessionState stamps ascending updatedAt, so the last key is newest.
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(onNavigate).toHaveBeenCalledWith("chat", {
@@ -258,7 +270,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
     await sidebar.updateComplete;
     sidebar
-      .querySelector<HTMLElement>('.sidebar-agent-menu wa-dropdown-item[value="agent:research"]')!
+      .querySelector<HTMLElement>('.sidebar-agent-menu [data-value="agent:research"]')!
       .click();
     await sidebar.updateComplete;
 
@@ -296,9 +308,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
-    const settingsAgent = menu?.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="agent:settings"]',
-    );
+    const settingsAgent = menu?.querySelector<HTMLElement>('[data-value="agent:settings"]');
     expect(settingsAgent).not.toBeNull();
     settingsAgent!.click();
     await sidebar.updateComplete;
@@ -344,9 +354,9 @@ describe("AppSidebar agent chip", () => {
     card?.click();
     await sidebar.updateComplete;
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
-    const retry = menu?.querySelector('wa-dropdown-item[value="command:retry-connect"]');
-    menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: retry }, bubbles: true }));
-    expect(onRetryConnect).toHaveBeenCalledOnce();
+    const retry = menu?.querySelector<HTMLElement>('[data-value="command:retry-connect"]');
+    retry?.click();
+    await vi.waitFor(() => expect(onRetryConnect).toHaveBeenCalledOnce());
 
     sidebar.connectionStatus = null;
     await sidebar.updateComplete;
@@ -360,7 +370,7 @@ describe("AppSidebar agent chip", () => {
     const { sidebar, context } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
     sidebar.connected = true;
     const defaults = { modelProvider: null, model: null, contextTokens: null };
-    harness.publishList({
+    const researchSnapshot = {
       result: {
         ts: 2,
         path: "",
@@ -377,8 +387,8 @@ describe("AppSidebar agent chip", () => {
         ],
       },
       agentId: "research",
-    });
-    harness.publishList({
+    } satisfies Parameters<typeof harness.publishList>[0];
+    const mainSnapshot = {
       result: {
         ts: 3,
         path: "",
@@ -387,7 +397,9 @@ describe("AppSidebar agent chip", () => {
         sessions: [{ key: "agent:main:main", kind: "direct", label: "Main task", updatedAt: 5 }],
       },
       agentId: "main",
-    });
+    } satisfies Parameters<typeof harness.publishList>[0];
+    harness.publishList(researchSnapshot);
+    harness.publishList(mainSnapshot);
     await sidebar.updateComplete;
 
     // No per-agent sections: the card switcher owns agent switching now, and
@@ -399,10 +411,12 @@ describe("AppSidebar agent chip", () => {
       sidebar.querySelector(".sidebar-agent-card__avatar .sidebar-agent-card__menu-unread"),
     ).not.toBeNull();
 
-    // Mid-switch (selected agent != loaded result agent) the list renders the
-    // target agent's cached rows instead of flashing empty until refresh.
-    // Chip switch and chat-pane both sync agentSelection with the route.
-    context.agentSelection.state.selectedId = "research";
+    // Retire the previous agent scope through its owner before seeding the new
+    // scope's cached rows. A still-loaded Main result must not hide Research.
+    context.agentSelection.set("research");
+    await sidebar.updateComplete;
+    harness.publishList(researchSnapshot);
+    harness.publishList(mainSnapshot);
     sidebar.sessionKey = "agent:research:one";
     await sidebar.updateComplete;
     const rows = [...sidebar.querySelectorAll(".sidebar-recent-session")];
@@ -556,13 +570,16 @@ describe("AppSidebar agent chip", () => {
         "[data-agent-group=main] .sidebar-agent-roster__header .session-glyph__ring",
       ),
     ).toBeNull();
-    expect(
-      sidebar.querySelector(
-        '[data-agent-group=main] .sidebar-agent-roster__header [data-session-attention="error"]',
-      ),
-    ).not.toBeNull();
-    expect(
-      sidebar.querySelector("[data-agent-group=main] .sidebar-agent-roster__header")?.textContent,
-    ).toContain("Child session Spawned thread failed: Review failed");
+    const attention = sidebar.querySelector(
+      '[data-agent-group=main] .sidebar-agent-roster__header [data-session-attention="error"]',
+    )!;
+    expect(attention).not.toBeNull();
+    await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+      .updateComplete;
+    const description = (attention.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(description).toContain("Child session Spawned thread failed: Review failed");
   });
 });

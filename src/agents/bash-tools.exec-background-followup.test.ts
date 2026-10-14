@@ -10,6 +10,8 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -55,12 +57,12 @@ beforeAll(async () => {
     plugins: { enabled: false },
     skills: { load: { watch: false } },
   };
-  setRuntimeConfigSnapshot(config);
   await state.writeConfig(config);
   openOpenClawStateDatabase();
 });
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot(config);
   model.mockReset().mockImplementation(async (params: RunEmbeddedAgentParams) => {
     await expectDefined(params.preparedRunAdmission, "real completion admission").admit(
       "gateway",
@@ -193,6 +195,13 @@ test("reports manual collection after destination capture fails, then recovers o
 }) => {
   const sessionKey = "agent:main:exec-capture-failure";
   await seedOrigin(sessionKey);
+  // Force a cold destination read so the transport fault cannot be bypassed by writer receipts.
+  sessionChanges.invalidate({
+    agentId: "main",
+    sessionKey,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    factsInvalidated: true,
+  });
   let faults = 0;
   const capture = sessionEvents.captureSessionEventTargetForHost;
   vi.spyOn(sessionEvents, "captureSessionEventTargetForHost").mockImplementation(

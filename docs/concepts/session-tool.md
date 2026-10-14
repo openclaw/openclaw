@@ -60,7 +60,7 @@ Gateway sharing operations are outside this run-audit boundary.
 Use the filters together to narrow the inventory before paging:
 
 - `relationship`: `owned`, `created`, or `involving`, relative to the authenticated requesting user. Ownership is current responsibility; creation is original provenance; involvement means current ownership or retained prompt participation. This is not the agent's owner and does not infer identity from a session label. Without a trusted requesting-user identity, the tool rejects this filter; use an explicit `ownerId` or `creatorId` instead.
-- `ownerId` and `creatorId`: exact canonical actor IDs. Relationship filters narrow visibility; they never grant access.
+- `ownerId` and `creatorId`: exact resolved actor IDs. Relationship filters narrow visibility; they never grant access.
 - `projectId` and `workspaceDir`: exact persisted project and working-directory associations. Listing does not inspect the filesystem or run Git.
 - `group` and `pinned`: exact sidebar group and pin state. An empty group selects ungrouped sessions.
 - `activeOnly`: current direct queued/running work on Gateway-backed inventories; it is unavailable in embedded mode without a live Gateway projection. `activeMinutes` is recency, not liveness. `excludeSubagents` omits subagent runs and ungrouped spawned sessions. Visible spawned conversations assigned to a custom group remain eligible under the normal visibility and archive filters.
@@ -77,11 +77,18 @@ Use the returned `sessionId` as `expectedSessionId` when the `sessions` tool arc
 
 `sessions_history` fetches the conversation transcript for a specific session. By default, tool results are excluded; pass `includeTools: true` to see them. Use `limit` for the newest bounded tail. Pass `offset: 0` when you need pagination metadata, then pass returned `nextOffset` values to page backward through older OpenClaw transcript windows without reading raw transcript files. When an eligible bound external CLI transcript contributes messages, history returns a merged snapshot instead of a numeric offset page—even with an explicit `offset`. The Gateway treats these as terminal snapshots (`hasMore: false`); oversized snapshots remain byte-bounded, so terminal does not imply complete. Local offset paging applies when no external import survives. Unanchored reads stay the current reset-relative view. An explicit `messageId` that remains in that current view, including a pre-reset row kept after reset, keeps current-view behavior. An explicit `messageId` for a retained active-path row outside the current view opens that original closed interval and does not mix later post-reset turns; a missing or off-path `messageId` returns empty history rather than the newest messages.
 
+Display history limits raw pages to 8 MiB before loading message bodies. A larger
+message returns an error instead of exhausting a transcript worker. If an anchored
+page exceeds this limit, request a smaller `limit`. The tool's text and response
+byte caps still apply.
+
 Durably admitted inputs from `sessions_send` or the Gateway `agent` method
 appear separately in `pendingInputs`, not in transcript `messages`. Each row
 records `queued`, `cancelled`, or `interrupted`.
-Cancelled and interrupted inputs are retained for inspection and never run
-automatically. Built-in and CLI agent turns also receive bounded text previews of recent
+Cancelled inputs never run automatically. Interrupted inputs are retained for
+inspection; the Gateway can re-admit an unconsumed ordinary peer send that has
+durable delivery ownership, as described below. Other interrupted inputs do not
+run automatically. Built-in and CLI agent turns also receive bounded text previews of recent
 visible interrupted inputs as historical context, even when session-history tools
 are unavailable. These previews do not consume input, restore old permissions, or
 resume work without a current request. The preview tells the agent to resume them
@@ -108,7 +115,7 @@ The returned view is intentionally bounded:
 - returned messages are capped at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`, `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
 
-This is structured history, not the plain-text rendering used by [`/subagents log`](/tools/subagents#slash-command). `sessions_history` does not apply that command's assistant prose sanitizer: reasoning tags, `<relevant-memories>` / `<relevant_memories>` scaffolding, plain-text tool-call XML (including malformed MiniMax XML), downgraded tool markers, and model control tokens can remain in returned message text. `includeTools` controls tool-result messages, not those embedded text forms.
+This is structured history, not the plain-text rendering used by [`/subagents log`](/tools/subagents#slash-command). `sessions_history` does not apply that command's assistant prose sanitizer: reasoning tags, `<relevant-memories>` / `<relevant_memories>` markup, plain-text tool-call XML (including malformed MiniMax XML), downgraded tool markers, and model control tokens can remain in returned message text. `includeTools` controls tool-result messages, not those embedded text forms.
 
 Use the returned **session key** (like `"main"`) with `sessions_history`, `sessions_send`, and `session_status`. To reopen a search hit, also pass its `messageId` and `sessionId` to `sessions_history`; see [Session search](/concepts/session-search). Outside anchored recall, use the durable `sessionId` as the lifecycle identity described above.
 
@@ -122,7 +129,7 @@ The `sessions` tool exposes bounded self-service surfaces. Gateway owners retain
 
 Explicit tool denies still remove the tool. Standalone HTTP/RPC tool invocation and session-bound MCP attach grants retain their owner gate and do not gain agent identity. Assignment without affirmative owner authority requires a live admitted agent turn, rechecked at the owner write. Tool discovery never grants access to another session; revoked authority and replaced session generations cannot be reused.
 
-- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions, ordinary Home-linked dashboard sessions, and persistent children explicitly moved to the top level in the Control UI can be pinned; hidden subagent runs and still-nested child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a canonical SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
+- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions, ordinary Home-linked dashboard sessions, and persistent children explicitly moved to the top level in the Control UI can be pinned; hidden subagent runs and still-nested child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a normalized SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
 - `action: "reset"` resets another visible session selected by `sessionKey`.
 - `action: "stop"` stops another authorized session without archiving or deleting it. Include `expectedSessionId` from session discovery to reject a replacement, and optionally `runId` to stop only that exact run. Session-wide stop clears queued follow-ups by default; pass `clearQueued: false` to retain them. Exact-run stop cannot clear unrelated queued follow-ups. To stop the calling session, finish its current reply instead. Non-interactive Swarm collectors do not receive Stop; their existing archive and other session operations are unchanged.
 - `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
@@ -223,6 +230,21 @@ request; send-only access is not isolation from a privileged target's behavior.
 
 During healthy worker provisioning or workspace preparation, accepted input stays queued until the intended worker is ready. It starts once after OpenClaw rechecks the session and placement. Cancellation, failed setup, or a replaced destination does not silently run that input locally or on another worker. Check the retained input and setup error before submitting another message.
 
+Ordinary peer sends accepted by the Gateway retain delivery ownership with the
+saved input. After an unexpected shutdown or update restart, startup re-admits
+only unconsumed inputs whose exact source and target sessions still exist and
+whose current communication policies and visibility permit delivery. It reuses
+the original input identity, preserving per-target order and consumption
+deduplication; it does not rerun the sender's task. Cancellation, reset, archival,
+revoked access, or a policy requiring fresh approval prevents automatic recovery.
+Inputs saved by older versions without delivery ownership remain available for
+inspection, not automatic retry. In history, `queued` means an input has current
+custody, not that the model is executing it; an input that remains `interrupted`
+is saved but is not being retried. A display-only notice distinguishes changed
+sessions, denied communication, and unavailable admission without feeding those
+diagnostics back to the model. Task continuations and steering retain their
+separate lifecycle owners.
+
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 - **Guide your running child:** with no `mode` and `timeoutSeconds: 0`, a send to your own spawned child steers into its active run and acknowledges queue admission, like `mode: "steer"`, not persistence or model consumption. This admission is not restart-durable. Use `mode: "followup"` for a separate child turn with its own completion. An idle child or one whose run rejects the steer starts a new turn. Explicit modes keep their existing behavior.
@@ -287,7 +309,7 @@ like `mode: "steer"`; they do not confirm transcript persistence or model consum
 and are not restart-durable. They produce no separate completion turn. Use
 `mode: "followup"` when you need that separate child turn and completion.
 
-If an idempotent retry finds that the original admission is still pending, the
+If a retry with the same request ID finds that the original admission is still pending, the
 tool returns an error with `sentBeforeError: true` and the existing run ID, without
 installing a watch. Inspect that run before retrying.
 
@@ -318,7 +340,7 @@ delivery records and does not resume these replies.
 
 A waited send that finishes without visible assistant text returns `status: "no_reply"`; no reply delivery remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
-Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread.
+Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread. Set `tools.sessions.allowThreadTargets: true` to opt in to thread and topic targets; the target runs in that session, and anything it sends with the `message` tool lands in the thread.
 
 Messages and delayed replies are marked as inter-session data in the receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript provenance. The receiving agent should treat them as tool-routed data, not as a direct end-user-authored instruction.
 
@@ -387,7 +409,7 @@ See [Session state awareness](/concepts/session-state) for the full model: event
 
 ## Spawning sub-agents
 
-`sessions_spawn` creates a separate session for a background task. Non-thread spawns start with isolated context by default; thread-bound spawns follow the configured context policy described below. It returns a `runId` and `childSessionKey` when startup is accepted, without waiting for the child task to finish. Spawns from an OpenClaw cloud worker can first wait for child provisioning and node enrollment. Native sub-agent runs receive their delegated task in a user message appended after any forked history; model-only runtime context marks inherited conversation as background, not the current child's assignment. The Control UI displays the task without this runtime scaffolding. The system prompt carries only sub-agent runtime rules and routing context.
+`sessions_spawn` creates a separate session for a background task. Non-thread spawns start with isolated context by default; thread-bound spawns follow the configured context policy described below. It returns a `runId` and `childSessionKey` when startup is accepted, without waiting for the child task to finish. Spawns from an OpenClaw cloud worker can first wait for child provisioning and node enrollment. Native sub-agent runs receive their delegated task in a user message appended after any forked history; model-only runtime context marks inherited conversation as background, not the current child's assignment. The Control UI displays the task without this runtime context. The system prompt carries only sub-agent runtime rules and routing context.
 
 Key options:
 
@@ -422,7 +444,7 @@ list, read, search, message, and inspect status across agents on the Gateway.
 This can include other users' transcripts. Cross-agent access is on by default
 and governed by `tools.agentToAgent`; set `enabled: false` to block ordinary
 cross-agent access or use `allow` to restrict permitted agent pairs; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all` either way. Set `agent` for same-agent-only
-access, or `tree` for current plus spawned scope; its canonical main-session
+access, or `tree` for current plus spawned scope; its primary main-session
 exception still covers all same-agent sessions. Set `self` for strict
 current-session access, including main.
 

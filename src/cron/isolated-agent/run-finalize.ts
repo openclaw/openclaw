@@ -223,7 +223,6 @@ export async function finalizeCronRun(params: {
     outputText,
     hasFatalErrorPayload,
     embeddedRunError,
-    agentReportedFailure,
   } = cronPayloadOutcome;
   const terminalToolFailure = finalRunResult.meta?.terminalToolFailure;
   const hasTerminalToolFailure = isEmbeddedRunTerminalToolFailure(terminalToolFailure);
@@ -257,14 +256,7 @@ export async function finalizeCronRun(params: {
       ...(failure
         ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }
         : hasFatalErrorPayload
-          ? {
-              error: runError,
-              // The agent already judged the task blocked: rerunning it would repeat that turn,
-              // and its prose must not be text-classified into a transient retry reason.
-              ...(agentReportedFailure
-                ? { errorClassification: { kind: "permanent" as const, reportedByAgent: true } }
-                : {}),
-            }
+          ? { error: runError }
           : {}),
       ...output,
       replyDisposition,
@@ -291,8 +283,7 @@ export async function finalizeCronRun(params: {
     });
   };
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
-  const heartbeatOnlyResponse =
-    prepared.deliveryRequested && !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
+  const heartbeatOnlyResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const heartbeatControlOnlyResponse =
     heartbeatOnlyResponse &&
     (deliveryDisposition.kind === "empty" ||
@@ -309,7 +300,8 @@ export async function finalizeCronRun(params: {
     summary = undefined;
     outputText = undefined;
   }
-  const skipHeartbeatDelivery = heartbeatOnlyResponse && !spawnOnlyHandoff;
+  const skipHeartbeatDelivery =
+    prepared.deliveryRequested && heartbeatOnlyResponse && !spawnOnlyHandoff;
   const sourceDeliveryOutcome = resolveSourceDeliveryOutcome(prepared.sourceDelivery, {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
@@ -392,11 +384,6 @@ export async function finalizeCronRun(params: {
   if (pendingPresentationWarningError && deliveryResult.delivered !== true) {
     hasFatalErrorPayload = true;
     embeddedRunError = pendingPresentationWarningError;
-  }
-  if (deliveryResult.agentReportedFailure && !hasFatalErrorPayload) {
-    hasFatalErrorPayload = true;
-    embeddedRunError = deliveryResult.agentReportedFailure;
-    agentReportedFailure = true;
   }
   return resolveRunOutcome({ ...deliveryResult, delivery: deliveryTrace });
 }

@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
@@ -20,10 +21,14 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
+import { readSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
+import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
+import type { SessionTranscriptContextMetadata } from "./session-transcript-projection-facts.types.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
@@ -52,6 +57,7 @@ export type CurrentTranscriptProjection = {
   };
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;
+  contextMetadata?: SessionTranscriptContextMetadata;
 };
 
 export type SessionTranscriptMessageEvent = {
@@ -219,7 +225,7 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .$narrowType<{ message_position: number }>();
 }
 
-const messageRangeReaders = createSqliteQueryCache((db) => {
+const messageRangeReaders = createSqliteQueryCache((db: DatabaseSync) => {
   const database = { db };
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
@@ -374,7 +380,7 @@ function buildProjectionSnapshotQuery(
 }
 
 // Cache compilation only; bindings and rows belong to each read snapshot.
-const projectionSnapshotReader = createSqliteQueryCache((db) =>
+const projectionSnapshotReader = createSqliteQueryCache((db: DatabaseSync) =>
   prepareSqliteQuerySync<
     string,
     InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]
@@ -389,44 +395,19 @@ const projectionSnapshotReader = createSqliteQueryCache((db) =>
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
   const actor = readSessionActorTransactionState(database, { sessionId });
   if (actor) {
-    const { active, coldArchive, identities, navigation, projection } = actor.transcript;
-    let latestIndexedReset: CurrentTranscriptProjection["latestIndexedReset"] = null;
-    let hasUnindexedPrefix = true;
-    for (const identity of identities.values()) {
-      hasUnindexedPrefix &&= identity.seq !== navigation[0]?.seq;
-      const row = active.get(identity.seq);
-      if (
-        identity.event_type === "reset" &&
-        row &&
-        (!latestIndexedReset || identity.seq > latestIndexedReset.seq)
-      ) {
-        latestIndexedReset = {
-          active_position: row.active_position,
-          event_type: "reset",
-          seq: identity.seq,
-        };
-      }
-    }
     return {
-      cold: Boolean(coldArchive),
-      generation: actor.hot.transcript.version.generation ?? undefined,
-      updatedAt: actor.hot.transcript.version.updatedAt,
-      hasUnclassified: projection?.hasUnclassifiedEvents ?? false,
-      latestIndexedReset,
-      hasUnindexedPrefix,
-      latestSeq: navigation.at(-1)?.seq ?? null,
-      state: projection && {
-        activeEventCount: projection.activeEventCount,
-        activeMessageCount: projection.activeMessageCount,
-        indexedSeq: projection.indexedSeq,
-        leafEventId: projection.leafEventId,
-        needsRebuild: projection.needsRebuild,
-      },
+      ...projectSessionTranscriptFacts(actor),
+      contextMetadata: projectSessionActorContextMetadata(actor),
     };
+  }
+  const retained = readSessionTranscriptProjectionReceipt(database, sessionId);
+  if (retained && !retained.contextOnly) {
+    return retained.facts;
   }
   const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),
+    contextMetadata: retained?.facts.contextMetadata,
     generation: row.generation ?? undefined,
     updatedAt: row.transcript_updated_at ?? null,
     hasUnclassified: Boolean(row.has_unclassified),
@@ -506,6 +487,7 @@ export function readCurrentProjectionSnapshot<T>(
         latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
         resolved,
         state,
+        contextMetadata: snapshot.contextMetadata,
       }),
     };
   };

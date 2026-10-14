@@ -3,7 +3,7 @@ import { mkdir, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../../../src/agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
@@ -28,20 +28,20 @@ import type { DB as StateDatabase } from "../../../../src/state/openclaw-state-d
 import { parseNodeWorkerLaunchInput } from "../../../../src/worker/node-supervisor-protocol.js";
 import { parseNodeWorkerWorkspaceExecInput } from "../../../../src/worker/node-workspace-protocol.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
-import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
   closeWireServer,
   connectWireClient,
   createPairedNodeWorkerHost,
+  createWireWorkspaceSettlementWaiter,
   startPairedNodeWorkerGateway,
   wireMessageText,
   type PairedNodeWorkerHost,
   type WireGateway,
 } from "./paired-node-worker-wire-fixture.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
 const [providerId, modelId] = MODEL_REF.split("/");
 const QUIESCENCE_NONCE = "0".repeat(32);
@@ -106,18 +106,10 @@ function readPendingInput(gateway: WireGateway, key: string, runId: string) {
 // finishing ACK -> SQLite result fence -> projected clear -> SAME-session cursor reuse.
 it.skipIf(process.platform === "win32")(
   "settles required native empty workspaces and same-session follow-ups through public RPC",
-  async ({ signal }) => {
-    const root = await realpath(tempDirs.make("required-native-same-session-"));
+  async (context) => {
+    const { signal } = context;
     const gatewayOwner = createQaGatewayChild();
-    const identity = loadOrCreateDeviceIdentity({ path: path.join(root, "node-identity.sqlite") });
-    const nodeHostRoot = path.join(root, "node-state", "node-host");
-    await mkdir(nodeHostRoot, { recursive: true, mode: 0o700 });
-    const remoteAgentWorkspace = path.join(root, "remote-agent-workspace");
-    await writeSkill({
-      dir: path.join(remoteAgentWorkspace, "skills", "workspace-proof"),
-      name: "workspace-proof",
-      description: "Synthetic node-hosted workspace skill",
-    });
+    const settlement = createWireWorkspaceSettlementWaiter();
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
     const observationFailure = createDeferred<never>();
@@ -136,99 +128,113 @@ it.skipIf(process.platform === "win32")(
     const startedAt = Date.now();
     const record = (boundary: string, detail: unknown) => {
       const entry = { ms: Date.now() - startedAt, boundary, detail };
-      console.info("required-native-boundary", JSON.stringify(entry));
+      process.stderr.write(`required-native-boundary ${JSON.stringify(entry)}\n`);
     };
     let onNativeRequest: ((marker: string) => void) | undefined;
-    const provider = createServer((request, response) => {
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.from(chunk));
-        }
-        const body = JSON.parse(Buffer.concat(chunks).toString()) as {
-          messages: Array<{ role: string; content: string }>;
-        };
-        const marker = body.messages
-          .filter((message) => message.role === "user")
-          .map(
-            (message) =>
-              JSON.stringify(message.content).match(
-                /Hello\. Reply exactly: (REQUIRED-NATIVE-[0-9]+-[AB])/u,
-              )?.[1],
-          )
-          .findLast((candidate) => candidate !== undefined);
-        expect(request.url).toBe("/v1/chat/completions");
-        expect(request.headers.authorization).toBe("Bearer synthetic-required-native-key");
-        expect(marker).toBe(
-          `REQUIRED-NATIVE-${Math.floor(requests.length / 2)}-${requests.length % 2 === 0 ? "A" : "B"}`,
-        );
-        expect(JSON.stringify(body.messages)).toContain("workspace-proof");
-        expect(JSON.stringify(body.messages)).not.toContain("worktree-sources");
-        requests.push(marker!);
-        onNativeRequest?.(marker!);
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        for (const [delta, finish_reason] of [
-          [{ role: "assistant", content: marker }, null],
-          [{}, "stop"],
-        ]) {
-          response.write(
-            "data: " +
-              JSON.stringify({
-                id: marker,
-                object: "chat.completion.chunk",
-                created: 1,
-                model: modelId,
-                choices: [{ index: 0, delta, finish_reason }],
-              }) +
-              "\n\n",
-          );
-        }
-        response.end("data: [DONE]\n\n");
-      })().catch((error: unknown) => {
-        providerErrors.push(error);
-        observationFailure.reject(error);
-        response.destroy();
-      });
-    });
-    await new Promise<void>((resolve, reject) => {
-      provider.once("error", reject);
-      provider.listen(0, "127.0.0.1", resolve);
-    });
-    const address = provider.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing native provider address");
-    }
-    const nativeConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          [providerId!]: {
-            api: "openai-completions",
-            baseUrl: "http://127.0.0.1:" + address.port + "/v1",
-            apiKey: "synthetic-required-native-key",
-            models: [
-              {
-                id: modelId!,
-                name: modelId!,
-                contextWindow: 32768,
-                maxTokens: 128,
-                reasoning: true,
-                thinkingLevelMap: { medium: "medium" },
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
-          },
-        },
-      },
-    };
+    let nativeServer: ReturnType<typeof createServer> | undefined;
     let node: PairedNodeWorkerHost | undefined;
     let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
     let beforeInvoke: Parameters<typeof createPairedNodeWorkerHost>[0]["beforeInvoke"];
     let onChanged: ((event: Changed) => void) | undefined;
     const barriers: Array<{ resolve: () => void }> = [];
     const turnWaits: Promise<unknown>[] = [];
-    await runQaGatewayFixture(
-      async () => {
+    await runQaGatewayTestFixture(
+      context,
+      async ({ createTempDir }) => {
+        const root = await realpath(createTempDir("required-native-same-session-"));
+        const identity = loadOrCreateDeviceIdentity({
+          path: path.join(root, "node-identity.sqlite"),
+        });
+        const nodeHostRoot = path.join(root, "node-state", "node-host");
+        await mkdir(nodeHostRoot, { recursive: true, mode: 0o700 });
+        const remoteAgentWorkspace = path.join(root, "remote-agent-workspace");
+        await writeSkill({
+          dir: path.join(remoteAgentWorkspace, "skills", "workspace-proof"),
+          name: "workspace-proof",
+          description: "Synthetic node-hosted workspace skill",
+        });
+        const provider = (nativeServer = createServer((request, response) => {
+          void (async () => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) {
+              chunks.push(Buffer.from(chunk));
+            }
+            const body = JSON.parse(Buffer.concat(chunks).toString()) as {
+              messages: Array<{ role: string; content: string }>;
+            };
+            const marker = body.messages
+              .filter((message) => message.role === "user")
+              .map(
+                (message) =>
+                  JSON.stringify(message.content).match(
+                    /Hello\. Reply exactly: (REQUIRED-NATIVE-[0-9]+-[AB])/u,
+                  )?.[1],
+              )
+              .findLast((candidate) => candidate !== undefined);
+            expect(request.url).toBe("/v1/chat/completions");
+            expect(request.headers.authorization).toBe("Bearer synthetic-required-native-key");
+            expect(marker).toBe(
+              `REQUIRED-NATIVE-${Math.floor(requests.length / 2)}-${requests.length % 2 === 0 ? "A" : "B"}`,
+            );
+            expect(JSON.stringify(body.messages)).toContain("workspace-proof");
+            expect(JSON.stringify(body.messages)).not.toContain("worktree-sources");
+            requests.push(marker!);
+            onNativeRequest?.(marker!);
+            response.writeHead(200, { "content-type": "text/event-stream" });
+            for (const [delta, finish_reason] of [
+              [{ role: "assistant", content: marker }, null],
+              [{}, "stop"],
+            ]) {
+              response.write(
+                "data: " +
+                  JSON.stringify({
+                    id: marker,
+                    object: "chat.completion.chunk",
+                    created: 1,
+                    model: modelId,
+                    choices: [{ index: 0, delta, finish_reason }],
+                  }) +
+                  "\n\n",
+              );
+            }
+            response.end("data: [DONE]\n\n");
+          })().catch((error: unknown) => {
+            providerErrors.push(error);
+            observationFailure.reject(error);
+            response.destroy();
+          });
+        }));
+        await new Promise<void>((resolve, reject) => {
+          provider.once("error", reject);
+          provider.listen(0, "127.0.0.1", resolve);
+        });
+        const address = provider.address();
+        if (!address || typeof address === "string") {
+          throw new Error("missing native provider address");
+        }
+        const nativeConfig: OpenClawConfig = {
+          models: {
+            providers: {
+              [providerId!]: {
+                api: "openai-completions",
+                baseUrl: "http://127.0.0.1:" + address.port + "/v1",
+                apiKey: "synthetic-required-native-key",
+                models: [
+                  {
+                    id: modelId!,
+                    name: modelId!,
+                    contextWindow: 32768,
+                    maxTokens: 128,
+                    reasoning: true,
+                    thinkingLevelMap: { medium: "medium" },
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+              },
+            },
+          },
+        };
         const gateway = await startPairedNodeWorkerGateway({
           owner: gatewayOwner,
           providerBaseUrl: "http://127.0.0.1:1",
@@ -313,6 +319,7 @@ it.skipIf(process.platform === "win32")(
           role: "operator",
           identity: null,
           onEvent: (event) => {
+            settlement.onEvent(event);
             if (event.event === "sessions.changed") {
               try {
                 onChanged?.(event.payload as Changed);
@@ -379,14 +386,10 @@ it.skipIf(process.platform === "win32")(
             .then((result) => {
               record("agent.wait-terminal", { runId, ...result });
               if (result.status !== "ok") {
-                console.info(
-                  "required-native-dispatch-error",
-                  gateway
-                    .logs()
-                    .split("\n")
-                    .filter((line) => /workspace|skills|not allowed|POLICY_DENIED/i.test(line))
-                    .join("\n"),
-                );
+                record("required-native-dispatch-error", {
+                  runId,
+                  gatewayLog: gateway.logs().slice(-24_000),
+                });
                 observationFailure.reject(new Error("agent.wait: " + JSON.stringify(result)));
               }
               return result;
@@ -396,12 +399,21 @@ it.skipIf(process.platform === "win32")(
           return pending;
         };
         const send = async (key: string, marker: string) => {
-          const result = await operator!.request("chat.send", {
-            sessionKey: key,
-            message: "Hello. Reply exactly: " + marker,
-            deliver: false,
-            idempotencyKey: marker,
-          });
+          const result = await operator!
+            .request("chat.send", {
+              sessionKey: key,
+              message: "Hello. Reply exactly: " + marker,
+              deliver: false,
+              idempotencyKey: marker,
+            })
+            .catch((error: unknown) => {
+              record("chat-send-rejected", {
+                marker,
+                error: String(error),
+                gatewayLog: gateway.logs().slice(-12_000),
+              });
+              throw error;
+            });
           expect(result).toMatchObject({ runId: marker, status: "started" });
           return result;
         };
@@ -433,7 +445,6 @@ it.skipIf(process.platform === "win32")(
             let aClaim: string | undefined;
             let aRun: string | undefined;
             let bRun: string | undefined;
-            let aDone = false;
             let sawPending = false;
             let finishReleased = false;
             let sawClear = false;
@@ -452,6 +463,16 @@ it.skipIf(process.platform === "win32")(
                 state: placement?.state,
                 reconciling: placement?.workspaceResultReconciling,
               });
+              if (event.phase === "error" || event.reason === "chat.dispatch-error") {
+                // A queued follow-up's execution run ID is known only at native HTTP entry.
+                // Fail on its published error instead of waiting for the test timeout.
+                record("required-native-dispatch-error", {
+                  creation,
+                  timing,
+                  gatewayLog: gateway.logs().slice(-24_000),
+                });
+                throw new Error(`${creation} ${timing} run failed before settlement`);
+              }
               if (placement?.workspaceResultReconciling) {
                 if (!sawPending) {
                   record("finishing-ACK-pending-publication", {
@@ -543,19 +564,13 @@ it.skipIf(process.platform === "win32")(
               bEntered.resolve();
             };
             await send(key, markers.A);
-            const aWait = wait(markers.A).then((value) => {
-              aDone = true;
-              if (value.status !== "ok") {
-                observationFailure.reject(new Error("A agent.wait: " + JSON.stringify(value)));
-              }
-              return value;
-            });
-            turnWaits.push(aWait);
-            void aWait.catch(() => undefined);
+            const aWait = wait(markers.A);
             await checkpoint(
               atQuiesce.promise,
               "A never reached physical terminal receipt / quiescence",
             );
+            expect(await aWait).toMatchObject({ status: "ok" });
+            record("A-agent.wait-before-workspace-settlement", { creation, timing });
             const current = await describe(key);
             record("A-sessions.describe-pending", {
               creation,
@@ -576,7 +591,6 @@ it.skipIf(process.platform === "win32")(
             expect(
               committed.messages.some((message) => wireMessageText(message) === markers.A),
             ).toBe(true);
-            expect(aDone).toBe(false);
             const placed = readSettlement(gateway, key).placement!;
             if (retained) {
               expect(placed.session_id).toBe(retained.session_id);
@@ -623,11 +637,8 @@ it.skipIf(process.platform === "win32")(
             }
             continueQuiesce.resolve();
             await checkpoint(atResume.promise, "A never accepted its unchanged workspace result");
-            expect(aDone).toBe(false);
             finishReleased = true;
             continueResume.resolve();
-            expect(await aWait).toMatchObject({ status: "ok" });
-            record("A-agent.wait", { creation, timing });
             await checkpoint(changedClear.promise, "settled placement never published clear");
             if (timing === "after-agent-wait") {
               const settled = readSettlement(gateway, key);
@@ -644,6 +655,28 @@ it.skipIf(process.platform === "win32")(
             // id owns queue cancellation and returns "pending" until adoption settles.
             // Wait on the exact real claim observed at native HTTP admission.
             expect(await wait(bRun!)).toMatchObject({ status: "ok" });
+            try {
+              await settlement.wait(operator, key, signal);
+            } catch (error) {
+              record("workspace-settlement-stopped", {
+                creation,
+                timing,
+                commands: node.frames.slice(-8).map((frame) => frame.command),
+                gatewayLog: gateway.logs().slice(-12_000),
+              });
+              try {
+                record("workspace-settlement-state", readSettlement(gateway, key));
+              } catch (diagnosticError) {
+                throw new AggregateError(
+                  [error, diagnosticError],
+                  "Workspace settlement diagnostics failed",
+                  {
+                    cause: diagnosticError,
+                  },
+                );
+              }
+              throw error;
+            }
             const final = readSettlement(gateway, key);
             expect(final.pending).toBeUndefined();
             expect(final.placement).toMatchObject({
@@ -698,7 +731,7 @@ it.skipIf(process.platform === "win32")(
       async () => {
         await Promise.allSettled(turnWaits);
       },
-      () => closeWireServer(provider),
+      () => (nativeServer ? closeWireServer(nativeServer) : undefined),
     );
     record("cleanup-complete", { nodeStopped: true, gatewayStopped: true, providerClosed: true });
   },

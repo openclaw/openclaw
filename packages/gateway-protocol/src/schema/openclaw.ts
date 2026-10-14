@@ -18,6 +18,15 @@ import {
 import { withSince } from "./since.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
+export {
+  SystemAgentSetupAutoParamsSchema,
+  SystemAgentSetupAutoCandidateSchema,
+  SystemAgentSetupAutoResultSchema,
+  type SystemAgentSetupAutoParams,
+  type SystemAgentSetupAutoCandidate,
+  type SystemAgentSetupAutoResult,
+} from "./setup-inference.js";
+
 export const SystemAgentWizardCancelSchema = closedObject({
   /** The visible step this action belongs to; stale controls must not affect a newer step. */
   stepId: NonEmptyString,
@@ -445,6 +454,8 @@ export const SystemAgentSetupAuthStartParamsSchema = closedObject({
   /** Agent that owns credentials and model selection created by this setup flow. */
   agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
+  /** Opt in to selecting the verified model when models.authLogin starts AI Setup. */
+  selectModel: Type.Optional(Type.Literal(true)),
   workspace: Type.Optional(Type.String()),
   /** Fresh-install opt-in for native provider conversation discovery. */
   nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),

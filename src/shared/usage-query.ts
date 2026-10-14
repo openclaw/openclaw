@@ -25,6 +25,7 @@ type UsageSessionQueryTarget = {
   model?: string;
   hasContextWeight?: boolean;
   usage?: {
+    usageReport?: { state: "available" | "unavailable" };
     totalTokens?: number;
     totalCost?: number;
     messageCounts?: { total?: number; errors?: number };
@@ -243,7 +244,10 @@ const prepareUsageQuery = (
     return matchesEverySession;
   }
   const [getValue, matches] = numericSpec;
-  return (session) => matches(getValue(session), threshold);
+  return (session) =>
+    (!(key.endsWith("tokens") || key.endsWith("cost")) ||
+      session.usage?.usageReport?.state !== "unavailable") &&
+    matches(getValue(session), threshold);
 };
 
 export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(

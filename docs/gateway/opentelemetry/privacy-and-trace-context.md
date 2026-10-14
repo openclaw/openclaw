@@ -73,6 +73,12 @@ remain excluded. Provider-internal `thinking` and `redacted_thinking` payloads
 are also excluded: compatibility attributes retain only a redacted structural
 marker, while GenAI message attributes omit those parts.
 
+The same setting also exports the bounded, redacted turn prompt and the model's
+final answer as `input.value` and `output.value` on `openclaw.message.processed`,
+`openclaw.harness.run`, and `openclaw.run` spans. Operators who already enable
+`captureContent` receive these attributes after upgrading; see the
+[upgrade note](/gateway/opentelemetry/spans-and-events).
+
 Completed assistant commentary uses the same setting. With content capture
 off, commentary events contain timing, sequence, harness, and text-length
 metadata only. With it on, each event can include up to 16,384 characters of

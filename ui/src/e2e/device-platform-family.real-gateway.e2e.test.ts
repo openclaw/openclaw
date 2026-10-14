@@ -369,7 +369,7 @@ suite.define(() => {
               );
               if (item === cases.at(-1)) {
                 await orphanRow.locator(".device-entry__menu-trigger").click();
-                await orphanRow.locator('wa-dropdown-item[value="remove"]').click();
+                await orphanRow.locator('[role="menuitem"][data-value="remove"]').click();
                 await page
                   .locator("openclaw-modal-dialog")
                   .last()

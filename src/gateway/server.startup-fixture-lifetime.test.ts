@@ -138,9 +138,9 @@ test("finishes without publishing the required join receipt", () => {
     const config = path.join(root, sharedRoots[0]!, "vitest.config.ts");
     expect(cleanups).toHaveLength(1);
     await expect(cleanups[0]!()).rejects.toThrow("Fixture cleanup unverified");
-    await expect(fs.access(config)).resolves.toBeUndefined();
-    await expect(fs.access(caseRoot!)).resolves.toBeUndefined();
-    await expect(fs.access(codeRoot!)).resolves.toBeUndefined();
+    await fs.access(config);
+    await fs.access(caseRoot!);
+    await fs.access(codeRoot!);
     expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
   } finally {
     await Promise.allSettled(completion ? [completion] : []);

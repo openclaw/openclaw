@@ -188,12 +188,15 @@ it.for([false, true])(
           signal,
           start: () => list(true),
           read: list,
-          ready: () => {
+          ready: ({ result }) => {
             const { completedTasks, pendingTasks } = catalogWork.read();
-            return completedTasks > 0 && pendingTasks === 0;
+            return (
+              completedTasks > 0 &&
+              pendingTasks === 0 &&
+              !result.pendingProviders?.includes(provider)
+            );
           },
         });
-        const beforeLoginWork = catalogWork.read();
         await client.request("models.authLogin", {
           sessionId: "fixture-login",
           agentId: "main",
@@ -244,7 +247,6 @@ it.for([false, true])(
           maxWorkers: 1,
           workersCreated: 1,
           pendingTasks: 0,
-          completedTasks: beforeLoginWork.completedTasks + 1,
         });
         responseDelay = 0;
         const manualRefresh = await list(true);

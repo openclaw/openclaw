@@ -14,6 +14,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -28,11 +29,11 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugins.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import {
   createSessionListEntryFilter,
-  resolveSessionMutationAuthorization,
   resolveSessionSharingRole,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
 } from "../session-sharing.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -64,12 +65,13 @@ async function invoke(params: {
   authorizationOverride?: SessionMutationAuthorization;
 }) {
   const requestContext = context(params.cfg);
-  const authorization = resolveSessionMutationAuthorization({
+  const authorization = await resolveSessionMutationAuthorizationAsync({
     client: params.client,
     method: "sessions.assignOwner",
     requestParams: params.request,
     context: requestContext,
   });
+  using _ = { [Symbol.dispose]: () => authorization.authorization?.release?.() };
   const responses: Parameters<RespondFn>[] = [];
   if (!authorization.error) {
     await sessionMutationHandlers["sessions.assignOwner"]?.({
@@ -592,22 +594,26 @@ describe("sessions.patch", () => {
       const requestContext = context(cfg);
       const patch = async (pinned: boolean) => {
         const request = { key: sessionKey, pinned };
-        const authorization = resolveSessionMutationAuthorization({
+        const authorization = await resolveSessionMutationAuthorizationAsync({
           client: requestClient,
           method: "sessions.patch",
           requestParams: request,
           context: requestContext,
         });
-        expect(authorization.error).toBeNull();
-        const respond = vi.fn();
-        await sessionMutationHandlers["sessions.patch"]?.({
-          params: request,
-          client: requestClient,
-          context: requestContext,
-          sessionMutationAuthorization: authorization.authorization,
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+        try {
+          expect(authorization.error).toBeNull();
+          const respond = vi.fn();
+          await sessionMutationHandlers["sessions.patch"]?.({
+            params: request,
+            client: requestClient,
+            context: requestContext,
+            sessionMutationAuthorization: authorization.authorization,
+            respond,
+          } as never);
+          expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+        } finally {
+          authorization.authorization?.release?.();
+        }
       };
 
       await patch(true);
@@ -652,7 +658,7 @@ describe("sessions.assignOwner", () => {
         const cfg = {
           agents: { ownership: "explicit", entries: { main: {}, research: {} } },
         } as OpenClawConfig;
-        const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
+        const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId: "main" });
         if (!target) {
           throw new Error("expected lifecycle assignment target");
         }
@@ -722,6 +728,7 @@ describe("sessions.assignOwner", () => {
     await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:handoff";
       const ownerProfile = ensureProfileForEmail("requester@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env: state.env })).release };
       await upsertSessionEntryCore(
         { agentId: "main", env: state.env, sessionKey },
         {
@@ -834,6 +841,9 @@ describe("sessions.assignOwner", () => {
           assignedAt: 4242,
         });
         const durableOwner = ensureProfileForEmail(`next-owner-${caseNumber}@example.test`);
+        using _ = {
+          [Symbol.dispose]: (await prepareUserProfileCatalog({ env: state.env })).release,
+        };
         const reassigned = await invoke({
           cfg,
           client: client("profile-viewer"),
@@ -858,14 +868,22 @@ describe("sessions.assignOwner", () => {
           loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner?.actor,
         ).toEqual({ type: "human", id: durableOwner.id });
 
-        const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
+        const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId: "main" });
         if (!target) {
           throw new Error("expected assigned session target");
         }
         expect(resolveSessionSharingRole({ client: client("profile-creator"), target })).toBe(
           "owner",
         );
-        expect(resolveSessionSharingRole({ client: client("research"), target })).toBe("viewer");
+        expect(
+          resolveSessionSharingRole({
+            client: client("research"),
+            target,
+            isMember: (
+              await readSessionMembersInWorker({ agentId: "main", env: state.env, sessionKey })
+            ).members.some((member) => member.identityId === "research"),
+          }),
+        ).toBe("viewer");
       });
     },
   );

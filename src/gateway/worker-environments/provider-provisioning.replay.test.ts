@@ -449,7 +449,9 @@ describe("worker environment service provision replay", () => {
       );
 
       expect(provision).toHaveBeenCalledTimes(1);
-      expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      expect(inspect).toHaveBeenCalledWith(
+        expect.objectContaining({ leaseId, profile: { region: "test" } }),
+      );
       expect(destroy).toHaveBeenCalledTimes(released ? 0 : 1);
       if (!released) {
         expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
@@ -668,7 +670,7 @@ describe("worker environment service provision replay", () => {
     [
       "malformed SSH endpoint",
       { leaseId: "lease-invalid", ssh: { ...support.SSH_ENDPOINT, keyRef: "not-a-secret-ref" } },
-      "SSH key must be a canonical SecretRef",
+      "SSH key must be a valid SecretRef",
     ],
     [
       "invalid shared-host declaration",

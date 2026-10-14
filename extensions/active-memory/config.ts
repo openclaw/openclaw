@@ -252,7 +252,7 @@ export function normalizePluginConfig(
 
 export function readActiveMemoryConfig(api: OpenClawPluginApi): OpenClawConfig {
   try {
-    return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
+    return api.runtime.config.current() as OpenClawConfig;
   } catch {
     return api.config;
   }

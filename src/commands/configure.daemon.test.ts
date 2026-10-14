@@ -32,9 +32,11 @@ vi.mock("../cli/progress.js", () => ({
   withProgress: vi.fn(async (_opts, run) => run({ setLabel: progressSetLabel })),
 }));
 
+// mock-isolation: Daemon configuration tests use a synthetic install plan and config.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: loadConfig,
   loadConfig,
+  captureRuntimeConfigAsyncReader: () => async () => loadConfig(),
 }));
 
 vi.mock("./gateway-install-token.js", () => ({
@@ -85,7 +87,7 @@ describe("maybeInstallDaemon", () => {
     runExec.mockReset().mockResolvedValue({
       stdout: JSON.stringify({
         nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
+        bunVersion: "1.4.3",
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       }),
@@ -160,13 +162,13 @@ describe("maybeInstallDaemon", () => {
       typeof import("./daemon-install-helpers.js")
     >("./daemon-install-helpers.js");
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
