@@ -49,10 +49,11 @@ that start, including model work before the first tool call, checked as tools
 start, finish, and when a run ends. Either trigger marks a review due; `0` disables
 a trigger. The review waits until all started tool calls have authoritative
 completion events, or the run ends or errors. Built-in runs settle on tool
-results. Codex runs settle on native `item/completed` events, not the early
-dynamic tool result emitted before Codex records the response. Both the initial
-review and verification recheck settlement immediately before forking; new calls
-during a review can delay verification.
+results. Codex tracks native tool-item starts through completion and raw call
+receipts through their recorded outputs, including outer function and custom/code-mode
+calls. Child command completion does not settle an enclosing call. Early dynamic
+tool results never release that work. Both the initial review and verification
+recheck settlement immediately before forking; new calls can delay verification.
 
 Stalled calls never force a review. A due review waits for tool settlement or
 run end; reviewing at run end preserves feedback when no next model call occurs.
@@ -60,7 +61,7 @@ Lifecycle end/error clears pending tool IDs. Both counters restart when a review
 completes, including a failed review, so the next review waits a full interval.
 
 The event subscription requests metadata only for tool starts/results, Codex
-native item completion, and lifecycle starts/ends/errors, without copying tool
+native and raw item starts/completions, and lifecycle starts/ends/errors, without copying tool
 result payloads. Ignored phases are rejected before reading run context.
 
 ### Review instructions

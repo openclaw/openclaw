@@ -273,8 +273,10 @@ Reviews always use the session's own model; there is no separate model setting.
 
 A due review waits until all started tool calls have authoritative completion
 events, or the run ends or errors. Built-in runs settle on tool results; Codex
-runs settle on native `item/completed` notifications rather than early dynamic
-tool results. Verification checks the same condition again before its fork.
+runs settle on native item completion and recorded raw tool outputs, including
+outer function/custom-code calls. Completed child commands do not settle an
+enclosing call. Early dynamic tool results are not a safe boundary. Verification
+checks the same condition again before its fork.
 A stalled call never forces a review: Advisor waits for completion or run end,
 without a timer bypass. A call without a result may still be running; the fixed
 review contract forbids treating it as failed or aborted. Run end/error clears

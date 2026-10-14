@@ -15,7 +15,6 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import * as controllerModule from "./src/controller.js";
 import { VERIFY_MESSAGE } from "./src/review.js";
 
 const manifest = JSON.parse(
@@ -301,6 +300,37 @@ function setup(pluginConfig: Record<string, unknown>) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("advisor", () => {
+  it.each([
+    ["custom_tool_call", "custom_tool_call_output"],
+    ["function_call", "function_call_output"],
+  ])("keeps an outer %s open after its native children finish", async (type, outputType) => {
+    const run = setup({ everyToolCalls: 2, everyMinutes: 0 });
+    run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
+    await run.startService();
+    await run.startRun();
+    await run.emitEvent("codex_app_server.item", "started", { itemId: "outer", type });
+    for (const itemId of ["outer", "second-child"]) {
+      await run.emitEvent("codex_app_server.item", "started", {
+        itemId,
+        type: "commandExecution",
+      });
+      await run.toolStarted({ toolCallId: itemId, itemId });
+      await run.emitEvent("codex_app_server.item", "completed", {
+        itemId,
+        type: "commandExecution",
+      });
+    }
+    await run.advanceBy(24 * 60 * 60_000);
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.emitEvent("codex_app_server.item", "completed", {
+      itemId: "outer",
+      type: outputType,
+    });
+    await run.wakeScheduler();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+    await run.stopService();
+  });
+
   it.each(["commandExecution", "dynamicToolCall"])(
     "waits for native %s completion instead of an early Codex result",
     async (type) => {
@@ -439,7 +469,10 @@ describe("advisor", () => {
           setImmediate(resolve);
         });
         expect(run.forkSession).toHaveBeenCalledOnce();
-        await run.emitEvent("codex_app_server.item", "completed", { itemId: call.itemId });
+        await run.emitEvent("codex_app_server.item", "completed", {
+          itemId: call.itemId,
+          type: "commandExecution",
+        });
       } else if (release === "result") {
         await run.toolFinished(call);
       } else {
@@ -507,33 +540,24 @@ describe("advisor", () => {
     await run.stopService();
   });
 
-  it("filters ignored event phases before reading context or touching the controller", async () => {
-    const factory = vi.spyOn(controllerModule, "createAdvisorController");
+  it("filters ignored event phases before reading context or scheduling a review", async () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
-    const controller = factory.mock.results[0]!.value;
-    const runStarted = vi.spyOn(controller, "runStarted");
-    const toolStarted = vi.spyOn(controller, "toolStarted");
-    const turnEnded = vi.spyOn(controller, "turnEnded");
     await run.startService();
     await run.startRun();
     run.getRunContext.mockClear();
-    runStarted.mockClear();
     for (const phase of ["update", "end", "error", ""]) {
       await run.emitEvent("tool", phase);
     }
     for (const phase of ["model", "update", ""]) {
       await run.emitEvent("lifecycle", phase);
     }
-    for (const phase of ["started", "update", "end", ""]) {
+    for (const phase of ["update", "end", ""]) {
       await run.emitEvent("codex_app_server.item", phase);
     }
     expect(run.getRunContext).not.toHaveBeenCalled();
-    expect(runStarted).not.toHaveBeenCalled();
-    expect(toolStarted).not.toHaveBeenCalled();
-    expect(turnEnded).not.toHaveBeenCalled();
     expect(run.subscription).toMatchObject({
       streams: ["tool", "lifecycle", "codex_app_server.item"],
-      phases: ["start", "result", "end", "error", "completed"],
+      phases: ["start", "result", "end", "error", "started", "completed"],
       payload: "metadata",
     });
     await run.wakeScheduler();

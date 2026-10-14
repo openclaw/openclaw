@@ -210,7 +210,12 @@ export function createAdvisorController(deps: AdvisorDeps) {
       state.pendingTools.clear();
       state.onSettled?.();
     },
-    toolStarted(params: { sessionKey: string; runId: string; toolCallId: string }): void {
+    toolStarted(params: {
+      sessionKey: string;
+      runId: string;
+      toolCallId: string;
+      count?: boolean;
+    }): void {
       const state = sessions.get(params.sessionKey);
       // Tool events carry no trigger; only admitted runs with a lifecycle start count.
       if (state?.run?.id !== params.runId) {
@@ -219,7 +224,9 @@ export function createAdvisorController(deps: AdvisorDeps) {
       state.pendingTools.add(params.toolCallId);
       state.cancelScheduled?.();
       state.cancelScheduled = undefined;
-      state.toolCalls += 1;
+      if (params.count !== false) {
+        state.toolCalls += 1;
+      }
       accountTime(state, Date.now() - state.run.startedAt);
       markReviewDue(params.sessionKey, state.run.agentId, state);
     },

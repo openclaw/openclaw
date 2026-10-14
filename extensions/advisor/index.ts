@@ -14,6 +14,25 @@ const ADVICE_TTL_MS = 24 * 60 * 60 * 1000;
 const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
 type AdmittedRun = { agentId: string; sessionKey: string; startedAt: number | null };
 
+const CODEX_TOOL_ITEM_KINDS: Record<string, "native" | "raw"> = {
+  commandExecution: "native",
+  fileChange: "native",
+  mcpToolCall: "native",
+  dynamicToolCall: "native",
+  collabAgentToolCall: "native",
+  webSearch: "native",
+  imageGeneration: "native",
+  imageView: "native",
+  sleep: "native",
+  function_call: "raw",
+  custom_tool_call: "raw",
+  local_shell_call: "raw",
+  tool_search_call: "raw",
+  function_call_output: "raw",
+  custom_tool_call_output: "raw",
+  tool_search_output: "raw",
+};
+
 function resolveSchedule(config: Record<string, unknown> | undefined): AdvisorSchedule {
   const read = (key: keyof AdvisorSchedule) => {
     const value = config?.[key];
@@ -155,14 +174,15 @@ export default definePluginEntry({
       id: "advisor-runs",
       description: "Counts tool starts and waits for settled tool calls before reviewing.",
       streams: ["tool", "lifecycle", "codex_app_server.item"],
-      phases: ["start", "result", "end", "error", "completed"],
+      phases: ["start", "result", "end", "error", "started", "completed"],
       payload: "metadata",
       handle: (event, ctx) => {
         const phase = event.data.phase;
         if (
           !(
             (event.stream === "tool" && (phase === "start" || phase === "result")) ||
-            (event.stream === "codex_app_server.item" && phase === "completed") ||
+            (event.stream === "codex_app_server.item" &&
+              (phase === "started" || phase === "completed")) ||
             (event.stream === "lifecycle" &&
               (phase === "start" || phase === "end" || phase === "error"))
           )
@@ -192,22 +212,37 @@ export default definePluginEntry({
             if (typeof toolCallId !== "string") {
               return;
             }
-            const params = { sessionKey: run.sessionKey, runId: event.runId, toolCallId };
+            const native = typeof event.data.itemId === "string";
+            const params = {
+              sessionKey: run.sessionKey,
+              runId: event.runId,
+              toolCallId: native ? `native:${toolCallId}` : toolCallId,
+            };
             if (phase === "start") {
               controller.toolStarted(params);
-            } else if (typeof event.data.itemId !== "string") {
+            } else if (!native) {
               controller.toolFinished(params);
             }
           } else if (event.stream === "codex_app_server.item") {
-            // Codex tool events have itemId; its early dynamic result precedes native
-            // persistence. Only item/completed (event-projector.ts) settles that call.
             const itemId = event.data.itemId;
-            if (typeof itemId === "string") {
-              controller.toolFinished({
-                sessionKey: run.sessionKey,
-                runId: event.runId,
-                toolCallId: itemId,
-              });
+            const type = event.data.type;
+            if (
+              typeof itemId !== "string" ||
+              typeof type !== "string" ||
+              !Object.hasOwn(CODEX_TOOL_ITEM_KINDS, type)
+            ) {
+              return;
+            }
+            // Raw outer calls and native children can share a call ID but settle separately.
+            const params = {
+              sessionKey: run.sessionKey,
+              runId: event.runId,
+              toolCallId: `${CODEX_TOOL_ITEM_KINDS[type]}:${itemId}`,
+            };
+            if (phase === "started") {
+              controller.toolStarted({ ...params, count: false });
+            } else {
+              controller.toolFinished(params);
             }
           } else {
             controller.turnEnded({
