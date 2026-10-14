@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
-import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -74,7 +74,7 @@ test("sessions.delete retires an automation's idle run-alias placement through i
   requireOk("sessions.delete", deleted);
   expect(deleted.payload).toMatchObject({ deleted: true });
   expect(placementStore.get(sessionId)).toBeUndefined();
-  expect(loadSessionEntry(AUTOMATION_BASE_KEY).entry).toBeUndefined();
+  expect((await loadSessionEntryAsync(AUTOMATION_BASE_KEY)).entry).toBeUndefined();
 });
 
 test("sessions.delete still accepts an automation's exact run-alias key", async () => {
@@ -99,7 +99,7 @@ test("sessions.delete still accepts an automation's exact run-alias key", async 
   requireOk("sessions.delete", deleted);
   expect(deleted.payload).toMatchObject({ deleted: true });
   expect(placementStore.get(sessionId)).toBeUndefined();
-  expect(loadSessionEntry(alias).entry).toBeUndefined();
+  expect((await loadSessionEntryAsync(alias)).entry).toBeUndefined();
 });
 
 test("sessions.patch archives an automation base session over its idle run-alias placement", async () => {
@@ -116,7 +116,9 @@ test("sessions.patch archives an automation base session over its idle run-alias
   );
 
   requireOk("sessions.patch", archived);
-  expect(loadSessionEntry(AUTOMATION_BASE_KEY).entry?.archivedAt).toEqual(expect.any(Number));
+  expect((await loadSessionEntryAsync(AUTOMATION_BASE_KEY)).entry?.archivedAt).toEqual(
+    expect.any(Number),
+  );
   // Archive keeps cloud affinity; only deletion retires the placement.
   expect(placementStore.get(sessionId)).toMatchObject({
     state: "local",
@@ -138,7 +140,7 @@ test("sessions.delete still rejects a placement keyed to another automation's ru
   expect(deleted).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
   expect(deleted.error?.message).toContain("cloud worker placement identity changed");
   expect(placementStore.get(sessionId)).toMatchObject({ sessionKey: foreignAlias });
-  expect(loadSessionEntry(AUTOMATION_BASE_KEY).entry?.sessionId).toBe(sessionId);
+  expect((await loadSessionEntryAsync(AUTOMATION_BASE_KEY)).entry?.sessionId).toBe(sessionId);
 });
 
 test("sessions.delete reclaims an automation's active run-alias placement before deleting", async () => {
@@ -147,7 +149,7 @@ test("sessions.delete reclaims an automation's active run-alias placement before
     entries: { [AUTOMATION_BASE_KEY]: sessionStoreEntry(REQUEST.sessionId) },
   });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+  const harness = await createHarness(openOpenClawStateDatabase(), placementStore, {
     reconcileChanged: false,
     reconcileCommitsManifest: false,
   });
@@ -173,5 +175,5 @@ test("sessions.delete reclaims an automation's active run-alias placement before
   expect(deleted.payload).toMatchObject({ deleted: true });
   expect(harness.environments.destroy).toHaveBeenCalledOnce();
   expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
-  expect(loadSessionEntry(AUTOMATION_BASE_KEY).entry).toBeUndefined();
+  expect((await loadSessionEntryAsync(AUTOMATION_BASE_KEY)).entry).toBeUndefined();
 });
