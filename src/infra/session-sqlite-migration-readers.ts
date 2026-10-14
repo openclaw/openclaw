@@ -199,6 +199,12 @@ export function createTranscriptEventReader(
       allowMalformedPrefix,
     )) {
       let event = loadedEvent;
+      // A transcript carries exactly one session header. A repeated header (same
+      // session, possibly a different timestamp) is not a second event, so import
+      // and shared verification must not count it as missing history.
+      if (originalIndex !== plan.headerIndex && isRecord(event) && event.type === "session") {
+        continue;
+      }
       if (plan.sourceVersion >= 2) {
         recordLegacyCompactionTarget(event, plan.compactionTargetIndexes);
       }
