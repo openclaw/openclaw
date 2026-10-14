@@ -239,9 +239,11 @@ Session observation is enabled by default. Safe preamble headlines do not requir
 
 Session links in messages open inside the Control UI. This includes `agent:` keys,
 root-relative chat URLs, and URLs on the current origin or the Gateway's public origin
-when its applied configuration is loaded. Hovering a link shows the session card
-when the session is known locally. Unknown or ambiguous session references remain
-navigable without a card; links to other origins keep normal browser behavior.
+when its applied configuration is loaded. Links show the session's title, and hovering
+one shows its session card. Session URLs that are not in the loaded sidebar are
+resolved through the Gateway, including shortened IDs, using the same access rules as
+opening them. Missing, inaccessible, or ambiguous references stay plain navigable links
+without a card; links to other origins keep normal browser behavior.
 Document-relative hrefs are never session links; file references such as
 `src/utils/foo.ts` and `qa-café/index.md` retain workspace file handling, including
 Unicode names and percent-encoded Markdown link destinations. Explicit Markdown

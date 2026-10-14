@@ -1,6 +1,8 @@
+import { inspect } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requestMcpEvent } from "./mcp-event-request.js";
+import * as mcpTransport from "./mcp-transport.js";
 
 const mocks = vi.hoisted(() => ({
   lookup: vi.fn(),
@@ -64,11 +66,15 @@ beforeEach(() => {
   mocks.token.mockReset();
   mocks.authorizationRequired.mockReset();
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 describe("MCP Events direct protocol transport", () => {
   it.each(["json", "sse"] as const)(
     "sends one MCP 2 request without initialize and accepts %s",
     async (mode) => {
+      const resolution = vi.spyOn(mcpTransport, "resolveMcpTransport");
       mocks.fetch.mockImplementation(async (_url, init) => reply(init, mode, { events: [] }));
       const result = await requestMcpEvent({
         serverName: "calendar",
@@ -78,6 +84,14 @@ describe("MCP Events direct protocol transport", () => {
         assertCurrent: () => {},
       });
       expect(result).toEqual({ events: [] });
+      const resolved = resolution.mock.results.find((entry) => entry.type === "return");
+      const transport = resolved?.value?.transport;
+      expect(transport).toBeDefined();
+      expect(transport).toMatchObject({
+        onmessage: undefined,
+        onerror: undefined,
+        onclose: undefined,
+      });
       expect(mocks.fetch).toHaveBeenCalledOnce();
       const init = mocks.fetch.mock.calls[0]![1];
       const headers = new Headers(init?.headers);
@@ -162,6 +176,27 @@ describe("MCP Events direct protocol transport", () => {
       reason: "cursor_expired",
     });
     expect(String(error)).not.toContain("private-account-secret");
+  });
+  it("retains sanitized transport diagnostics as cause without exposing credentials", async () => {
+    mocks.fetch.mockRejectedValue(
+      new Error(
+        "network unavailable https://fixture-user:fixture-password@mcp.example.com/events?api_key=fixture-token",
+      ),
+    );
+    const error = await requestMcpEvent({
+      serverName: "calendar",
+      server,
+      method: "events/list",
+      assertCurrent: () => {},
+    }).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("network unavailable"),
+      cause: expect.stringContaining("network unavailable"),
+    });
+    const diagnostic = inspect(error);
+    expect(diagnostic).not.toContain("fixture-password");
+    expect(diagnostic).not.toContain("fixture-token");
   });
   it("fails closed for missing requester OAuth rather than using shared OAuth", async () => {
     await expect(

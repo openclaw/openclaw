@@ -258,6 +258,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     folderLabel: view().projectState.label,
     worktree: props.params.place.worktree,
     worktreeAvailable: props.params.place.worktreeAvailable(),
+    currentCheckoutUnavailableReason: props.params.place.currentCheckoutUnavailableReason,
     repositoryUnavailable: props.params.place.repository.kind === "unavailable",
     branches: view().branches,
     branchesLoading: props.params.place.repository.kind === "checking",

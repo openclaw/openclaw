@@ -55,21 +55,6 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     ...projection.resolved,
   });
   const visible = resolveVisibleMessagePositions(projection);
-  const history = resolveVisibleHistoryProjection(projection);
-  const { messageEnd } = resolveVisibleHistoryRange(
-    history,
-    params.messageSeq - 1,
-    params.messageSeq,
-  );
-  const scannedThroughMessagePosition =
-    messageEnd <= visible.kept.length
-      ? (visible.kept[messageEnd - 1] ?? -1)
-      : visible.postStart + messageEnd - visible.kept.length - 1;
-  const hidden = {
-    hidden: true as const,
-    scannedThroughMessageSeq: params.messageSeq,
-    scannedThroughMessagePosition,
-  };
   const keptPositions =
     /* kysely-allow-raw: Bind the exact retained display positions without SQLite's variable limit. */
     sql<number>`(SELECT value FROM json_each(${JSON.stringify(visible.kept)}))`;
@@ -126,6 +111,21 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     }
     readAfter = anchor.message_position;
   }
+  const history = resolveVisibleHistoryProjection(projection);
+  const { messageEnd } = resolveVisibleHistoryRange(
+    history,
+    params.messageSeq - 1,
+    params.messageSeq,
+  );
+  const scannedThroughMessagePosition =
+    messageEnd <= visible.kept.length
+      ? (visible.kept[messageEnd - 1] ?? -1)
+      : visible.postStart + messageEnd - visible.kept.length - 1;
+  const hidden = {
+    hidden: true as const,
+    scannedThroughMessageSeq: params.messageSeq,
+    scannedThroughMessagePosition,
+  };
   // A reply's visibility cannot depend on later transcript entries. Resume only
   // beyond already inspected inputs when another output from this run is read.
   const laterInputs = userInputs
