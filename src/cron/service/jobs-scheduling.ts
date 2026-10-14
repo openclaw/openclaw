@@ -108,6 +108,18 @@ export function resolveJobLastRunStatus(job: Pick<CronJob, "state">) {
   return job.state.lastRunStatus ?? job.state.lastStatus;
 }
 
+/** Resolves run end using the same persisted duration semantics as retry backoff. */
+export function resolveJobLastRunEndedAtMs(job: Pick<CronJob, "state">): number | undefined {
+  if (!isFiniteTimestamp(job.state.lastRunAtMs)) {
+    return undefined;
+  }
+  const lastDurationMs =
+    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
+      ? Math.max(0, Math.floor(job.state.lastDurationMs))
+      : 0;
+  return job.state.lastRunAtMs + lastDurationMs;
+}
+
 /** Resolves the retry backoff delay for a one-based consecutive error count. */
 export function errorBackoffMs(
   consecutiveErrors: number,
@@ -122,7 +134,11 @@ export function resolveJobErrorBackoffUntilMs(
   job: CronJob,
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
 ): number | undefined {
-  if (resolveJobLastRunStatus(job) !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
+  if (resolveJobLastRunStatus(job) !== "error") {
+    return undefined;
+  }
+  const lastEndedAtMs = resolveJobLastRunEndedAtMs(job);
+  if (lastEndedAtMs === undefined) {
     return undefined;
   }
   const consecutiveErrorsRaw = job.state.consecutiveErrors;
@@ -130,11 +146,6 @@ export function resolveJobErrorBackoffUntilMs(
     typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
       ? Math.max(1, Math.floor(consecutiveErrorsRaw))
       : 1;
-  const lastDurationMs =
-    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
-      ? Math.max(0, Math.floor(job.state.lastDurationMs))
-      : 0;
-  const lastEndedAtMs = job.state.lastRunAtMs + lastDurationMs;
   return asDateTimestampMs(lastEndedAtMs + errorBackoffMs(consecutiveErrors, scheduleMs));
 }
 
