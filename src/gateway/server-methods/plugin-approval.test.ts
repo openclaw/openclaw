@@ -678,6 +678,13 @@ describe("createPluginApprovalHandlers", () => {
   });
 
   describe("plugin.approval.waitDecision", () => {
+    it("rejects missing id", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.waitDecision", {});
+      await invokeHandler(handlers, opts);
+      expect(expectResponseRejected(opts.respond).message).toContain("id is required");
+    });
+
     it("returns not found for approvals hidden from the caller", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = await registerOwnedApproval(manager, { title: "T" });
@@ -697,6 +704,20 @@ describe("createPluginApprovalHandlers", () => {
       );
       await invokeHandler(handlers, opts);
       expect(expectResponseRejected(opts.respond).message).toContain("expired or not found");
+    });
+
+    it("returns decision when resolved", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = await registerApproval(manager);
+
+      // Resolve before waiting
+      await manager.resolve(record.id, "allow-once");
+
+      const opts = createMockOptions("plugin.approval.waitDecision", { id: record.id });
+      await invokeHandler(handlers, opts);
+      const result = expectResponseOk(opts.respond);
+      expect(result.id).toBe(record.id);
+      expect(result.decision).toBe("allow-once");
     });
   });
 

@@ -77,11 +77,18 @@ it("preserves a proven schema failure while completing plugin metadata", async (
 
 it.each([
   "SQLite inspection",
+  "initial config read",
   "full config read",
+  "invalid authored JSON",
   "invalid include directive",
   "inspection with offline maintenance",
+  "ownership mismatch",
+  "wrapped ownership mismatch",
   "aggregate ownership mismatch",
+  "pending inspection",
+  "failed inspection",
   "proven integrity damage",
+  "unavailable integrity check",
 ])("preserves failed %s during startup admission", async (phase) => {
   await withDoctorConfigPreflightHome(async (home) => {
     const configPath =
@@ -92,9 +99,13 @@ it.each([
       JSON.stringify({
         gateway: { mode: "local" },
         plugins: { enabled: false },
+        ...(phase === "initial config read" ? { $include: "missing.json" } : {}),
         ...(phase === "invalid include directive" ? { $include: 42 } : {}),
       }),
     );
+    if (phase === "invalid authored JSON") {
+      fs.writeFileSync(configPath, "{ invalid authored JSON");
+    }
     const inspectionFailure = createSqliteReadOnlyWorkerError(
       "failed while creating its private snapshot",
       "",
@@ -123,9 +134,28 @@ it.each([
           "Expected an ownership mismatch",
         ),
       );
-      failure = new AggregateError([inspectionFailure, mismatch], "read admission failed");
-    } else if (phase === "proven integrity damage") {
-      const integrity = new Error("SQLite integrity_check failed");
+      failure =
+        phase === "wrapped ownership mismatch"
+          ? new Error("read admission failed", { cause: mismatch })
+          : phase === "aggregate ownership mismatch"
+            ? new AggregateError([inspectionFailure, mismatch], "read admission failed")
+            : mismatch;
+    } else if (phase === "pending inspection" || phase === "failed inspection") {
+      failure = new AgentDatabaseAdmissionError(
+        createAgentDatabaseInspectionRefusal({
+          agentId: "requested",
+          paths: ["/synthetic/agent.sqlite"],
+          reason: "storage unavailable",
+          pending: phase === "pending inspection",
+        }),
+      );
+    } else if (phase === "proven integrity damage" || phase === "unavailable integrity check") {
+      const integrity = new Error(
+        "SQLite integrity_check failed",
+        phase === "unavailable integrity check"
+          ? { cause: Object.assign(new Error("storage unavailable"), { code: "EIO" }) }
+          : undefined,
+      );
       integrity.name = "SqliteIntegrityError";
       failure = new AgentDatabaseAdmissionError(
         createAgentDatabaseInspectionRefusal({
@@ -155,7 +185,7 @@ it.each([
         throw failure;
       },
     });
-    if (phase === "invalid include directive") {
+    if (phase === "invalid authored JSON" || phase === "invalid include directive") {
       await expect(read).resolves.toMatchObject({
         snapshot: { valid: false, issues: [{ errorCode: "CONFIG_SOURCE_INVALID" }] },
       });
@@ -163,6 +193,15 @@ it.each([
       await expect(read).rejects.toMatchObject({
         code: "CONFIG_READ_FAILED",
         message: expect.stringContaining("EIO"),
+      });
+    } else if (phase === "initial config read") {
+      await expect(read).resolves.toMatchObject({
+        snapshot: {
+          valid: false,
+          issues: [
+            { errorCode: "CONFIG_READ_FAILED", message: expect.stringContaining("missing.json") },
+          ],
+        },
       });
     } else if (
       phase === "inspection with offline maintenance" ||

@@ -102,6 +102,15 @@ describe("cron model schema regressions", () => {
     expect(findLlamacppGbnfSchemaViolations(projected, "cron.parameters")).toEqual([]);
   });
 
+  it.each([undefined, " agent:main:main "])(
+    "advertises job retargeting only without session scope (%j)",
+    (agentSessionKey) => {
+      const parameters = createCronTool({ agentSessionKey, agentId: "main" }).parameters;
+      expect(Boolean(propertyAt(parameters, "job.agentId"))).toBe(!agentSessionKey);
+      expect(propertyAt(parameters, "agentId")).toMatchObject({ type: "string" });
+    },
+  );
+
   it("preserves failure-alert values in the shared job schema", () => {
     expect(propertyAt(schema, "job.failureAlert")?.anyOf).toContainEqual({
       type: "boolean",
@@ -130,6 +139,47 @@ describe("cron model schema regressions", () => {
         expect(validate).toThrow(/job.failureAlert/);
       }
     }
+  });
+
+  it("projects nullable fields and failure policies into the restricted provider dialect", () => {
+    const projected = normalizeToolParameterSchema(schema, { modelProvider: "gemini" });
+    expect(propertyAt(projected, "job.failureAlert")).toMatchObject({
+      type: "object",
+      description: expect.stringContaining("false disables"),
+    });
+    for (const key of ["job.agentId", "job.sessionKey", "job.payload.model"]) {
+      expect(propertyAt(projected, key)).toMatchObject({
+        type: "string",
+        description: expect.stringMatching(/null to clear/i),
+      });
+    }
+    expect(propertyAt(projected, "job.payload.toolsAllow")).toMatchObject({ type: "array" });
+    expect(JSON.stringify(projected)).not.toMatch(/"type"\s*:\s*\[|"not"\s*:\s*\{/);
+  });
+
+  it("accepts nullable cron update clears in the runtime schema", () => {
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        jobId: "job-1",
+        job: {
+          agentId: null,
+          displayName: null,
+          sessionKey: null,
+          payload: { toolsAllow: null, model: null, fallbacks: null },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("describes cron expressions as local wall-clock time in the supplied timezone", () => {
+    const expression = propertyAt(schema, "job.schedule.expr")?.description;
+    const timezone = propertyAt(schema, "job.schedule.tz")?.description;
+    expect(expression).toMatch(/wall-time/i);
+    expect(expression).toMatch(/never UTC-convert/i);
+    expect(expression).toContain("Gateway local");
+    expect(timezone).toMatch(/wall-clock fields/i);
+    expect(timezone).toContain("Gateway host local timezone");
   });
 
   it("omits unavailable trigger capabilities and explains the disabled surface", () => {

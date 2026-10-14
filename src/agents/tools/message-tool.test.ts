@@ -935,6 +935,28 @@ describe("poll vote echo guard", () => {
 });
 
 describe("message tool secret scoping", () => {
+  it("keeps automatic WebChat final-answer guidance while selecting the tool-local sink", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        currentChannelProvider: "webchat",
+        sourceReplyDeliveryMode: "automatic",
+        agentSessionKey: "agent:main:webchat:dm:dashboard",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    const tool = createMessageTool({
+      currentChannelProvider: "webchat",
+      sourceReplyDeliveryMode: "automatic",
+      agentSessionKey: "agent:main:webchat:dm:dashboard",
+    });
+    expect(tool.description).not.toContain("Normal final answers stay private");
+  });
+
   it("keeps direct operator authority on the in-process action only", async () => {
     mockSendResult();
 
@@ -1757,6 +1779,18 @@ describe("message tool agent routing", () => {
     await tool.execute("1", { action: "send", channel: "slack", ...action });
     expect(firstRunMessageActionInput()?.toolContext).toMatchObject(expected);
   });
+
+  it("keeps the tool definition stable through createOpenClawTools", () => {
+    const tools = (["automatic", "message_tool_only"] as const).map((sourceReplyDeliveryMode) =>
+      createOpenClawTools({ config: {}, sourceReplyDeliveryMode }).find(
+        (candidate) => candidate.name === "message",
+      ),
+    );
+    expect(tools[0]).toBeDefined();
+    expect(tools[1]?.description).toBe(tools[0]?.description);
+    expect(tools[1]?.parameters).toEqual(tools[0]?.parameters);
+    expect(getToolProperties(tools[1]!).final).toMatchObject({ type: "boolean" });
+  });
 });
 
 describe("message tool explicit target guard", () => {
@@ -2154,6 +2188,41 @@ describe("message tool schema scoping", () => {
       }
     },
   );
+
+  it.each<{
+    action: ChannelMessageActionName;
+    fields: string[];
+    descriptions?: Record<string, string>;
+  }>([
+    { action: "search", fields: ["query", "limit"] },
+    {
+      action: "emoji-upload",
+      fields: ["guildId", "emojiName", "media", "roleIds"],
+      descriptions: { emojiName: "Name for an uploaded custom emoji." },
+    },
+    { action: "voice-status", fields: ["guildId", "userId"] },
+    { action: "timeout", fields: ["guildId", "userId", "durationMin", "until", "reason"] },
+    { action: "thread-create", fields: ["messageId", "threadName", "channelId"] },
+  ])("keeps fields consumed by scoped $action handlers", ({ action, fields, descriptions }) => {
+    const plugin = createChannelPlugin({ id: "test-channel", actions: [action] });
+    registerPlugins(plugin);
+
+    const properties = getToolProperties(
+      createMessageTool({
+        config: {} as never,
+        currentChannelProvider: "test-channel",
+      }),
+    );
+
+    for (const field of fields) {
+      expect(properties, `${action} should advertise ${field}`).toHaveProperty(field);
+    }
+    for (const [field, description] of Object.entries(descriptions ?? {})) {
+      expect(properties[field], `${action} should describe ${field}`).toMatchObject({
+        description,
+      });
+    }
+  });
 
   it("preserves channel-management params for scoped channel-move and category-delete allowlists", () => {
     // Regression: SCOPED_ACTION_GROUPS previously omitted channel-move and
