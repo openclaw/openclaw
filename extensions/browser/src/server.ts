@@ -10,12 +10,13 @@ import {
 } from "./browser-control-state.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./browser/bridge-auth-registry.js";
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
-import { resolveBrowserConfig } from "./browser/config.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import {
   ensureBrowserControlAuth,
   resolveBrowserControlAuth,
   shouldAutoGenerateBrowserAuth,
 } from "./browser/control-auth.js";
+import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
 import { listenBrowserHttpServer } from "./browser/http-listen.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
 import type { BrowserServerState } from "./browser/server-context.js";
@@ -90,8 +91,15 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
     return null;
   }
 
+  const hasExtensionProfiles = Object.values(resolved.profiles).some(
+    (profile) => profile.driver === "extension",
+  );
   let state: BrowserServerState;
   try {
+    if (hasExtensionProfiles) {
+      const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
+      await ensureExtensionRelayToken();
+    }
     state = await ensureBrowserControlRuntime({
       server,
       port,
@@ -104,6 +112,15 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
     throw err;
   }
   setBridgeAuthForPort(port, browserAuth);
+
+  if (hasExtensionProfiles) {
+    const { startConfiguredExtensionRelays } = await getExtensionRelayModule();
+    await startConfiguredExtensionRelays(
+      state,
+      (name) => resolveProfile(state.resolved, name),
+      (message) => logServer.warn(message),
+    );
+  }
 
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);

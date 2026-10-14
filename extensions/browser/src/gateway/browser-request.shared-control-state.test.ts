@@ -60,6 +60,7 @@ const { getBrowserControlState, startBrowserControlServiceFromConfig, stopBrowse
   await import("../control-service.js");
 const { runBrowserProxyCommand } = await import("../node-host/invoke-browser.js");
 const { getBridgeAuthForPort } = await import("../browser/bridge-auth-registry.js");
+const { getFreePort } = await import("../browser/test-port.js");
 const { browserHandlers } = await import("./browser-request.js");
 
 const controlPort = 18_791;
@@ -276,5 +277,27 @@ describe("browser.request local control state", () => {
     expect(getBrowserControlState()).toBeNull();
     setEnabled(false);
     await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+  });
+
+  it("initializes configured extension relays on HTTP server startup and cleans them up on stop", async () => {
+    const relayPort = await getFreePort();
+    mocks.runtimeConfig = browserConfig({
+      profiles: {
+        openclaw: { cdpPort: controlPort + 9 },
+        chrome: { driver: "extension", cdpPort: relayPort },
+      },
+    });
+    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+
+    const state = expectDefined(await startBrowserControlServerFromConfig(), "browser runtime");
+    const relay = expectDefined(state.extensionRelays?.get("chrome"), "chrome extension relay");
+    expect(relay.port).toBe(relayPort);
+    expect(state.resolved.extensionRelayToken).toEqual(expect.any(String));
+    expect(state.resolved.extensionRelayInternalTokens.chrome).toEqual(expect.any(String));
+
+    await stopBrowserControlServer();
+    expect(state.extensionRelays?.size ?? 0).toBe(0);
+    expect(state.resolved.extensionRelayInternalTokens.chrome).toBeUndefined();
+    expect(getBrowserControlState()).toBeNull();
   });
 });
