@@ -81,6 +81,38 @@ export async function loadSubagentSessionEntry(params: {
   );
 }
 
+/**
+ * Classifies a child session entry the caller already holds.
+ *
+ * `resolveSubagentRunOrphanReason` defers only the session read, so a caller
+ * that loaded the entry for this exact run can finish the classification
+ * without a second worker round trip. Both forms must agree, so this is the
+ * single place the session-entry conditions live.
+ */
+export function classifySubagentRunOrphanFromSessionEntry(params: {
+  entry: SubagentRunRecord;
+  sessionEntry: SessionEntry | undefined;
+  includeStaleUnended?: boolean;
+  now?: number;
+}): SubagentRunOrphanReason | null {
+  const { entry, sessionEntry } = params;
+  if (!sessionEntry) {
+    return "missing-session-entry";
+  }
+  if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
+    return "missing-session-id";
+  }
+  if (
+    params.includeStaleUnended === true &&
+    sessionEntry.abortedLastRun !== true &&
+    entry.execution.status !== "interrupted" &&
+    isStaleUnendedSubagentRun(entry, params.now)
+  ) {
+    return "stale-unended-run";
+  }
+  return null;
+}
+
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   includeStaleUnended?: boolean;
@@ -126,19 +158,12 @@ export function resolveSubagentRunOrphanReason(params: {
         cfg: params.cfg,
         assertCurrent,
       });
-      let orphanReason: SubagentRunOrphanReason | null = null;
-      if (!sessionEntry) {
-        orphanReason = "missing-session-entry";
-      } else if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
-        orphanReason = "missing-session-id";
-      } else if (
-        params.includeStaleUnended === true &&
-        sessionEntry.abortedLastRun !== true &&
-        entry.execution.status !== "interrupted" &&
-        isStaleUnendedSubagentRun(entry, params.now)
-      ) {
-        orphanReason = "stale-unended-run";
-      }
+      const orphanReason = classifySubagentRunOrphanFromSessionEntry({
+        entry,
+        sessionEntry,
+        includeStaleUnended: params.includeStaleUnended,
+        now: params.now,
+      });
       return { orphanReason, sessionEntry };
     },
   };

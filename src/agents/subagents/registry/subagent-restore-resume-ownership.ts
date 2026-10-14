@@ -6,7 +6,10 @@
 import type { InternalSessionEntry } from "../../../config/sessions.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { resolveSubagentRunOrphanReason } from "./subagent-session-reconciliation.js";
+import {
+  classifySubagentRunOrphanFromSessionEntry,
+  resolveSubagentRunOrphanReason,
+} from "./subagent-session-reconciliation.js";
 
 export function isRestoredSubagentRunHeldByAnotherOwner(
   entry: SubagentRunRecord,
@@ -17,11 +20,29 @@ export function isRestoredSubagentRunHeldByAnotherOwner(
   if (sessionEntry?.abortedLastRun === true || isRetiredSubagentSessionOwner(entry, sessionEntry)) {
     return true;
   }
+  if (entry.execution.status === "queued" || entry.execution.endedAt !== undefined) {
+    return false;
+  }
   // The sweeper owns active restored orphans so it can attribute a gateway
   // death and publish a requester-visible terminal outcome.
+  const classification = resolveSubagentRunOrphanReason({ entry, includeStaleUnended: true });
+  if (classification === null) {
+    return false;
+  }
+  if (typeof classification === "string") {
+    return true;
+  }
+  // The deferred form defers only the child session read, which the restorer
+  // has already performed for this exact owner. Finish the classification
+  // against that entry: treating the pending reader as an orphan verdict would
+  // hand the sweeper every active restored run, including children whose
+  // sessions already finished, and leave their requesters unsettled until a
+  // later sweep.
   return (
-    entry.execution.status !== "queued" &&
-    entry.execution.endedAt === undefined &&
-    Boolean(resolveSubagentRunOrphanReason({ entry, includeStaleUnended: true }))
+    classifySubagentRunOrphanFromSessionEntry({
+      entry,
+      sessionEntry,
+      includeStaleUnended: true,
+    }) !== null
   );
 }

@@ -49,11 +49,14 @@ import { randomUUID } from "node:crypto";
  *  5. queued    — the SAME run is republished as queued while the completion
  *                 is queued. The republished row is the same owner, so the
  *                 controller would still admit it; nothing may be written.
- *  6. history-read race — the boot-history read now runs on the shared-state
- *                 read worker, so the sweeper yields before it has decided
- *                 anything. A successor takes the runId during that real
- *                 worker round trip. The inspected row must be abandoned
- *                 before any completion is attempted.
+ *  6. history-read race — the boot-history read runs on the shared-state read
+ *                 worker, so the sweeper yields after consuming the session
+ *                 observation and before it has decided anything. A successor
+ *                 takes the runId during that real worker round trip, entered
+ *                 deterministically (see the scenario's own comment). The
+ *                 inspected row must be abandoned before any completion is
+ *                 attempted, and the scenario counts the selection checks so
+ *                 that a post-history check which stops happening fails it.
  *
  * Run: pnpm tsx scripts/proof-136476-orphan-owner-binding.ts
  */
@@ -224,10 +227,11 @@ function createOrphanedRun(params: {
   runId: string;
   startedAtMs: number;
   lastActivityAtMs: number;
+  childSessionKey?: string;
 }): SubagentRunRecord {
   return {
     runId: params.runId,
-    childSessionKey: `agent:proof:subagent:${params.runId}`,
+    childSessionKey: params.childSessionKey ?? `agent:proof:subagent:${params.runId}`,
     requesterSessionKey: "agent:proof:main",
     requesterDisplayKey: "proof",
     task: "orphan owner binding proof",
@@ -544,11 +548,26 @@ async function runScenario(ownership: OrphanOwnershipScenario): Promise<void> {
 }
 
 /**
- * Pins the post-await re-check. Attribution history is read off the gateway
- * thread, so `reconcileStaleActiveSubagentRun` suspends before it inspects the
- * run at all. This scenario makes that read a genuine read-worker round trip
- * (the cache is seeded stale, not warm) and replaces the registry row while it
- * is in flight. Nothing about the inspected row may be written afterwards.
+ * Pins the post-history re-check. Attribution history is read off the gateway
+ * thread, so `reconcileStaleActiveSubagentRun` suspends after it has consumed
+ * the session observation and before it has decided anything; the row it
+ * inspected can be replaced across that suspension.
+ *
+ * The window is entered deterministically, not by timing. This run's recorded
+ * child session key is blank — the `missing-session-entry` orphan, whose
+ * classification resolves without a session worker read — so the history read
+ * is the only read the helper suspends on. The harness starts that read itself
+ * with the cache seeded stale and awaits it first; the helper's own call finds
+ * the same load in flight and queues behind this one, so the harness resumes
+ * while the helper is still inside the real round trip. The successor is
+ * installed there, which leaves the post-history `isCurrent()` check as the
+ * only thing that can abandon the inspected row.
+ *
+ * The selection checks are counted so the scenario cannot pass vacuously: two
+ * before the read, and exactly one after it. Deleting the post-history check
+ * drops that last one and fails the scenario, and an earlier replacement (the
+ * shape this scenario had before, where the session read was the suspension
+ * the row was swapped under) fails the pre-read count.
  */
 async function runHistoryReadRaceScenario(): Promise<void> {
   console.log(`\n== scenario: history-read race ==`);
@@ -571,6 +590,10 @@ async function runHistoryReadRaceScenario(): Promise<void> {
     runId,
     startedAtMs: runStartedAt,
     lastActivityAtMs: runStartedAt + 120_000,
+    // Blank, not absent: `resolveSubagentRunOrphanReason` classifies it
+    // outright and `loadSubagentSessionEntry` returns without dispatching a
+    // worker read, while the durable row still carries a child session key.
+    childSessionKey: " ",
   });
   const runs = new Map<string, SubagentRunRecord>([[runId, entry]]);
   const edges: EdgeRecorder = {
@@ -588,8 +611,11 @@ async function runHistoryReadRaceScenario(): Promise<void> {
     readDurableRun(runId)?.execution.status === "running",
   );
 
-  const isSelectionCurrent = () =>
-    runs.get(runId) === entry && typeof entry.execution.endedAt !== "number";
+  let selectionChecks = 0;
+  const isSelectionCurrent = () => {
+    selectionChecks += 1;
+    return runs.get(runId) === entry && typeof entry.execution.endedAt !== "number";
+  };
   const completion = reconcileStaleActiveSubagentRun({
     runId,
     entry,
@@ -601,6 +627,14 @@ async function runHistoryReadRaceScenario(): Promise<void> {
     },
     completeSubagentRunWithRecovery: runtime.completeSubagentRunWithRecovery,
   });
+  // Starts the real round trip the helper is about to join, and resumes first.
+  await loadGatewayBootSegmentsForAttribution(now);
+  const checksBeforeReplacement = selectionChecks;
+  check(
+    "race: the helper consumed its session observation before the history read",
+    checksBeforeReplacement === 2,
+    { selectionChecks: checksBeforeReplacement },
+  );
   // No completion lock is held here: the helper has not reached completion yet.
   // It is suspended on the history read, which is the window under test.
   const successor = createSuccessorRun(runId, now - 10_000);
@@ -613,6 +647,11 @@ async function runHistoryReadRaceScenario(): Promise<void> {
     { generation: successorDurableBefore?.generation },
   );
   await completion;
+  check(
+    "race: the helper re-checked its selection after the history read",
+    selectionChecks === checksBeforeReplacement + 1,
+    { selectionChecks },
+  );
 
   const durable = readDurableRun(runId);
   check("race: inspected row was not mutated in memory", entry.execution.status === "running", {
