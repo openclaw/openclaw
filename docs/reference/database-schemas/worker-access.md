@@ -1815,6 +1815,10 @@ phase, and before/after version, and install before command acknowledgement.
 Worker transport already detaches these internal postimages. Settlement and
 replica installation share them without another deep freeze or copy; internal
 borrowers treat snapshots and receipts as read-only and copy before editing.
+Replica residency uses an approximate heap budget based on string lengths and
+object/slot overhead, without serializing postimages or transcript bodies just
+to count bytes. The 128-snapshot and 8 MiB LRU limits retain one oversized
+snapshot so its next reader can still reuse it.
 If a receipt supersedes an in-flight read, that read uses the current replica.
 An empty replica permits one worker-read retry. A replacement before disclosure
 is reacquired once and authorized again; revoked authority still refuses the read.
