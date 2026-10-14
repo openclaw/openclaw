@@ -1,16 +1,29 @@
 import { EventEmitter, once } from "node:events";
 import { fstatSync, renameSync } from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 import type { WorkerLifecycle } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { PostgresSyncConnection } from "./postgres-sync/connection.js";
+import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import { readSqliteDatabaseGeneration } from "./sqlite-database-admission-record.js";
 import {
+  beginSqliteDatabaseAdmissionOperation,
+  discardSqliteDatabaseTransactionAdmissions,
+  getSqliteDatabaseAdmission,
+  hasPendingSqliteDatabaseSchemaMutation,
+  invalidateLocalSqliteSchemaAdmissions,
+  publishSqliteDatabaseAdmission,
+  publishSqliteDatabaseSchemaChange,
+  suspendSqliteDatabaseAdmission,
   captureSqliteDatabaseAdmissions,
   installSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissions,
@@ -24,7 +37,10 @@ import {
   trackSqliteDatabaseAdmissionWorker,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
-import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
+import {
+  stageSqliteTransactionState,
+  withSqlitePostCommitPublications,
+} from "./sqlite-post-commit.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "./sqlite-worker-operation-admission.js";
@@ -541,3 +557,148 @@ it.each([false, true])(
     }
   },
 );
+
+const key = { name: "test.engine-admission", read: (value: unknown) => value };
+const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };
+
+const postgresConnections: PostgresSqlConnection[] = [];
+afterEach(() => {
+  for (const connection of postgresConnections.splice(0)) {
+    withEngineStoreAdmission(() => connection.close());
+  }
+});
+
+function postgresConnection(anchor: DatabaseSync): PostgresSqlConnection {
+  const configured = getEnvironmentData("openclaw.test.workboard.connection");
+  if (typeof configured === "string") {
+    const connection = new PostgresSyncConnection(configured, "public", anchor, "admission-test");
+    postgresConnections.push(connection);
+    return connection;
+  }
+  let isTransaction = false;
+  return {
+    [Symbol.for("openclaw.postgres-sync-connection")]: true,
+    anchor,
+    advisoryLockKey: 1n,
+    get isTransaction() {
+      return isTransaction;
+    },
+    exec(sql) {
+      if (sql.startsWith("BEGIN")) {
+        isTransaction = true;
+      } else if (sql === "COMMIT" || sql === "ROLLBACK") {
+        isTransaction = false;
+      }
+    },
+    query() {
+      throw new Error("Admission facts must not query PostgreSQL");
+    },
+    close() {},
+    runTransaction(operation, options, ...modes) {
+      return runPostgresTransactionSync(this, operation, options, ...modes);
+    },
+  };
+}
+
+it("PostgreSQL keeps publications local until commit and restores nested and outer rollback", () =>
+  withEngineStoreAdmission(() => {
+    const filename = path.join(tempDirs.make("engine-admission-"), "anchor.sqlite");
+    using anchor = openNodeSqliteDatabase(filename);
+    using peer = openNodeSqliteDatabase(filename);
+    const connection = postgresConnection(anchor);
+    const transact = (operation: () => void) =>
+      runSqliteImmediateTransactionSync(connection, operation);
+
+    publishSqliteDatabaseAdmission(connection, key, "initial");
+    expect(getSqliteDatabaseAdmission(peer, key)).toBe("initial");
+    transact(() => {
+      expect(connection.isTransaction).toBe(true);
+      expect(anchor.isTransaction).toBe(false);
+      publishSqliteDatabaseAdmission(connection, key, "outer");
+      expect(getSqliteDatabaseAdmission(connection, key)).toBe("outer");
+      expect(getSqliteDatabaseAdmission(peer, key)).toBe("initial");
+      expect(() =>
+        transact(() => {
+          publishSqliteDatabaseAdmission(connection, key, "nested");
+          expect(getSqliteDatabaseAdmission(connection, key)).toBe("nested");
+          throw new Error("nested rollback");
+        }),
+      ).toThrow("nested rollback");
+      expect(getSqliteDatabaseAdmission(connection, key)).toBe("outer");
+      expect(getSqliteDatabaseAdmission(peer, key)).toBe("initial");
+    });
+    expect(getSqliteDatabaseAdmission(peer, key)).toBe("outer");
+    expect(() =>
+      transact(() => {
+        publishSqliteDatabaseAdmission(connection, key, "rolled back");
+        throw new Error("outer rollback");
+      }),
+    ).toThrow("outer rollback");
+    expect(getSqliteDatabaseAdmission(connection, key)).toBe("outer");
+    expect(getSqliteDatabaseAdmission(peer, key)).toBe("outer");
+    publishSqliteDatabaseAdmission(connection, key, "autocommit");
+    expect(getSqliteDatabaseAdmission(peer, key)).toBe("autocommit");
+  }));
+
+it("uses the PostgreSQL anchor for schema dirtiness, final revisions, and discarded facts", () =>
+  withEngineStoreAdmission(() => {
+    const filename = path.join(tempDirs.make("engine-schema-admission-"), "anchor.sqlite");
+    using anchor = openNodeSqliteDatabase(filename);
+    using peer = openNodeSqliteDatabase(filename);
+    const connection = postgresConnection(anchor);
+    publishSqliteDatabaseAdmission(connection, schemaKey, "initial");
+    expect(() =>
+      connection.runTransaction(() => {
+        invalidateLocalSqliteSchemaAdmissions(connection);
+        expect(hasPendingSqliteDatabaseSchemaMutation(connection)).toBe(true);
+        expect(getSqliteDatabaseAdmission(connection, schemaKey)).toBeUndefined();
+        throw new Error("DDL rollback");
+      }),
+    ).toThrow("DDL rollback");
+    expect(hasPendingSqliteDatabaseSchemaMutation(connection)).toBe(false);
+    expect(getSqliteDatabaseAdmission(connection, schemaKey)).toBe("initial");
+
+    connection.runTransaction(() => {
+      invalidateLocalSqliteSchemaAdmissions(connection);
+      stageSqliteTransactionState(anchor, {
+        stage: () => {},
+        rollback: () => {},
+        commit: () => publishSqliteDatabaseSchemaChange(connection),
+      });
+      publishSqliteDatabaseAdmission(connection, schemaKey, "committed schema");
+      expect(getSqliteDatabaseAdmission(peer, schemaKey)).toBe("initial");
+    });
+    expect(getSqliteDatabaseAdmission(peer, schemaKey)).toBe("committed schema");
+    expect(hasPendingSqliteDatabaseSchemaMutation(connection)).toBe(false);
+
+    connection.runTransaction(() => {
+      publishSqliteDatabaseAdmission(connection, schemaKey, "discarded");
+      discardSqliteDatabaseTransactionAdmissions(connection);
+      expect(getSqliteDatabaseAdmission(connection, schemaKey)).toBeUndefined();
+    });
+    expect(getSqliteDatabaseAdmission(peer, schemaKey)).toBeUndefined();
+    publishSqliteDatabaseAdmission(connection, schemaKey, "replacement");
+    expect(getSqliteDatabaseAdmission(peer, schemaKey)).toBe("replacement");
+  }));
+
+it("keeps PostgreSQL publications independent of native SQLite callback facts and suspension", () =>
+  withEngineStoreAdmission(() => {
+    const filename = path.join(tempDirs.make("engine-native-admission-"), "anchor.sqlite");
+    using anchor = openNodeSqliteDatabase(filename);
+    using peer = openNodeSqliteDatabase(filename);
+    const connection = postgresConnection(anchor);
+    const finish = beginSqliteDatabaseAdmissionOperation(anchor);
+    try {
+      publishSqliteDatabaseAdmission(anchor, key, "native callback");
+      publishSqliteDatabaseAdmission(connection, key, "postgres");
+      expect(getSqliteDatabaseAdmission(connection, key)).toBe("postgres");
+      expect(getSqliteDatabaseAdmission(peer, key)).toBe("postgres");
+      suspendSqliteDatabaseAdmission(anchor, true);
+      expect(getSqliteDatabaseAdmission(connection, key)).toBeUndefined();
+      publishSqliteDatabaseAdmission(connection, key, "suspended");
+    } finally {
+      suspendSqliteDatabaseAdmission(anchor, false);
+      finish();
+    }
+    expect(getSqliteDatabaseAdmission(peer, key)).toBe("postgres");
+  }));
