@@ -1,11 +1,11 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
-import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
+import { TabPanel, Tabs } from "../../../components/solid/tabs.tsx";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
@@ -185,44 +185,32 @@ function ToolCardModes(props: {
   const modes = ["diff", "raw"] as const;
   // Tool call IDs repeat across messages, so every tab and panel includes its message key.
   const id = () => `${props.messageKey}:${props.card.id}`;
-  const active = () => (props.isError || props.outcome === "skipped" ? "raw" : "diff");
-  const modeLabel = () => t("chat.toolCards.viewMode");
-  let group: HTMLElement | undefined;
-  createEffect(
-    () => [props.card, modeLabel()] as const,
-    ([, label]) => syncTabGroupLabel(group, label),
+  const initialMode = createMemo(() =>
+    props.isError || props.outcome === "skipped" ? "raw" : "diff",
   );
+  const [active, setActive] = createSignal<string>(initialMode);
   return (
-    <wa-tab-group
-      class="chat-tool-card__modes"
-      aria-label={modeLabel()}
-      prop:active={active()}
-      activation="auto"
-      without-scroll-controls
-      ref={(element) => {
-        group = element;
-      }}
-    >
+    <div class="chat-tool-card__modes">
+      <Tabs
+        ariaLabel={t("chat.toolCards.viewMode")}
+        active={active()}
+        activation="auto"
+        onSelect={(value) => {
+          setActive(value);
+        }}
+        items={modes.map((mode) => ({
+          value: mode,
+          label: t(`chat.toolCards.${mode}`),
+          id: `${id()}-${mode}-tab`,
+          panelId: `${id()}-${mode}-panel`,
+        }))}
+      />
       <For each={modes}>
         {(mode) => (
-          <wa-tab
-            slot="nav"
-            id={`${id()}-${mode}-tab`}
-            aria-controls={`${id()}-${mode}-panel`}
-            panel={mode}
-            prop:active={active() === mode}
-          >
-            {t(`chat.toolCards.${mode}`)}
-          </wa-tab>
-        )}
-      </For>
-      <For each={modes}>
-        {(mode) => (
-          <wa-tab-panel
+          <TabPanel
             id={`${id()}-${mode}-panel`}
-            aria-labelledby={`${id()}-${mode}-tab`}
-            name={mode}
-            prop:active={active() === mode}
+            tabId={`${id()}-${mode}-tab`}
+            active={active() === mode}
           >
             {mode === "diff" ? (
               <DiffBlock lines={props.diff} outcome={props.outcome} file={props.file} />
@@ -232,10 +220,10 @@ function ToolCardModes(props: {
                 text={props.card.outputText!}
               />
             )}
-          </wa-tab-panel>
+          </TabPanel>
         )}
       </For>
-    </wa-tab-group>
+    </div>
   );
 }
 

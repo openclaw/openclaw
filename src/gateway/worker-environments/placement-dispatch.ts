@@ -180,6 +180,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       }
       const workspace = await options.resolveWorkspace(request);
       if (
+        workspace.kind === "device-folder" &&
+        (request.deviceId !== workspace.deviceId || request.executionMode !== "worker-turn")
+      ) {
+        throw new Error(
+          "Device folders require an explicit dispatch to their original paired device using the OpenClaw harness.",
+        );
+      }
+      if (
         workspace.kind === "repository" &&
         !request.deviceId &&
         environments.requiresNodeEnrollment?.(

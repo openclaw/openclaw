@@ -141,6 +141,79 @@ function contextFixture(f: Fixture) {
   };
 }
 
+it("keeps settled append bodies in receipts and storage without evicting navigation", async () => {
+  await withActor((f) => {
+    replace(f);
+    const other = { ...f.target, sessionKey: "agent:main:other-resident" };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, other.sessionKey, { sessionId: "other", updatedAt: 1 });
+    });
+    f.read();
+    const warn = vi.fn();
+    f.hooks.transactionOptions = { logger: { warn }, slowTransactionHoldMs: 0 };
+    const events = Array.from({ length: 6 }, (_, index) => ({
+      type: "custom",
+      id: `large-metadata-${index}`,
+      parentId: index === 0 ? "answer" : `large-metadata-${index - 1}`,
+      timestamp: "2026-01-01T00:00:03Z",
+      customType: "openclaw.cache-ttl",
+      data: { snapshot: "synthetic".repeat(180_000) },
+    }));
+    for (const event of events) {
+      const outcome = f.mutate({
+        type: "session.actor.appendTranscriptEvent",
+        input: {
+          target: f.target,
+          commandId: event.id,
+          phaseId: "turn",
+          sessionId: f.scope.sessionId,
+          lifecycleRevision: null,
+          eventJson: JSON.stringify(event),
+        },
+      });
+      expect(outcome.kind).toBe("committed");
+      expect(warn).toHaveBeenLastCalledWith(
+        "slow SQLite transaction hold",
+        expect.objectContaining({
+          operation: "session.actor.appendTranscriptEvent",
+          context: { payloadBytes: Buffer.byteLength(JSON.stringify(event)) },
+        }),
+      );
+      if (outcome.kind === "committed") {
+        expect(outcome.receipt.transcript.appendedEvents?.[0]?.event).toEqual(event);
+      }
+    }
+    const expectedBytes = [question, answer, ...events].reduce(
+      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+      0,
+    );
+    const reads = trackSqliteStatementExecutions(f.database.db, ["history"], (sql) =>
+      /^\s*select\b/iu.test(sql) && sql.includes('"transcript_events"') ? "history" : null,
+    );
+    let warm;
+    try {
+      f.read(other);
+      reads.counts.history = 0;
+      warm = f.read();
+      expect(reads.counts.history).toBe(0);
+      expect(warm.transcript.projection?.contextMetadata?.sizeBytes).toBe(expectedBytes);
+    } finally {
+      reads.restore();
+    }
+    expect(
+      readTranscriptEventRows(f.database, f.scope.sessionId).map((row) =>
+        JSON.parse(row.eventJson),
+      ),
+    ).toEqual([...transcript(f), ...events]);
+    f.restartActor();
+    const cold = f.read();
+    expect(cold.transcript.modelContext).toEqual(warm.transcript.modelContext);
+    expect(cold.transcript.projection?.contextMetadata).toEqual(
+      warm.transcript.projection?.contextMetadata,
+    );
+  });
+});
+
 it("advances retained context through native actor appends and preserves it through bookkeeping", async () => {
   await withActor(async (f) => {
     replace(f);

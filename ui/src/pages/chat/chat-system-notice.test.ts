@@ -55,6 +55,12 @@ describe("system notices through pending-to-history promotion", () => {
       false,
     ],
     [
+      "cron_failure_repair",
+      "System · automation recovery",
+      "An automation failed — asked the agent to investigate and continue if needed.",
+      false,
+    ],
+    [
       "restart-sentinel",
       "System · gateway restarted",
       "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
@@ -84,7 +90,9 @@ describe("system notices through pending-to-history promotion", () => {
         content:
           sourceTool === "main_session_restart_recovery"
             ? baseMessage.content
-            : (midTurn ? "" : "[System] ") + text,
+            : sourceTool === "cron_failure_repair"
+              ? "Automation repair request from the scheduler.\n<untrusted-text>Private task payload and last error</untrusted-text>"
+              : (midTurn ? "" : "[System] ") + text,
         provenance: { kind: "internal_system", sourceTool },
         __openclaw: imported
           ? {

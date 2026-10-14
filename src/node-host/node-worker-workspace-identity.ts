@@ -79,6 +79,8 @@ export function resolveNodePreparedWorkspaceIdentity(
 }
 
 export type NodeWorkerManagedWorkspaceRequest = {
+  /** Required for device folders; managed paths already carry their gateway namespace. */
+  gatewayNamespace?: string;
   workspaceDir: string;
   environmentId: string;
   sessionId: string;
@@ -220,6 +222,24 @@ export function resolveNodeManagedWorkspaceIdentity(
   };
 }
 
+export function ensureNodeWorkerWorkspaceSessionRoot(
+  root: string,
+  gatewayNamespace: string,
+  environmentId: string,
+  sessionId: string,
+) {
+  if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
+    throw new Error("INVALID_REQUEST: invalid node workspace gateway namespace");
+  }
+  const gatewayRoot = ensureContainedDirectory(root, gatewayNamespace);
+  const workspacesRoot = ensureContainedDirectory(gatewayRoot, "workspaces");
+  const environmentRoot = ensureContainedDirectory(
+    workspacesRoot,
+    hashNodeWorkerWorkspaceComponent(environmentId, 16),
+  );
+  return ensureContainedDirectory(environmentRoot, hashNodeWorkerWorkspaceComponent(sessionId, 32));
+}
+
 export function ensureContainedDirectory(parent: string, name: string): string {
   const candidate = path.join(parent, name);
   fs.mkdirSync(candidate, { recursive: true, mode: 0o700 });
@@ -341,3 +361,10 @@ export function buildNodeWorkerWorkspaceRetainSnapshot(input: NodeWorkerWorkspac
     manifestsBySession,
   };
 }
+
+export type NodeWorkerWorkspaceAcquisition = {
+  workspaceDir: string;
+  homeDir?: string;
+  assertCurrent?: () => void;
+  release: () => void;
+};

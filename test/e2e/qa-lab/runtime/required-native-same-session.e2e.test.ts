@@ -463,6 +463,16 @@ it.skipIf(process.platform === "win32")(
                 state: placement?.state,
                 reconciling: placement?.workspaceResultReconciling,
               });
+              if (event.phase === "error" || event.reason === "chat.dispatch-error") {
+                // A queued follow-up's execution run ID is known only at native HTTP entry.
+                // Fail on its published error instead of waiting for the test timeout.
+                record("required-native-dispatch-error", {
+                  creation,
+                  timing,
+                  gatewayLog: gateway.logs().slice(-24_000),
+                });
+                throw new Error(`${creation} ${timing} run failed before settlement`);
+              }
               if (placement?.workspaceResultReconciling) {
                 if (!sawPending) {
                   record("finishing-ACK-pending-publication", {

@@ -58,7 +58,7 @@ export function createSessionWorkerOperationContext(
         dispatch({ ...request, facts: { ...request.facts, publication } });
       });
     },
-    writeTransaction(operationLabel, owner, write) {
+    writeTransaction(operationLabel, owner, write, diagnosticContext) {
       return runOpenClawAgentWriteTransaction(
         (current) => {
           if (current.db !== native) {
@@ -68,7 +68,7 @@ export function createSessionWorkerOperationContext(
           return write(current);
         },
         options,
-        { operationLabel },
+        { operationLabel, diagnosticContext },
       );
     },
   };

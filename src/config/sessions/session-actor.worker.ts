@@ -53,7 +53,6 @@ import {
   readSessionActorTransactionState,
   replaceSessionActorStoredEntry,
   withSessionActorTransactionState,
-  writableSessionActorMap,
 } from "./session-actor-transaction.js";
 import { registerSessionActorTranscriptRewriteOwner } from "./session-actor-transcript-publication.worker.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
@@ -67,6 +66,36 @@ import { collectSessionEntryLookupKeys } from "./store-entry.js";
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 const MAX_RESIDENT_SESSIONS = 128;
 const MAX_RESIDENT_BYTES = 8 * 1024 * 1024;
+
+function transcriptPayloadBytes(command: Command): number | undefined {
+  if (
+    command.type !== "session.actor.appendTranscriptEvent" &&
+    command.type !== "session.actor.appendToolResult"
+  ) {
+    return undefined;
+  }
+  const input = command.input;
+  if (input.append) {
+    const append = input.append;
+    if (append.kind === "message") {
+      return Buffer.byteLength(append.input.messageJson);
+    }
+    return (
+      Buffer.byteLength(
+        typeof append.input.event === "string"
+          ? append.input.event
+          : JSON.stringify(append.input.event),
+      ) + Buffer.byteLength(append.input.message?.messageJson ?? "")
+    );
+  }
+  if ("eventJson" in input) {
+    return Buffer.byteLength(input.eventJson);
+  }
+  return input.turn.options.messages.reduce(
+    (bytes, row) => bytes + Buffer.byteLength(JSON.stringify(row.message)),
+    0,
+  );
+}
 
 function errorFacts(error: unknown) {
   return error instanceof Error
@@ -90,6 +119,9 @@ export function createSessionActorWorker(
   const remember = (state: SessionActorStoredState) => {
     const key = state.hot.target.sessionKey;
     drop(key);
+    // Receipts own appended bodies; residency keeps navigation and exact byte accounting.
+    state.transcript.contextMetadata = state.hot.transcript.projection?.contextMetadata;
+    state.transcript.payloads = new Map();
     const bytes = serialize(state).byteLength;
     residents.set(key, { state, bytes });
     residentBytes += bytes;
@@ -334,12 +366,6 @@ export function createSessionActorWorker(
         }
         const working = forkSessionActorStoredState(before);
         rewriteSessionActorContextMetadata(working, rewrite.rows);
-        for (const { rawSeq, event, serializedBytes } of rewrite.rows) {
-          if (working.transcript.payloads.has(rawSeq)) {
-            working.transcript.payloads = writableSessionActorMap(working.transcript.payloads);
-            working.transcript.payloads.set(rawSeq, { event, serializedBytes });
-          }
-        }
         working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
         return withSessionActorTransactionState(opened, working, run, (authority) => {
           working.hot = projectSessionActorHotState(working);
@@ -462,8 +488,8 @@ export function createSessionActorWorker(
           observed.settled("read");
           return structuredClone(before.hot);
         }
-        const operationLabel = `session.actor.${phase}`;
-        const outcome = context.writeTransaction(operationLabel, "Session actor", (opened) => {
+        const payloadBytes = transcriptPayloadBytes(command);
+        const apply = (opened: OpenClawAgentDatabase) => {
           database = opened;
           registerSessionActorEntryPatchOwner(opened, prepareEntryPatch);
           registerParticipantOwner(opened);
@@ -624,7 +650,13 @@ export function createSessionActorWorker(
             });
             return accepted;
           });
-        });
+        };
+        const outcome = context.writeTransaction(
+          `session.actor.${phase}`,
+          "Session actor",
+          apply,
+          payloadBytes === undefined ? undefined : { payloadBytes },
+        );
         observed.settled(outcome.kind);
         return outcome;
       } catch (error) {
