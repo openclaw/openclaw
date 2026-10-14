@@ -208,7 +208,7 @@ describe("Control UI release-only inventories", () => {
     expectRealGatewayCoverage(
       createUiTestShardGroups({
         includeReleaseOnlyTests: false,
-        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.ts"],
+        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
       }).e2e,
       uiE2eRealGatewayTestFiles.filter(
         (file) => !releaseOnlyRealGateway.has(file) || file === automationManagement,

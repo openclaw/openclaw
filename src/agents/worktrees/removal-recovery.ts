@@ -21,9 +21,9 @@ import {
   withExactStateGitLocks,
 } from "./removal-git.js";
 import { createRemovalRecoveryInventory } from "./removal-recovery-inventory.js";
+import { resolveRepository } from "./repository-paths.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
-import { resolveRepository } from "./service-preparation.js";
 import type { WorktreeWorkerAuthority } from "./types.js";
 
 const preserved = (reason: string) =>

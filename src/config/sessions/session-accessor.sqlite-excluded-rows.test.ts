@@ -94,9 +94,11 @@ function capCandidates(
 ) {
   return readSessionMaintenanceCapCandidates({
     database,
+    activeSessionKeys: [],
     overflow: Number.MAX_SAFE_INTEGER,
     excludedKeys,
-  });
+    readPreserveKeys: () => undefined,
+  }).store;
 }
 
 describe("SQLite cap candidate exclusions", () => {

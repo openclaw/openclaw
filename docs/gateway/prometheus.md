@@ -178,6 +178,9 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
 | `openclaw_worker_started_total`                           | counter   | `script`                                                                                  |
 | `openclaw_worker_retired_total`                           | counter   | `script`, `reason`                                                                        |
+| `openclaw_worker_messages_total`                          | counter   | `kind`, `direction`                                                                       |
+| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`                                                                       |
+| `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
 | `openclaw_memory_rss_bytes`                               | histogram | none                                                                                      |
 | `openclaw_memory_pressure_total`                          | counter   | `level`, `reason`                                                                         |
@@ -185,6 +188,30 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_prometheus_series_dropped_total`                | counter   | none                                                                                      |
 | `openclaw_diagnostic_async_queue_dropped_total`           | counter   | `drop_class`                                                                              |
 | `openclaw_diagnostic_async_queue_length`                  | gauge     | none                                                                                      |
+
+Worker message counters describe posts and receives on Gateway main-thread worker transports,
+with `direction="to_worker"` or `direction="from_worker"`. The fixed `kind` labels
+separate SQLite requests and replies, task inputs and replies, task requests,
+notifications, consumption receipts, admission, authority, resources, lifecycle,
+memory, realtime, and other messages. Totals survive worker retirement and are
+published with memory samples. Posts queued on a worker-bound port count when
+accepted by the port, even if cancellation later prevents handing that port to a
+worker. These counters describe transport work, not confirmed delivery.
+
+Payload bytes use existing encoded buffer sizes or inexpensive owner estimates;
+they exclude transport framing and do not measure structured-clone allocations.
+Commit receipts reuse their already-computed serialized fact sizes. Memory reports
+count numeric heap counters and GC durations; GC kind labels and object envelopes
+are excluded. Authority includes transaction/commit admission and settlement, not
+just authorization checks; arbitrary admission facts can still be unmeasured.
+Object graphs without a known size increase `openclaw_worker_message_unmeasured_total`
+instead of appearing as measured zero-byte messages. Compare byte rankings with
+this coverage counter before drawing conclusions; nested worker-to-worker traffic
+does not cross the main-thread boundary.
+
+Foreign Worker instances with accessor or read-only methods, or nonextensible
+instances, retain CPU and lifecycle tracking but exclude per-message traffic.
+Instrumentation does not replace those protected methods.
 
 For model-call metrics, `observation_unit="request"` measures one observable
 provider request. `observation_unit="turn"` measures a synthetic Claude Code

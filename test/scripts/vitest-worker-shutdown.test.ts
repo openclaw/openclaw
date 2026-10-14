@@ -566,7 +566,7 @@ it("rejects a live borrower when its owner closes during verification", ({
           throw new Error("Borrower exited before verification was held");
         }),
       ]);
-      expect(controlled.read()).toMatchObject([{ directory, inputs: 2, outputs: 2 }]);
+      expect(controlled.read()).toMatchObject([{ directory, inputs: 3, outputs: 3 }]);
       let disposed = false;
       const disposal = workerArtifacts.fixtureLifetime.track(
         owner.dispose().then(() => {

@@ -299,16 +299,7 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
     if (typeof value !== "string") {
       continue;
     }
-    const firstContent = value.search(/\S/);
-    let firstLine: string | undefined;
-    if (firstContent >= 0) {
-      const start =
-        Math.max(value.lastIndexOf("\r", firstContent), value.lastIndexOf("\n", firstContent)) + 1;
-      const lineEnd = /[\r\n]/g;
-      lineEnd.lastIndex = firstContent;
-      firstLine = value.slice(start, lineEnd.exec(value)?.index ?? value.length);
-    }
-    const preview = formatCollapsedToolPreviewText(firstLine);
+    const preview = formatCollapsedToolPreviewText(value.trimStart().split(/[\r\n]/, 1)[0]);
     if (preview) {
       return preview;
     }

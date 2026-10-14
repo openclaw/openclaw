@@ -7,7 +7,8 @@ import type { WorktreeAllocationGuard } from "./allocation.js";
 import { requireAllocationSpace } from "./capacity.js";
 import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
-import { withWorktreeSource, type ResolvedRepository } from "./service-preparation.js";
+import type { ResolvedRepository } from "./repository-paths.js";
+import { withWorktreeSource } from "./service-preparation.js";
 import type { CreateManagedWorktreeParams } from "./types.js";
 
 export type MaterializedRepositoryWorktree = {

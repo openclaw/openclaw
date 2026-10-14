@@ -348,6 +348,45 @@ describe("canonical proof on physical database validation", () => {
     });
   });
 
+  it("repairs missing additive schema during refresh without losing existing sessions", async () => {
+    await withReceiptFixture(true, (database, options) => {
+      const reader = openOpenClawAgentDatabaseReadOnly(options);
+      if (!reader.found) {
+        throw new Error("Expected independent reader");
+      }
+      const previousSchemaVersion =
+        getOpenClawAgentDatabaseValidation(database)!.schema!.facts.schemaVersion;
+      try {
+        database.db.exec("DROP TABLE session_reactions");
+        expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+
+        refreshOpenClawAgentDatabaseSchema(database, () => {});
+
+        expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+        const published = getAdmittedSqliteSchemaFacts(reader.database.db);
+        expect(published?.schemaVersion).toBeGreaterThan(previousSchemaVersion);
+        expect(published?.tables.has("session_reactions")).toBe(true);
+        expect(published?.indexes.has("idx_agent_session_reactions_message")).toBe(true);
+        expect(
+          reader.database.db.prepare("SELECT message_id FROM session_reactions").all(),
+        ).toEqual([]);
+        expect(
+          reader.database.db
+            .prepare(
+              "SELECT current_session_id, entry_json, updated_at FROM session_nodes WHERE session_key = ?",
+            )
+            .get("agent:main:existing"),
+        ).toEqual({
+          current_session_id: "existing",
+          entry_json: '{"sessionId":"existing","updatedAt":1}',
+          updated_at: 1,
+        });
+      } finally {
+        reader.database.close();
+      }
+    });
+  });
+
   it.each(["refreshed", "replacement"] as const)(
     "shares %s proof published after local DDL without rechecking foreign schema markers",
     async (receipt) => {

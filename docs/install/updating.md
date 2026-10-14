@@ -245,8 +245,10 @@ in a fresh process using the updated package and its dependencies. This also
 applies to updates driven by 2026.9.4. If an optional read fails, the updater
 prints `candidate-config-read-failed` with the reader's error or exit reason and
 leaves the service definition unchanged. The reader's stderr is not echoed.
-Reads follow the restored package after a rollback. Inspect the reported problem
-with the updated CLI after the update.
+Reads follow the restored package after a rollback. After the update finishes,
+inspect the reported problem with the updated CLI, then run
+`openclaw gateway install --force` with the same `--profile` or `--dev` option as
+the update to refresh the service definition.
 Node and Bun readers run only one child per read. An attempted nested reader
 stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;

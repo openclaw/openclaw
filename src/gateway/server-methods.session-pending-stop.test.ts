@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -114,6 +115,7 @@ describe("pending Stop producer binding", () => {
 
   it("keeps a real chat admission abortable while its original session lifecycle is held", async () => {
     await withOpenClawTestState(profileState, async () => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       const client = roleClient("view", "pending-chat-owner");
       client.connId = "pending-owner";
       client.connect.scopes = ["operator.sessions.write"];

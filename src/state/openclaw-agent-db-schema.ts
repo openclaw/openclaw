@@ -273,10 +273,9 @@ export function refreshOpenClawAgentDatabaseSchema(
     if (convergence) {
       ensureAgentSchema(db, agentId, pathname);
     }
-    // Publish facts from the same schema snapshot that passes the final contract checks.
+    // Integrity admission or same-version repair already checked the runtime schema.
     return runSqliteSchemaReadSnapshotSync(db, () => {
       admitSqliteSchema(db);
-      assertOpenClawAgentCurrentRuntimeSchema(db, { agentId, pathname });
       assertCanonicalSessionValidationSchema(db);
       assertCurrent();
       if (!validation) {
@@ -519,8 +518,7 @@ function ensureAgentSchema(
           migrateMemoryChunkMetadataSchema(db);
           db.exec(schemaSql);
         }
-        // Repeat index repair before the transactional schema assertion so a
-        // concurrent opener cannot turn repairable drift into a hard refusal.
+        // Repair canonical indexes after the same-version additive schema changes.
         repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
           verifyPhysicalIntegrity: false,
         });

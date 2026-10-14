@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { foldSqliteIdentifierCase, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 
 type TableSnapshot = { schema: string; content: string };
 
@@ -11,7 +11,7 @@ function captureUndeclaredTables(
   const objects = database
     .prepare(
       `SELECT type, name, tbl_name, sql FROM main.sqlite_schema
-       WHERE type IN ('table', 'index', 'trigger') ORDER BY type, name`,
+       WHERE type IN ('table', 'index', 'trigger', 'view') ORDER BY type, name`,
     )
     .all();
   const tables = database
@@ -22,6 +22,19 @@ function captureUndeclaredTables(
     )
     .all();
   const snapshots = new Map<string, TableSnapshot>();
+  // Table scopes cannot restore views, including views over declared tables.
+  for (const object of objects.filter((entry) => entry.type === "view")) {
+    snapshots.set(String(object.name), {
+      schema: JSON.stringify(
+        objects.filter(
+          (entry) =>
+            foldSqliteIdentifierCase(String(entry.tbl_name)) ===
+            foldSqliteIdentifierCase(String(object.name)),
+        ),
+      ),
+      content: "",
+    });
+  }
   for (const table of tables) {
     const name = String(table.name);
     if (declaredTables.has(name)) {
@@ -81,7 +94,12 @@ function captureUndeclaredTables(
       hash.update("\n");
     }
     snapshots.set(name, {
-      schema: JSON.stringify(objects.filter((object) => object.tbl_name === name)),
+      schema: JSON.stringify(
+        objects.filter(
+          (object) =>
+            foldSqliteIdentifierCase(String(object.tbl_name)) === foldSqliteIdentifierCase(name),
+        ),
+      ),
       content: hash.digest("hex"),
     });
   }

@@ -474,7 +474,9 @@ export function createUserTurnTranscriptRecorder(
     get message() {
       return message;
     },
-    resolveMessage: resolveMessageForPersistence,
+    // Runtime replay consumes the committed hook decision; persistence still resolves late media.
+    resolveMessage: async () =>
+      recorder.getPersistedMessage?.() ?? (await resolveMessageForPersistence()),
     assertOriginalInputCommit: params.assertOriginalInputCommit
       ? createDynamicSessionSourceAssertion(
           () =>
