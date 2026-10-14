@@ -681,6 +681,7 @@ type DiagnosticModelCallUsage = Readonly<{
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  cacheWrite1h?: number;
   reasoningTokens?: number;
   promptTokens?: number;
   total?: number;

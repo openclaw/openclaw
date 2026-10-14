@@ -124,6 +124,17 @@ export function assignModelCallUsageAttrs(
       attrs[key] = normalized;
     }
   }
+  const reportedCacheWrite1h = asNonNegativeFiniteNumber(usage.cacheWrite1h);
+  if (reportedCacheWrite1h !== undefined) {
+    const cacheWrite = asNonNegativeFiniteNumber(usage.cacheWrite) ?? 0;
+    const cacheWrite1h = Math.min(cacheWrite, reportedCacheWrite1h);
+    const cacheWrite5m = cacheWrite - cacheWrite1h;
+    // Langfuse prices these generic usage keys by TTL; retain blended totals above.
+    attrs["gen_ai.usage.input_cache_creation_1h"] = cacheWrite1h;
+    attrs["gen_ai.usage.input_cache_creation_5m"] = cacheWrite5m;
+    attrs["openclaw.model_call.usage.cache_creation_input_tokens_1h"] = cacheWrite1h;
+    attrs["openclaw.model_call.usage.cache_creation_input_tokens_5m"] = cacheWrite5m;
+  }
 }
 
 export function assignGenAiSpanIdentityAttrs(
