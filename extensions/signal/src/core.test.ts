@@ -418,6 +418,25 @@ describe("signal outbound", () => {
     );
   });
 
+  it("splits formatted Signal text on paragraphs in newline chunk mode", async () => {
+    const send = vi.fn(async (_to: string, _text: string) => ({ messageId: "signal-1" }));
+
+    await signalPlugin.outbound?.sendFormattedText?.({
+      cfg: {
+        channels: { signal: { textChunkLimit: 60, streaming: { chunkMode: "newline" } } },
+      } as OpenClawConfig,
+      to: "+15551234567",
+      text: "Intro here.\n\n- item one aaaa\n- item two bbbb\n- item three cc\n- item four dddd",
+      deps: { signal: send },
+    });
+
+    expect(send.mock.calls.map((call) => call[1])).toEqual([
+      "Intro here.",
+      "• item one aaaa\n• item two bbbb\n• item three cc",
+      "• item four dddd",
+    ]);
+  });
+
   it("resolves aliases before formatted Signal media sends", async () => {
     const send = successfulSend("media");
 

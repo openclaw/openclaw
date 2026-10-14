@@ -1,4 +1,5 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FormatCapabilityProfile,
@@ -6,6 +7,7 @@ import {
   type MarkdownIR,
   renderMarkdownWithAttributedRanges,
   renderMarkdownIRChunksWithinLimit,
+  sliceMarkdownIR,
 } from "openclaw/plugin-sdk/text-chunking";
 
 type SignalTextStyle = "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
@@ -110,21 +112,44 @@ export function markdownToSignalText(
   return renderSignalText(markdownToSignalIR(markdown, options));
 }
 
+function splitSignalIRForChunkMode(
+  ir: MarkdownIR,
+  limit: number,
+  chunkMode: ChunkMode,
+): MarkdownIR[] {
+  if (chunkMode !== "newline") {
+    return [ir];
+  }
+  const chunks: MarkdownIR[] = [];
+  let cursor = 0;
+  for (const text of chunkMarkdownTextWithMode(ir.text, limit, chunkMode)) {
+    const start = ir.text.indexOf(text, cursor);
+    if (start < 0) {
+      return [ir];
+    }
+    cursor = start + text.length;
+    chunks.push(sliceMarkdownIR(ir, start, cursor));
+  }
+  return chunks;
+}
+
 export function markdownToSignalTextChunks(
   markdown: string,
   limit: number,
-  options: SignalMarkdownOptions = {},
+  options: SignalMarkdownOptions & { chunkMode?: ChunkMode } = {},
 ): SignalFormattedText[] {
   const ir = markdownToSignalIR(markdown, options);
   // Signal uses public list markers; private source coordinates are only needed by block renderers.
   if (ir.listItems && ir.text.length > limit) {
     ir.listItems = ir.listItems.map((item) => ({ ...item }));
   }
-  return renderMarkdownIRChunksWithinLimit({
-    ir,
-    limit,
-    assistantTranscriptRoleMessageBoundaries: true,
-    renderChunk: renderSignalText,
-    measureRendered: (rendered) => rendered.text.length,
-  }).map(({ rendered }) => rendered);
+  return splitSignalIRForChunkMode(ir, limit, options.chunkMode ?? "length").flatMap((source) =>
+    renderMarkdownIRChunksWithinLimit({
+      ir: source,
+      limit,
+      assistantTranscriptRoleMessageBoundaries: true,
+      renderChunk: renderSignalText,
+      measureRendered: (rendered) => rendered.text.length,
+    }).map(({ rendered }) => rendered),
+  );
 }
