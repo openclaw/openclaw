@@ -81,7 +81,7 @@ type PublicationView = () => Publication;
 const publications = new WeakMap<
   SessionRowProjection,
   {
-    revision: object;
+    revision: object | undefined;
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
@@ -196,21 +196,32 @@ export function prepareSessionRowPublication(
         lists: new Map(),
       };
       publications.set(projection, publication);
-      const published = publication;
-      const { lists } = published;
-      projection.onSelectionChange(() => lists.clear());
+      const retained = publication;
+      projection.onSelectionChange((change) => {
+        if (change.kind === "reset") {
+          retained.lists.clear();
+          return;
+        }
+        // Unaffected immutable vectors remain comparison witnesses after selection retires.
+        retained.revision = undefined;
+        for (const list of retained.lists.values()) {
+          list.selection = undefined;
+        }
+      });
       projection.onFactsChange((change) => {
-        published.factsRevision++;
+        retained.factsRevision++;
         // Retire wire snapshots even when no reader returns after a publication or disposal.
-        for (const list of lists.values()) {
+        for (const list of retained.lists.values()) {
           if (change.kind === "reset" || list.rows?.some((row) => row.key === change.key)) {
             list.rows = undefined;
           }
         }
       });
     } else if (publication.revision !== revision) {
+      if (publication.revision !== undefined) {
+        publication.lists.clear();
+      }
       publication.revision = revision;
-      publication.lists.clear();
     }
     return publication;
   };
@@ -236,8 +247,14 @@ export function prepareProjectedSessionPresentation(
   const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const preparedRowContext = { ...rowContext, subagentRuns };
-  const runState = (key: string, entry: records.MaterializedRow["entry"]) =>
-    projectGatewaySessionRunState({ key, entry, now, rowContext: preparedRowContext });
+  const runState = (
+    key: string,
+    {
+      entry,
+      parsedKey,
+    }: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
+  ) =>
+    projectGatewaySessionRunState({ key, entry, parsedKey, now, rowContext: preparedRowContext });
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
       requestedKey: key,
@@ -318,6 +335,7 @@ export function prepareProjectedSessionPresentation(
     const childOwnerSessionKeys = resolveSessionChildOwners({
       key: record.key,
       entry: record.entry,
+      parsedKey: record.materialized.source.parsedKey,
       now,
       subagentRuns,
     });
@@ -359,7 +377,7 @@ export function prepareProjectedSessionPresentation(
         sessionId: record.entry.sessionId,
         index: rowContext.projectedAgentRuns,
       });
-      const temporal = runState(record.key, record.entry);
+      const temporal = runState(record.key, record.materialized.source);
       const facts = [
         record.profileRevision,
         record.lastMessagePreview,
@@ -392,14 +410,16 @@ export function prepareProjectedSessionPresentation(
           : undefined,
         record.materialized.source.childLinks?.length,
       ];
-      for (const { key, entry } of record.materialized.source.childLinks ?? []) {
-        const childActive = runState(key, entry).fields.hasActiveSubagentRun;
+      for (const child of record.materialized.source.childLinks ?? []) {
+        const { key, entry, parsedKey } = child;
+        const childActive = runState(key, child).fields.hasActiveSubagentRun;
         facts.push(
           key,
           childActive,
           resolveSessionChildOwners({
             key,
             entry,
+            parsedKey,
             now,
             subagentRuns,
             hasActiveRun: childActive,

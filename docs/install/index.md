@@ -143,7 +143,7 @@ If you already manage Node yourself:
 
     <Note>
     `--trust` allows OpenClaw's package lifecycle scripts for this install. Bun
-    1.4 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
+    1.4.3 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
     remains the primary runtime, so the plain `openclaw` executable keeps its
     Node shebang. `bun run --bun` forces the Bun runtime, while
     `--daemon-runtime bun` installs the managed Gateway under Bun.
