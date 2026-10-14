@@ -24,13 +24,13 @@ export function reconcileDiagnosticGcObserver(): void {
   stopObserver ??= observeGcSamples((samples) => publishGcSamples(samples, "main"));
 }
 
-function publishGcSamples(samples: GcSample[], thread: string): void {
+function publishGcSamples(samples: GcSample[], thread: string, workerSlot?: number): void {
   if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("diagnostic.gc")) {
     return;
   }
   runWithDiagnosticTraceContext(undefined, () => {
     for (const sample of samples) {
-      emitInternalDiagnosticEvent({ type: "diagnostic.gc", ...sample, thread });
+      emitInternalDiagnosticEvent({ type: "diagnostic.gc", ...sample, thread, workerSlot });
     }
   });
 }

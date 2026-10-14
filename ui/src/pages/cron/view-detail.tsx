@@ -5,12 +5,11 @@ import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
 import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
 import { Editor } from "./view-editor.tsx";
-import { TriggerIndicator } from "./view-job-status.tsx";
+import { describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
 import { RunsSection } from "./view-runs.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 export function DetailView(
@@ -95,7 +94,7 @@ function DetailHeader(
       : "";
   const subtitle = () =>
     props.mode === "job" && props.selectedJob
-      ? `${formatCronSchedule(props.selectedJob)}${nextRunSuffix()}`
+      ? `${describeJobSchedule(props.selectedJob)}${nextRunSuffix()}`
       : t("cron.detail.newSubtitle");
   return (
     <div class="cron-detail-header">

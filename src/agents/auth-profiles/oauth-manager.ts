@@ -62,9 +62,9 @@ import {
   canReuseOAuthCredentialAfterRefreshFailure,
   loadStoredOAuthRefreshStore,
   markOAuthRefreshClaimFailed,
+  persistOAuthRefreshClaim,
   rollbackOAuthRefreshOwnerClaim,
   settleOAuthRefreshClaim,
-  updateOAuthStore,
   type OAuthRefreshClaim,
   type ResolvedOAuthAccess,
 } from "./oauth-store.js";
@@ -500,8 +500,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             credential: credentialToRefresh,
           });
           observation = beginOAuthRefreshObservation();
-          let claimed = false;
-          const updated = await updateOAuthStore({
+          const claimed = await persistOAuthRefreshClaim({
             personalStore: params.personalStore,
             assertCurrent: () => {
               params.signal?.throwIfAborted();
@@ -509,17 +508,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             },
             agentDir: ownerAgentDir,
             profileId: params.profileId,
-            updater: (authoritative) => {
-              const existing = authoritative.profiles[params.profileId];
-              if (!isExactOAuthCredential(existing, cred)) {
-                return false;
-              }
-              authoritative.profiles[params.profileId] = fence;
-              claimed = true;
-              return true;
-            },
+            expected: cred,
+            fence,
           });
-          if (updated === null || !claimed) {
+          if (!claimed) {
             const current = (
               await loadStoredOAuthRefreshStore(
                 ownerAgentDir,

@@ -35,12 +35,10 @@ export async function persistGeneratedMediaBatch<T>(params: {
   saves: ReadonlyArray<() => Promise<GeneratedMediaSave<T>>>;
   mode: GeneratedMediaSaveMode;
 }): Promise<T[]> {
-  const savedMedia: SavedMedia[] = [];
-  const runSave = async (save: () => Promise<GeneratedMediaSave<T>>) => {
+  const savedMedia: Array<SavedMedia | undefined> = [];
+  const runSave = async (save: () => Promise<GeneratedMediaSave<T>>, index: number) => {
     const result = await save();
-    if (result.savedMedia) {
-      savedMedia.push(result.savedMedia);
-    }
+    savedMedia[index] = result.savedMedia;
     return result.value;
   };
   let pending: Promise<T>[] = [];
@@ -50,8 +48,8 @@ export async function persistGeneratedMediaBatch<T>(params: {
       return await Promise.all(pending);
     }
     const values: T[] = [];
-    for (const save of params.saves) {
-      values.push(await runSave(save));
+    for (const [index, save] of params.saves.entries()) {
+      values.push(await runSave(save, index));
     }
     return values;
   } catch (error) {
@@ -59,8 +57,8 @@ export async function persistGeneratedMediaBatch<T>(params: {
     // success cannot escape rollback after the caller observes failure.
     await Promise.allSettled(pending);
     await Promise.allSettled(
-      savedMedia.map((saved) =>
-        Promise.resolve().then(() => deleteMediaBuffer(saved.id, params.subdir)),
+      savedMedia.flatMap((saved) =>
+        saved ? [Promise.resolve().then(() => deleteMediaBuffer(saved.id, params.subdir))] : [],
       ),
     );
     throw error;

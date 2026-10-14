@@ -9465,7 +9465,6 @@
 ["test/msteams-read-authority.integration.test.ts","../extensions/msteams/src/sdk.js","f9b8a39eeec6bd725938586cacac316f51ffaa0edae24d2d629f6bddfe7df7ce",1]
 ["test/msteams-read-target.integration.test.ts","../extensions/msteams/src/sdk.js","7a6257f585c2adb65989ddad6a330d5c8a523ec38ca08f0b78f8240ccdeb4e15",1]
 ["test/openai-model-discovery-auth-order.test.ts","../src/plugins/provider-discovery.runtime.js","08e1b7645a15cc5d59c8282a90be5b521a396c339b7ea53617901552bc8941fb",1]
-["test/openai-model-discovery-auth-order.test.ts","../src/plugins/provider-hook-runtime.js","bdee779bd195daf0b5216bf0c219b1a4450894ec1e78c6956299610d238b5f4a",1]
 ["test/plugins/chat-abort-codex.gateway.test.ts","../../src/commands/agent.js","0ed4a092b566bda0703ee09da06b38067292ca62a0f374ae65d79203f39f6070",1]
 ["test/plugins/clawrouter-responses-discovery.test.ts","openclaw/plugin-sdk/provider-auth-runtime","f198914896b67c0cebd7cf19d02f4c7deccd389224144e9cd8fd9cc4ca8827e2",1]
 ["test/plugins/voice-call-cli-scheduler.test.ts","../../extensions/voice-call/runtime-entry.js","e227ea085e2cd39a7f389b1bd0e5691ffd58cea2acdb13dbc2c1d6b1d9e9a411",1]
