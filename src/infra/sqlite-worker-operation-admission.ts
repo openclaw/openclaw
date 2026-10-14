@@ -195,7 +195,7 @@ function createOperationAdmission(
     code: "outcome-unknown" | "unavailable" = "outcome-unknown",
   ) => recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, code), "protocol");
   const installCommitted = (receipt: NativeCommitReceipt): void => {
-    // Settlement repeats the latest receipt; each private port otherwise delivers in order.
+    // Each private port delivers receipts in order; repeated receipts remain idempotent.
     if (nativeReceipt && receipt.sequence <= nativeReceipt.sequence) {
       return;
     }
@@ -227,6 +227,9 @@ function createOperationAdmission(
         ? "admission"
         : "authority",
       "from_worker",
+      isRecord(message) && typeof message.payloadBytes === "number"
+        ? message.payloadBytes
+        : undefined,
     );
     started = true;
     if (isRecord(message) && message.kind === "sqlite-database-admissions") {

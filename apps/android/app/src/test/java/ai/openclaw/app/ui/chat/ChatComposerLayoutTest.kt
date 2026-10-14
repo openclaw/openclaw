@@ -2194,6 +2194,7 @@ class ChatComposerLayoutTest {
       chatMethods.add(method)
       previousChatRequest(gatewayId, method, params)
     }
+
     fun openReview() {
       reviewLoad.set(null)
       composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
@@ -2204,8 +2205,7 @@ class ChatComposerLayoutTest {
           override val isIdleNow: Boolean
             get() = reviewLoad.get()?.isCompleted == true
 
-          override fun getDiagnosticMessageIfBusy(): String =
-            "Review snapshot requests=${calls.size} job=${reviewLoad.get()}"
+          override fun getDiagnosticMessageIfBusy(): String = "Review snapshot requests=${calls.size} job=${reviewLoad.get()}"
         }
       composeRule.registerIdlingResource(loading)
       try {

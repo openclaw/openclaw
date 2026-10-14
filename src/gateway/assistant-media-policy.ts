@@ -23,10 +23,7 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";
-import {
-  loadGatewaySessionEntryReadOnlyAsync,
-  type GatewaySessionEntryRead,
-} from "./session-utils.js";
+import type { GatewaySessionEntryRead } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 import { readSessionWorkerPlacementAsync } from "./worker-environments/session-placement-lifecycle.js";
@@ -65,6 +62,7 @@ export function assertAssistantMediaPolicyCurrent(
     current.session?.sessionKey !== policy.session?.sessionKey ||
     current.session?.agentId !== policy.session?.agentId ||
     current.session?.sessionId !== policy.session?.sessionId ||
+    current.messageId !== policy.messageId ||
     current.remote !== policy.remote ||
     current.executionCwd !== policy.executionCwd ||
     current.workspaceOnly !== policy.workspaceOnly ||
@@ -87,6 +85,7 @@ type AssistantMediaReader = Pick<
 function resolveAssistantMediaReaderAuth(
   reader: AssistantMediaReader,
   config: OpenClawConfig,
+  messageRead: boolean,
 ): AuthorizedControlUiReadRequest | undefined {
   try {
     const currentProfile = reader.profileId
@@ -96,7 +95,12 @@ function resolveAssistantMediaReaderAuth(
         )
       : undefined;
     const operatorScopes = applyHttpOperatorRoleScopeCeiling(reader.operatorScopes, currentProfile);
-    if (!authorizeOperatorScopesForMethod("assistant.media.get", operatorScopes).allowed) {
+    if (
+      !authorizeOperatorScopesForMethod(
+        messageRead ? "chat.message.get" : "assistant.media.get",
+        operatorScopes,
+      ).allowed
+    ) {
       return undefined;
     }
     return { authMethod: reader.authMethod, operatorScopes, ...currentProfile };
@@ -108,6 +112,7 @@ function resolveAssistantMediaReaderAuth(
 type AssistantMediaPolicyParams = {
   config: OpenClawConfig;
   sessionKey?: string;
+  messageId?: string;
   agentId?: string;
   requestAuth?: AuthorizedControlUiReadRequest;
   reader?: AssistantMediaReader;
@@ -115,7 +120,8 @@ type AssistantMediaPolicyParams = {
 type AssistantMediaSessionRead = Pick<
   GatewaySessionEntryRead,
   "cfg" | "agentId" | "canonicalKey" | "entry"
->;
+> &
+  Partial<Pick<GatewaySessionEntryRead, "storePath" | "readSource">>;
 
 async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyParams) {
   let loaded: AssistantMediaSessionRead | undefined;
@@ -149,9 +155,15 @@ async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyPa
         { sessionKey: canonicalKey, agentId: owner.agentId },
       ]);
       assertCurrent = () => assertRoutingCurrent(getRuntimeConfig());
-      const durable = await loadGatewaySessionEntryReadOnlyAsync(params.sessionKey, {
+      const { loadGatewaySessionEntryReadOnlyInWorker } =
+        await import("./session-utils-store-worker.js");
+      const durable = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getRuntimeConfig(),
+        key: params.sessionKey,
         agentId: owner.agentId,
-        projection: "list",
+        exactRead: true,
+        readOnly: true,
+        projection: [],
       });
       readSession = () => {
         assertCurrent?.();
@@ -199,8 +211,28 @@ function resolvePreparedAssistantMediaPolicy(
         }
       : undefined);
   const auth =
-    params.requestAuth ?? (reader ? resolveAssistantMediaReaderAuth(reader, config) : undefined);
+    params.requestAuth ??
+    (reader
+      ? resolveAssistantMediaReaderAuth(
+          reader,
+          config,
+          Boolean(params.sessionKey && params.messageId),
+        )
+      : undefined);
   if (!auth || !reader) {
+    return undefined;
+  }
+  const standaloneRead = authorizeOperatorScopesForMethod(
+    "assistant.media.get",
+    auth.operatorScopes,
+  ).allowed;
+  const messageId = standaloneRead ? undefined : params.messageId;
+  if (
+    !standaloneRead &&
+    (!messageId ||
+      !loaded ||
+      !authorizeOperatorScopesForMethod("chat.message.get", auth.operatorScopes).allowed)
+  ) {
     return undefined;
   }
   const agentId = loaded?.agentId ?? params.agentId;
@@ -219,10 +251,10 @@ function resolvePreparedAssistantMediaPolicy(
           return undefined;
         }
         if (
-          auth.operatorRolePolicy &&
+          (auth.operatorRolePolicy || messageId) &&
           !createProfileSessionEntryFilter({
             profileId,
-            sessionCap: auth.operatorRolePolicy.sessions.others,
+            sessionCap: auth.operatorRolePolicy?.sessions.others,
           })(loaded.canonicalKey, entry)
         ) {
           return undefined;
@@ -255,6 +287,7 @@ function resolvePreparedAssistantMediaPolicy(
   return {
     assertCurrent,
     readSession,
+    messageId,
     session,
     executionCwd,
     remote,
@@ -301,6 +334,7 @@ export type AssistantMediaTicketPayload = {
   source: string;
   exp: number;
   session?: AssistantMediaSession;
+  messageId?: string;
   reader: AssistantMediaReader;
   agentId?: string;
   file?: { realPath: string; dev: string; ino: string };

@@ -102,6 +102,32 @@ function editMetadata(
 }
 
 describe("table-scoped migration snapshots", () => {
+  it("restores mixed-case triggers without conflating distinct Unicode table names", async () => {
+    const f = fixture();
+    withDatabase(f.sourcePath, (db) => {
+      db.exec(`DROP TRIGGER selected_update;
+        CREATE TRIGGER selected_update AFTER UPDATE ON SeLeCtEd BEGIN
+          INSERT INTO untouched(value) VALUES ('mixed-case trigger ran');
+        END;
+        CREATE TABLE Keyed (value TEXT);
+        CREATE TRIGGER unicode_insert AFTER INSERT ON Keyed BEGIN
+          INSERT INTO untouched(value) VALUES ('Unicode trigger ran');
+        END;`);
+    });
+    await capture(f);
+    withDatabase(f.sourcePath, (db) => db.exec("DROP TRIGGER selected_update"));
+    restoreScopedMigrationSnapshot({ ...f, assertCurrent: () => {} });
+    withDatabase(f.sourcePath, (db) => {
+      db.exec("UPDATE selected SET label = 'after restore'");
+      db.exec("INSERT INTO Keyed VALUES ('preserved')");
+      expect(db.prepare("SELECT value FROM untouched ORDER BY id").all()).toEqual([
+        { value: "original child" },
+        { value: "mixed-case trigger ran" },
+        { value: "Unicode trigger ran" },
+      ]);
+    });
+  });
+
   it.each([
     { encoding: "UTF-8", malformed: "61FF62", nul: "610062" },
     { encoding: "UTF-16le", malformed: "610000D86200", nul: "610000006200" },

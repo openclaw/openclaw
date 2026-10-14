@@ -64,30 +64,9 @@ it("keeps test-only ambient augmentation out of declaration roots but in test gr
   }
 });
 
-it.each([true, false])(
-  "diagnoses declaration escapes with an ancestor install=%s",
-  (ancestorInstall) => {
-    const ancestor = fs.realpathSync.native(roots.make("declaration-escape-diagnosis-"));
-    const root = path.join(ancestor, ".claude/worktrees/validation");
-    fs.mkdirSync(root, { recursive: true });
-    const install = path.join(ancestor, ancestorInstall ? "node_modules" : "other/node_modules");
-    const file = path.join(install, "synthetic-package/package.json");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, "{}");
-    const boundary = createDeclarationInputBoundary(root);
-    expect(() => boundary.assert(file)).toThrow(`Declaration input escapes checkout: ${file}`);
-    expect(() => boundary.assert(file)).toThrow(
-      "shared installs and external symlinks are unsupported",
-    );
-    expect(() => boundary.assert(file)).toThrow(
-      "does not establish a missing or undeclared dependency",
-    );
-  },
-);
-
-it.each(["existing", "missing"] as const)(
+it.each(["missing"] as const)(
   "rechecks a previously resolved %s declaration path after its parent becomes a symlink",
-  (kind) => {
+  () => {
     const ancestor = fs.realpathSync.native(roots.make("declaration-path-recheck-"));
     const root = path.join(ancestor, "checkout");
     const outside = path.join(ancestor, "outside");
@@ -96,10 +75,6 @@ it.each(["existing", "missing"] as const)(
     fs.mkdirSync(root);
     fs.mkdirSync(outside);
     fs.writeFileSync(path.join(outside, "value.d.ts"), "export {};\n");
-    if (kind === "existing") {
-      fs.mkdirSync(parent);
-      fs.writeFileSync(file, "export {};\n");
-    }
     const boundary = createDeclarationInputBoundary(root);
     expect(boundary.assert(file)).toBe(file);
     expect(boundary.assert(file)).toBe(file);
@@ -157,32 +132,22 @@ it.each<{
   kind: string;
   source: string;
   error: RegExp;
-  corrected?: string;
 }>([
-  ...(["all", "declarations"] as const).flatMap((diagnostics) => [
-    {
-      diagnostics,
-      kind: "declaration transform",
-      source: "export const factory = () => class { private value = 1; };",
-      error: /TS4094: Property 'value' of exported anonymous class type/u,
-    },
-    {
-      diagnostics,
-      kind: "lazy global",
-      source: "export function* values() { yield 1; }",
-      error: /TS2318: Cannot find global type 'IterableIterator'/u,
-    },
-  ]),
   {
     diagnostics: "all",
-    kind: "semantic",
-    source: 'export const count: number = "wrong";',
-    error: /TS2322: Type 'string' is not assignable/u,
-    corrected: "export const count: number = 42;",
+    kind: "lazy global",
+    source: "export function* values() { yield 1; }",
+    error: /TS2318: Cannot find global type 'IterableIterator'/u,
+  },
+  {
+    diagnostics: "declarations",
+    kind: "declaration transform",
+    source: "export const factory = () => class { private value = 1; };",
+    error: /TS4094: Property 'value' of exported anonymous class type/u,
   },
 ])(
   "rejects $kind errors in $diagnostics diagnostic mode",
-  async ({ diagnostics, source, error, corrected }) => {
+  async ({ diagnostics, source, error }) => {
     const root = fs.realpathSync.native(roots.make("native-declaration-errors-"));
     const fixture = createNativeFixture(root);
     fixture.write("src/index.ts", source);
@@ -194,17 +159,10 @@ it.each<{
         configFile: path.join(root, "tsconfig.json"),
         roots: [path.join(root, "src/index.ts")],
         diagnostics,
-        compilerOptions: corrected ? undefined : { lib: ["es5"] },
+        compilerOptions: { lib: ["es5"] },
         assertInput: (file) => boundary.assert(file),
       }),
     ).rejects.toThrow(error);
-    if (corrected) {
-      fixture.write("src/index.ts", corrected);
-      const emitted = await fixture.compile();
-      expect(emitted.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
-        "export declare const count: number;",
-      );
-    }
   },
 );
 

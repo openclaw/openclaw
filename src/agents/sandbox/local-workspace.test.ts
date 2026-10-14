@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { runCommandBuffered } from "../../process/exec.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
@@ -14,6 +15,7 @@ it.runIf(process.platform !== "win32")(
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bound-local-bridge-"));
     let revoked = false;
     let revokeDuringBuild = false;
+    let waitForAdmission: Promise<void> | undefined;
     const checkpoint = vi.fn(async () => {});
     const finalized = vi.fn(async () => {});
     const backend: SandboxBackendHandle = {
@@ -54,7 +56,10 @@ it.runIf(process.platform !== "win32")(
         workspaceDir: root,
         workspaceCwd: root,
         checkpoint,
-        provision: async (run) => await run(),
+        provision: async (run) => {
+          await waitForAdmission;
+          return await run();
+        },
         assertCurrent: () => {
           if (revoked) {
             throw new Error("revoked");
@@ -94,6 +99,19 @@ it.runIf(process.platform !== "win32")(
         token: "prepared",
       });
       expect(checkpoint).toHaveBeenCalledTimes(2);
+      revokeDuringBuild = false;
+      revoked = false;
+      const admission = createDeferred();
+      waitForAdmission = admission.promise;
+      const shell = backend.runShellCommand({ script: `touch "${root}/blocked.txt"` });
+      const exec = backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      revoked = true;
+      admission.resolve();
+      await expect(shell).rejects.toThrow("revoked");
+      await expect(exec).rejects.toThrow("revoked");
+      await expect(fs.stat(path.join(root, "blocked.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

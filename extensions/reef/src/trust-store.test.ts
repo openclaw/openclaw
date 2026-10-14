@@ -7,7 +7,7 @@ import type {
   PluginStateOperationDefinitions,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -55,11 +55,15 @@ function runtime() {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-  mockRuntime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
-    const store = createPluginStateKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
+  mockRuntime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) => {
+    const store = createPluginStateKeyedStoreV2ForTests<T>(
+      "reef",
+      {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      },
+      { assertCurrent() {} },
+    );
     const createOperation = store.createOperation;
     if (!createOperation) {
       throw new Error("Expected worker operation capability");
@@ -159,10 +163,14 @@ beforeEach(async () => {
   resetPluginStateStoreForTests({ closeDatabase: false });
   // Clear rows and invalidate receipts while retaining the suite's database worker.
   for (const options of [REEF_TRUST_STORE_OPTIONS, REEF_DELIVERY_STORE_OPTIONS]) {
-    await createPluginStateKeyedStoreForTests("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    }).clear();
+    await createPluginStateKeyedStoreV2ForTests(
+      "reef",
+      {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      },
+      { assertCurrent() {} },
+    ).clear();
   }
   workerCommands = [];
 });
@@ -177,12 +185,16 @@ describe("ReefTrustStore", () => {
   it("retains delivery bindings across envelope and receipt relay windows", () => {
     const opened: OpenAsyncKeyedStoreOptions[] = [];
     const mockRuntime = runtime();
-    mockRuntime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
+    mockRuntime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) => {
       opened.push(options);
-      return createPluginStateKeyedStoreForTests<T>("reef", {
-        ...options,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      return createPluginStateKeyedStoreV2ForTests<T>(
+        "reef",
+        {
+          ...options,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        },
+        { assertCurrent() {} },
+      );
     };
 
     openReefTrustStore(mockRuntime, config());

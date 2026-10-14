@@ -738,7 +738,7 @@ export async function createOpenClawCodingToolsInternalAsync(
   );
 }
 
-/** @deprecated Use createOpenClawCodingToolsAsync to prepare policy through the worker. */
+/** @deprecated Use createOpenClawCodingToolsAsync to prepare policy through the worker. Supported through 2026-12-31. */
 export function createOpenClawCodingTools(options?: PluginCodingToolsOptions): AnyAgentTool[] {
   warnPluginSdkDeprecation({
     family: "tool-surface",

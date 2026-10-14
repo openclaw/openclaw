@@ -1,7 +1,6 @@
-import { nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
-import { directive, type ElementPart } from "lit/directive.js";
+import { createEffect, onCleanup, useContext, type Accessor } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { SolidContentPresentation } from "../lit/solid-content.tsx";
 import {
   subscribeTranscriptScroll,
   type TranscriptScrollObservation,
@@ -113,7 +112,7 @@ class ProgressDisclosureController {
     }
     this.connectHeader();
     this.apply();
-    // Lit attaches the surrounding transcript after committing this element part.
+    // The surrounding transcript may be inserted after this disclosure ref settles.
     queueMicrotask(() => {
       if (this.disposed) {
         return;
@@ -506,37 +505,25 @@ class ProgressDisclosureController {
   }
 }
 
-class ProgressDisclosureDirective extends AsyncDirective {
-  private controller: ProgressDisclosureController | undefined;
-  private element: HTMLDetailsElement | undefined;
-  private input: DisclosureInput | undefined;
-
-  render(..._input: DisclosureInput) {
-    return nothing;
-  }
-
-  override update(part: ElementPart, input: DisclosureInput) {
-    if (part.element instanceof HTMLDetailsElement) {
-      this.element = part.element;
-      this.input = input;
-      if (this.isConnected) {
-        this.reconnected();
+/** The Solid owner retains the disclosure controller across progress snapshots. */
+export function useComposerProgressDisclosure(input: Accessor<DisclosureInput>) {
+  const presented = useContext(SolidContentPresentation);
+  let element: HTMLDetailsElement;
+  let controller: ProgressDisclosureController | undefined;
+  createEffect(
+    () => [presented(), input()] as const,
+    ([active, value]) => {
+      if (!active) {
+        controller?.dispose();
+        controller = undefined;
+        return;
       }
-    }
-    return nothing;
-  }
-
-  protected override disconnected(): void {
-    this.controller?.dispose();
-    this.controller = undefined;
-  }
-
-  protected override reconnected(): void {
-    if (this.element && this.input) {
-      this.controller ??= new ProgressDisclosureController(this.element, this.input);
-      this.controller.update(this.input);
-    }
-  }
+      controller ??= new ProgressDisclosureController(element, value);
+      controller.update(value);
+    },
+  );
+  onCleanup(() => controller?.dispose());
+  return (value: HTMLDetailsElement) => {
+    element = value;
+  };
 }
-
-export const composerDisclosure = directive(ProgressDisclosureDirective);

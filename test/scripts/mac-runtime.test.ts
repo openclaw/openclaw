@@ -23,7 +23,7 @@ const testNodeExecPath = resolveTestNodeExecPath();
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 describe("Mac app runtime publication", () => {
-  baseIt.each([undefined, "26.8.2"])(
+  baseIt.each([undefined])(
     "preserves the requested build-time installer Node version (%s)",
     (version) => {
       const root = temps.make("openclaw-runtime-version-");

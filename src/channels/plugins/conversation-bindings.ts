@@ -3,7 +3,7 @@ import { getChannelPlugin } from "./registry.js";
 import type { ChannelId } from "./types.public.js";
 
 /**
- * @deprecated Use setChannelConversationBindingIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period.
+ * @deprecated Use setChannelConversationBindingIdleTimeoutBySessionKeyAsync; final compatibility day: 2026-12-31.
  *
  * Missing plugin support is a no-op because session commands fan out through
  * generic channel helpers while only some channels keep conversation bindings.
@@ -32,7 +32,7 @@ export function setChannelConversationBindingIdleTimeoutBySessionKey(params: {
 }
 
 /**
- * @deprecated Use setChannelConversationBindingMaxAgeBySessionKeyAsync; removal follows a stable deprecation period.
+ * @deprecated Use setChannelConversationBindingMaxAgeBySessionKeyAsync; final compatibility day: 2026-12-31.
  *
  * Returns the modified binding snapshots so command handlers can report the
  * concrete sessions affected by the generic channel command.

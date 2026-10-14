@@ -274,6 +274,7 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/parallels/parallels-exec.py",
   ".github/workflows/plugin-npm-release.yml",
   "scripts/lib/vitest-worker-bootstrap.mts",
+  "scripts/lib/vitest-worker-descriptor.mts",
 ];
 
 // Test-only roots share the invocation generation without changing package entries.

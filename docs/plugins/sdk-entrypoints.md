@@ -327,8 +327,8 @@ actions. `session-store-runtime` provides `prepareSessionEntryPatch` for host
 preparation followed by a conditional worker commit, and `applySessionEntryPatch`
 for already prepared data. `session-transcript-runtime` provides
 `withSessionTranscriptWrite` and duplicate-aware message preparation. Released
-synchronous and opaque transaction callback forms remain deprecated until the
-next Plugin SDK major. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
+synchronous and opaque transaction callback forms remain deprecated through
+2026-12-31, with removal in the first January 2027 stable release. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
 and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
 
 For ordinary session preparation, await `getSessionEntryAsync`,
@@ -337,7 +337,7 @@ For ordinary session preparation, await `getSessionEntryAsync`,
 preparation uses `resolveStoredModelOverrideAsync` and
 `resolveCommandArgMenuAsync` from `command-auth-native`; the menu helper is also
 available from `native-command-registry`. Their synchronous compatibility APIs
-remain deprecated until the next Plugin SDK major. See
+remain deprecated through 2026-12-31. See
 [session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
 
 ## Stateful CLI commands

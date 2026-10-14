@@ -725,6 +725,9 @@ scavenges, major mark/sweep/compact collections, incremental work, and weak-refe
 processing. Counts and elapsed durations are grouped by main thread or bounded
 worker script kind, without per-GC log lines. Instrumented workers use their
 existing memory telemetry port and observe GC only while an exporter is interested.
+Worker GC batches ride the next heap sample (normally every 30 seconds), with a
+flush after 256 pending samples or on orderly worker shutdown. Individual collection counts and durations
+are preserved; worker histogram updates can lag by one sampling interval.
 Workers without that port are not covered; a missing series does not mean zero GC.
 
 ## RPC response size and heap changes

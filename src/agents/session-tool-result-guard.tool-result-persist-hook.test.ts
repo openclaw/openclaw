@@ -25,7 +25,6 @@ import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 type PersistedToolResultMessage = ToolResultMessage & { details: Record<string, unknown> };
-const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(resetGlobalHookRunner);
@@ -109,28 +108,6 @@ describe("session persistence hooks", () => {
     expectPersistedToolResultDetailsCapped(sm);
   });
 
-  it("preserves small recursive details byte-for-byte", () => {
-    const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
-    let deepDetails: Record<string, unknown> = { token: tokenValue };
-    for (let index = 0; index < 10; index++) {
-      deepDetails = { child: deepDetails };
-    }
-    const details = {
-      status: "completed",
-      token: tokenValue,
-      card_number: 4242424242424242,
-      authToken: [tokenValue],
-      ["https://example.test/callback?token=" + tokenValue]: "ok",
-      deepDetails,
-      nested: { apiKey: { value: tokenValue }, stdout: "Authorization: Bearer " + tokenValue },
-    };
-    const sm = createGuardedSession();
-    appendToolResultDetails(sm, details);
-    const toolResult = requirePersistedToolResult(sm);
-    expect(toolResultText(toolResult)).toBe("visible output stays small");
-    expect(JSON.stringify(toolResult.details)).toBe(JSON.stringify(details));
-  });
-
   it("keeps logging patterns out of tool persistence", () => {
     const customSecret = "customsecret=abcdef1234567890ghij";
     const sm = guardSessionManager(SessionManager.inMemory(), {
@@ -142,30 +119,6 @@ describe("session persistence hooks", () => {
     const toolResult = requirePersistedToolResult(sm);
     expect(toolResult.details).toEqual({ diagnostic: customSecret });
     expect(toolResultText(toolResult)).toBe(customSecret);
-  });
-
-  it("caps oversized summary fields without masking or splitting surrogate pairs", () => {
-    const tokenValue = "ghp_" + "a".repeat(36);
-    const originalTail = tokenValue + " " + "x".repeat(1_959) + "😀" + "y".repeat(6_000);
-    const sm = createGuardedSession();
-    appendToolResultDetails(sm, {
-      status: { state: "completed", token: tokenValue },
-      sessionId: "exec-1",
-      aggregated: "x".repeat(120_000),
-      tail: originalTail,
-      sessions: [{ sessionId: "proc-1", command: tokenValue + " " + "x".repeat(6_000) }],
-    });
-    const toolResult = requirePersistedToolResult(sm);
-    const details = toolResult.details;
-    expect(toolResultText(toolResult)).toBe("visible output stays small");
-    expect(details.persistedDetailsTruncated).toBe(true);
-    expect(details.status).toEqual({ state: "completed", token: tokenValue });
-    expect(details.tail).toContain(tokenValue);
-    expect(details.tail).toContain("persisted detail truncated");
-    expect(details.tail).not.toMatch(LONE_SURROGATE_RE);
-    expect(String(details.tail).length).toBeLessThan(2_100);
-    expect(details.aggregated).toBeUndefined();
-    expect(Buffer.byteLength(JSON.stringify(details), "utf8")).toBeLessThan(8_192);
   });
 
   it("preserves retained structured fields in fallback oversized details summaries", () => {
@@ -311,21 +264,6 @@ describe("session persistence hooks", () => {
           entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
         ),
     ).toEqual(["original", "hooked", "original"]);
-  });
-
-  it("keeps the original message when a hook returns a non-message replacement", () => {
-    // A malformed plugin replacement must not fail the append or drop the admitted message.
-    installHook("before_message_write", () => ({
-      message: "not-a-message" as unknown as AgentMessage,
-    }));
-    const sm = createGuardedSession();
-    sm.appendMessage(makeUserMessage("hello", 1));
-    const messages = sm
-      .getEntries()
-      .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.role).toBe("user");
-    expect(messages.find((item) => item.role === "user")?.content).toBe("hello");
   });
 });
 

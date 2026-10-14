@@ -18,10 +18,6 @@ import { discordPlugin } from "../channel.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { registerThreadBindingCompatibilityTests } from "./thread-bindings.compatibility.test-support.js";
 import { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.manager.js";
-import {
-  setThreadBindingIdleTimeoutBySessionKey,
-  setThreadBindingMaxAgeBySessionKey,
-} from "./thread-bindings.session-updates.js";
 import { ensureBindingsLoaded, ensureBindingsLoadedAsync } from "./thread-bindings.state.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
@@ -381,7 +377,7 @@ describe("Discord thread binding restoration", () => {
     });
   });
 
-  it("keeps exported synchronous lifecycle setters synchronous", async () => {
+  it("keeps generic synchronous lifecycle setters synchronous", async () => {
     stores.entries.mockResolvedValueOnce([persistedBinding()]);
     const manager = await persistentManager();
     let saved = persistedBinding().value;
@@ -389,14 +385,15 @@ describe("Discord thread binding restoration", () => {
       saved = update(saved) ?? saved;
       return true;
     });
-    const idle = setThreadBindingIdleTimeoutBySessionKey({
+    const support = discordPlugin.conversationBindings!;
+    const idle = support.setIdleTimeoutBySessionKey!({
       targetSessionKey: saved.targetSessionKey,
       accountId: "work",
       idleTimeoutMs: 500,
     });
     expect(Array.isArray(idle)).toBe(true);
     expect(saved.idleTimeoutMs).toBe(500);
-    const age = setThreadBindingMaxAgeBySessionKey({
+    const age = support.setMaxAgeBySessionKey!({
       targetSessionKey: saved.targetSessionKey,
       accountId: "work",
       maxAgeMs: 1000,

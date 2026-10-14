@@ -197,6 +197,8 @@ async function resolveOpenAITtsRequest(
 }
 
 export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    Boolean(resolveOpenAISpeechApiKey(normalizeOpenAIProviderConfig(providerConfig, "resolved")));
   return {
     id: "openai",
     label: "OpenAI",
@@ -239,8 +241,9 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
       ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
     }),
     listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveOpenAISpeechApiKey(normalizeOpenAIProviderConfig(providerConfig, "resolved"))),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const params = await resolveOpenAITtsRequest(req);
       const audioBuffer = await openaiTTS(params);
