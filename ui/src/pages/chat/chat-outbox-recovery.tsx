@@ -435,8 +435,13 @@ class ChatOutboxRecoveryController {
   }
 }
 
-export type ChatOutboxRecoveryElement = SolidBridgeElement<RecoveryProps>;
-export const ChatOutboxRecovery = defineSolidBridge<RecoveryProps>(
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-chat-outbox-recovery": SolidBridgeElement<RecoveryProps>;
+  }
+}
+
+defineSolidBridge<RecoveryProps>(
   "openclaw-chat-outbox-recovery",
   (props, element) => {
     const [revision, setRevision] = createSignal(0);

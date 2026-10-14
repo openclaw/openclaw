@@ -33,7 +33,17 @@ describe("provider login choices", () => {
   it("offers guided auth without stored credentials and filters hidden, discovery, or media choices", () => {
     const choices = [
       choice(),
-      choice({ choiceId: "setup", credentialOnly: undefined }),
+      choice({
+        pluginId: "meta",
+        providerId: "meta",
+        methodId: "muse-code",
+        groupId: "meta",
+        groupLabel: "Meta",
+        choiceId: "muse-code",
+        choiceLabel: "Muse Code",
+        appGuidedAuth: "device-code",
+        credentialOnly: undefined,
+      }),
       choice({ choiceId: "discovery", appGuidedDiscovery: true }),
       choice({
         choiceId: "secret-setup",
@@ -48,7 +58,7 @@ describe("provider login choices", () => {
     const options = listProviderLoginOptions(choices);
     expect(options).toMatchObject([
       { id: "demo/demo-device" },
-      { id: "demo/setup", kind: "device-code", requiresSetup: true },
+      { id: "meta/muse-code", brandId: "meta", kind: "device-code", requiresSetup: true },
     ]);
     expect(options[0]).not.toHaveProperty("requiresSetup");
   });

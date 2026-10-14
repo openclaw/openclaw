@@ -145,7 +145,14 @@ async function startGatewayServerWithRuntime(
   const closeBroker = async () => {
     // A failed required core join can stop before the admission sidecar runs.
     await stopDatabaseAdmission?.();
-    await broker.close();
+    try {
+      const { closeSqliteReadOnlyWorkersForBroker } =
+        await import("../infra/sqlite-readonly-worker.js");
+      await closeSqliteReadOnlyWorkersForBroker(broker);
+    } finally {
+      // Readers that did not close remain attached children for broker termination.
+      await broker.close();
+    }
   };
   try {
     const { createSubsystemLogger } = await import("../logging/subsystem.js");

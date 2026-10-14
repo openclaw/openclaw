@@ -33,7 +33,6 @@ import {
 } from "./agent-runner-core.js";
 import {
   continueStalledReplyTurn,
-  createReplyAgentRestartRecoveryController,
   executePreparedReplyAgentRun,
   prependCompactionNotices,
 } from "./agent-runner-execute.js";
@@ -44,6 +43,7 @@ import {
 } from "./agent-runner-helpers.js";
 import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
+import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
 import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
 import { commitQueuedReplySessionActivity } from "./agent-runner-session-activity.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
@@ -83,9 +83,8 @@ import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
 export async function runReplyAgent(
-  input: RunReplyAgentParams,
+  params: RunReplyAgentParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const params = { ...input };
   const {
     followupRun,
     queueKey,
@@ -110,7 +109,7 @@ export async function runReplyAgent(
     blockReplyChunking,
     sessionCtx,
     typingMode,
-    resetTriggered,
+    resetTriggered = false,
     replyOperation: providedReplyOperation,
   } = params;
   followupRun.operatorAuthority?.assertCurrent();
@@ -126,7 +125,6 @@ export async function runReplyAgent(
     typing.cleanup();
   };
   let activeSessionEntry = sessionEntry;
-  const effectiveResetTriggered = resetTriggered === true;
 
   const isHeartbeat = opts?.isHeartbeat === true;
   const replyExpectation = (followupRun.run.terminalReplyExpectation ??=
@@ -150,9 +148,9 @@ export async function runReplyAgent(
             payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0],
           ) => {
             const observed = await settleProgressVisibilityCallbackResult(onPartialReply(payload));
-            if (observed.visible && hasOutboundReplyContent(payload, { trimText: true })) {
-              didDeliverVisiblePartialReply = true;
-            }
+            // Visibility is sticky; avoid materializing lazy text after the first content.
+            didDeliverVisiblePartialReply ||=
+              observed.visible && hasOutboundReplyContent(payload, { trimText: true });
             return observed.result;
           },
         }
@@ -243,8 +241,8 @@ export async function runReplyAgent(
     return undefined;
   }
 
-  const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
-  const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
+  const effectiveShouldSteer = !isHeartbeat && !resetTriggered && shouldSteer;
+  const effectiveShouldFollowup = !resetTriggered && shouldFollowup;
   const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
   const activeReplyOperation = sessionKey
     ? replyRunRegistry.get(sessionKey)
@@ -279,7 +277,7 @@ export async function runReplyAgent(
     messageInjectionDisposition === "none" &&
     terminalDeliveryBlockReason !== undefined;
 
-  const questionInput = await runReplyQuestionInput(input);
+  const questionInput = await runReplyQuestionInput(params);
   if (questionInput.handled) {
     releaseUnusedAdmission();
     return questionInput.payload;
@@ -383,7 +381,7 @@ export async function runReplyAgent(
     isActive,
     isHeartbeat,
     shouldFollowup: effectiveShouldFollowup || shouldQueueProvidedSteer,
-    resetTriggered: effectiveResetTriggered,
+    resetTriggered,
   });
   if (activeRunQueueAction === "drop") {
     if (replyOperationRunState) {
@@ -552,7 +550,7 @@ export async function runReplyAgent(
       expectedSessionId: activeSessionEntry?.sessionId,
       storePath,
       kind: replyTurnKind,
-      resetTriggered: effectiveResetTriggered,
+      resetTriggered,
       routeThreadId: replyRouteThreadId,
       originatingLeafEntryId: turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: resolveFollowupAbortSignal({
@@ -567,6 +565,9 @@ export async function runReplyAgent(
           : { status: "skipped", reason: admission.reason };
     }
     if (admission.status === "skipped") {
+      if (admission.error) {
+        opts?.internalEventExecution?.onFailed?.(admission.error);
+      }
       releaseUnusedAdmission();
       if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
         return undefined;
@@ -608,13 +609,15 @@ export async function runReplyAgent(
     // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
     // instead. The same sender's next queued request inherits the guidance; otherwise one
     // recovery run bound to this turn's route and authority is queued.
-    replyOperationRunState.continueStalledTurn = () =>
+    replyOperationRunState.continueStalledTurn = (guidance, owner = replyOperation) =>
+      owner === replyOperation &&
       continueStalledReplyTurn({
         followupRun,
         queueKey,
         resolvedQueue,
         replyOperation,
         runFollowupTurn,
+        guidance,
       });
   }
   const {
@@ -697,6 +700,7 @@ export async function runReplyAgent(
     );
     const result = await handleReplyAgentRunError(error, {
       resolveVisibleReplyDelivery,
+      userTurnAccepted: followupRun.userTurnTranscriptRecorder?.hasPersisted() === true,
       isHeartbeat,
       replyExpectation,
       isRestartRecoveryArmed,

@@ -367,13 +367,16 @@ async function verifyAndActivateCandidate(
       // SAFETY: The patch is derived from typed configs and preserves their config shape.
       patched = applyMergePatch(base, providerPatch) as OpenClawConfig;
     }
-    const selected = selectModel(patched, base);
+    const selected = params.selectModel === false ? patched : selectModel(patched, base);
     return staged.pendingPluginInstalls
       ? { ...selected, plugins: { ...selected.plugins, installs: staged.pendingPluginInstalls } }
       : selected;
   };
   const candidate = buildCandidate(cfg);
   const sourceCandidate = buildCandidate(source);
+  // Verify the candidate's route without persisting a new primary model for access-only sign-in.
+  const candidateRouteConfig = (config: OpenClawConfig) =>
+    params.selectModel === false ? selectModel(config, config) : config;
   const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshotAsync;
   await using cache = createPluginCache();
   const generation =
@@ -413,7 +416,7 @@ async function verifyAndActivateCandidate(
     );
   const resolveRoute = (config: OpenClawConfig, currentSnapshot = snapshot) =>
     resolveSystemAgentConfiguredRouteFromConfig(
-      config,
+      candidateRouteConfig(config),
       requestedAgentId,
       routeDeps,
       currentSnapshot,
@@ -432,7 +435,10 @@ async function verifyAndActivateCandidate(
     });
   }
   const baselineRoute = await project(cfg, source);
-  const verifiedRoute = await project(candidate, sourceCandidate);
+  const verifiedRoute = await project(
+    candidateRouteConfig(candidate),
+    candidateRouteConfig(sourceCandidate),
+  );
   const withGeneration = <T>(run: () => T): T =>
     generation ? withPluginRuntimeGenerationScope(generation, run) : run();
   const artifacts = withGeneration(() =>
@@ -552,7 +558,15 @@ async function verifyAndActivateCandidate(
       );
     }
     const next = buildCandidate(config);
-    if (!isDeepStrictEqual(await project(next, buildCandidate(sourceConfig)), verifiedRoute)) {
+    if (
+      !isDeepStrictEqual(
+        await project(
+          candidateRouteConfig(next),
+          candidateRouteConfig(buildCandidate(sourceConfig)),
+        ),
+        verifiedRoute,
+      )
+    ) {
       throw new SetupInferenceOwnerDriftError(
         "The candidate route changed during verification. Retry setup before selecting it as the default.",
       );
@@ -624,10 +638,11 @@ async function verifyAndActivateCandidate(
       },
     };
     await commitSetupInferenceActivation({
+      // Access-only setup leaves the primary route intact and may reload its new runtime plugin.
       preserveWorkingConnection: Boolean(
         savedCredential?.setup?.replacement ||
-        baselineRoute.route ||
-        resolveAgentEffectiveModelPrimary(cfg, routeAgentId),
+        (params.selectModel !== false &&
+          (baselineRoute.route || resolveAgentEffectiveModelPrimary(cfg, routeAgentId))),
       ),
       requireApplied: params.automaticSetup,
       assertCurrent: () => throwIfSetupInferenceCancelled(params),

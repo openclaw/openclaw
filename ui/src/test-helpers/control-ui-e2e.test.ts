@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { format } from "node:util";
 import type { Page } from "playwright";
@@ -817,6 +817,29 @@ describe("resolvePlaywrightChromiumExecutablePath", () => {
       ).toBe(expected);
     },
   );
+
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("prefers the newest installed Chromium revision over system browsers", () => {
+    const browsersRoot = tempDirs.make("control-ui-playwright-browsers-");
+    const installed = [
+      path.join(browsersRoot, "chromium-1100", "chrome-linux", "chrome"),
+      path.join(browsersRoot, "chromium-1194", "chrome-linux", "chrome"),
+    ];
+    for (const executable of installed) {
+      mkdirSync(path.dirname(executable), { recursive: true });
+      writeFileSync(executable, "");
+    }
+
+    expect(
+      resolvePlaywrightChromiumExecutablePath(
+        path.join(browsersRoot, "chromium-1243", "chrome-linux64", "chrome"),
+        {},
+        (candidate) =>
+          existsSync(candidate) || candidate === systemChromiumExecutableCandidates.at(-1),
+      ),
+    ).toBe(installed[1]);
+  });
 });
 
 describe("waitForControlUiRoute", () => {

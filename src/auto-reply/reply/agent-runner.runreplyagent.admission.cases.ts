@@ -19,7 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway } from "../../gateway/call.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
-import { resolveSessionMutationAuthorization } from "../../gateway/session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-sharing-authorization-async.js";
 import { sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -250,7 +250,7 @@ export function registerReplyAdmissionCases({
     const cfg: OpenClawConfig = { session: { store: storePath } };
     const profileId = "retirement-operator";
     const scopes = ["operator.admin"];
-    const authorized = resolveSessionMutationAuthorization({
+    const authorized = await resolveSessionMutationAuthorizationAsync({
       client: sharingPolicyClient({ user: profileId, scopes }),
       context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
       method: "sessions.patch",
@@ -267,6 +267,7 @@ export function registerReplyAdmissionCases({
       authorized.authorization,
       "session-backed retirement authority",
     );
+    onTestFinished(() => authority.release?.());
     duplicate.followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId,
       scopes,

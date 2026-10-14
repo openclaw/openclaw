@@ -56,6 +56,7 @@ import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.j
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -550,7 +551,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     });
     const connected = await connect();
     expect(connected.selection).toMatchObject({ scopes: ["workflow", "repo", "repo"] });
-    const db = openOpenClawStateDatabase().db;
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
     db.prepare(
       "UPDATE secret_store_entries SET value = ? WHERE scope_kind = 'identity' AND scope_id = ? AND name = 'github-connection'",
     ).run(

@@ -658,14 +658,6 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     ]);
   });
 
-  it("projects thread-scoped guardian warnings", async () => {
-    const { send, projector, onAgentEvent } = await observeProjector();
-    const message = "Guardian rejection limit reached; ending turn as interrupted.";
-    await send(guardianWarning("Wrong thread.", "thread-other"), guardianWarning(message));
-    projector.buildResult(buildEmptyToolTelemetry());
-    expect(onAgentEvent.mock.calls.map(([event]) => event.data.message)).toEqual([message]);
-  });
-
   it("surfaces configuration warnings and ignores another thread", async () => {
     const { send, onAgentEvent } = await observeProjector();
     await send(

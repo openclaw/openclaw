@@ -57,7 +57,6 @@ import {
   canonicalSessionKeyMigrationRequiredError,
   validateCanonicalSessionRow,
 } from "./session-canonical-row.js";
-import { deferCanonicalSessionValidation } from "./session-canonical-validation-deferral.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -590,8 +589,6 @@ export function assertCanonicalSqliteSessionKeysCurrent(
       remember();
       return undefined;
     }
-    // A copied clean projection is not first-admission proof for an unknown file.
-    deferCanonicalSessionValidation(database, true);
   }
   // A list already needs the whole inventory; hand its parsed rows through once.
   const metadata: ValidatedSessionMetadata | undefined = collectMetadata

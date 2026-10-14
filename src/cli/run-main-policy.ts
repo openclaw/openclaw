@@ -1,12 +1,16 @@
 // Main CLI startup policy helpers for fast paths, proxy startup, aliases, and missing commands.
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type {
   resolveManifestCommandAliasOwner,
   resolveManifestCliCommandSurfaceOwner,
@@ -40,6 +44,14 @@ const CLI_PROXY_ENV_KEYS = [
   "https_proxy",
   "all_proxy",
 ] as const;
+
+export function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
+  const cwd = tryProcessCwd();
+  if (cwd && existsSync(path.join(cwd, ".env"))) {
+    return true;
+  }
+  return loadGlobalEnv && existsSync(path.join(resolveStateDir(), ".env"));
+}
 
 export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);

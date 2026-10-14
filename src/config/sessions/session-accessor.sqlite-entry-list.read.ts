@@ -1,6 +1,7 @@
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
@@ -111,12 +112,12 @@ export function readSelectedSessionEntriesInDatabase(
     // Warm admission permits raw metadata changes. The listing contract still
     // rejects delivery-canonical sibling drift, so include its existing dirty set.
     // Older readers have no dirty set and retain their full validation inventory.
-    const rows = executeSqliteQuerySync(
+    const rows = iterateSqliteQuerySync(
       database.db,
       hasCanonicalSessionValidationProjection(database)
         ? query.where("session_key", "in", pending.union(selected))
         : query,
-    ).rows;
+    );
     const entries: SessionEntrySummary[] = [];
     for (const row of rows) {
       if (isInternalSessionEffectsKey(row.session_key)) {
@@ -197,6 +198,7 @@ export function listSqliteSessionEntriesFromDatabase(
   options: {
     deferParticipants?: true;
     captureCronRunUpdatedAt?: (oldestUpdatedAt: number | null) => void;
+    captureCronRunSessionKey?: (sessionKey: string | null) => void;
   } = {},
 ): SessionEntrySummary[] {
   captureListingSource(database, scope);
@@ -207,13 +209,43 @@ export function listSqliteSessionEntriesFromDatabase(
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
     const captured = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
       runSqliteDeferredTransactionSync(database.db, () => {
-        const snapshot = readSessionEntryCache(database, {
-          cache: false,
-          projection: "list",
-          deferParticipants,
-        });
-        // Sibling metadata and participants still cross complete listing validation.
-        const entries = Array.from(iterateSessionEntriesForListing(snapshot));
+        let entries: SessionEntrySummary[];
+        if (scope.cronRetention) {
+          const page = scope.cronRetention;
+          const keys: string[] = [];
+          for (const row of iterateSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<DB>(database.db)
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where("session_key", ">", page.afterSessionKey ?? "")
+              .orderBy("session_key"),
+          )) {
+            if (isCronRunSessionKey(row.session_key)) {
+              keys.push(row.session_key);
+              if (keys.length >= page.limit) {
+                break;
+              }
+            }
+          }
+          options.captureCronRunSessionKey?.(keys.length === page.limit ? keys.at(-1)! : null);
+          entries = readSelectedSessionEntriesInDatabase(database, keys);
+          if (!deferParticipants) {
+            entries = [
+              ...projectSqliteSessionParticipantsBatch(
+                database.db,
+                new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+              ),
+            ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+          }
+        } else {
+          const snapshot = readSessionEntryCache(database, {
+            cache: false,
+            projection: "list",
+            deferParticipants,
+          });
+          entries = Array.from(iterateSessionEntriesForListing(snapshot));
+        }
         let oldestUpdatedAt: number | null = null;
         const selected = entries.filter(({ sessionKey, entry }) => {
           if (

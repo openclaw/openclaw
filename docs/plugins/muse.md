@@ -60,9 +60,11 @@ OpenClaw enables the Muse plugin and selects `meta/muse-spark-1.3` with the
 that model uses Muse instead. No terminal login or manual runtime configuration
 is needed.
 
-The **Provider Access** connection dialog manages credentials without changing
-the active model. Use the **AI Setup** connection dialog for Muse Code because
-its sign-in also installs the runtime and selects a model.
+You can also choose **Meta → Muse Code** in the **Provider Access** connection
+dialog. It signs in, verifies access, and enables the Muse runtime without
+changing the active model. Select **Muse Spark 1.3** separately in the agent's
+**Model** dropdown when you want to use it. Use **AI Setup** to connect and select
+a model in one flow.
 
 For manual configuration, route one Meta model through the Muse runtime:
 
@@ -97,14 +99,16 @@ calls Meta itself.
 
 ## Auth
 
-Use **Model Setup → Muse Code** in the Control UI for browser sign-in.
+Use **Model Setup → Meta → Muse Code** in either **Provider Access** or **AI Setup**
+in the Control UI for browser sign-in.
 The credential stays in Muse Code's own credential store; OpenClaw does not
 copy it into an auth profile. This sign-in authorizes the Muse runtime, not
 the direct Meta API route.
 
-For Muse-owned sign-ins, setup checks that Muse can fetch the selected model
+For Muse-owned sign-ins, OpenClaw checks that Muse can fetch the candidate model
 from Meta's live catalog. It does not run a model turn or expose native tools
 during verification. The same check runs again before activation is committed.
+**AI Setup** selects that model; **Provider Access** preserves the active model.
 
 Gateway-driven sign-in always uses Muse's file credential backend under the
 OpenClaw state directory (`muse/muse/auth.json`). It needs one browser approval
@@ -192,10 +196,14 @@ expired, or cancelled approval sends a deny choice, and so does an approval
 with no surface to show it. Each approval waits up to two minutes. The harness
 never grants persistent approvals.
 
-The harness also refuses an attempt when OpenClaw requires an OpenClaw sandbox,
-workspace-only file access, or a restricted plugin tool policy. Muse runs on
-the Gateway host and cannot enforce those boundaries. Select the `openclaw`
-runtime for those agents or sessions.
+The harness also refuses an attempt when OpenClaw requires an OpenClaw sandbox
+or workspace-only file access. Muse runs on the Gateway host and cannot enforce
+those boundaries. Select the `openclaw` runtime for those agents or sessions.
+
+A conversation tool policy (for example `tools.deny`) does not block Muse once
+you accept the native-runtime prompt. Muse does not receive OpenClaw's agent
+tools, so the policy has nothing to filter, and its own tools follow the
+approval mode above. Without that consent, OpenClaw refuses the turn.
 
 A refused attempt fails before any `muse` process starts, with an error that
 names the setting.

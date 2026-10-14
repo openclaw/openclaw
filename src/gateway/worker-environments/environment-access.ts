@@ -279,7 +279,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         assertCurrent,
         signal: request.signal,
         knownRecipe: () => ({
-          project: projectSnapshot,
           setupRecipe: preparation.setupRecipe,
           recipe: preparation.recipe,
         }),
@@ -293,8 +292,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     const prepared = await bind({ ...request, assertCurrent: assertBindingCurrent });
     assertBindingCurrent();
     await repository?.revalidate(request.signal);
-    assertCurrent();
-    return prepared;
+    assertBindingCurrent();
+    return { ...prepared, assertCurrent: assertBindingCurrent };
   };
 
   const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {

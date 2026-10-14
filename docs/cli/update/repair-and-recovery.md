@@ -147,6 +147,9 @@ capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
 Continuation verifies the recorded live updater's process identity and ancestry;
 unreadable supervisors above that updater do not prevent its Doctor from reusing the capture.
+If ancestry cannot be verified through the live updater, Doctor defers maintenance
+with a warning and directs you to `openclaw update repair`. A verified update
+stays installed; this process-inspection failure does not trigger rollback.
 Inherited control-plane and managed-helper runs retain their existing capture
 behavior. Standalone `doctor --fix` preserves a separate pre-repair copy; that
 copy does not replace an earlier update's originals. Standalone `doctor --fix`
@@ -907,7 +910,8 @@ cleanup and remains gated on a compatible serving bridge. Its descriptor policy
 and release-generation inventory record ownership without deleting directories
 or snapshots. They do not make immutable releases eligible for `update cleanup`; see the
 [immutable release-retention inventory](/reference/database-schemas/layout#immutable-release-retention-inventory).
-Doctor's `<database>.pre-startup-migration-<id>.bak` groups become eligible only
+Doctor's `<database>.pre-startup-migration-<id>.bak` groups, including their
+`.scoped.bak` members, become eligible only
 after Doctor verifies migration completion and update history records a successful
 update that started later. Until then they appear as protected. Changed or
 unrecorded backups remain protected or blocked; cleanup never infers permission

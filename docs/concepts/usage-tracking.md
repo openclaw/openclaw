@@ -37,9 +37,16 @@ cold cache has any usage data, the page shows a loading placeholder instead of
 zero totals. Available partial totals stay visible; if a refresh fails, select
 **Refresh** to try again.
 
+Session reports have a 15-second data-read budget. If it expires, completed
+batches remain visible as a partial report, with a hint to narrow the date
+range or select a session. Partial totals are not complete billing totals.
+Disconnecting still cancels the request without publishing a response.
+
 Session reports preserve agent attribution when agents share a session store. A
 background usage refresh does not invalidate a selected report when its session
 store is unchanged.
+Retained SQLite transcripts with legacy colon-containing IDs remain included in
+usage totals and do not interrupt background refresh.
 
 Usage opens with the last 30 calendar days selected. **Today**, **7d**, **30d**,
 **90d**, **1y**, **All**, or the date inputs change the reporting range. Historical

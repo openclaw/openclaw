@@ -666,15 +666,8 @@ async function runScopedAgentHarnessQuestion(
       params.signal ? { signal: params.signal } : undefined,
     ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
     claim.setAnswer(answer);
-    const answerOutcome = answer.then(
-      (result) => ({ kind: "answer" as const, result }),
-      (error: unknown) => ({ kind: "answer-error" as const, error }),
-    );
-    const finishAnswer = async (outcome: Awaited<typeof answerOutcome>) => {
-      if (outcome.kind === "answer-error") {
-        throw outcome.error;
-      }
-      const { result } = outcome;
+    const answerOutcome = answer.then((result) => ({ kind: "answer" as const, result }));
+    const finishAnswer = async (result: QuestionWaitAnswerResult) => {
       const terminal =
         result.status === "pending"
           ? ((await cancel("wait-timeout")) ?? ({ status: "cancelled" } as const))
@@ -691,7 +684,7 @@ async function runScopedAgentHarnessQuestion(
       }),
     ]);
     if (beforeDelivery.kind !== "delivery-ready") {
-      return await finishAnswer(beforeDelivery);
+      return await finishAnswer(beforeDelivery.result);
     }
     let consumed: boolean;
     do {
@@ -699,7 +692,7 @@ async function runScopedAgentHarnessQuestion(
     } while (!consumed && claim.isResolving());
     if (consumed) {
       // A completed registration-time claim must not expose a stale prompt.
-      return await finishAnswer(await answerOutcome);
+      return await finishAnswer(await answer);
     }
     const delivery = deliverAgentHarnessQuestionPrompt(
       params.delivery,
@@ -713,8 +706,8 @@ async function runScopedAgentHarnessQuestion(
       (error: unknown) => ({ kind: "delivery-error" as const, error }),
     );
     const first = await Promise.race([answerOutcome, deliveryOutcome]);
-    if (first.kind === "answer" || first.kind === "answer-error") {
-      return await finishAnswer(first);
+    if (first.kind === "answer") {
+      return await finishAnswer(first.result);
     }
     if (first.kind === "delivery-error") {
       const terminal = await cancel("prompt-delivery-failed");
@@ -723,7 +716,7 @@ async function runScopedAgentHarnessQuestion(
       }
       throw new Error("harness question prompt delivery failed", { cause: first.error });
     }
-    return await finishAnswer(await answerOutcome);
+    return await finishAnswer(await answer);
   } catch (error) {
     try {
       const terminal = await cancel(params.signal?.aborted ? "run-abort" : "harness-error");

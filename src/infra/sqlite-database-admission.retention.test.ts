@@ -580,6 +580,9 @@ function postgresConnection(anchor: DatabaseSync): PostgresSqlConnection {
     [Symbol.for("openclaw.postgres-sync-connection")]: true,
     anchor,
     advisoryLockKey: 1n,
+    get isOpen() {
+      return anchor.isOpen;
+    },
     get isTransaction() {
       return isTransaction;
     },
@@ -591,6 +594,9 @@ function postgresConnection(anchor: DatabaseSync): PostgresSqlConnection {
       }
     },
     query() {
+      throw new Error("Admission facts must not query PostgreSQL");
+    },
+    prepare() {
       throw new Error("Admission facts must not query PostgreSQL");
     },
     close() {},

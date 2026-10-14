@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { parseSqliteTableDefinition } from "../../../infra/sqlite-schema-contract-assembly.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -16,7 +16,7 @@ const MAX_SUBAGENT_UPSERT_ROWS = 128;
 
 const parentStoreSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
 
-export function hasParentStoreColumns(db: DatabaseSync): boolean {
+export function hasParentStoreColumns(db: EngineConnection): boolean {
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Subagent rows require admitted schema facts");

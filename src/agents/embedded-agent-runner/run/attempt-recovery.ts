@@ -128,7 +128,9 @@ export async function recoverEmbeddedRunAttempt(input: {
   } = terminal;
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
-  const settledEvidence = resolveSettledToolBatchEvidence(attempt);
+  const midTurnPrecheck =
+    promptErrorSource === "precheck" && attempt.preflightRecovery?.source === "mid-turn";
+  const settledEvidence = resolveSettledToolBatchEvidence(attempt, { midTurn: midTurnPrecheck });
   // Project decisions at their existing return points; diagnostics never decide
   // replay safety or imply that recorded tool results prove settled side effects.
   const recordRecoveryDecision = (
@@ -230,10 +232,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   const midTurnBatchSettled =
     settledEvidence.allToolsProvenSettled || settledEvidence.parkedCodeModeRun;
   const canContinueSettledMidTurnOverflow =
-    promptErrorSource === "precheck" &&
-    attempt.preflightRecovery?.source === "mid-turn" &&
-    midTurnBatchSettled &&
-    !asyncActivity;
+    midTurnPrecheck && midTurnBatchSettled && !asyncActivity;
   // A provider can reject the next prompt after writes have settled. Compact
   // their recorded results under this owner without replaying the original task.
   const canRecoverSettledToolResults =
@@ -446,10 +445,10 @@ export async function recoverEmbeddedRunAttempt(input: {
     (!promptError || promptErrorSource === "prompt") &&
     !isTerminalAssistantError(attemptAssistant) &&
     (!outputLimitFailure || canContinueOutputLimit) &&
-    (retryFailure?.kind !== "reason" || retryFailure.sameModelRetry !== false) &&
     recoveryReason &&
     (await failoverRetryController.maybeRetryTransient({
       reason: recoveryReason,
+      sameModelRetry: retryFailure?.kind === "reason" ? retryFailure.sameModelRetry : undefined,
       code: promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code,
       message: promptError ? formatErrorMessage(promptError) : assistantSignal?.message,
       retryAfterMs: promptError
@@ -594,6 +593,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       runtimeAuthRetry: input.runtimeAuthRetry,
       buildErrorAgentMeta: buildAttemptErrorMeta,
       failover: failoverRetryController,
+      rateLimitRetriesExhausted: failoverRetryController.rateLimitRetriesExhausted,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,
       traceAttempts: input.traceAttempts,
       previousRetryFailoverReason: input.lastRetryFailoverReason,

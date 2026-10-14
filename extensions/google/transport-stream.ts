@@ -52,6 +52,7 @@ import {
   isGoogleGemini25ThinkingBudgetModel,
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
   resolveGoogleGemini3ThinkingLevel,
   stripInvalidGoogleThinkingBudget,
   type GoogleThinkingInputLevel,
@@ -124,9 +125,6 @@ const GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX =
 const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
 let toolCallCounter = 0;
-function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
-}
 
 function normalizeGoogleTransportRouteApi(
   api: string | undefined,
@@ -364,7 +362,7 @@ function resolveGoogleThinkingConfig(
     return getDisabledThinkingConfig(model.id);
   }
   if (isAdaptiveReasoningLevel(options.reasoning)) {
-    if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
+    if (isGoogleGemini3ThinkingLevelModel(model.id)) {
       return { includeThoughts: true };
     }
     if (isGoogleGemini25ThinkingBudgetModel(model.id)) {
@@ -374,7 +372,7 @@ function resolveGoogleThinkingConfig(
       });
     }
   }
-  if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
+  if (isGoogleGemini3ThinkingLevelModel(model.id)) {
     return {
       includeThoughts: true,
       thinkingLevel: resolveThinkingLevel(options.reasoning, model.id),
@@ -407,10 +405,10 @@ function convertGoogleMessages(
       normalizeGoogleTransportMessageRoutes(context.messages as Context["messages"]),
       canonicalGoogleModel(routeModel),
       (id) => (requiresGoogleToolCallId(model.id) ? normalizeToolCallId(id) : id),
-      { preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id) },
+      { preserveCrossModelToolCallThoughtSignature: isGoogleGemini3ThinkingLevelModel(model.id) },
     ) as ProviderContext["messages"],
     replay: "managed",
-    requiresToolCallSignature: requiresToolCallThoughtSignature(model.id),
+    requiresToolCallSignature: isGoogleGemini3ThinkingLevelModel(model.id),
     videoPart: (video) => {
       const placeholder = { text: GOOGLE_VIDEO_SLOT_OMISSION };
       videoSlots?.set(placeholder, video);

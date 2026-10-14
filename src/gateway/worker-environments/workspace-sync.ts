@@ -316,14 +316,14 @@ export function createWorkerWorkspaceActions(
         if (!success(packTransfer)) {
           throw workspaceSyncError(packTransfer);
         }
-        const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
-          runTask(
-            argv,
-            workerSshCommandOptions({
+        const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv, gitOptions) =>
+          runTask(argv, {
+            ...workerSshCommandOptions({
               timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
               signal: options.ownerSignal,
             }),
-          ),
+            ...gitOptions,
+          }),
         );
         const seeded = await runWorkspaceCommand({
           transportRetry: "never",

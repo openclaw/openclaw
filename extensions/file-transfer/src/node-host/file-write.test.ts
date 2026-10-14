@@ -229,26 +229,37 @@ describe("handleFileWrite — symlink protection", () => {
     await expectAccessMissing(path.join(realDir, "new"));
   });
 
-  it("preflights canonical write targets without creating files or parents", async () => {
-    const realDir = path.join(tmpRoot, "real-dir");
-    await fs.mkdir(realDir);
-    const allowed = path.join(tmpRoot, "allowed");
-    await fs.symlink(realDir, allowed);
+  it.each([
+    { name: "without an expected hash", expectedSha256: undefined },
+    { name: "with an incorrect hash", expectedSha256: "0".repeat(64) },
+  ])(
+    "preflights canonical write targets $name without creating files or parents",
+    async ({ expectedSha256 }) => {
+      const realDir = path.join(tmpRoot, "real-dir");
+      await fs.mkdir(realDir);
+      const allowed = path.join(tmpRoot, "allowed");
+      await fs.symlink(realDir, allowed);
 
-    const r = await handleFileWrite({
-      path: path.join(allowed, "new", "child.txt"),
-      contentBase64: b64("payload"),
-      createParents: true,
-      followSymlinks: true,
-      preflightOnly: true,
-    });
+      const r = await handleFileWrite({
+        path: path.join(allowed, "new", "child.txt"),
+        contentBase64: b64("payload"),
+        createParents: true,
+        followSymlinks: true,
+        preflightOnly: true,
+        expectedSha256,
+      });
 
-    expectSuccessFields(r, {
-      path: path.join(realDir, "new", "child.txt"),
-      size: "payload".length,
-    });
-    await expectAccessMissing(path.join(realDir, "new"));
-  });
+      if (expectedSha256) {
+        expectFailure(r, "INTEGRITY_FAILURE");
+      } else {
+        expectSuccessFields(r, {
+          path: path.join(realDir, "new", "child.txt"),
+          size: "payload".length,
+        });
+      }
+      await expectAccessMissing(path.join(realDir, "new"));
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects a retargeted parent before writing bytes",

@@ -101,13 +101,13 @@ it("reuses resident metadata while preserving exact payload bytes and observing 
         messageId: question.id,
         message: firstMessage,
       });
-      expect(sql.counts).toEqual({ payload: 2, other: 0 });
+      expect(sql.counts).toEqual({ payload: 1, other: 0 });
 
       const second = rewrite.prepare();
       expect(second.event.message).toEqual(firstMessage);
       expect(second.eventJson).toBe(JSON.stringify({ ...question, message: firstMessage }));
       expect(rewrite.commit(second, finalMessage).result?.message).toEqual(finalMessage);
-      expect(sql.counts).toEqual({ payload: 4, other: 0 });
+      expect(sql.counts).toEqual({ payload: 2, other: 0 });
     } finally {
       sql.restore();
     }

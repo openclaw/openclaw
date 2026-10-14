@@ -4,7 +4,10 @@ import { page } from "vitest/browser";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { renderMessageGroup } from "./components/chat-message-group.test-support.ts";
-import { renderStreamGroup, renderWorkGroupSummary } from "./components/chat-message-stream.ts";
+import {
+  renderStreamGroup,
+  renderWorkGroupSummary,
+} from "./components/chat-message-stream.test-support.ts";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/chat.ts";

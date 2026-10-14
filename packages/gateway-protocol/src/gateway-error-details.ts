@@ -42,6 +42,8 @@ export const GatewayErrorDetailCodes = {
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
   TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
   TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
+  CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED",
+  CLAW_REVIEW_REQUIRED: "CLAW_REVIEW_REQUIRED",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -122,6 +124,16 @@ export type TaskWorktreeSourceRequiredErrorDetails = {
   cwd: string;
 };
 
+export type ClawHubRiskAcknowledgementRequiredErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED;
+  warning: string;
+};
+
+export type ClawReviewRequiredErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED;
+  kind: "plugin" | "skill";
+};
+
 /** Structured details emitted by method-level failures. */
 export type GatewayErrorDetails =
   | CronJobNotFoundErrorDetails
@@ -136,7 +148,32 @@ export type GatewayErrorDetails =
   | GitHubPublicationSelectionRejectedErrorDetails
   | SessionWorkspaceRecoveryRequiredErrorDetails
   | TaskWorktreeSourceRequiredErrorDetails
+  | ClawHubRiskAcknowledgementRequiredErrorDetails
+  | ClawReviewRequiredErrorDetails
   | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
+
+export function readClawHubRiskAcknowledgementRequiredError(
+  error: unknown,
+): ClawHubRiskAcknowledgementRequiredErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  const warning = typeof details?.warning === "string" ? details.warning.trim() : "";
+  return record?.code === ErrorCodes.INVALID_REQUEST &&
+    details?.code === GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED &&
+    warning
+    ? { code: GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED, warning }
+    : null;
+}
+
+export function readClawReviewRequiredError(error: unknown): ClawReviewRequiredErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  return record?.code === ErrorCodes.INVALID_REQUEST &&
+    details?.code === GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED &&
+    (details.kind === "plugin" || details.kind === "skill")
+    ? { code: GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED, kind: details.kind }
+    : null;
+}
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
 

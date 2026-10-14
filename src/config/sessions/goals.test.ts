@@ -216,6 +216,65 @@ describe("session goals", () => {
     ).rejects.toThrow(/already complete/);
   });
 
+  it.each([
+    { totalTokens: 105, tokenStart: 100, tokensUsed: 5 },
+    { totalTokens: 125, tokenStart: 125, tokensUsed: 0 },
+  ])(
+    "resumes completed goals with appropriate accounting at $totalTokens tokens",
+    async ({ totalTokens, tokenStart, tokensUsed }) => {
+      await writeSession(100);
+      const created = await createSessionGoal({
+        storePath: fixture.storePath(),
+        sessionKey,
+        objective: "ship",
+        tokenBudget: 20,
+        now: 10,
+      });
+      await upsertSessionEntry({
+        storePath: fixture.storePath(),
+        sessionKey,
+        entry: { ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!, totalTokens },
+      });
+      const completed = await updateSessionGoalStatus({
+        storePath: fixture.storePath(),
+        sessionKey,
+        status: "complete",
+        note: "verified",
+        now: 20,
+      });
+      expect(formatSessionGoalStatus(completed)).toContain("Commands: /goal resume, /goal clear");
+      const resumed = await updateSessionGoalStatus({
+        storePath: fixture.storePath(),
+        sessionKey,
+        status: "active",
+        now: 30,
+      });
+      expect(resumed).toMatchObject({
+        id: created.id,
+        objective: "ship",
+        createdAt: 10,
+        status: "active",
+        updatedAt: 30,
+        tokenBudget: 20,
+        tokenStart,
+        tokensUsed,
+        continuationTurns: 0,
+        lastStatusNote: "verified",
+      });
+      expect(resumed.completedAt).toBeUndefined();
+      const recompleted = await updateSessionGoalStatus({
+        storePath: fixture.storePath(),
+        sessionKey,
+        status: "complete",
+        now: 40,
+      });
+      expect(recompleted.completedAt).toBe(40);
+      expect(
+        getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.completedAt,
+      ).toBe(40);
+    },
+  );
+
   it("lets users resume blocked goals", async () => {
     await writeSession(0);
     await createSessionGoal({

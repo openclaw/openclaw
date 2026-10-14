@@ -21,7 +21,9 @@ import {
   shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
+import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
@@ -455,6 +457,89 @@ describe("gateway client capability tool filtering", () => {
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: true }), "github_publish"),
     ).toBe(true);
+  });
+
+  it.each([
+    { name: "default policy", config: {}, available: true, expected: true },
+    {
+      name: "sandbox deny",
+      config: { tools: { sandbox: { tools: { deny: ["github_publish"] } } } },
+      available: true,
+      expected: false,
+    },
+    {
+      name: "restrictive sandbox allow",
+      config: { tools: { sandbox: { tools: { allow: ["read"] } } } },
+      available: true,
+      expected: false,
+    },
+    {
+      name: "global deny",
+      config: { tools: { deny: ["github_publish"] } },
+      available: true,
+      expected: false,
+    },
+    {
+      name: "restrictive agent allow",
+      config: { agents: { entries: { main: { tools: { allow: ["read"] } } } } },
+      available: true,
+      expected: false,
+    },
+    { name: "unavailable publication", config: {}, available: false, expected: false },
+    { name: "unprepared publication", config: {}, available: undefined, expected: false },
+  ] satisfies {
+    name: string;
+    config: OpenClawConfig;
+    available: boolean | undefined;
+    expected: boolean;
+  }[])("filters sandbox GitHub publication with $name", async ({ config, available, expected }) => {
+    const cfg = withDefaultRoster(config);
+    const sessionKey = "agent:main:sandbox-publisher";
+    const sandbox = createAgentToolsSandboxContext({
+      workspaceDir: "/tmp/sandbox-publisher",
+      sessionKey,
+      tools: resolveSandboxToolPolicyForAgent(cfg, "main"),
+    });
+    const callers: unknown[] = [];
+    const call = vi
+      .spyOn(inProcessGateway, "callInProcessGatewayTool")
+      .mockImplementation(async () => {
+        callers.push(getGatewayToolCallerIdentity()?.sessionKey);
+        return { requestId: "publication-1", status: "requested" } as never;
+      });
+    try {
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        sessionKey,
+        sandbox,
+        githubPublicationAvailable: available,
+        senderIsOwner: false,
+        wrapBeforeToolCallHook: false,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      });
+      expect(hasTool(tools, "github_publish")).toBe(expected);
+      if (expected) {
+        await expectToolNamed(tools, "github_publish").execute("publish-1", {
+          title: "Publish fix",
+        });
+        expect(call).toHaveBeenCalledWith("sessions.github.publish", {
+          sessionKey,
+          idempotencyKey: "publish-1",
+          title: "Publish fix",
+        });
+        expect(callers).toEqual([sessionKey]);
+      } else {
+        expect(call).not.toHaveBeenCalled();
+      }
+    } finally {
+      call.mockRestore();
+    }
   });
 
   it("omits host UI runtime tools for sandboxed agents", () => {

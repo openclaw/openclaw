@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -5,6 +6,8 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { openSqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import type { FixtureOperations } from "../infra/sqlite-worker-store.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import { revokeAgentDatabaseResources } from "./openclaw-agent-db-resources.js";
 import {
@@ -19,6 +22,7 @@ import {
 } from "./openclaw-agent-worker-store.js";
 import { agentWorkerStoreFixtureEntrypoint } from "./openclaw-agent-worker-store.runtime.test-support.js";
 import type { AgentWorkerFixtureOperations } from "./openclaw-agent-worker-store.test-support.js";
+import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 
 const workers = new Set<OpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>>();
 const executions = new Set<OpenClawAgentDatabaseExecution>();
@@ -230,4 +234,70 @@ it("V2 reports resource revocation only after its accepted write settles", async
     { value: "accepted" },
     { value: "readmitted" },
   ]);
+});
+
+it("attributes cold worker reservations to bounded commands and actual outer transactions", async () => {
+  const reservationRoot = tempDirs.make("openclaw-reservation-attribution-");
+  const reservationOptions = {
+    agentId: "fixture",
+    path: path.join(reservationRoot, "agent.sqlite"),
+  };
+  const diagnostics = channel("openclaw.agent-database.reservation");
+  const observations: unknown[] = [];
+  const observe = (message: unknown) => observations.push(message);
+  diagnostics.subscribe(observe);
+  try {
+    await runOpenClawAgentWorkerWrite(reservationOptions, async () => {
+      const store = await openSqliteWorkerStore<FixtureOperations>({
+        moduleUrl: new URL("../infra/sqlite-worker-store.test-support.ts", import.meta.url),
+        databasePath: reservationOptions.path,
+        input: undefined,
+      });
+      try {
+        await store.execute({
+          type: "database.domain.execute",
+          input: {
+            command: {
+              type: "session.actor.appendTranscriptEvent",
+              input: { value: "synthetic-private-committed" },
+            },
+          },
+        });
+        await expect(
+          store.execute({
+            type: "database.domain.execute",
+            input: {
+              command: {
+                type: "session.private-customer-command",
+                input: { value: "synthetic-private-rolled-back" },
+              },
+            },
+          }),
+        ).rejects.toThrow("Fixture transaction rolled back");
+        expect(await store.execute({ type: "read", input: undefined })).toEqual([
+          "synthetic-private-committed",
+        ]);
+      } finally {
+        await store.close();
+      }
+    });
+    expect(observations).toEqual([
+      expect.objectContaining({
+        operation: "worker",
+        workerOperations: [
+          "open",
+          "session.actor.appendTranscriptEvent",
+          "sessions",
+          "execute",
+          "close",
+        ],
+        transactionCount: 2,
+      }),
+    ]);
+    const serialized = JSON.stringify(observations);
+    expect(serialized).not.toContain("private");
+    expect(serialized).not.toContain(reservationOptions.path);
+  } finally {
+    diagnostics.unsubscribe(observe);
+  }
 });

@@ -50,7 +50,7 @@ export type NewSessionBodyProps = {
   onOpenImage: (item: ImageLightboxItem) => void;
 };
 
-export function newSessionAnnouncement(
+function newSessionAnnouncement(
   props: Pick<NewSessionBodyProps, "pendingMessage" | "completion" | "statusLabel">,
 ) {
   return props.pendingMessage

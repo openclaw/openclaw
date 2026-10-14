@@ -125,6 +125,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
           kind: "provider-auth",
           authChoice: choice.choiceId,
           agentId: params.agentId,
+          selectModel: params.selectModel === true,
         },
         timeoutMs: 25 * 60_000,
         context,

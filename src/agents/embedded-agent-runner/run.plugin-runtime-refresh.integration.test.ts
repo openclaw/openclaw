@@ -19,11 +19,15 @@ import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harnes
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
+let PreparedModelRuntimeInitialRunAdmissionError: typeof import("../prepared-model-runtime.errors.js").PreparedModelRuntimeInitialRunAdmissionError;
+let PreparedModelRuntimeOwnerNotPublishedError: typeof import("../prepared-model-runtime.errors.js").PreparedModelRuntimeOwnerNotPublishedError;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 let registerPreparedAgentHarness: typeof import("../harness/registry.js").registerAgentHarness;
 
 beforeAll(async () => {
   runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+  ({ PreparedModelRuntimeInitialRunAdmissionError, PreparedModelRuntimeOwnerNotPublishedError } =
+    await import("../prepared-model-runtime.errors.js"));
   ({ registerAgentHarness: registerPreparedAgentHarness } = await import("../harness/registry.js"));
 });
 
@@ -42,6 +46,75 @@ afterEach(async () => {
 });
 
 describe("plugin runtime refresh admission", () => {
+  it("identifies an initial runtime admission refusal before an attempt can execute", async () => {
+    const refusal = new PreparedModelRuntimeOwnerNotPublishedError(
+      "Model runtime replacement is in progress",
+      { admissionBlocked: true },
+    );
+    const onAttemptStart = vi.fn();
+    mockedAcquireAgentRunPreparedModelRuntime.mockRejectedValueOnce(refusal);
+
+    const error = await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      agentHarnessId: "openclaw",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      sessionKey: undefined,
+      onAttemptStart,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PreparedModelRuntimeInitialRunAdmissionError);
+    expect(error).toMatchObject({ admissionBlocked: true, cause: refusal });
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
+    expect(onAttemptStart).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps a runtime refusal after committed work unqualified for initial failure delivery", async () => {
+    const refusal = new PreparedModelRuntimeOwnerNotPublishedError(
+      "Model runtime replacement is in progress",
+      { admissionBlocked: true },
+    );
+    const base = await mockedAcquireAgentRunPreparedModelRuntime({
+      agentId: "main",
+      agentDir: state.agentDir(),
+      config: {},
+      workspaceDir: state.workspaceDir,
+    });
+    mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+    mockedAcquireAgentRunPreparedModelRuntime
+      .mockResolvedValueOnce(base)
+      .mockRejectedValueOnce(refusal);
+    const onAttemptStart = vi.fn();
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      params.registerPluginRuntimeRefreshConsumer?.(() => true);
+      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          { toolName: "write", isError: false },
+          { toolName: "plugins", isError: false },
+        ],
+      });
+    });
+
+    await expect(
+      runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        prompt: "write the receipt, reload the plugin, then verify the receipt",
+        agentHarnessId: "openclaw",
+        provider: "fixture-provider",
+        model: "fixture-model",
+        sessionKey: undefined,
+        onAttemptStart,
+      }),
+    ).rejects.toBe(refusal);
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledTimes(2);
+    expect(onAttemptStart).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+  });
+
   it("retains settled work from an overloaded attempt through a later plugin refresh", async () => {
     const originalPrompt = "write the receipt, reload the plugin, then report the receipt ID";
     const originalMessage = { role: "user" as const, content: originalPrompt, timestamp: 1 };

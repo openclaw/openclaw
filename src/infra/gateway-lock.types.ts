@@ -13,6 +13,7 @@ export type GatewayLockHandle = {
   releaseInTree: () => Promise<void>;
   release: () => Promise<void>;
   run<T>(operation: () => T): T;
+  markListening?: () => void;
 };
 
 export type GatewayLockOptions = {

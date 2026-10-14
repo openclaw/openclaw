@@ -44,6 +44,7 @@ import {
 } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
@@ -414,7 +415,7 @@ it.each(
           expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
         }
         if (boundary.endsWith("reference")) {
-          const db = openOpenClawStateDatabase().db;
+          const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
           const rows = db
             .prepare(
               "SELECT id, json_remove(entry_json, '$.deliveryCompletion.commandOwnerReference') AS entry_json FROM delivery_queue_entries WHERE queue_name = ?",

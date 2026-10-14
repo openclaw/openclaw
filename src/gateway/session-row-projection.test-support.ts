@@ -210,7 +210,7 @@ export function createSessionRowProjectionFixture(params: {
     modelFacts: (query) => describe(query)!.materialized.source,
     withPreparedExactRows: async (queries, consume) => {
       queries(cfg);
-      return { kind: "complete", value: consume(projection) };
+      return consume(projection);
     },
     present: (record, options) => {
       const now = options?.now ?? Date.now();

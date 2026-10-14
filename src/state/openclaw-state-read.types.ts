@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type {
   AcpSessionReadCommand,
@@ -69,6 +68,7 @@ import type {
   ConversationRef,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding.types.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type {
@@ -124,6 +124,7 @@ import type {
   UserBackgroundReadCommand,
   UserBackgroundReadReply,
 } from "./user-background.types.js";
+import type { CanonicalUserPreferences } from "./user-preferences.types.js";
 import type { UserProfileAvatarReadCommand } from "./user-profiles-avatar.types.js";
 import type {
   UserChannelIdentitySelector,
@@ -232,6 +233,7 @@ export type OpenClawStateReadCommand =
       selection: import("./user-model-accounts.js").PersonalCatalogSelection;
     }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
+  | { type: "userPreferences.read"; profileId: string; keys?: readonly string[] }
   | {
       type: "githubPublication.lifecycle";
       publicationKind: "shared" | "personal";
@@ -429,6 +431,7 @@ export type OpenClawStateReadResult =
       type: "userPreferences.values";
       values: Map<string, unknown>;
     }
+  | { type: "userPreferences.read"; preferences: CanonicalUserPreferences | undefined }
   | UserBackgroundReadReply
   | {
       type: "exec-approvals.read";
@@ -544,6 +547,6 @@ export type RetainedReadScope = {
 };
 
 export type OpenClawStateReadOnlyDatabase = {
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
 };

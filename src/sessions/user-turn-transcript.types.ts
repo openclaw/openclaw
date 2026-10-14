@@ -220,7 +220,7 @@ export type UserTurnTranscriptRecorder = {
     authority?: import("../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   }) => Promise<boolean>;
   getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
-  /** @deprecated Await completeProcessingAsync. Retained during stable deprecation. */
+  /** @deprecated Await completeProcessingAsync. Final compatibility day: 2026-12-31. */
   completeProcessing?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome | undefined;
   completeProcessingAsync?: (
     outcome: AgentRunTerminalOutcome,

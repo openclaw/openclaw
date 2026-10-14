@@ -17,6 +17,7 @@ import {
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import {
+  readSqliteWorkerMonotonicNs,
   SqliteWorkerError,
   type SqliteWorkerAdmissionRequest,
   type SqliteWorkerExecutionAuthority,
@@ -39,6 +40,7 @@ import {
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 
 export type { SqliteWorkerAdmissionRequest } from "./sqlite-worker-contract.js";
 export { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
@@ -62,6 +64,7 @@ type DatabaseAuthority = {
 
 export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner & {
   readonly port: MessagePort;
+  readonly attachment?: { value: unknown };
   readonly failure: unknown;
   readonly failureSource: AdmissionFailureSource | undefined;
   readonly cleanupFailures: readonly unknown[];
@@ -146,16 +149,6 @@ function createOperationAdmission(
   assertRelayCurrent?: () => void,
 ): SqliteWorkerOperationAdmission {
   const { port1, port2 } = new MessageChannel();
-  if (attachment !== undefined) {
-    try {
-      // This message moves with port2; command payloads retain their v8 encoding.
-      port1.postMessage({ kind: "sqlite-operation-attachment", value: attachment }, []);
-    } catch (error) {
-      port1.close();
-      port2.close();
-      throw error;
-    }
-  }
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const decisions = new Set<Int32Array>();
   const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
@@ -192,7 +185,7 @@ function createOperationAdmission(
     code: "outcome-unknown" | "unavailable" = "outcome-unknown",
   ) => recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, code), "protocol");
   const installCommitted = (receipt: NativeCommitReceipt): void => {
-    // Settlement repeats the latest receipt; each private port otherwise delivers in order.
+    // Each private port delivers receipts in order; repeated receipts remain idempotent.
     if (nativeReceipt && receipt.sequence <= nativeReceipt.sequence) {
       return;
     }
@@ -219,6 +212,15 @@ function createOperationAdmission(
     }
   };
   const receive = (message: unknown) => {
+    recordWorkerMessage(
+      isRecord(message) && message.kind === "sqlite-database-admissions"
+        ? "admission"
+        : "authority",
+      "from_worker",
+      isRecord(message) && typeof message.payloadBytes === "number"
+        ? message.payloadBytes
+        : undefined,
+    );
     started = true;
     if (isRecord(message) && message.kind === "sqlite-database-admissions") {
       if (
@@ -318,6 +320,7 @@ function createOperationAdmission(
           message.location === undefined ? undefined : { location: message.location, admissions };
         const reply = captureSqliteDatabaseAdmissions(databaseAdmissionCursor, scope);
         message.port.postMessage(reply, []);
+        recordWorkerMessage("admission", "to_worker");
         Atomics.store(decision, 0, GRANTED);
       } catch (error) {
         if (
@@ -380,7 +383,10 @@ function createOperationAdmission(
     }
     const decision = new Int32Array(message.decision);
     const expired = () => {
-      if (typeof message.deadlineNs === "bigint" && process.hrtime.bigint() >= message.deadlineNs) {
+      if (
+        typeof message.deadlineNs === "bigint" &&
+        readSqliteWorkerMonotonicNs() >= message.deadlineNs
+      ) {
         if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
           Atomics.notify(decision, 0);
         }
@@ -522,6 +528,7 @@ function createOperationAdmission(
   };
   const admission: SqliteWorkerOperationAdmission = {
     port: port2,
+    attachment: attachment === undefined ? undefined : { value: attachment },
     observeRequests(observer) {
       if (closed || observeRequest) {
         throw new SqliteWorkerError(
@@ -694,22 +701,14 @@ export function requestSqliteWorkerSchemaMaintenance(databasePath: string): bool
   return true;
 }
 
-/** Require and cache owner-prepared data from this operation's private port. */
+/** Require owner-prepared data carried by this operation's command envelope. */
 export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
   const scope = currentAdmission.getStore();
   if (!scope?.active) {
     throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
   }
   if (!scope.owner.attachment) {
-    const message: unknown = receiveMessageOnPort(scope.port)?.message;
-    if (
-      !isRecord(message) ||
-      message.kind !== "sqlite-operation-attachment" ||
-      message.value === undefined
-    ) {
-      throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
-    }
-    scope.owner.attachment = { value: message.value };
+    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
   }
   return scope.owner.attachment.value;
 }

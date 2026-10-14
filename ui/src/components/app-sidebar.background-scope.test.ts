@@ -332,7 +332,7 @@ describe("AppSidebar initial managed-list hydration", () => {
       invalidate: false,
       filter: "involving-me",
     },
-  ])("keeps only required filtered reads during $name", async (scenario) => {
+  ])("paints filtered sessions before group metadata during $name", async (scenario) => {
     const { holdSecondSlot, invalidate, filter } = scenario;
     const matchesFilter = (query: Record<string, unknown> | null | undefined) =>
       filter === "involving-me"
@@ -448,29 +448,26 @@ describe("AppSidebar initial managed-list hydration", () => {
     try {
       sidebar.connected = true;
       await settleLitElement(sidebar);
-      expect(listQueries).toHaveLength(1);
+      expect(listQueries).toHaveLength(holdSecondSlot ? 1 : 2);
       expect(listQueries[0]).toMatchObject({ ownerFirst: true, agentId: "main" });
-      expect(order.includes("groups:start")).toBe(!holdSecondSlot);
+      expect(order).not.toContain("groups:start");
 
       order.push("primary:resolve");
       primary.resolve(primaryResult);
-      await vi.waitFor(() => expect(order).toContain("groups:start"));
+      await vi.waitFor(() => expect(order).toContain("filtered:start"));
       await vi.waitFor(() =>
         expect(sessions.state.result?.sessions[0]?.label).toBe("Canonical session"),
       );
-      if (holdSecondSlot) {
-        expect(listQueries).toHaveLength(1);
-      }
-
-      order.push("groups:resolve");
-      groups.resolve(emptyGroups);
-      await vi.waitFor(() => expect(order).toContain("filtered:start"));
       expect(listQueries).toHaveLength(2);
       expect(listQueries[1]?.agentId).toBe(filter === "involving-me" ? "main" : undefined);
       expect(matchesFilter(listQueries[1])).toBe(true);
 
       order.push("filtered:resolve");
       filtered.resolve(filteredResult);
+      await vi.waitFor(() => expect(sidebar.textContent).toContain("My session"));
+      await vi.waitFor(() => expect(order).toContain("groups:start"));
+      order.push("groups:resolve");
+      groups.resolve(emptyGroups);
       if (invalidate) {
         await vi.waitFor(() => expect(order).toContain("later:start"));
         expect(sidebar.textContent).toContain("My session");

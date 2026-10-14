@@ -1,6 +1,28 @@
 import { readFileSync } from "node:fs";
+import { minimatch } from "minimatch";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
+
+it.each([
+  [["apps/linux/README.md"], false],
+  [["apps/linux/omarchy/README.md"], false],
+  [["apps/linux/README.md", "apps/linux/src-tauri/src/main.rs"], true],
+  [["apps/linux/ui/index.html"], true],
+  [["apps/linux/src-tauri/resources/README.md"], true],
+  [["scripts/stage-openclaw-bun.sh"], true],
+  [[".github/workflows/linux-app.yml"], true],
+] as const)("selects Linux app CI for %j: %s", (files, expected) => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const patterns: string[] = workflow.on.pull_request.paths;
+  const selected = files.some((file) =>
+    patterns.reduce((included, pattern) => {
+      const excluded = pattern.startsWith("!");
+      return minimatch(file, excluded ? pattern.slice(1) : pattern) ? !excluded : included;
+    }, false),
+  );
+  expect(selected).toBe(expected);
+  expect(workflow.on).toHaveProperty("workflow_dispatch");
+});
 
 it.each(["build_linux", "build_windows", "build_macos"])(
   "passes the verified release identity to %s despite tagless checkout",

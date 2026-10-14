@@ -1,4 +1,3 @@
-import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { showConfirmDialog } from "../components/confirm-dialog.ts";
 import "../styles.css";
@@ -190,10 +189,17 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
         anchor.style.cssText =
           `position: fixed; top: 100px; left: 0; width: ` + width + "px; height: 100px";
         document.body.append(anchor);
+        const messageContent = document.createElement("span");
+        const settingsLink = document.createElement("a");
+        settingsLink.href = "#settings";
+        settingsLink.textContent = "Gateway settings";
+        messageContent.append(
+          "Your changes could not be saved because the connection was interrupted. Keep this tab open, check ",
+          settingsLink,
+          ", and try again when the connection is restored.",
+        );
         const host = await showArchiveToast({
-          message: html`Your changes could not be saved because the connection was interrupted. Keep
-            this tab open, check <a href="#settings">Gateway settings</a>, and try again when the
-            connection is restored.`,
+          message: messageContent,
           actionLabel: "Discard unsaved changes and reload",
           ...(placement === "anchored" ? { anchor } : { placement }),
         });

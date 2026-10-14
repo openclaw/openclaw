@@ -1,4 +1,5 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
 import {
   crabboxCommandOutput,
   leaseRunArgs,
@@ -7,6 +8,7 @@ import {
 } from "./crabbox-worker-command.js";
 import { createCrabboxNodeRuntimeSetup } from "./crabbox-worker-node-enrollment.js";
 import { runProvisionSetup } from "./crabbox-worker-provision-commands.js";
+import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
 import {
   resolveCrabboxNodeEnrollmentTimeoutMs,
   WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
@@ -73,23 +75,41 @@ export async function prepareCrabboxProjectFiles(params: {
   signal?: AbortSignal;
   inspectPrepared?: true;
   recordRecipePreparation?: (metadata: RecipePreparation) => Promise<void>;
+  setupSecrets?: Readonly<Record<string, SecretRef>>;
+  assertCurrent?: () => void;
 }) {
   const run = async (
     args: string[],
     signal: AbortSignal,
-    createScript?: (timeoutMs: number) => string,
+    createScript?: (timeoutMs: number, setupEnv?: Record<string, string>) => string,
   ) => {
     params.project.assertCurrent();
     const timeoutMs = params.timeoutMs();
-    const result = await runCrabboxCommand({
-      action: "project preparation",
-      args,
-      binary: params.binary,
-      runCommand: params.runCommand,
-      signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
-      input: createScript?.(timeoutMs),
-      timeoutMs,
-    });
+    const assertCurrent = () => {
+      params.signal?.throwIfAborted();
+      params.project.assertCurrent();
+      params.assertCurrent?.();
+    };
+    const commandSignal = params.signal ? AbortSignal.any([signal, params.signal]) : signal;
+    const result =
+      createScript && Object.keys(params.setupSecrets ?? {}).length
+        ? await runCrabboxSetupEgress({
+            ...params,
+            secrets: params.setupSecrets ?? {},
+            createScript: (env) => createScript(timeoutMs, env),
+            signal: commandSignal,
+            timeoutMs,
+            assertCurrent,
+          })
+        : await runCrabboxCommand({
+            action: "project preparation",
+            args,
+            binary: params.binary,
+            runCommand: params.runCommand,
+            signal: commandSignal,
+            input: createScript?.(timeoutMs),
+            timeoutMs,
+          });
     params.project.assertCurrent();
     return crabboxCommandOutput("project preparation", result);
   };

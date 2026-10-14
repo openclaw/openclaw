@@ -141,7 +141,8 @@ describe("test runtime prerequisites", () => {
     ],
     ["tui-pty", ["--exclude", "tui/tui-session-identity-pty.e2e.test.ts"], undefined],
     ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
-    ["gateway-core", ["--exclude", "gateway-*.test.ts"], undefined],
+    ["gateway-core", ["--exclude", "gateway-*.test.ts"], "runtime"],
+    ["gateway-core", ["--exclude", "gateway*.test.ts"], undefined],
     ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
     ["infra", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
     [
@@ -2057,7 +2058,6 @@ export const single = {
         "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
         "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
         "test/scripts/mcp-code-mode-gateway-client.test.ts",
-        "test/scripts/session-log-mentions.test.ts",
         "src/agents/agent-bundle-mcp-runtime.test.ts",
         "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
         "src/gateway/server.cron.test.ts",
@@ -3977,6 +3977,11 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("expands untargeted local runs to leaf project configs by default", async () => {
     const infraConfig = "test/vitest/vitest.infra.config.ts";
     const infraFiles = await listVitestConfigTestFiles(infraConfig);
+    const toolingFiles = await listVitestConfigTestFiles("test/vitest/vitest.tooling.config.ts");
+    const uiFiles = await listVitestConfigTestFiles("test/vitest/vitest.ui.config.ts");
+    const gatewayFiles = await listVitestConfigTestFiles(
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+    );
     withEnv(
       {
         OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
@@ -4006,7 +4011,23 @@ describe("scripts/test-projects full-suite sharding", () => {
         expect(unitSrcPlans.every((plan) => plan.forwardedArgs.length <= 150)).toBe(true);
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
-        expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+        expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 8)).toBe(true);
+        expect(toolingPlans).toHaveLength(Math.ceil(toolingFiles.length / 8));
+        expect(toolingPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(toolingFiles)].toSorted(),
+        );
+        const uiPlans = targetedPlans("test/vitest/vitest.ui.config.ts");
+        expect(uiPlans).toHaveLength(Math.ceil(uiFiles.length / 8));
+        expect(uiPlans.every((plan) => plan.forwardedArgs.length <= 8)).toBe(true);
+        expect(uiPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(uiFiles)].toSorted(),
+        );
+        const gatewayPlans = targetedPlans("test/vitest/vitest.gateway-database-workers.config.ts");
+        expect(gatewayPlans).toHaveLength(Math.ceil(gatewayFiles.length / 50));
+        expect(gatewayPlans.every((plan) => plan.forwardedArgs.length <= 50)).toBe(true);
+        expect(gatewayPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(gatewayFiles)].toSorted(),
+        );
         const infraPlans = plans.filter((plan) => plan.config === infraConfig);
         expect(infraPlans.length).toBeGreaterThan(1);
         expect(

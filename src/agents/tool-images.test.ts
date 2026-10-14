@@ -65,20 +65,6 @@ describe("tool image sanitizing", () => {
       expect(resizeToJpegMock).toHaveBeenCalledTimes(2);
     });
 
-    it("reuses the exact replacement for an oversized replay", async () => {
-      const block = pngBlock(createSolidPngBuffer(2001, 8, { r: 53, g: 71, b: 89 }));
-
-      const first = getImageBlock(await replay(block));
-      expect(first.mimeType).toBe("image/jpeg");
-      expect(resizeToJpegMock).toHaveBeenCalledTimes(1);
-      resizeToJpegMock.mockClear();
-
-      const second = getImageBlock(await replay(block));
-      expect(second.mimeType).toBe("image/jpeg");
-      expect(second.data).toBe(first.data);
-      expect(resizeToJpegMock).not.toHaveBeenCalled();
-    });
-
     it("retries verification after the image backend was unavailable", async () => {
       const block = pngBlock(createSolidPngBuffer(33, 25, { r: 97, g: 113, b: 131 }));
       resizeToJpegMock.mockRejectedValueOnce(

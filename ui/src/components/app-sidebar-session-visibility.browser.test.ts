@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
   mountRoster,
   settleRoster,
@@ -319,3 +320,101 @@ it("registers running rows rendered by the real roster child after its parent up
     Array(10).fill("running"),
   );
 });
+
+it.each(["chip", "roster"] as const)(
+  "preserves running animations through %s session refreshes",
+  async (mode) => {
+    const roster = createSessionState(
+      "main",
+      ["bare", "icon", "owner", "pair"].map((kind) => "agent:main:" + kind),
+    );
+    roster.result!.sessions.forEach((row, index) => {
+      Object.assign(row, {
+        label: ["Review changes", "Run focused tests", "Check documentation", "Verify the fix"][
+          index
+        ],
+        agentId: "main",
+        isMain: false,
+        hasActiveRun: true,
+        status: "running",
+        createdAt: 1000 - index,
+        ...(index === 1 ? { icon: "🦞" } : {}),
+        ...(index >= 2 ? { owner: { actor: { type: "human", id: "ada", label: "Ada" } } } : {}),
+        ...(index === 3
+          ? {
+              participants: [{ identity: { type: "profile", id: "bob" }, label: "Bob" }],
+              participantCount: 1,
+            }
+          : {}),
+      });
+    });
+    const {
+      sidebar,
+      sessions: harness,
+      result,
+      context,
+    } = await mountRoster(
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main", name: "Main" }],
+      },
+      roster.result!.sessions,
+    );
+    sidebar.style.cssText =
+      "display:block;position:fixed;inset:0 auto auto 0;width:320px;height:900px";
+    sidebar.sidebarAgentsMode = mode;
+    await settleRoster(sidebar);
+    const indicators = () => [
+      ...sidebar.querySelectorAll<HTMLElement>(
+        ".sidebar-recent-session .session-glyph__ring, .sidebar-recent-session .session-glyph__trace-run",
+      ),
+    ];
+    await waitForSolid(() => expect(indicators()).toHaveLength(4));
+    const original = indicators();
+    const keys = original.map(
+      (element) => element.closest<HTMLElement>("[data-session-key]")!.dataset.sessionKey,
+    );
+    const animations = original.map((element) => element.getAnimations()[0]!);
+    expect(animations.every(Boolean)).toBe(true);
+    animations.forEach((animation) => {
+      animation.pause();
+      animation.currentTime = 500;
+    });
+    for (let update = 1; update <= 3; update++) {
+      const refreshed = {
+        ...result,
+        sessions: roster.result!.sessions.map((row) =>
+          Object.assign({}, row, {
+            label: row.label + " " + update,
+            updatedAt: 1000 + update,
+            lastMessagePreview: "Progress update " + update,
+          }),
+        ),
+      };
+      result.sessions = refreshed.sessions;
+      harness.publishList({ result: refreshed });
+      if (mode === "roster") {
+        await rosterActivityStore(context).refresh();
+      }
+      await settleRoster(sidebar);
+      expect(sidebar.textContent).toContain("Review changes " + update);
+      const current = keys.map((key) =>
+        sidebar.querySelector<HTMLElement>(
+          '[data-session-key="' +
+            key +
+            '"] .session-glyph__ring, [data-session-key="' +
+            key +
+            '"] .session-glyph__trace-run',
+        )!,
+      );
+      expect(current).toHaveLength(4);
+      current.forEach((element, index) => {
+        expect(element).toBe(original[index]);
+        expect(element.getAnimations()[0]).toBe(animations[index]);
+        expect(animations[index]!.currentTime).toBe(500);
+      });
+    }
+  },
+);

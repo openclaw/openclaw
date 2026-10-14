@@ -18,6 +18,7 @@ export type ModelFallbackCandidate = ModelCandidate & {
 
 export type FallbackAttempt = ModelCandidate & {
   error: string;
+  rateLimitRetriesExhausted?: number;
   reason?: FailoverReason;
   authMode?: string;
   status?: number;

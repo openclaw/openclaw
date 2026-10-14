@@ -2,6 +2,7 @@ type CrabboxProvisionTimeoutProfile = {
   provider: string;
   desktop?: boolean;
   setup?: string;
+  warmImage?: boolean;
 };
 
 const CRABBOX_ACQUISITION_ENVELOPE_MS = 5 * 60_000;
@@ -30,7 +31,7 @@ export const CRABBOX_STOP_TIMEOUT_MS =
   2 * 10_000 + 35_000 + 2 * (5 * 60_000 + 20_000) + 5 * 60_000 + 10_000;
 // Process timeout begins termination; allow the SDK's 300ms grace and Windows'
 // 5s taskkill to settle before core reports the provider result.
-export const CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS = 10_000;
+const CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS = 10_000;
 // AWS coordinator heartbeat latency reached 107.6 seconds in production measurements.
 export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 
@@ -71,6 +72,8 @@ const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS =
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.
 // Setup may install an exact candidate CLI and official plugins on a minimal cloud image.
 export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;
+// Local pack creation, two seed commands, and upload precede runtime preparation and capture.
+export const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS = 4 * CRABBOX_SETUP_TIMEOUT_MS;
 const CRABBOX_NODE_ENROLLMENT_TIMEOUT_FLOOR_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS = 60_000;
 
@@ -119,6 +122,21 @@ export function resolveCrabboxProvisionCallTimeoutMs(
     CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS +
     CRABBOX_STOP_TIMEOUT_MS +
     // Diagnostics, heartbeat cancellation, and stop retain child/tree settlement.
-    3 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS
+    3 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
+    (profile.warmImage === false
+      ? 0
+      : CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
+        resolveCrabboxWarmImageCaptureTimeoutMs(profile.provider))
+  );
+}
+
+export function resolveCrabboxDestroyTimeoutMs(
+  profile: Pick<CrabboxProvisionTimeoutProfile, "provider" | "warmImage">,
+): number {
+  // Reserve capture unless disabled, plus separate heartbeat and stop child settlement.
+  return (
+    CRABBOX_STOP_TIMEOUT_MS +
+    2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
+    (profile.warmImage === false ? 0 : resolveCrabboxWarmImageCaptureTimeoutMs(profile.provider))
   );
 }

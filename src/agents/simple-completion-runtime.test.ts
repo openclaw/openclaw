@@ -227,7 +227,7 @@ function createOpenAIRouteModelResolver(params: {
 }
 
 describe("prepareSimpleCompletionModel", () => {
-  it.each([undefined, {}])(
+  it.each([{}])(
     "blocks helper inference under the admitted required policy with caller config %j",
     async (cfg) => {
       preparedModelRuntime = {

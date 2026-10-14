@@ -11,6 +11,7 @@ vi.mock("./chat-pane.tsx", async () => {
 });
 
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { ChatPageState } from "./chat-page-state.ts";
 import {
   settleChatPage,
   createSessionTitleSource,
@@ -19,7 +20,7 @@ import {
   setNavigationContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
-import { ChatPage, chatPageState } from "./chat-page.ts";
+import { ChatPage } from "./chat-page.ts";
 
 type RenderedPane = HTMLElement & { presentationTitle: string | undefined };
 
@@ -100,8 +101,8 @@ describe("chat page session refresh", () => {
       }
       originalRequestUpdate(...args);
     });
-    const originalRender = chatPageState(page).render.bind(chatPageState(page));
-    vi.spyOn(chatPageState(page), "render").mockImplementation(() => {
+    const originalRender = ChatPageState.forHost(page).render.bind(ChatPageState.forHost(page));
+    vi.spyOn(ChatPageState.forHost(page), "render").mockImplementation(() => {
       if (!insideFrame) {
         offFrameUpdates.push("pane bindings");
       }

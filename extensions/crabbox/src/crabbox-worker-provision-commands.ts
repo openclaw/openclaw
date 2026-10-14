@@ -21,6 +21,7 @@ import {
 import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import { buildCrabboxAllocationArgs, type parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
 import {
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE0_READY_WAIT_TIMEOUT,
@@ -257,6 +258,7 @@ export async function runProvisionSetup(
     setup: string;
     timeoutMs?: number;
     forwardedEnv?: Record<string, string>;
+    assertCurrent?: () => void;
   },
 ): Promise<void> {
   try {
@@ -266,24 +268,41 @@ export async function runProvisionSetup(
       params.phase === "node enrollment setup"
         ? runCrabboxCommandWithCoordinatorRetry
         : runCrabboxCommand;
-    const result = await withCrabboxWorkerEnvProfile(
-      params.forwardedEnv,
-      (names, profilePath, childEnv) =>
-        run({
-          action: params.phase,
-          args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
-          binary: params.binary,
-          env: childEnv,
-          input: params.setup,
-          runCommand: params.runCommand,
-          signal: params.signal,
-          sleep: params.sleep,
-          timeoutMs: remainingProvisionTimeout(
-            params.deadline,
-            params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
-          ),
-        }),
-    );
+    const result =
+      params.phase === "profile setup" && Object.keys(params.profile.setupSecrets ?? {}).length
+        ? await runCrabboxSetupEgress({
+            ...params,
+            id: params.inspect.id,
+            secrets: params.profile.setupSecrets ?? {},
+            createScript: () => params.setup,
+            assertCurrent: () => {
+              params.signal?.throwIfAborted();
+              if (!params.assertCurrent) {
+                throw new Error("Setup secrets require current provisioning authority");
+              }
+              params.assertCurrent();
+            },
+            timeoutMs: remainingProvisionTimeout(
+              params.deadline,
+              params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
+            ),
+          })
+        : await withCrabboxWorkerEnvProfile(params.forwardedEnv, (names, profilePath, childEnv) =>
+            run({
+              action: params.phase,
+              args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
+              binary: params.binary,
+              env: childEnv,
+              input: params.setup,
+              runCommand: params.runCommand,
+              signal: params.signal,
+              sleep: params.sleep,
+              timeoutMs: remainingProvisionTimeout(
+                params.deadline,
+                params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
+              ),
+            }),
+          );
     crabboxCommandOutput(params.phase, result);
   } catch (error) {
     params.signal?.throwIfAborted();

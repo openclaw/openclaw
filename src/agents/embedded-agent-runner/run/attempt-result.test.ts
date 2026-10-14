@@ -51,6 +51,7 @@ function createResultFixture(params?: {
   yieldAcknowledgment?: string;
   yieldMessageWaitRegistered?: boolean;
   assistantTexts?: readonly string[];
+  allowedToolNames?: string[];
   toolMetas?: Array<{
     toolName: string;
     toolCallId?: string;
@@ -151,6 +152,9 @@ function createResultFixture(params?: {
       }),
     },
     prepared: {
+      toolCatalog: {
+        toolSearchRunPlan: { liveAllowedToolNames: new Set(params?.allowedToolNames) },
+      },
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
       sessionRuntime: {
@@ -192,6 +196,41 @@ function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 }
 
 describe("attempt result projection", () => {
+  it.each([
+    { name: "Write", allowedToolNames: ["write"], expected: true },
+    { name: "functions.write", allowedToolNames: ["write"], expected: true },
+    { name: "WRITE", allowedToolNames: ["Write", "wriTE"], expected: undefined },
+    { name: "write", allowedToolNames: [], expected: undefined },
+  ])("uses native callable-name matching for $name", ({ name, allowedToolNames, expected }) => {
+    const assistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      content: [{ type: "text", text: JSON.stringify({ name, arguments: { path: "proof.txt" } }) }],
+    });
+    expect(
+      completeResult({ currentAttemptCompletedAssistant: assistant, allowedToolNames })
+        .textToolCallAttempt,
+    ).toBe(expected);
+  });
+
+  it.each([false, true])(
+    "recognizes text-only terminal calls after a read (native terminal call=%s)",
+    (nativeCall) => {
+      const assistant = makeAssistantMessageFixture({
+        stopReason: "stop",
+        content: [{ type: "text", text: '{"name":"write","arguments":{"path":"proof.txt"}}' }],
+      });
+      if (nativeCall) {
+        assistant.content.push({ type: "toolCall", id: "native", name: "write", arguments: {} });
+      }
+      const result = completeResult({
+        currentAttemptCompletedAssistant: assistant,
+        allowedToolNames: ["write"],
+        toolMetas: [{ toolName: "read", replaySafe: true, isError: false }],
+      });
+      expect(result.textToolCallAttempt).toBe(nativeCall ? undefined : true);
+    },
+  );
+
   it("keeps the settled result snapshot when an output hook replaces live state", () => {
     const assistant = makeAssistantMessageFixture({ content: [{ type: "text", text: "settled" }] });
     const fixture = createResultFixture({

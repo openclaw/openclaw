@@ -287,8 +287,11 @@ function Library(props: { view: WorkshopView }) {
 function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView }) {
   const live = () => ("versions" in props.skill ? null : props.skill);
   const archived = () => ("versions" in props.skill ? props.skill : null);
-  const change = () =>
-    live() ? latestChanges(props.view().snapshot!.changes).get(props.skill.name) : undefined;
+  const change = createMemo(() =>
+    live()
+      ? props.view().snapshot!.changes.find((entry) => entry.skillName === props.skill.name)
+      : undefined,
+  );
   const unused = () => {
     const skill = live();
     return skill ? unusedDays(skill, change(), props.view().mode) : null;

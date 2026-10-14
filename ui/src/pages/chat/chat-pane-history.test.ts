@@ -6,8 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import "./chat-pane.tsx";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
+import "./chat-pane.tsx";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
@@ -25,7 +25,8 @@ import {
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {

@@ -336,9 +336,14 @@ openclaw-chat-details-progress {
   flex: 1;
   min-width: 0;
 }
+.chat-details .chat-pr__link--static .chat-pr__identity {
+  display: grid;
+  gap: 2px;
+}
 .chat-details .chat-pr__repo {
-  overflow-wrap: anywhere;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 500;
   flex: 1;
@@ -375,6 +380,10 @@ openclaw-chat-details-progress {
 }
 .chat-details .chat-pr--compact .chat-pr__identity {
   grid-column: 1 / -1;
+}
+.chat-details .chat-pr--compact .chat-pr__repo {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .chat-details .chat-pr--compact .chat-pr__meta {
   grid-column: 2;

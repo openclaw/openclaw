@@ -134,10 +134,9 @@ export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
 ): Promise<
-  Pick<
-    MigratedUpdateFinalizationResult,
-    "result" | "exitCode" | "automaticTriage" | "candidateStartAttempted"
-  > & { databaseRollbackAvailable?: true }
+  Pick<MigratedUpdateFinalizationResult, "result" | "exitCode" | "candidateStartAttempted"> & {
+    databaseRollbackAvailable?: true;
+  }
 > {
   if (params.opts.recovery) {
     throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
@@ -329,7 +328,6 @@ export async function continueMigratedUpdateInFreshProcess(
     const finalization = {
       result: response.result,
       exitCode: response.exitCode,
-      automaticTriage: response.automaticTriage,
       candidateStartAttempted: response.candidateStartAttempted,
     };
     const restoreDatabases =

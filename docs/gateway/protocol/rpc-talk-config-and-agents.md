@@ -69,6 +69,7 @@ providers ignore barge-in and end the session on an explicit output stop.
 - Durable run JSON from `update.runs.get`, `update.runs.list`, and update status can include `admission: { owner: "candidate" | "installed", protocol?, candidateVersion?, checks?, fallbackReason? }`. Each check has `name`, `status` (`ok`, `warn`, or `refuse`), and optional `detail`. This projects `origin.admission` from the existing ledger JSON; `origin.candidateAdmission` retains the bounded candidate verdict, reasons, warnings, and facts. Older records omit these fields. See [candidate-owned admission](/cli/update#candidate-owned-admission) for ownership and fallback behavior.
 - `update.status` refreshes and returns the latest update restart sentinel, including the post-restart running version when available.
 - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
+  Each answered step uses the current `wizard.next` caller's authority through inference verification, including after progress replies. Device revocation still rejects the probe.
 
 ## Agent and workspace helpers
 

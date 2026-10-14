@@ -1,6 +1,5 @@
 /** SQLite persistence and stable cursor queries for metadata-only audit events. */
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { AUDIT_ACTIVITY_MESSAGE_KIND } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import {
@@ -8,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -54,7 +54,7 @@ const AUDIT_EVENT_PRUNE_BATCH_ROWS = 1_024;
 // The single audit writer owns one DB handle. Maintenance and rollback drop
 // these facts; ordinary inserts need neither a row scan nor an empty expiry DELETE.
 const auditEventRetention = new WeakMap<
-  DatabaseSync,
+  EngineConnection,
   { rowCount: number; nextExpiryAt: number; nextSequence: number }
 >();
 
@@ -481,7 +481,7 @@ export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
   return corruptAuditRow(row, "invalid message direction");
 }
 
-function projectMessageIdentities(db: DatabaseSync, input: MessageAuditEventInput) {
+function projectMessageIdentities(db: EngineConnection, input: MessageAuditEventInput) {
   const identity = loadOrCreateAuditIdentityKey(db);
   const conversationId =
     input.conversationId ?? (input.direction === "outbound" ? input.targetId : undefined);
@@ -508,7 +508,7 @@ function projectMessageIdentities(db: DatabaseSync, input: MessageAuditEventInpu
   };
 }
 
-function bindAuditEvent(db: DatabaseSync, input: AuditEventInput) {
+function bindAuditEvent(db: EngineConnection, input: AuditEventInput) {
   const message =
     input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? projectMessageIdentities(db, input) : undefined;
   return {
@@ -545,7 +545,7 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput) {
   } satisfies AuditEventInsert;
 }
 
-function readAuditEventRetention(db: DatabaseSync) {
+function readAuditEventRetention(db: EngineConnection) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<AuditDatabase>(db)
@@ -563,7 +563,7 @@ function readAuditEventRetention(db: DatabaseSync) {
   };
 }
 
-function deleteExpiredAuditEvents(db: DatabaseSync, now: number) {
+function deleteExpiredAuditEvents(db: EngineConnection, now: number) {
   const kysely = getNodeSqliteKysely<AuditDatabase>(db);
   const expiredSequences = kysely
     .selectFrom("audit_events")
@@ -578,7 +578,7 @@ function deleteExpiredAuditEvents(db: DatabaseSync, now: number) {
   );
 }
 
-function pruneAfterInsert(db: DatabaseSync, now: number, at: number, sequence: number): void {
+function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequence: number): void {
   const kysely = getNodeSqliteKysely<AuditDatabase>(db);
   const cached = auditEventRetention.get(db);
   const retention = cached

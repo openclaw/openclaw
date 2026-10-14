@@ -62,7 +62,8 @@ The review forks the conversation through the finished turn and appends one
 instruction, reusing the foreground provider, model, auth profile, and tool
 schemas so the provider's prompt cache applies. Model fallbacks are disabled. It
 runs on the embedded OpenClaw harness under a private session that never
-appears in your transcript.
+appears in your transcript. It is internal system work, not a new user turn;
+user-only reply hooks, including Advisor admission, do not run for it.
 
 The review can look things up with `read`, `ls`, `view_image`, `web_search`,
 `web_fetch`, `sessions_history`, `sessions_search`, `memory_search`, and

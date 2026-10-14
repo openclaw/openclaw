@@ -266,6 +266,7 @@ async function runDoctorHealthFlowWithResult(
         runtime: doctorRuntime,
         json: options.json,
         postCoreSchemaRepair: writeAuthority?.postCoreSchemaRepair,
+        signal: maintenance?.signal,
         onVerifiedBackup: (snapshots) => {
           verifiedSnapshots = snapshots;
         },
@@ -322,6 +323,7 @@ async function runDoctorHealthFlowWithResult(
           databasePaths: databaseTargets?.map((database) => database.path) ?? [],
           agentDatabaseTargets: databaseTargets,
           pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
+          pendingMigrations: schemas.pendingMigrations,
           verifiedSnapshots,
         });
         for (const message of [...backups.changes, ...backups.warnings]) {
@@ -664,14 +666,9 @@ async function runDoctorHealthFlowWithResult(
     }
     throw error;
   } finally {
-    try {
-      await measureGatewayBootstrapStep("doctor.maintenance.release", () =>
-        resources.disposeAsync(),
-      );
-    } finally {
-      if (updateResult) {
-        await publishDoctorUpdateResult({ updateResult, doctorResult, healthContext, maintenance });
-      }
+    await measureGatewayBootstrapStep("doctor.maintenance.release", () => resources.disposeAsync());
+    if (updateResult) {
+      await publishDoctorUpdateResult({ updateResult, doctorResult, healthContext, maintenance });
     }
     // The default runtime exits synchronously; finish native recovery and release
     // maintenance leases before handing it an exit code.

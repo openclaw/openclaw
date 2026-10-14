@@ -40,6 +40,7 @@ import {
   beginRunAttempt,
   createRunRetryBudget,
   isRunRetryBudgetExhausted,
+  recordRunModelProgress,
   recordRunRetry,
 } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
@@ -355,6 +356,9 @@ export async function runPreparedEmbeddedLoop(
       const { dispatchedAttempt, runtimePlan } = dispatch;
       const refusal = await providerReview.settle(dispatchedAttempt.rawAttempt);
       failoverRetryController.observeAttempt(dispatchedAttempt.rawAttempt);
+      if (dispatchedAttempt.rawAttempt.hasSuccessfulModelResponse) {
+        recordRunModelProgress(runRetryBudget);
+      }
       const rawAttempt = refresh.applyDeliveryState(dispatchedAttempt.rawAttempt);
       attemptCarryover.apply(rawAttempt);
       // Attempt subscriptions reset on retry; the reply owner retains final source
@@ -475,6 +479,7 @@ export async function runPreparedEmbeddedLoop(
         overloadProfileRotations,
         previousRetryFailoverReason: lastRetryFailoverReason,
         failover: failoverRetryController,
+        rateLimitRetriesExhausted: failoverRetryController.rateLimitRetriesExhausted,
         traceAttempts,
         suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
       });
@@ -502,6 +507,7 @@ export async function runPreparedEmbeddedLoop(
             attemptCompactionCount,
           },
           terminalBase: {
+            rateLimitRetriesExhausted: failoverRetryController.rateLimitRetriesExhausted,
             mergeToolMedia: refresh.mergeToolMedia,
             runParams: params,
             provider,

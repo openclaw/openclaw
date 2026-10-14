@@ -19,6 +19,7 @@ import {
   createUiTestShardGroups,
   createVitestCacheWarmGroups,
   hasCompleteStartupCorpusCoverage,
+  packCompactNodeTestJobsToCapacity,
   resolveCanonicalNodeTestConfig,
   resolveStartupCorpusTestFiles,
 } from "../../scripts/lib/ci-node-test-plan.mts";
@@ -207,7 +208,7 @@ describe("Control UI release-only inventories", () => {
     expectRealGatewayCoverage(
       createUiTestShardGroups({
         includeReleaseOnlyTests: false,
-        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.ts"],
+        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
       }).e2e,
       uiE2eRealGatewayTestFiles.filter(
         (file) => !releaseOnlyRealGateway.has(file) || file === automationManagement,
@@ -324,6 +325,126 @@ function selectFixtureProjects(owns: (config: string) => boolean) {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it.each([false, true])(
+    "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
+    (extraGroup) => {
+      const original = fullSuiteVitestShards.slice();
+      if (extraGroup) {
+        // A new isolated group must not exhaust main's capacity on arrival.
+        fullSuiteVitestShards.push({
+          name: "synthetic-capacity-growth",
+          config: "fixture-capacity.config.ts",
+          projects: ["test/vitest/vitest.hooks.config.ts"],
+        });
+      }
+      try {
+        const jobs = createNodeTestShardBundles({
+          includeProofTests: true,
+          includeReleaseOnlyPluginShards: false,
+          includeReleaseOnlyToolingShards: true,
+          includeReleaseOnlyRuntimeTests: false,
+          includePrExemptRuntimeTests: true,
+          compactMode: "pull-request",
+          compactNodeJobCap: 76,
+          mainValidation: true,
+          runnerBackend: "hybrid",
+        });
+        // Main's 77 Node rows reserve one for the separate worker-E2E owner.
+        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
+        expect(jobs.length).toBeLessThanOrEqual(78);
+        expect(
+          jobs
+            .flatMap((job) => job.groups)
+            .filter((group) => group.shard_name === "synthetic-capacity-growth"),
+        ).toHaveLength(extraGroup ? 1 : 0);
+      } finally {
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+      }
+    },
+  );
+
+  function smallCapacityJobs(count: number): CompactNodeTestShard[] {
+    return Array.from({ length: count }, (_, index) => ({
+      checkName: `checks-capacity-${index}`,
+      shardName: `capacity-${index}`,
+      requiresDist: false,
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      planConcurrency: 1,
+      predictedSeconds: 10,
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      groups: [
+        {
+          shard_name: `capacity-${index}`,
+          requiresDist: false,
+          runner: "blacksmith-8vcpu-ubuntu-2404",
+          configs: ["test/vitest/vitest.hooks.config.ts"],
+          includePatterns: [`src/hooks/capacity-${index}.test.ts`],
+        },
+      ],
+    }));
+  }
+
+  const capacityOptions = {
+    compactJobCap: 78,
+    runnerBackend: "hybrid",
+    estimateGroupSeconds: () => 10,
+  };
+
+  it("fits 83 small compatible bundles under the capacity ceiling without losing or duplicating files", () => {
+    const before = smallCapacityJobs(83);
+    const after = packCompactNodeTestJobsToCapacity(before, capacityOptions);
+    expect(after).toHaveLength(78);
+    expect(
+      after.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
+    ).toEqual(
+      Array.from({ length: 83 }, (_, index) => `src/hooks/capacity-${index}.test.ts`).toSorted(),
+    );
+    expect(after.filter((job) => job.groups.length > 1)).toHaveLength(5);
+    for (const job of after) {
+      expect(job.predictedSeconds).toBeLessThanOrEqual(210);
+      expect(job.groups.length).toBeLessThanOrEqual(10);
+      for (const group of job.groups) {
+        expect(before.flatMap((entry) => entry.groups)).toContain(group);
+      }
+    }
+    expect(
+      packCompactNodeTestJobsToCapacity(before, { ...capacityOptions, compactJobCap: 83 }),
+    ).toBe(before);
+  });
+
+  it.each(["runner", "build", "workers", "environment", "time budget", "group budget"] as const)(
+    "refuses over-cap bundles that cannot merge within the existing %s policy",
+    (policy) => {
+      const jobs = smallCapacityJobs(79);
+      for (const [index, job] of jobs.entries()) {
+        if (policy === "runner") {
+          job.runner = `different-runner-${index}`;
+        }
+        if (policy === "build") {
+          job.pretestBuildMode = "runtime";
+        }
+        if (policy === "workers") {
+          job.groups[0]!.env = { OPENCLAW_VITEST_MAX_WORKERS: "4" };
+        }
+        if (policy === "environment") {
+          job.env!.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS = "60000";
+        }
+        if (policy === "time budget") {
+          job.predictedSeconds = 110;
+        }
+        if (policy === "group budget") {
+          job.groups = Array.from({ length: 10 }, (_, group) => ({
+            ...job.groups[0]!,
+            shard_name: `capacity-${index}-${group}`,
+          }));
+        }
+      }
+      expect(() => packCompactNodeTestJobsToCapacity(jobs, capacityOptions)).toThrow(
+        "no compatible bundles fit the existing limits",
+      );
+    },
+  );
+
   it("retries hybrid Gateway-first packing only when the completed plan exceeds its cap", () => {
     const entries = [
       ["ordinary-a", "hooks", 180],
@@ -695,6 +816,24 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           job.groups.every((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2"),
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    { profile: "native" as const, limit: 420, jobs: 2 },
+    { profile: "main-validation" as const, limit: 420, jobs: 1 },
+    { profile: "main-validation" as const, limit: 150, jobs: 2 },
+  ])("packs $profile tooling within its $limit-second test budget", ({ profile, limit, jobs }) => {
+    const before = measuredToolingFixture().slice(0, 2);
+    const after = rebalanceMeasuredSerialJobs(before, {
+      ...measuredPackingOptions,
+      profile,
+      estimateGroup: () => ({ seconds: 210, complete: true }),
+      testSecondsLimit: () => limit,
+    });
+    expect(after).toHaveLength(jobs);
+    expect(sortedMeasuredGroups(after)).toEqual(sortedMeasuredGroups(before));
+    expect(after.every((job) => job.planConcurrency === 1 && job.timeoutMinutes === 20)).toBe(true);
+    expect(after.map((job) => job.predictedSeconds)).toEqual(jobs === 1 ? [420] : [210, 210]);
   });
 
   it("packs hosted hourly tooling only with complete supplied prices and ignores native tails", () => {

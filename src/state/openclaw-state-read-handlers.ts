@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   prepareAcpSessionMetadataRead,
   readAcpSessionCommand,
@@ -55,6 +54,7 @@ import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   readInterruptedUpdateCandidate,
@@ -104,8 +104,9 @@ import type {
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
-import { selectUserPreferenceValues } from "./user-preferences.store.js";
+import { readUserPreferences, selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
+import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 
 export {
   prepareAcpSessionMetadataRead,
@@ -117,7 +118,7 @@ export {
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
 export function readOpenClawStateDatabaseCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: OpenClawStateReadRequest,
   command: Exclude<
     OpenClawStateReadRequest["command"],
@@ -418,6 +419,24 @@ export function readOpenClawStateDatabaseCommand(
     return {
       type: command.type,
       values: selectUserPreferenceValues(db, command.profileIds, command.key),
+    };
+  }
+  if (command.type === "userPreferences.read") {
+    return {
+      type: command.type,
+      preferences: runSqliteDeferredTransactionSync(db, () => {
+        const profile = tableExists(db, "user_profiles")
+          ? selectResolvedUserProfileMetadataById(db, command.profileId)
+          : undefined;
+        return profile
+          ? {
+              profileId: profile.id,
+              entries: tableExists(db, "user_preferences")
+                ? readUserPreferences(db, profile.id, command.keys)
+                : {},
+            }
+          : undefined;
+      }),
     };
   }
   if (

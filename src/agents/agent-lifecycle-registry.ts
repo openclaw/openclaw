@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PersistedClawInstall } from "../claws/provenance-types.js";
 import { captureActiveCronJobAgentDeletion } from "../cron/active-jobs.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionRequest,
@@ -528,7 +528,7 @@ function runAgentDeletionWithLease<T>(
 export function isAgentDeletionBlocked(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
-  database?: DatabaseSync,
+  database?: EngineConnection,
 ): boolean {
   if (database) {
     return Boolean(readAgentDeletionJournalInDatabase({ db: database }, agentId, "runtime"));

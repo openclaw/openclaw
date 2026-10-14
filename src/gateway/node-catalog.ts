@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { NodePairingPendingRequest, PairedDeviceNode } from "../infra/device-pairing-node.js";
-import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
+import type { PairedDevice } from "../infra/device-pairing.js";
 import { filterPublicNodeCommands } from "../infra/node-commands.js";
 import {
   sameNodeApprovalSurfaceSet,
@@ -85,6 +85,7 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
 }
 
 export function createKnownNodeCatalog(params: {
+  /** Devices selected by the pairing owner's current node bindings. */
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly PairedDeviceNode[];
   pendingNodes?: readonly NodePairingPendingRequest[];
@@ -97,9 +98,7 @@ export function createKnownNodeCatalog(params: {
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
-      .filter(
-        (entry) => hasNonEmptyString(entry.deviceId) && hasEffectivePairedDeviceRole(entry, "node"),
-      )
+      .filter((entry) => hasNonEmptyString(entry.deviceId))
       .map((entry) => [entry.deviceId, entry]),
   );
   // Prepare every approved command surface before duplicate selection, even when a live

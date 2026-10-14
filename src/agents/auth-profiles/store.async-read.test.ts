@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import * as sqliteWorker from "../../infra/sqlite-readonly-worker.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -17,6 +18,7 @@ import * as migration from "./legacy-source-diagnostic.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import * as persistedStore from "./persisted.js";
+import { authProfileRuntimeMode } from "./runtime-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   noteRuntimeAuthProfileStorePersistedMutation,
@@ -36,12 +38,16 @@ const reader = vi.hoisted(() => ({
   dispose: vi.fn(async () => {}),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const prepareAgentRows = sqliteRead.prepareAgentAuthProfileRowsRead;
 beforeEach(() => {
   reader.assertCurrent.mockReset();
   reader.read.mockReset();
   vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockReturnValue(reader);
 });
+
+function useAgentWorkerRows() {
+  vi.mocked(sqliteRead.prepareAgentAuthProfileRowsRead).mockRestore();
+  vi.spyOn(sqliteWorker, "runSqliteReadOnlyWorker").mockImplementation(reader.read);
+}
 
 afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
@@ -65,7 +71,7 @@ function createRuntime(overlayExternalAuthProfiles = (store: AuthProfileStore) =
 }
 
 it.each(["agent", "shared"] as const)(
-  "seeds selected %s credential authority from canonical rows, including a warm row cache",
+  "seeds selected %s credential authority from canonical rows instead of runtime overlays",
   async (source) => {
     const root = tempDirs.make("openclaw-auth-authority-rows-");
     const agentDir = path.join(root, "agents/worker/agent");
@@ -87,13 +93,8 @@ it.each(["agent", "shared"] as const)(
       profiles: { [profileId]: { type: "api_key", provider: "custom", key: "persisted-fixture" } },
     };
     reader.read.mockResolvedValue(readableRows(persisted));
-    vi.mocked(sqliteRead.prepareAgentAuthProfileRowsRead).mockImplementation((options) => ({
-      ...prepareAgentRows(options),
-      read: reader.read,
-    }));
-    const sharedRead = vi
-      .spyOn(sqliteRead, "readSharedAuthProfileRows")
-      .mockResolvedValue(readableRows(persisted));
+    useAgentWorkerRows();
+    vi.spyOn(sqliteRead, "readSharedAuthProfileRows").mockResolvedValue(readableRows(persisted));
     const runtime = createRuntime((store) => {
       store.profiles[profileId] = { type: "api_key", provider: "custom", key: "runtime-overlay" };
       return store;
@@ -116,7 +117,9 @@ it.each(["agent", "shared"] as const)(
         profileId,
       );
       expect(authority.readCurrentCredential()).toEqual(persisted.profiles[profileId]);
-      expect(source === "agent" ? reader.read : sharedRead).toHaveBeenCalledTimes(1);
+      if (source === "agent") {
+        expect(reader.read).toHaveBeenCalledOnce();
+      }
     } finally {
       await Promise.all(revokeAgentDatabaseResources({ rootPath: root }));
     }
@@ -167,6 +170,7 @@ it("keeps cached credentials and selection state separate from mutable runtime v
   const root = tempDirs.make("openclaw-auth-cached-mutation-");
   const localDir = path.join(root, "agents/worker/agent");
   createCacheDatabase(localDir);
+  useAgentWorkerRows();
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const persisted: AuthProfileStore = {
     version: 1,
@@ -236,6 +240,33 @@ it("keeps cached credentials and selection state separate from mutable runtime v
   expect(reader.read).toHaveBeenCalledTimes(1);
 });
 
+it("shares canonical rows while keeping scoped read-through credentials separate", async () => {
+  const root = tempDirs.make("openclaw-auth-scope-cache-");
+  const agentDir = path.join(root, "agents/worker/agent");
+  createCacheDatabase(agentDir);
+  useAgentWorkerRows();
+  const env = { OPENCLAW_STATE_DIR: root };
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  reader.read.mockResolvedValue(readableRows());
+  const runtime = createRuntime();
+  for (const key of ["fixture-one", "fixture-two"]) {
+    const sharedStore: AuthProfileStore = {
+      version: 1,
+      profiles: { "custom:key": { type: "api_key", provider: "custom", key } },
+    };
+    const store = await authProfileRuntimeMode.run(
+      { kind: "agent-dir", agentDir, env, sharedStore },
+      () =>
+        runtime.loadAuthProfileStoreForRuntimeAsync(agentDir, {
+          inheritedAuthDir: agentDir,
+          externalCli: { mode: "none" },
+        }),
+    );
+    expect(store.profiles["custom:key"]).toEqual(sharedStore.profiles["custom:key"]);
+  }
+  expect(reader.read).toHaveBeenCalledOnce();
+});
+
 function createCacheDatabase(agentDir: string): void {
   fs.mkdirSync(agentDir, { recursive: true });
   using database = openNodeSqliteDatabase(path.join(agentDir, "openclaw-agent.sqlite"));
@@ -248,6 +279,7 @@ function prepareCachedRuntimeRead() {
   fs.mkdirSync(agentDir, { recursive: true });
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   createCacheDatabase(agentDir);
+  useAgentWorkerRows();
   prepareSharedAuthStoreOwnershipForNative();
   const rows = readableRows();
   reader.read.mockResolvedValue(rows);

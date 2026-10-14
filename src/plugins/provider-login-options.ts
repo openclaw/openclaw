@@ -15,7 +15,7 @@ export type ProviderLoginOption = {
   docsUrl?: string;
   kind: "oauth" | "device-code" | "secret";
   featured: boolean;
-  /** This sign-in must complete model setup rather than only save credentials. */
+  /** This sign-in activates a provider runtime rather than only saving credentials. */
   requiresSetup?: true;
 };
 export type ProviderChannelLoginChoice = {

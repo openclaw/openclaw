@@ -165,7 +165,7 @@ function providerChoices(page: Pick<ParentNode, "querySelectorAll">) {
 }
 
 describe("Models provider login", () => {
-  it("offers setup-only sign-in through AI Setup, not Provider Access", async () => {
+  it.each([false, true])("connects Muse Code (setup: %s)", async (setup) => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer } = loginHarness({
       capabilities: [
@@ -187,27 +187,52 @@ describe("Models provider login", () => {
       ],
     });
     const page = appendPage(context);
-    await openPicker(page);
+    if (setup) {
+      await waitForSolid(() => expect(page.state.data?.updatedAt).toEqual(expect.any(Number)));
+      page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
+      await page.updateComplete;
+    } else {
+      await openPicker(page);
+    }
     await selectProvider(page, "meta");
-    expect(page.querySelector("[data-models-login-choice] button")).toBeNull();
-    page.login.reset();
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
-    await page.updateComplete;
-    await selectProvider(page, "meta");
+    if (!setup) {
+      expect(page.renderRoot.textContent).toContain(
+        "Sign in and enable this provider for this agent without changing the active model.",
+      );
+    }
     await startSelectedLogin(page, "meta/muse-code");
     expect(request).toHaveBeenCalledWith(
       "models.authLogin",
-      expect.objectContaining({ authChoice: "meta/muse-code", agentId: "writer" }),
+      {
+        sessionId: expect.any(String),
+        authChoice: "meta/muse-code",
+        agentId: "writer",
+        ...(setup ? { selectModel: true } : {}),
+      },
       { timeoutMs: null },
     );
-    expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
+    const authReads = request.mock.calls.filter(([name]) => name === "models.authStatus").length;
     answer.resolve({
       done: true,
       status: "done",
       modelActivation: { modelRef: "meta/muse-spark-1.3" },
     });
     await submitCredential(page);
+    await waitForSolid(() =>
+      expect(page.renderRoot.textContent).toContain(
+        setup
+          ? "Account verified and selected for this agent's default model."
+          : "Muse Code: Provider enabled. The active model has not changed.",
+      ),
+    );
+    if (!setup) {
+      expect(page.renderRoot.textContent).not.toContain("selected for this agent");
+    }
+    await waitForSolid(() =>
+      expect(
+        request.mock.calls.filter(([name]) => name === "models.authStatus").length,
+      ).toBeGreaterThan(authReads),
+    );
   });
 
   it.each([

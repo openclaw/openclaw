@@ -19,6 +19,48 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it.each(["registered", "cloned"] as const)(
+    "submits a guest's path-redacted %s project as an isolated worktree",
+    async (source) => {
+      const fixture = createDraftFixture({
+        scopes: ["operator.sessions.read", "operator.sessions.write"],
+        methods: ["sessions.create", "projects.list", "worktrees.branches"],
+        selfUser: { id: "guest" },
+        request: async (method) => {
+          if (method === "projects.list") {
+            return { projects: [{ id: "registered", displayName: "Registered Project", source }] };
+          }
+          if (method === "worktrees.branches") {
+            throw new Error("missing scope: operator.write");
+          }
+          return {};
+        },
+      });
+      const { place, flow, context, request } = fixture;
+      await place.browser.refreshProjects();
+      place.selectProjectId("registered");
+      flow.setMessage("Create an isolated change");
+      expect(place.checkoutVisible).toBe(true);
+      place.selectWorktree(true);
+      expect(place.worktree).toBe(true);
+      expect(flow.submitBlock()).toBeUndefined();
+      vi.mocked(context.sessions.createResult).mockRejectedValueOnce(
+        new Error("project registered is unavailable; re-register the project"),
+      );
+      await flow.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+      expect(params).toMatchObject({ projectId: "registered", worktree: true });
+      expect(params).not.toHaveProperty("worktreeBaseRef");
+      expect(params).not.toHaveProperty("cwd");
+      expect(flow.error).toContain("re-register the project");
+      expect(place.worktree).toBe(true);
+      expect(place.browser.projectId).toBe("registered");
+      expect(flow.submitBlock()).toBeUndefined();
+      expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toEqual([]);
+    },
+  );
+
   it("retries a restored existing-folder create after its device stops offering free slots", async () => {
     let freeSlots = 1;
     const { place, flow, gateway } = createDraftFixture({

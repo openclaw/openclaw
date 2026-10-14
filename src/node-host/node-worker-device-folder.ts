@@ -9,7 +9,7 @@ import {
 import type { NodeWorkerManagedWorkspaceRequest } from "./node-worker-workspace-identity.js";
 
 /** Node-local consent is checked afresh, including symlink resolution, at each use. */
-export function validateNodeWorkerDeviceFolder(
+function validateNodeWorkerDeviceFolder(
   folder: string,
   options: { folders?: readonly string[]; privateRoots: readonly string[]; env: NodeJS.ProcessEnv },
 ): string {

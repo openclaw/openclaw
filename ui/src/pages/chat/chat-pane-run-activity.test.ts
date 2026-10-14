@@ -11,7 +11,8 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerProps } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

@@ -154,7 +154,7 @@ async function readLaunchAgentEnvironmentFile(
   const lines = content.split("\n");
   for (let index = 0; index < lines.length; index++) {
     const rawLine = lines[index] ?? "";
-    const line = options?.requireEffective ? rawLine.trimStart() : rawLine.trim();
+    const line = rawLine.trimStart();
     if (!line.trim() || line.startsWith("#")) {
       continue;
     }
@@ -170,20 +170,17 @@ async function readLaunchAgentEnvironmentFile(
     if (!key || value === undefined) {
       continue;
     }
-    let parsedValue = parseGeneratedEnvValue(value);
-    if (options?.requireEffective) {
-      // The writer's quoted literals can span physical lines; retain their exact newline bytes.
-      while (
-        quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim() &&
-        index + 1 < lines.length
-      ) {
-        value += `\n${lines[++index]}`;
-        parsedValue = parseGeneratedEnvValue(value);
-      }
-      // Strict inspection accepts the writer's literal syntax, never shell expressions.
-      if (quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()) {
-        throw new Error("Unsupported LaunchAgent environment value");
-      }
+    // Only an unfinished writer literal (including '\'' escapes) consumes another line.
+    while (/^'(?:[^']|'\\'')*$/.test(value) && index + 1 < lines.length) {
+      value += `\n${lines[++index]}`;
+    }
+    const parsedValue = parseGeneratedEnvValue(value);
+    // Strict inspection accepts the writer's literal syntax, never shell expressions.
+    if (
+      options?.requireEffective &&
+      quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()
+    ) {
+      throw new Error("Unsupported LaunchAgent environment value");
     }
     environment[key] = parsedValue;
   }
