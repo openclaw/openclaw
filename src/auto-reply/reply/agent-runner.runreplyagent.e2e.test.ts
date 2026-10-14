@@ -37,7 +37,6 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig, TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
@@ -56,8 +55,12 @@ import type { TemplateContext } from "../templating.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
+import { registerReplyCompactionCases } from "./agent-runner.runreplyagent.compaction.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
-import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
+import {
+  createReplyAgentSessionFixture,
+  runSuccessfulReplyModelFixture,
+} from "./agent-runner.runreplyagent.fixture.test-support.js";
 import { registerFollowupDrainCases } from "./agent-runner.runreplyagent.followup-drain.cases.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
@@ -73,7 +76,6 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { clearFollowupQueueForTest } from "./queue.test-helpers.js";
-import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationAgentTurn,
@@ -271,13 +273,14 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
   getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),
 }));
 
+// mock-isolation: Queue admission is controlled here; only logical-turn registration, snapshots, and retirement stay real.
 vi.mock("../../agents/embedded-agent-runner/runs.js", async (importOriginal) => {
-  const { clearActiveEmbeddedRun, setActiveEmbeddedRun } =
+  const { clearActiveEmbeddedRun, setActiveEmbeddedRun, updateActiveEmbeddedRunSnapshot } =
     await importOriginal<typeof import("../../agents/embedded-agent-runner/runs.js")>();
   return {
-    // Queue admission is controlled here; logical-turn registration and retirement stay real.
     clearActiveEmbeddedRun,
     setActiveEmbeddedRun,
+    updateActiveEmbeddedRunSnapshot,
     formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
     queueEmbeddedAgentMessageWithOutcomeAsync: async (
       sessionId: string,
@@ -456,9 +459,10 @@ function createMinimalRun(params?: {
     },
   } as unknown as FollowupRun;
   const activeOperation = replyRunRegistry.get(sessionKey);
-  if (activeOperation && params?.isActive && params.bindActiveAuthority !== false) {
-    activeOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
-  }
+  const activeAuthority =
+    activeOperation && params?.isActive && params.bindActiveAuthority !== false
+      ? prepareReplyToolAuthority(followupRun)
+      : undefined;
 
   return {
     followupRun,
@@ -466,6 +470,9 @@ function createMinimalRun(params?: {
     typing,
     opts,
     run: async () => {
+      if (activeOperation && activeAuthority) {
+        await activeOperation.bindToolAuthoritySnapshotAsync(activeAuthority);
+      }
       const runReplyAgent = await getRunReplyAgent();
       const operation = replyRunRegistry.get(sessionKey);
       if (operation && params?.attachSteerBackend !== false) {
@@ -802,8 +809,8 @@ describe("runReplyAgent active steering", () => {
       sessionId: "session",
       resetTriggered: false,
     });
-    active.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
-    active.bindToolAuthorityRoute(activeRoute);
+    await active.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
+    await active.bindToolAuthorityRouteAsync(activeRoute);
     active.setPhase("running");
 
     await expect(run()).resolves.toBeUndefined();
@@ -1701,26 +1708,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("releases reply admission and typing when the recovery read fails", async () => {
-    const failure = new Error("synthetic recovery read failure");
-    vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
-    const ticket = reserveReplyAdmissionTicket(["main"]);
-    if (!ticket) {
-      throw new Error("expected a reply admission ticket");
-    }
-    const release = vi.spyOn(ticket, "release");
-    const { run, typing } = createMinimalRun({
-      opts: { [REPLY_ADMISSION_TICKET]: ticket },
-      storePath: "/tmp/synthetic-recovery-read.sqlite",
-    });
-
-    await expect(run()).rejects.toBe(failure);
-
-    expect(release).toHaveBeenCalledOnce();
-    expect(typing.cleanup).toHaveBeenCalledOnce();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
   it("records queue-cap rejection while cleaning up typing", async () => {
     vi.mocked(enqueueFollowupRun).mockImplementationOnce((...args) => {
       args[1].onQueueDisposition?.("queue-cap-new");
@@ -2085,6 +2072,8 @@ describe("runReplyAgent heartbeat followup guard", () => {
     },
   );
 });
+
+registerReplyCompactionCases({ createMinimalRun, makeSessionFixture, tempDirs, state });
 
 describe("runReplyAgent pending final delivery capture", () => {
   it("delivers an authenticated channel reply through the explicitly selected agent", async () => {
@@ -5163,10 +5152,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
+    state.runEmbeddedAgentMock.mockImplementation(runSuccessfulReplyModelFixture);
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementation(async (params: TestModelFallbackRunnerParams) => {
@@ -5233,10 +5219,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
       let callCount = 0;
 
-      state.runEmbeddedAgentMock.mockResolvedValue({
-        payloads: [{ text: "final" }],
-        meta: {},
-      });
+      state.runEmbeddedAgentMock.mockImplementation(runSuccessfulReplyModelFixture);
       const fallbackSpy = vi
         .spyOn(modelFallbackModule, "runWithModelFallback")
         .mockImplementation(async (params: TestModelFallbackRunnerParams) => {
@@ -5541,10 +5524,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
+    state.runEmbeddedAgentMock.mockImplementation(runSuccessfulReplyModelFixture);
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementation(async (params: TestModelFallbackRunnerParams) => {
@@ -5729,52 +5709,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(stored.model).toBe("claude-opus-4-7");
     expect(stored.totalTokens).toBe(42_000);
     expect(stored.totalTokensFresh).toBe(false);
-  });
-
-  it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
-      payloads: [],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "context_overflow",
-          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-        },
-      },
-    }));
-
-    const { run } = createMinimalRun();
-    const res = await run();
-    const payload = Array.isArray(res) ? res[0] : res;
-    if (!payload) {
-      throw new Error("expected payload");
-    }
-    expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("fresh session or using a model with a larger context window");
-    expect(payload.text).toContain("/new");
-  });
-
-  it("surfaces overflow fallback when embedded payload text is whitespace-only", async () => {
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
-      payloads: [{ text: "   \n\t  ", isError: true }],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "context_overflow",
-          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-        },
-      },
-    }));
-
-    const { run } = createMinimalRun();
-    const res = await run();
-    const payload = Array.isArray(res) ? res[0] : res;
-    if (!payload) {
-      throw new Error("expected payload");
-    }
-    expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("fresh session or using a model with a larger context window");
-    expect(payload.text).toContain("/new");
   });
 
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {

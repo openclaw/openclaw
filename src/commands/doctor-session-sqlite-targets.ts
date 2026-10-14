@@ -1,7 +1,7 @@
 /** Offline Doctor target discovery and legacy-source admission. */
 import fs from "node:fs";
 import path from "node:path";
-import { getRuntimeConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   resolveAgentSessionStoreTargetsSync,
@@ -92,7 +92,7 @@ export function resolveDoctorSessionSqliteConfig(
     return options.cfg;
   }
   const requestedAgentId = normalizeAgentId(options.agent ?? LEGACY_IMPLICIT_AGENT_ID);
-  return options.store ? { agents: { entries: { [requestedAgentId]: {} } } } : getRuntimeConfig();
+  return options.store ? { agents: { entries: { [requestedAgentId]: {} } } } : loadConfig();
 }
 
 export function resolveDoctorSessionSqliteMaintenancePaths(

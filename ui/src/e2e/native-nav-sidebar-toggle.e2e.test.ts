@@ -71,10 +71,10 @@ const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
 suite.define(() => {
   const openPage = createNativeNavPageOpener(suite);
 
-  it("keeps the web expand/collapse controls in plain browsers", async () => {
+  it("keeps sidebar rail toggles in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
     const titlebarRequest = controlUiE2eBuiltModuleRequest(
-      "ui/src/components/macos-titlebar-controls.runtime.ts",
+      "ui/src/components/macos-titlebar-controls.runtime-solid.tsx",
     );
     const swipeRequest = controlUiE2eBuiltModuleRequest("ui/src/app/nav-drawer-swipe.runtime.ts");
 
@@ -98,13 +98,13 @@ suite.define(() => {
         swipeRequest.source,
       ),
     ).toBe(false);
-    const collapse = page.locator(".sidebar-brand__collapse");
-    await expect.poll(() => collapse.isVisible()).toBe(true);
-    await collapse.click();
-    const expand = page.locator(".shell-chrome-controls__nav-toggle");
-    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
-    await expand.click();
-    await expect.poll(() => collapse.isVisible()).toBe(true);
+    const toggle = page.locator('[data-navigation-view="sessions"]');
+    const sidebarPanel = page.locator(".sidebar-shell");
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    await toggle.click();
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(false);
+    await toggle.click();
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
 
     await page.locator(".sidebar-issues-button").click();
     const desktopInbox = page.locator("#sidebar-issues-panel");
@@ -115,8 +115,10 @@ suite.define(() => {
 
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    const toggle = page.locator(".sidebar-brand__collapse");
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    const toggle = page.locator('[data-navigation-view="sessions"]');
+    const sidebarPanel = page.locator(".sidebar-shell");
+    const openTooltip = page.locator("openclaw-tooltip[open]");
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
 
     // Safari does not focus buttons on tap. Reproduce that ordering so the
     // shell's post-collapse focus, rather than the pointer itself, owns focus.
@@ -127,34 +129,34 @@ suite.define(() => {
       (element as HTMLElement).click();
     });
 
-    const expand = page.locator(".shell-chrome-controls__nav-toggle");
-    const tooltip = expand.locator("xpath=..");
-    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(false);
     await expect
-      .poll(() => expand.evaluate((element) => element === document.activeElement))
+      .poll(() => toggle.evaluate((element) => element === document.activeElement))
       .toBe(true);
-    await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+    await expect.poll(() => openTooltip.count()).toBe(0);
 
     await page.keyboard.press("Enter");
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
-    expect(await page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    expect(await openTooltip.count()).toBe(0);
 
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
     });
-    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(false);
     await expect
-      .poll(() => expand.evaluate((element) => element === document.activeElement))
+      .poll(() => toggle.evaluate((element) => element === document.activeElement))
       .toBe(true);
-    await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+    await expect.poll(() => openTooltip.count()).toBe(0);
 
     // A later, explicit keyboard return still reveals the accessible hint.
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
-    await expect.poll(() => tooltip.getAttribute("open")).toBe("");
+    await expect
+      .poll(() => openTooltip.locator(".tooltip-content").textContent())
+      .toContain("Sessions · Expand sidebar");
     await page.keyboard.press("Enter");
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
-    expect(await page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    expect(await openTooltip.count()).toBe(0);
   });
 
   it("hides the web chrome cluster when the native titlebar toggle is present", async () => {
@@ -189,7 +191,6 @@ suite.define(() => {
     // Expanded native-nav hosts keep sidebar search (no native search control
     // exists while the rail is open) but hide the duplicate web nav toggle.
     await expect.poll(() => page.locator(".sidebar-brand__search").isVisible()).toBe(true);
-    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
 
     // Collapse through the native titlebar path; the whole web chrome cluster
     // hides (native titlebar provides search and new-thread while collapsed).
@@ -209,10 +210,13 @@ suite.define(() => {
       )
       .toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-    // With the in-page expand control hidden, collapse anchors keyboard focus
-    // on the content column instead of stranding it on the body.
+    // The persistent rail remains a keyboard path back to the collapsed list.
     await expect
-      .poll(() => page.evaluate(() => document.activeElement?.classList.contains("content")))
+      .poll(() =>
+        page
+          .locator('[data-navigation-view="sessions"]')
+          .evaluate((element) => element === document.activeElement),
+      )
       .toBe(true);
 
     await page.evaluate(() => {
@@ -244,8 +248,7 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-    const sidebarBrand = page.locator(".sidebar-brand");
-    const sidebarNewThread = sidebarBrand.locator(".sidebar-brand__new-thread");
+    const sidebarNewThread = page.locator(".sidebar-rail .sidebar-new-session");
     await expect.poll(() => sidebarNewThread.isVisible()).toBe(true);
     await expect
       .poll(() =>
@@ -255,6 +258,7 @@ suite.define(() => {
         }),
       )
       .toEqual({ borderStyle: "none", boxShadow: "none" });
+    await expect.poll(() => sidebarNewThread.getAttribute("aria-disabled")).toBeNull();
     await page.keyboard.press("Tab");
     await sidebarNewThread.focus();
     await expect
@@ -263,35 +267,23 @@ suite.define(() => {
           const style = getComputedStyle(element);
           return {
             focusVisible: element.matches(":focus-visible"),
-            boxShadow: style.boxShadow,
+            outlineStyle: style.outlineStyle,
+            outlineWidth: style.outlineWidth,
           };
         }),
       )
-      .toEqual({ focusVisible: true, boxShadow: expect.not.stringMatching(/^none$/) });
-    await expect
-      .poll(async () => {
-        const [brandBox, newThreadBox] = await Promise.all([
-          sidebarBrand.boundingBox(),
-          sidebarNewThread.boundingBox(),
-        ]);
-        if (!brandBox || !newThreadBox) {
-          return null;
-        }
-        return Math.round(brandBox.x + brandBox.width - (newThreadBox.x + newThreadBox.width));
-      })
-      .toBe(2);
-
+      .toEqual({ focusVisible: true, outlineStyle: "solid", outlineWidth: "2px" });
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
-    const search = toolbar.getByRole("button", { name: "Open command palette" });
-    const newThread = toolbar.getByRole("button", { name: "New session" });
+    const search = page.locator(".sidebar-brand__search");
+    const newThread = page.locator(".sidebar-rail__create a, .sidebar-rail__create button");
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await expect.poll(() => search.isVisible()).toBe(true);
-    await expect.poll(() => newThread.count()).toBe(0);
+    await expect.poll(() => newThread.isVisible()).toBe(true);
     await page.locator(".sidebar-issues-button__count").waitFor();
 
-    await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+    await page.locator(".sidebar-session-toolbar__collapse").click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
@@ -330,7 +322,7 @@ suite.define(() => {
         return box.top + box.height / 2;
       }),
     );
-    expect(centerlines).toHaveLength(5);
+    expect(centerlines).toHaveLength(2);
     for (const centerline of centerlines.slice(1)) {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
@@ -377,7 +369,7 @@ suite.define(() => {
         ),
       )
       .toEqual(
-        Array.from({ length: 6 }, () => ({
+        Array.from({ length: 3 }, () => ({
           border: "0px",
           background: "rgba(0, 0, 0, 0)",
           shadow: "none",
@@ -425,7 +417,7 @@ suite.define(() => {
 
     await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    await toolbar.getByRole("button", { name: "Expand sidebar" }).click();
+    await page.locator(".shell-chrome-controls__nav-toggle").click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .not.toContain("shell--nav-collapsed");
@@ -465,9 +457,8 @@ suite.define(() => {
       webChrome: true,
       width: testCase.width,
     });
-    const toolbar = page.locator(".macos-titlebar-controls");
     if (testCase.navCollapsed) {
-      await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+      await page.locator(".sidebar-session-toolbar__collapse").click();
     }
     await openChatSidePanelType(page, "Side chat");
     await focusChatSidePanel(page);
@@ -578,11 +569,6 @@ suite.define(() => {
     ).toBe(false);
 
     await navigation.locator('[data-navigation-view="sessions"]').click();
-    // These shared ownerless fixtures are deliberately outside the human Mine scope.
-    await navigation
-      .locator(".sidebar-navigation-scope")
-      .getByRole("button", { name: "All", exact: true })
-      .click();
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
     await row.click({ button: "right" });
@@ -687,7 +673,7 @@ suite.define(() => {
       await catalog.locator(".sidebar-recent-sessions__head").hover();
       await catalog.locator('[data-session-catalog-view-menu="codex"]').click();
       await page
-        .locator('wa-dropdown-item[value="hide-catalog"]')
+        .locator('[data-value="hide-catalog"]')
         .evaluate((element) => (element as HTMLElement).click());
       const host = drawer.locator("openclaw-toast-host");
       const toast = host.locator(".app-toast");
@@ -768,27 +754,19 @@ suite.define(() => {
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--mobile-nav");
-    await page.setViewportSize({ width: 620, height: 900 });
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .not.toContain("shell--mobile-nav");
-    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
-  });
-
-  it("uses the drawer below the native minimum main-pane width", async () => {
-    const page = await openPage({ webChrome: true, width: 560 });
     await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(false);
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .toContain("shell--mobile-nav");
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
-    // The native traffic-light cluster ends around x=78. Keep the brand aligned
-    // with the desktop titlebar controls' 92px inset so the groups stay distinct.
+    // Keep the brand clear of the native traffic-light cluster.
     await expect
       .poll(() =>
         page.locator(".topbar-brand").evaluate((element) => element.getBoundingClientRect().x),
       )
       .toBe(92);
+    await page.setViewportSize({ width: 620, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
   });
 
   it("hides the drawer hamburger at narrow widths when the native toggle is present", async () => {

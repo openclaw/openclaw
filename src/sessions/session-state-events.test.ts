@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   readExactSessionEntryRow,
@@ -20,12 +21,13 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { recordSessionCreated } from "./session-created.js";
+import { prepareAmbientGroupWatchTargetsRead } from "./session-state-events.ambient-read.js";
 import {
   classifySessionStateActor,
   getSessionStateVersion,
   handleSessionStateSessionDeleted,
-  listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
   recordSessionCompacted,
   recordSessionGoalChanged,
@@ -56,6 +58,18 @@ const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const group = "agent:main:telegram:group:room-1";
 const cfg = {} as OpenClawConfig;
 
+async function readAmbientTargets(
+  sessionKey: string,
+  options: ReturnType<typeof createDatabaseOptions>,
+) {
+  const reader = prepareAmbientGroupWatchTargetsRead(sessionKey, options);
+  try {
+    return new Set(await reader.read());
+  } finally {
+    reader.release();
+  }
+}
+
 async function createWatcherSession(
   database: ReturnType<typeof createDatabaseOptions>,
   watcherSessionKey = watcher,
@@ -66,11 +80,42 @@ async function createWatcherSession(
   );
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(async () => {
   await cleanupSessionStateTestState();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("session state events", () => {
+  it("publishes the inserted head and notice once, leaving replay state unchanged", () => {
+    const database = createDatabaseOptions();
+    const input = eventInput({ dedupeKey: "replayed-event" });
+    const record = (now: number) =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => recordSessionStateEventInDatabase(db, input, now),
+        database,
+      );
+    const first = record(1000);
+    expect(first.row?.sequence).toBeGreaterThan(0);
+    expect(first.notices).toHaveLength(1);
+    const db = openOpenClawStateDatabase(database).db;
+    const readHead = () =>
+      db.prepare("SELECT last_sequence, updated_at FROM session_state_heads").get();
+    const head = readHead();
+    const cursor = readCursor(database);
+    expect(head).toEqual({ last_sequence: first.row?.sequence, updated_at: 1000 });
+    expect(cursor?.material_sequence).toBe(first.row?.sequence);
+
+    const replay = record(2000);
+    expect(replay.row).toEqual(first.row);
+    expect(replay.notices).toEqual([]);
+    expect(readHead()).toEqual(head);
+    expect(readCursor(database)).toEqual(cursor);
+  });
+
   it.each(
     [
       { change: "ownership", key: child, field: "lifecycleRunId", records: false },
@@ -252,7 +297,7 @@ describe("session state events", () => {
         database,
       ),
     ).toBe(false);
-    expect(listAmbientGroupWatchTargets(mainSessionKey, database)).toEqual(new Set());
+    expect(await readAmbientTargets(mainSessionKey, database)).toEqual(new Set());
   });
 
   it("prunes dormant ambient cursors while retaining active cursors", async () => {
@@ -281,7 +326,7 @@ describe("session state events", () => {
     );
     await sweepSessionStateWatchNotices({ ...database, now: activeAt });
 
-    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
+    expect(await readAmbientTargets(watcher, database)).toEqual(new Set([group]));
     const cursors = openOpenClawStateDatabase(database)
       .db.prepare("SELECT COUNT(*) AS count FROM session_watch_cursors")
       .get() as { count: number };
@@ -348,6 +393,7 @@ describe("session state events", () => {
     ] as const) {
       const prepared = prepareSubagentTerminalState({
         childSessionKey: child,
+        agentId: "main",
         requesterSessionKey: watcher,
         ...terminal,
       });
@@ -402,7 +448,7 @@ describe("session state watcher cursor batches", () => {
   it("advances watcher fanout with bounded cursor reads and preserves excluded cursors", async () => {
     const database = createDatabaseOptions();
     await seedChild(database, nestedWatcher);
-    const { db } = openOpenClawStateDatabase(database);
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
     const watchers = Array.from(
       { length: 1_001 },
       (_, index) => `agent:main:subagent:fanout-${index}`,

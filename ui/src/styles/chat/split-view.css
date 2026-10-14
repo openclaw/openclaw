@@ -10,7 +10,6 @@
   .chat-pane__header
   :is(
     .chat-pane__nav-toggle,
-    .chat-pane__incognito,
     openclaw-session-owner-chip,
     .chat-pane__participants,
     .chat-pane__presence,
@@ -209,7 +208,50 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-pane__incognito > span {
+  display: inline-flex;
+}
+
+.chat-pane__incognito-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px dashed var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.chat-pane__incognito-notice p {
+  margin: 0;
+}
+
+.chat-pane__incognito-limits {
   color: var(--muted);
+}
+
+.chat-pane__incognito-notice-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+
+.chat-pane__incognito-notice-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .chat-pane__incognito svg,
@@ -324,9 +366,56 @@
   height: 14px;
 }
 
+.chat-pane__branches-menu {
+  --versions-icon-column: 28px;
+}
+
+.chat-pane__versions-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-pane__versions-info {
+  margin-inline-start: auto;
+  width: var(--versions-icon-column);
+  min-width: var(--versions-icon-column);
+  height: 28px;
+  padding: 6px;
+}
+
+.chat-pane__versions-info svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pane__versions-help {
+  --max-width: 280px;
+
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.chat-pane__branches-menu::part(menu) {
+  width: min(360px, calc(100vw - 24px));
+}
+
 .chat-pane__branch-item {
-  min-width: 260px;
-  max-width: 360px;
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Current is a readable selection, not an unavailable action. */
+.chat-pane__branch-item[data-active="true"] {
+  opacity: 1;
+  cursor: var(--cursor-action);
 }
 
 .chat-pane__branch-copy {
@@ -348,7 +437,9 @@
 
 .chat-pane__branch-active {
   display: inline-flex;
-  margin-left: auto;
+  width: var(--versions-icon-column);
+  align-items: center;
+  justify-content: center;
   color: var(--accent);
 }
 
@@ -529,18 +620,10 @@
   height: 15px;
 }
 
-/* A full split header measures 793px including insets, so secondary controls
-   shed through 800px of container content; restoration then has 8px+ slack.
-   The close action survives at the 320px pane floor. */
+/* The labelled actions stay available as split panes narrow; only secondary
+   identity and navigation details yield space to the session title. */
 @container (max-width: 800px) {
-  /* Scoped to the actions row so this hide outranks the 0,2,0 icon-button
-     styling rule above; a bare class here silently loses that cascade. */
-  .chat-pane__actions .chat-pane__split-down,
-  .chat-pane__actions .chat-pane__split-right,
-  .chat-pane__header.chat-pane__header--closable .chat-side-panel-toggle,
-  .chat-pane__header.chat-pane__header--closable .chat-pane__sharing-menu,
   .chat-pane__header.chat-pane__header--closable .chat-pane__nav-toggle,
-  .chat-pane__header.chat-pane__header--closable .chat-pane__palette-open,
   .chat-pane__header.chat-pane__header--closable .chat-pane__participants,
   .chat-pane__header.chat-pane__header--closable openclaw-session-owner-chip {
     display: none;
@@ -548,6 +631,15 @@
 }
 
 @container (max-width: 480px) {
+  .chat-pane__header-leading:has(.chat-pane__incognito) {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  .chat-pane__header-leading:has(.chat-pane__incognito) .chat-pane__crumbs {
+    flex-basis: 100%;
+  }
+
   .chat-pane__presence {
     display: none;
   }

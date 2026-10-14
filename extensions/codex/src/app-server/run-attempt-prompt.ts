@@ -175,6 +175,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           : "elide",
       prepareFileContext,
       currentUserTurnIdempotencyKey,
+      currentUserMessage: admittedMessage,
     });
     assertProjectionCurrent();
     contextImageGroups = projection.imageGroups ?? [];
@@ -241,6 +242,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             : "elide",
         ...(projectionDecision.project ? { prepareFileContext } : {}),
         currentUserTurnIdempotencyKey,
+        currentUserMessage: admittedMessage,
       });
       assertProjectionCurrent();
       contextImageGroups = projectionDecision.project ? (projection.imageGroups ?? []) : [];

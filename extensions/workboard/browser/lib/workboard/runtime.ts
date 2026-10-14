@@ -24,11 +24,8 @@ type WorkboardRuntime = {
   cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
   loadClient?: GatewayBrowserClient;
-  loadCatalogOnly?: boolean;
   loadError?: string;
-  liveChangeEpoch?: string;
-  liveHighestSeenRevision?: number;
-  liveAppliedRevision?: number;
+  liveLastChange?: WorkboardChange;
   liveRefreshPending?: boolean;
   liveRefreshPromise?: Promise<void>;
   liveRefreshRetryTimer?: ReturnType<typeof setTimeout>;
@@ -52,7 +49,6 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
   delete runtime.cardsRevision;
   delete runtime.loadPromise;
   delete runtime.loadClient;
-  delete runtime.loadCatalogOnly;
 }
 
 export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
@@ -64,9 +60,7 @@ export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   }
   delete runtime.liveRefreshEntry;
   delete runtime.liveRefreshPromise;
-  delete runtime.liveChangeEpoch;
-  delete runtime.liveHighestSeenRevision;
-  delete runtime.liveAppliedRevision;
+  delete runtime.liveLastChange;
   delete runtime.liveRefreshPending;
   if (loadInFlight) {
     invalidateWorkboardLoads(host);

@@ -1,5 +1,8 @@
 import { execFileSync } from "node:child_process";
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  PluginCapabilityCatalogContext,
+  PluginCapabilityCatalogHostContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBrowserSessionCreateRequest,
@@ -25,7 +28,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
+import {
+  OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
+  resolveOpenAIChatGptSubscriptionAuth,
+} from "./realtime-auth.js";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   readRealtimeErrorDetail,
@@ -473,7 +479,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   if (platformAuth) {
     return { type: "api-key" as const, token: platformAuth };
   }
-  if (hasOpenAIRealtimePlatformAuthInput(params, runtime)) {
+  if (await hasOpenAIRealtimePlatformAuthInputAsync(params, runtime)) {
     throw new Error(
       isOpenAIGptLiveSubscriptionModel(params.model)
         ? OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE
@@ -487,6 +493,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   );
 }
 
+// Retained for public synchronous SDK calls through 2026-12-31.
 export function hasOpenAIRealtimePlatformAuthInput(
   params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   {
@@ -529,7 +536,60 @@ export function hasOpenAIChatGptSubscriptionAuthInput(
     cfg: params.cfg,
     agentDir:
       params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    profileTypes: ["oauth"],
+    profileTypes: OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
+    includeExternalCliAuth: false,
+  });
+}
+
+export async function hasOpenAIRealtimePlatformAuthInputAsync(
+  params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
+  {
+    isProviderAuthProfileConfiguredAsync,
+    resolveAgentDir,
+  }: Pick<
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
+  >,
+): Promise<boolean> {
+  if (hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)) {
+    return true;
+  }
+  if (
+    await isProviderAuthProfileConfiguredAsync({
+      provider: "openai",
+      cfg: params.cfg,
+      ...(params.cfg && params.agentId
+        ? { agentDir: resolveAgentDir(params.cfg, params.agentId) }
+        : {}),
+      profileTypes: ["api_key"],
+      includeExternalCliAuth: false,
+    })
+  ) {
+    return true;
+  }
+  return hasOpenAIRealtimeApiKeyInput(undefined);
+}
+
+export async function hasOpenAIChatGptSubscriptionAuthInputAsync(
+  params: {
+    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  {
+    isProviderAuthProfileConfiguredAsync,
+    resolveAgentDir,
+  }: Pick<
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
+  >,
+): Promise<boolean> {
+  return isProviderAuthProfileConfiguredAsync({
+    provider: "openai",
+    capability: "realtime-voice",
+    cfg: params.cfg,
+    agentDir:
+      params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+    profileTypes: OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
     includeExternalCliAuth: false,
   });
 }

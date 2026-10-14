@@ -79,7 +79,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
                 ({ executeGitWorktreeOperation }) => executeGitWorktreeOperation(command),
               );
             case "repository.identities":
-              return import("../agents/worktrees/service-preparation.js").then(
+              return import("../agents/worktrees/repository-paths.js").then(
                 async ({ resolveRepositoryIdentity }) =>
                   (
                     await runTasksWithConcurrency({

@@ -87,6 +87,7 @@ function mockExclusiveCopyPublication(alterCopy?: (filePath: string) => Promise<
       return {
         method: "exclusive-copy",
         identity: await target.stat(),
+        exactIdentity: await target.stat({ bigint: true }),
         directorySync: await syncDirectory(path.dirname(options.targetPath)),
       };
     } finally {
@@ -282,7 +283,7 @@ describe("createVerifiedSqliteSnapshot", () => {
       expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       const rejected = results.find((result) => result.status === "rejected");
       expect(rejected).toBeDefined();
-      expect((rejected as PromiseRejectedResult).reason).toMatchObject({ code: "EEXIST" });
+      expect((rejected as PromiseRejectedResult).reason).toMatchObject({ code: "already-exists" });
       await expect(fs.lstat(directoryPath)).resolves.toMatchObject({});
     },
   );

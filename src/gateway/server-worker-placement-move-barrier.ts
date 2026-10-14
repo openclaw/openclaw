@@ -35,7 +35,7 @@ export async function runWorkerPlacementHandoff<T>(
   begin: (resolved: Awaited<ReturnType<typeof resolveWorkerPlacementSessionTarget>>) => Promise<T>,
 ): Promise<T> {
   const { sessionId, sessionKey, agentId, action, signal } = request;
-  const target = resolveWorkerPlacementSessionStoreTarget(
+  const target = await resolveWorkerPlacementSessionStoreTarget(
     sessionRuntime,
     getRuntimeConfig(),
     request,
@@ -47,7 +47,7 @@ export async function runWorkerPlacementHandoff<T>(
     identities: lifecycleIdentities,
     signal,
     prepare: async () => {
-      const resolved = await resolveWorkerPlacementSessionTarget({
+      using resolved = await resolveWorkerPlacementSessionTarget({
         sessionRuntime,
         config: getRuntimeConfig(),
         sessionId,
@@ -123,7 +123,12 @@ export function createGatewayWorkerPlacementMoveBarrier(
       params,
       { ...request, action: "move" },
       await params.loadSessionRuntime(),
-      async () => {
+      async ({ workspace }) => {
+        if (workspace.kind === "device-folder") {
+          throw new Error(
+            "Device folders cannot move or Continue on Gateway; reconnect the original device or start a new session.",
+          );
+        }
         request.authorize?.();
         return await request.begin(async (runId) => {
           if (params.persistAbandonedPartial) {

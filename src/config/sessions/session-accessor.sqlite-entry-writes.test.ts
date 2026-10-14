@@ -1,11 +1,15 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "../../state/openclaw-agent-board-schema.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import { writeSessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
 import {
   readSessionEntrySelectionSnapshot,
@@ -13,14 +17,90 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { loadExactSessionEntry, patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
+import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import {
-  commitSessionEntryReplacementsInDatabase,
-  prepareSessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import type { SessionEntry } from "./types.js";
+
+it("publishes canonical side metadata through cold, warm, and field-only writes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:cache-metadata" };
+    const database = openOpenClawAgentDatabase(scope);
+    let published: ReturnType<typeof readPreparedSessionEntryChange>;
+    const unsubscribe = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        published = readPreparedSessionEntryChange(change, scope.sessionKey);
+      }
+    });
+    const expectAbsentMetadata = (entry: SessionEntry | undefined) => {
+      expect(entry).toMatchObject({ sessionId: "cache-metadata" });
+      for (const field of ["owner", "participants", "participantCount"]) {
+        expect(entry).not.toHaveProperty(field);
+      }
+    };
+    const write = (label: string, updatedAt = 10) =>
+      runOpenClawAgentWriteTransaction(
+        (writer) =>
+          writeSessionEntry(writer, scope.sessionKey, {
+            sessionId: "cache-metadata",
+            updatedAt,
+            label,
+            skillsSnapshot: { prompt: "saved prompt", skills: [] },
+          }),
+        scope,
+      );
+    const current = () => readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey);
+    const owner: NonNullable<SessionEntry["owner"]> = {
+      actor: { type: "human", id: "cache-owner" },
+    };
+    const assignOwner = (assignment: typeof owner | undefined) =>
+      runOpenClawAgentWriteTransaction(
+        (writer) => replaceSessionOwnerInTransaction(writer, scope.sessionKey, assignment),
+        scope,
+      );
+    try {
+      write("cold");
+      expectAbsentMetadata(published?.entry);
+      expectAbsentMetadata(published?.fullEntry);
+      expect(published?.fullEntry?.skillsSnapshot?.prompt).toBe("saved prompt");
+
+      readSessionEntryCache(database, { cache: true, projection: "list" });
+      write("warm", 20);
+      expect(current()).toMatchObject({ label: "warm", updatedAt: 20 });
+      expectAbsentMetadata(current());
+      expectAbsentMetadata(published?.entry);
+
+      expect(assignOwner(owner)).toBe(true);
+      readSessionEntryCache(database, { cache: true, projection: "list" });
+      expect(current()?.owner).toEqual(owner);
+      expect(assignOwner(undefined)).toBe(true);
+      expectAbsentMetadata(current());
+
+      expect(assignOwner(owner)).toBe(true);
+      expect(
+        recordSessionParticipant(scope, {
+          identity: { type: "agent", id: "cache-participant" },
+          promptedAt: 10,
+        }),
+      ).toBe("inserted");
+      expect(current()).toMatchObject({
+        owner,
+        participants: [{ identity: { type: "agent", id: "cache-participant" } }],
+        participantCount: 1,
+      });
+      expect(assignOwner(undefined)).toBe(true);
+      expect(current()).not.toHaveProperty("owner");
+      expect(current()).toMatchObject({
+        participants: [{ identity: { type: "agent", id: "cache-participant" } }],
+        participantCount: 1,
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+});
 
 it("skips unchanged entry and snapshot writes while retaining current transcript observation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -37,14 +117,21 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
       scope,
     );
     const assertCommitAllowed = vi.fn();
-    const onCommitted = vi.fn();
-    const patch = (fields: Partial<SessionEntry>) =>
-      patchSessionEntryCore(scope, () => fields, {
-        assertCommitAllowed,
-        onCommitted,
-        preserveActivity: true,
-        skipMaintenance: true,
-      });
+    const patch = async (fields: Partial<SessionEntry>) =>
+      runOpenClawAgentWriteTransaction((writer) => {
+        const fresh = readSessionEntrySelectionSnapshot(writer, scope.sessionKey, true, true);
+        const current = fresh[0]?.entry;
+        if (!current) {
+          throw new Error("Missing entry before patch");
+        }
+        return writeSessionEntryPatchInDatabase(writer, {
+          sessionKey: scope.sessionKey,
+          fresh,
+          writeBase: current,
+          next: { ...current, ...fields },
+          options: { assertCommitAllowed },
+        }).entry;
+      }, scope);
     // Settle the initial transcript observation before measuring unchanged rows.
     await patch({});
     const sql = trackSqliteStatementExecutions(
@@ -63,7 +150,6 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
     );
     try {
       assertCommitAllowed.mockClear();
-      onCommitted.mockClear();
       await expect(
         patch({ skillsSnapshot: structuredClone(skillsSnapshot) }),
       ).resolves.toMatchObject({
@@ -72,7 +158,6 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
       });
       expect(sql.counts).toEqual({ nodes: 0, windows: 0, snapshots: 0 });
       expect(assertCommitAllowed).toHaveBeenCalled();
-      expect(onCommitted).toHaveBeenCalledOnce();
 
       await patch({
         lastRunError: "retained error",
@@ -113,7 +198,7 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
 });
 
 it.each(["entry", "target"] as const)(
-  "reuses %s patch postimages until transaction facts change",
+  "publishes exact %s patch postimages without rereading written facts",
   async (selection) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:entry-postimage" };
@@ -134,6 +219,18 @@ it.each(["entry", "target"] as const)(
           writeSessionEntry(writer, scope.sessionKey, {
             sessionId: "entry-postimage",
             updatedAt: 10,
+            activitySummary: {
+              version: 1,
+              text: "Empty transcript",
+              updatedAt: 10,
+              sessionId: "entry-postimage",
+              generation: null,
+              maxSeq: null,
+              leafEntryId: null,
+              coveredMessages: 0,
+              totalMessages: 0,
+              omittedContent: false,
+            },
             skillsSnapshot: { prompt: "private saved prompt", skills: [] },
           }),
         scope,
@@ -155,15 +252,17 @@ it.each(["entry", "target"] as const)(
       }, scope);
       const sql = trackSqliteStatementExecutions(
         database.db,
-        ["participants", "windows", "metadata"],
+        ["participants", "windows", "metadata", "watermarks"],
         (query) =>
           /^select\b.*\bfrom "session_participants"/iu.test(query)
             ? "participants"
             : query.includes('from "session_windows" where "session_id" =')
               ? "windows"
-              : query.includes('as "member_ids_json"')
-                ? "metadata"
-                : null,
+              : query.startsWith("select coalesce(") && query.includes('as "max_seq"')
+                ? "watermarks"
+                : query.includes('as "member_ids_json"')
+                  ? "metadata"
+                  : null,
       );
       try {
         runOpenClawAgentWriteTransaction((writer) => {
@@ -190,10 +289,17 @@ it.each(["entry", "target"] as const)(
               participantCount: 99,
             },
             options: {},
-            reusePostimage: true,
           });
           if (!mutation.identity || !mutation.postimages) {
             throw new Error("Missing committed patch postimage");
+          }
+          expect(mutation.entry.participants).toEqual([
+            expect.objectContaining({ identity: { type: "agent", id: "first" } }),
+          ]);
+          expect(mutation.entry).not.toHaveProperty("owner");
+          mutation.entry.lastRunError = "caller-owned result";
+          if (mutation.entry.skillsSnapshot) {
+            mutation.entry.skillsSnapshot.prompt = "caller-owned prompt";
           }
           expect(sql.counts.windows).toBe(0);
           const committed = {
@@ -225,6 +331,7 @@ it.each(["entry", "target"] as const)(
           );
           expect(retained.current.get(scope.sessionKey)).not.toHaveProperty("owner");
           expect(retained.projection?.get(scope.sessionKey)).toMatchObject({
+            activitySummaryWatermark: { generation: null, maxSeq: null },
             membership: [
               scope.sessionKey,
               null,
@@ -243,12 +350,28 @@ it.each(["entry", "target"] as const)(
             .prepare("DELETE FROM session_members WHERE session_key = ?")
             .run(scope.sessionKey);
           writer.db.prepare("DELETE FROM board_tabs WHERE session_key = ?").run(scope.sessionKey);
-          const afterWrite = sql.counts.metadata;
-          const refreshed = prepareSessionEntryReplacementPublication(committed, writer, {
-            postimages: mutation.postimages,
-            captureFullFacts: true,
+          const changed = readSnapshot(writer);
+          const changedEntry = changed[0]?.entry;
+          if (!changedEntry) {
+            throw new Error("Missing entry after participant and membership writes");
+          }
+          const changedMutation = writeSessionEntryPatchInDatabase(writer, {
+            sessionKey: scope.sessionKey,
+            fresh: changed,
+            writeBase: changedEntry,
+            next: { ...changedEntry, lastRunError: "after side-table writes" },
+            options: {},
           });
-          expect(sql.counts.metadata).toBeGreaterThan(afterWrite);
+          if (!changedMutation.identity) {
+            throw new Error("Missing changed patch identity");
+          }
+          const afterWrite = { ...sql.counts };
+          const refreshed = prepareSessionEntryReplacementPublication(
+            { ...committed, ...changedMutation.identity },
+            writer,
+            { postimages: changedMutation.postimages, captureFullFacts: true },
+          );
+          expect(sql.counts).toEqual(afterWrite);
           expect(refreshed.current.get(scope.sessionKey)).toMatchObject({
             participants: [
               { identity: { type: "agent", id: "first" } },
@@ -261,106 +384,81 @@ it.each(["entry", "target"] as const)(
             hasBoard: false,
           });
 
-          const guarded = readSnapshot(writer);
-          const guardedEntry = guarded[0]?.entry;
-          if (!guardedEntry) {
-            throw new Error("Missing entry before synchronous guard");
+          const beforeAppend = readSnapshot(writer);
+          const beforeAppendEntry = beforeAppend[0]?.entry;
+          if (!beforeAppendEntry) {
+            throw new Error("Missing entry before transcript append");
           }
-          const writeGuardSnapshot = () =>
-            writer.db
-              .prepare(
-                "UPDATE session_entry_snapshots SET value_json = ? WHERE session_key = ? AND field = 'skillsSnapshot'",
-              )
-              .run(JSON.stringify({ prompt: "guard snapshot", skills: [] }), scope.sessionKey);
-          const readSavedSnapshot = () =>
-            writer.db
-              .prepare(
-                "SELECT value_json FROM session_entry_snapshots WHERE session_key = ? AND field = 'skillsSnapshot'",
-              )
-              .get(scope.sessionKey);
-          const guardedMutation = writeSessionEntryPatchInDatabase(writer, {
+          expect(
+            appendTranscriptMessageSync(
+              { ...scope, sessionId: beforeAppendEntry.sessionId },
+              { message: { role: "user", content: "append after entry selection" } },
+            ).ok,
+          ).toBe(true);
+          const windowsBeforePatch = sql.counts.windows;
+          const appendedMutation = writeSessionEntryPatchInDatabase(writer, {
             sessionKey: scope.sessionKey,
-            fresh: guarded,
-            writeBase: guardedEntry,
-            next: { ...guardedEntry },
-            options: {
-              assertCommitAllowed() {
-                writer.db
-                  .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-                  .run(
-                    JSON.stringify({ ...guardedEntry, lastRunError: "guard mutation" }),
-                    scope.sessionKey,
-                  );
-                addSideTables("guard-member");
-                writeGuardSnapshot();
-              },
-            },
-            reusePostimage: true,
-          });
-          expect(guardedMutation.identity).toBeDefined();
-          expect(readSavedSnapshot()).toEqual({
-            value_json: JSON.stringify(guardedEntry.skillsSnapshot),
-          });
-          const guardedPublication = prepareSessionEntryReplacementPublication(
-            {
-              ...committed,
-              current: new Map([[scope.sessionKey, guardedMutation.entry]]),
-            },
-            writer,
-            { postimages: guardedMutation.postimages, captureFullFacts: true },
-          );
-          expect(guardedPublication.current.get(scope.sessionKey)?.lastRunError).toBe("updated");
-          expect(guardedPublication.projection?.get(scope.sessionKey)).toMatchObject({
-            membership: [
-              scope.sessionKey,
-              null,
-              ["guard-member"],
-              expect.any(Object),
-              "entry-postimage",
-            ],
-            hasBoard: true,
-          });
-
-          const stale = readSnapshot(writer);
-          const staleEntry = stale[0]?.entry;
-          if (!staleEntry) {
-            throw new Error("Missing patched entry");
-          }
-          writer.db
-            .prepare("UPDATE session_windows SET transcript_updated_at = 123 WHERE session_id = ?")
-            .run(staleEntry.sessionId);
-          writeSessionEntryPatchInDatabase(writer, {
-            sessionKey: scope.sessionKey,
-            fresh: stale,
-            writeBase: staleEntry,
-            next: { ...staleEntry, lastRunError: "after transcript update" },
+            fresh: beforeAppend,
+            writeBase: beforeAppendEntry,
+            next: { ...beforeAppendEntry, lastRunError: "after transcript append" },
             options: {},
-            reusePostimage: true,
           });
-          expect(sql.counts.windows).toBe(2);
+          expect(sql.counts.windows).toBe(windowsBeforePatch);
+          const appendedWindow = appendedMutation.postimages?.get(scope.sessionKey)?.window;
+          const appendedWatermark = appendedMutation.postimages?.get(
+            scope.sessionKey,
+          )?.transcriptWatermark;
+          // The session header precedes the first appended message.
+          expect(appendedWatermark).toEqual({ generation: expect.any(String), maxSeq: 1 });
+          const beforePublication = { ...sql.counts };
+          const appendedPublication = prepareSessionEntryReplacementPublication(
+            { ...committed, ...appendedMutation.identity },
+            writer,
+            { postimages: appendedMutation.postimages },
+          );
+          expect(
+            appendedPublication.projection?.get(scope.sessionKey)?.activitySummaryWatermark,
+          ).toEqual(appendedWatermark);
+          expect(sql.counts).toEqual(beforePublication);
+          expect(appendedWindow?.transcript_observed_at).toBe(
+            appendedWindow?.transcript_updated_at,
+          );
           expect(
             writer.db
-              .prepare("SELECT transcript_observed_at FROM session_windows WHERE session_id = ?")
-              .get(staleEntry.sessionId),
-          ).toEqual({ transcript_observed_at: 123 });
-
-          const replacementBefore = readExactSessionEntryRow(writer, scope.sessionKey);
-          if (!replacementBefore) {
-            throw new Error("Missing entry before guarded replacement");
-          }
-          commitSessionEntryReplacementsInDatabase(
-            writer,
-            {
-              expectedRows: new Map([[scope.sessionKey, replacementBefore]]),
-              validationKeys: [scope.sessionKey],
-              labelOwnerKeys: [],
-              replacements: [{ sessionKey: scope.sessionKey, entry: replacementBefore.entry }],
-            },
-            writeGuardSnapshot,
-          );
-          expect(readSavedSnapshot()).toEqual({
-            value_json: JSON.stringify(replacementBefore.entry.skillsSnapshot),
+              .prepare(
+                "SELECT transcript_observed_at, transcript_updated_at FROM session_windows WHERE session_id = ?",
+              )
+              .get(beforeAppendEntry.sessionId),
+          ).toEqual({
+            transcript_observed_at: appendedWindow?.transcript_observed_at,
+            transcript_updated_at: appendedWindow?.transcript_updated_at,
           });
+
+          addSideTables("replacement-member");
+          const beforeReset = readSnapshot(writer);
+          const beforeResetEntry = beforeReset[0]?.entry;
+          if (!beforeResetEntry) {
+            throw new Error("Missing entry before generation replacement");
+          }
+          const replacement = writeSessionEntryPatchInDatabase(writer, {
+            sessionKey: scope.sessionKey,
+            fresh: beforeReset,
+            writeBase: beforeResetEntry,
+            next: { ...beforeResetEntry, sessionId: "replacement-postimage", updatedAt: 30 },
+            options: {},
+          });
+          const replacementPostimage = replacement.postimages?.get(scope.sessionKey);
+          expect(replacementPostimage?.entry).toMatchObject({
+            sessionId: "replacement-postimage",
+            participantCount: 2,
+          });
+          expect(replacementPostimage?.sideTables).toEqual({
+            memberIdsJson: "[]",
+            hasBoard: true,
+          });
+          expect(readExactSessionEntryRow(writer, scope.sessionKey)?.entry).toEqual(
+            replacementPostimage?.entry,
+          );
         }, scope);
       } finally {
         sql.restore();

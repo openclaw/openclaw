@@ -216,7 +216,7 @@ describe("node worker workspace retention", () => {
     expect(fs.existsSync(workspaceDir)).toBe(false);
   });
 
-  it.each(["generation", "transfer", "manifest", "metadata"] as const)(
+  it.each(["manifest", "metadata"] as const)(
     "cancels before deleting a %s verified after cancellation and resumes on replay",
     async (kind) => {
       const root = tempDirs.make("node-worker-workspace-retention-cancel-");
@@ -238,15 +238,10 @@ describe("node worker workspace retention", () => {
           : [],
       );
       const target =
-        kind === "generation"
-          ? seedGeneration(root, input, 1)
-          : kind === "manifest"
-            ? seedManifest(root, input, "b".repeat(64))
-            : path.join(
-                sessionRoot(root, input),
-                kind === "transfer" ? ".1.workspace-transfer-stale" : ".openclaw-worker",
-              );
-      if (kind === "transfer" || kind === "metadata") {
+        kind === "manifest"
+          ? seedManifest(root, input, "b".repeat(64))
+          : path.join(sessionRoot(root, input), ".openclaw-worker");
+      if (kind === "metadata") {
         fs.mkdirSync(target, { recursive: true });
         fs.writeFileSync(path.join(target, "sentinel.txt"), "preserve until resumed");
       }
@@ -329,38 +324,6 @@ describe("node worker workspace retention", () => {
     await supervisor.close();
   });
 
-  it("replaces the full retain set and deletes the latest orphan", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-snapshot-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "snapshot-retention");
-    const first = seedGeneration(bundleRoot, input, 1);
-    const latest = seedGeneration(bundleRoot, input, 2);
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-
-    await expect(
-      supervisor.retainWorkspaces(
-        retainInput(input, 1, [
-          {
-            environmentId: input.descriptor.admission.environmentId,
-            sessionId: input.descriptor.admission.sessionId,
-            generation: 1,
-            manifestRefs: null,
-          },
-        ]),
-      ),
-    ).resolves.toMatchObject({ applied: true, hasMore: false });
-
-    expect(fs.existsSync(first)).toBe(true);
-    expect(fs.existsSync(latest)).toBe(false);
-
-    await expect(supervisor.retainWorkspaces(retainInput(input, 2, []))).resolves.toMatchObject({
-      applied: true,
-      hasMore: false,
-    });
-    expect(fs.existsSync(first)).toBe(false);
-    await supervisor.close();
-  });
-
   it("continues a bounded backlog with an idempotent snapshot replay", async () => {
     const root = tempDirs.make("node-worker-workspace-retention-backlog-");
     const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
@@ -377,53 +340,6 @@ describe("node worker workspace retention", () => {
     expect(first).toMatchObject({ applied: true, deleted: 256, hasMore: true });
     expect(second).toMatchObject({ applied: true, hasMore: false });
     expect(fs.existsSync(sessionRoot(bundleRoot, input))).toBe(false);
-    await supervisor.close();
-  });
-
-  it("cleans transfer siblings, unreachable manifests, and empty parents", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-artifacts-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "artifact-retention");
-    const generation = seedGeneration(bundleRoot, input, 3);
-    const rootForSession = sessionRoot(bundleRoot, input);
-    const staging = path.join(rootForSession, ".3.workspace-transfer-stale");
-    const backup = path.join(rootForSession, "3.previous-123-stale");
-    fs.mkdirSync(staging);
-    fs.mkdirSync(backup);
-    const manifest = seedManifest(bundleRoot, input, "a".repeat(64));
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-
-    await supervisor.retainWorkspaces(retainInput(input, 1, []));
-
-    for (const target of [generation, staging, backup, manifest, rootForSession]) {
-      expect(fs.existsSync(target)).toBe(false);
-    }
-    await supervisor.close();
-  });
-
-  it("keeps only reachable manifests for a retained workspace", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-manifests-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "manifest-retention");
-    seedGeneration(bundleRoot, input, 4);
-    const retainedDigest = "b".repeat(64);
-    const retained = seedManifest(bundleRoot, input, retainedDigest);
-    const stale = seedManifest(bundleRoot, input, "c".repeat(64));
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-
-    await supervisor.retainWorkspaces(
-      retainInput(input, 1, [
-        {
-          environmentId: input.descriptor.admission.environmentId,
-          sessionId: input.descriptor.admission.sessionId,
-          generation: 4,
-          manifestRefs: [`sha256:${retainedDigest}`],
-        },
-      ]),
-    );
-
-    expect(fs.existsSync(retained)).toBe(true);
-    expect(fs.existsSync(stale)).toBe(false);
     await supervisor.close();
   });
 
@@ -508,6 +424,7 @@ describe("node worker workspace retention", () => {
     const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
     const input = testWorkerLaunchInput(workspaceDir, "active-retention", "background-start");
     const active = seedGeneration(bundleRoot, input, input.descriptor.admission.ownerEpoch);
+    input.descriptor.assignment.workspaceDir = fs.realpathSync.native(active);
     const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
 
     try {

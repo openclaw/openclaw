@@ -83,7 +83,9 @@ export async function resolveRuntimeMatrixClientWithReadiness(
     });
     assertCurrent?.();
   } catch (err) {
-    await lease.release({ mode: "stop" });
+    // Readiness may have initialized Rust crypto before failing. Publish its final
+    // state before relinquishing custody so a normal retry can acquire the store.
+    await lease.release({ mode: "persist" });
     throw err;
   }
   return {
@@ -95,7 +97,7 @@ export async function resolveRuntimeMatrixClientWithReadiness(
 export async function withResolvedRuntimeMatrixClient<T>(
   opts: MatrixRuntimeClientOptions,
   run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
-  stopMode: MatrixClientReleaseMode = "stop",
+  stopMode: MatrixClientReleaseMode = "persist",
 ): Promise<T> {
   const assertCurrent = captureChannelReadAuthority();
   assertCurrent?.();

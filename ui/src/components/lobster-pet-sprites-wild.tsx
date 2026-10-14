@@ -1,4 +1,5 @@
 import type { JSX } from "../types/solid-elements.d.ts";
+import { staticSprite } from "./lobster-pet-sprite.tsx";
 import type { LobsterEyeProps } from "./lobster-pet-sprite.tsx";
 
 export function FLATPACK_LOBSTER(props: LobsterEyeProps): JSX.Element {
@@ -444,27 +445,25 @@ export function PORTAL_LOBSTER(props: LobsterEyeProps): JSX.Element {
   );
 }
 
-export const WATERMELON_RIND = () => (
-  <>
-    <g class="lob-watermelon">
-      <g fill="none" stroke="#2c7a4a" stroke-width="4" stroke-linecap="round">
-        <path d="M31 25 Q39 13 48 11" />
-        <path d="M48 22 Q54 10 60 9" />
-        <path d="M66 22 Q72 10 80 15" />
-        <path d="M82 28 Q89 20 94 30" />
-      </g>
-      <ellipse cx="60" cy="69" rx="35" ry="23" fill="#e5484d" />
-      <g fill="#28211c">
-        <ellipse cx="42" cy="62" rx="2" ry="3.4" transform="rotate(-20 42 62)" />
-        <ellipse cx="58" cy="58" rx="2" ry="3.4" transform="rotate(8 58 58)" />
-        <ellipse cx="76" cy="64" rx="2" ry="3.4" transform="rotate(24 76 64)" />
-        <ellipse cx="49" cy="77" rx="2" ry="3.4" transform="rotate(18 49 77)" />
-        <ellipse cx="68" cy="79" rx="2" ry="3.4" transform="rotate(-16 68 79)" />
-        <ellipse cx="84" cy="75" rx="1.8" ry="3.1" transform="rotate(30 84 75)" />
-      </g>
-    </g>
-  </>
-);
+export const WATERMELON_RIND = staticSprite(`
+<g class="lob-watermelon">
+  <g fill="none" stroke="#2c7a4a" stroke-width="4" stroke-linecap="round">
+    <path d="M31 25 Q39 13 48 11"></path>
+    <path d="M48 22 Q54 10 60 9"></path>
+    <path d="M66 22 Q72 10 80 15"></path>
+    <path d="M82 28 Q89 20 94 30"></path>
+  </g>
+  <ellipse cx="60" cy="69" rx="35" ry="23" fill="#e5484d"></ellipse>
+  <g fill="#28211c">
+    <ellipse cx="42" cy="62" rx="2" ry="3.4" transform="rotate(-20 42 62)"></ellipse>
+    <ellipse cx="58" cy="58" rx="2" ry="3.4" transform="rotate(8 58 58)"></ellipse>
+    <ellipse cx="76" cy="64" rx="2" ry="3.4" transform="rotate(24 76 64)"></ellipse>
+    <ellipse cx="49" cy="77" rx="2" ry="3.4" transform="rotate(18 49 77)"></ellipse>
+    <ellipse cx="68" cy="79" rx="2" ry="3.4" transform="rotate(-16 68 79)"></ellipse>
+    <ellipse cx="84" cy="75" rx="1.8" ry="3.1" transform="rotate(30 84 75)"></ellipse>
+  </g>
+</g>
+`);
 
 export function TINFOIL_PARTS(showHat: boolean): JSX.Element {
   return (
@@ -497,18 +496,9 @@ export function TINFOIL_PARTS(showHat: boolean): JSX.Element {
   );
 }
 
-export const ECLIPSE_CORONA = () => (
-  <>
-    <path
-      class="lob-eclipse-corona"
-      d="M29 31 Q40 10 61 9 Q82 9 94 31"
-      fill="none"
-      stroke="#ffe9b8"
-      stroke-width="2.5"
-      stroke-linecap="round"
-    />
-  </>
-);
+export const ECLIPSE_CORONA = staticSprite(`
+<path class="lob-eclipse-corona" d="M29 31 Q40 10 61 9 Q82 9 94 31" fill="none" stroke="#ffe9b8" stroke-width="2.5" stroke-linecap="round"></path>
+`);
 
 const CHECKER_ROWS = [
   { y: 12, x: 44, count: 4 },
@@ -544,17 +534,9 @@ export const NOTEXTURE_CHECKER = () => (
   </>
 );
 
-export const CHIMERA_STITCHES = () => (
-  <>
-    <g
-      class="lob-chimera-stitches"
-      fill="none"
-      stroke="#4a3f3a"
-      stroke-width="1.8"
-      stroke-linecap="round"
-    >
-      <path d="M18 47 L27 50 M19 51 L22 46 M23 53 L26 48" />
-      <path d="M93 50 L102 47 M94 48 L97 53 M98 46 L101 51" />
-    </g>
-  </>
-);
+export const CHIMERA_STITCHES = staticSprite(`
+<g class="lob-chimera-stitches" fill="none" stroke="#4a3f3a" stroke-width="1.8" stroke-linecap="round">
+  <path d="M18 47 L27 50 M19 51 L22 46 M23 53 L26 48"></path>
+  <path d="M93 50 L102 47 M94 48 L97 53 M98 46 L101 51"></path>
+</g>
+`);

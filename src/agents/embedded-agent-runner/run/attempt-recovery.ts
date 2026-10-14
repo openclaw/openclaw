@@ -1,5 +1,6 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
+import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
@@ -175,6 +176,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   // Resume its transcript before considering the terminal, tool-free finalizer.
   const emptyLengthStop =
     recoveryAssistant?.stopReason === "length" &&
+    !isCompactionReplayCheckpoint(recoveryAssistant.providerReplay) &&
     recoveryAssistant.content.length === 0 &&
     !isContextOverflow(recoveryAssistant, runtime.contextTokenBudget) &&
     !hasAttemptTerminalState(attempt) &&
@@ -207,6 +209,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     (isResponsesOutputLimitToolCallError(recoveryAssistant) || emptyLengthNeedsContinuation),
   );
   const canContinueOutputLimit =
+    // These modes omit history; their continuation would replay the same request.
+    params.modelRun !== true &&
+    params.promptMode !== "none" &&
     !runtime.pluginHarnessOwnsTransport &&
     !terminalInterrupted &&
     !promptError &&
@@ -441,10 +446,10 @@ export async function recoverEmbeddedRunAttempt(input: {
     (!promptError || promptErrorSource === "prompt") &&
     !isTerminalAssistantError(attemptAssistant) &&
     (!outputLimitFailure || canContinueOutputLimit) &&
-    (retryFailure?.kind !== "reason" || retryFailure.sameModelRetry !== false) &&
     recoveryReason &&
     (await failoverRetryController.maybeRetryTransient({
       reason: recoveryReason,
+      sameModelRetry: retryFailure?.kind === "reason" ? retryFailure.sameModelRetry : undefined,
       code: promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code,
       message: promptError ? formatErrorMessage(promptError) : assistantSignal?.message,
       retryAfterMs: promptError
@@ -466,6 +471,7 @@ export async function recoverEmbeddedRunAttempt(input: {
             retryAttempt,
             maxRetries,
             delayMs,
+            retryAt: Date.now() + delayMs,
             attempt: retryAttempt + 1,
             maxAttempts: maxRetries + 1,
             reason,
@@ -588,6 +594,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       runtimeAuthRetry: input.runtimeAuthRetry,
       buildErrorAgentMeta: buildAttemptErrorMeta,
       failover: failoverRetryController,
+      rateLimitRetriesExhausted: failoverRetryController.rateLimitRetriesExhausted,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,
       traceAttempts: input.traceAttempts,
       previousRetryFailoverReason: input.lastRetryFailoverReason,

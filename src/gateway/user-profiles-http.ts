@@ -241,6 +241,7 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   let emails: string[];
+  let revision: string;
   try {
     const reader = createProfileAvatarReader(profileId);
     for (;;) {
@@ -280,6 +281,7 @@ export async function handleUserProfileAvatarHttpRequest(
         });
         return true;
       }
+      revision = String(profile.updatedAt);
       emails = prepared.emails;
       break;
     }
@@ -342,6 +344,12 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   authResult.assertCurrent();
+  if (
+    !transientFailure &&
+    new URL(req.url ?? "/", "http://localhost").searchParams.get("v") === revision
+  ) {
+    res.setHeader("Cache-Control", "private, max-age=60");
+  }
   sendJson(res, transientFailure ? 502 : 404, {
     ok: false,
     error: { type: transientFailure ? "avatar_upstream_unavailable" : "not_found" },

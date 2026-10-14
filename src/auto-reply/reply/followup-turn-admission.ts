@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
@@ -28,6 +28,7 @@ import {
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { isGoalContinuationCurrent } from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import {
   admitFollowupRunLifecycle,
@@ -35,6 +36,7 @@ import {
   resolveFollowupAbortSignal,
   type FollowupRun,
 } from "./queue.js";
+import { getFollowupQueueDepth } from "./queue/enqueue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import {
@@ -80,7 +82,7 @@ type FollowupAdmissionResult =
   | { kind: "deferred"; reason: "active-run" }
   | {
       kind: "skipped";
-      reason: "aborted" | "lifecycle-invalidated";
+      reason: "aborted" | "lifecycle-invalidated" | "goal-inactive";
       operation?: ReplyOperation;
     };
 
@@ -169,6 +171,7 @@ export async function admitFollowupTurn(params: {
   const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
   operation.retainFailureUntilComplete();
   let queuedFollowupAdmitted = false;
+  let admissionFailed = false;
   try {
     await admitFollowupRunLifecycle(params.queued);
     if (isFollowupRunAborted(params.queued)) {
@@ -181,11 +184,6 @@ export async function admitFollowupTurn(params: {
     await params.defaults.opts?.onQueuedFollowupAdmitted?.();
     assertOperatorCurrent();
     const sessionRotated = operation.sessionId !== run.sessionId;
-    const admittedEntry = replySessionKey
-      ? params.defaults.storePath
-        ? loadSessionEntry({ storePath: params.defaults.storePath, sessionKey: replySessionKey })
-        : params.defaults.sessionStore?.[replySessionKey]
-      : undefined;
     const admissionEntry =
       admission.sessionEntry?.sessionId === operation.sessionId
         ? admission.sessionEntry
@@ -207,20 +205,26 @@ export async function admitFollowupTurn(params: {
         );
       }
     };
-    assertPersistedGeneration(admittedEntry);
-    const reloadedEntry =
-      admittedEntry?.sessionId === operation.sessionId ? admittedEntry : undefined;
-    const freshestMatchingEntry =
-      reloadedEntry && admissionEntry
-        ? reloadedEntry.updatedAt >= admissionEntry.updatedAt
-          ? reloadedEntry
-          : admissionEntry
-        : (reloadedEntry ?? admissionEntry);
     let activeEntry =
-      freshestMatchingEntry ??
-      (admittedEntry === undefined && initialEntry?.sessionId === operation.sessionId
-        ? initialEntry
-        : undefined);
+      admissionEntry ??
+      (initialEntry?.sessionId === operation.sessionId ? initialEntry : undefined);
+    const goalContinuation = params.queued.goalContinuation;
+    if (goalContinuation) {
+      const goalEntry =
+        replySessionKey && params.defaults.storePath
+          ? await readSessionEntryInWorker({
+              storePath: params.defaults.storePath,
+              sessionKey: replySessionKey,
+            })
+          : activeEntry;
+      assertOperatorCurrent();
+      if (
+        !isGoalContinuationCurrent(goalContinuation, goalEntry) ||
+        getFollowupQueueDepth(replySessionKey ?? "") > 0
+      ) {
+        return { kind: "skipped", reason: "goal-inactive", operation };
+      }
+    }
     const lifecycleRevisionChanged =
       operation.sessionId === params.queued.run.sessionId &&
       activeEntry?.sessionId === operation.sessionId &&
@@ -298,9 +302,9 @@ export async function admitFollowupTurn(params: {
       sendPolicy: resolveTurnSendPolicy(activeEntry),
       preflightCompactionApplied: false,
     };
-    const readTurnSessionEntry = () =>
+    const readNoticeSessionEntry = async () =>
       replySessionKey && params.defaults.storePath
-        ? loadSessionEntry({
+        ? await readSessionEntryInWorker({
             storePath: params.defaults.storePath,
             sessionKey: replySessionKey,
           })
@@ -353,7 +357,7 @@ export async function admitFollowupTurn(params: {
               pendingTerminalCompactionNotice = { phase, text };
               return;
             }
-            const noticeEntry = readTurnSessionEntry();
+            const noticeEntry = await readNoticeSessionEntry();
             try {
               assertPersistedGeneration(noticeEntry);
             } catch (error) {
@@ -401,27 +405,6 @@ export async function admitFollowupTurn(params: {
           "Follow-up session generation changed during preflight notice delivery",
         );
       }
-      if (replySessionKey && params.defaults.storePath) {
-        const persistedEntry = readTurnSessionEntry();
-        if (
-          (!persistedEntry && preflightEntry) ||
-          (persistedEntry &&
-            !isSameSessionGeneration(persistedEntry, preflightEntry) &&
-            !isSameSessionGeneration(persistedEntry, activeEntry))
-        ) {
-          throw new FollowupSessionGenerationInvalidatedError(
-            "Follow-up session generation changed during preflight",
-          );
-        }
-        if (
-          persistedEntry &&
-          (!activeEntry ||
-            (isSameSessionGeneration(persistedEntry, activeEntry) &&
-              persistedEntry.updatedAt >= activeEntry.updatedAt))
-        ) {
-          activeEntry = persistedEntry;
-        }
-      }
       if (activeEntry) {
         session.adopt(activeEntry);
         activeEntry = session.current() ?? activeEntry;
@@ -430,10 +413,7 @@ export async function admitFollowupTurn(params: {
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
     } catch (error) {
-      const failureEntry = readTurnSessionEntry();
-      if (!isSameSessionGeneration(failureEntry, session.current())) {
-        assertPersistedGeneration(failureEntry);
-      }
+      const failureEntry = session.current();
       if (failureEntry) {
         session.adopt(failureEntry);
         activeEntry = session.current() ?? failureEntry;
@@ -468,21 +448,53 @@ export async function admitFollowupTurn(params: {
       turn.sendPolicy === "allow" &&
       turn.queued.currentInboundEventKind !== "room_event"
     ) {
-      await params.onCompactionNoticePayload?.(
-        createCompactionNoticePayload({
-          phase: pendingTerminalCompactionNotice.phase,
-          text: pendingTerminalCompactionNotice.text,
-          currentMessageId: resolveFollowupCurrentMessageId(turn.queued),
-        }),
-        turn,
-      );
+      const noticeEntry = await readNoticeSessionEntry();
+      const expectedEntry = session.current();
+      if ((noticeEntry || expectedEntry) && !isSameSessionGeneration(noticeEntry, expectedEntry)) {
+        throw new FollowupSessionGenerationInvalidatedError(
+          "Follow-up session generation changed before compaction notice delivery",
+        );
+      }
+      if (resolveTurnSendPolicy(noticeEntry, turn.queued) === "allow") {
+        await params.onCompactionNoticePayload?.(
+          createCompactionNoticePayload({
+            phase: pendingTerminalCompactionNotice.phase,
+            text: pendingTerminalCompactionNotice.text,
+            currentMessageId: resolveFollowupCurrentMessageId(turn.queued),
+          }),
+          turn,
+        );
+      }
     }
+    if (goalContinuation) {
+      const currentEntry =
+        replySessionKey && params.defaults.storePath
+          ? await readSessionEntryInWorker({
+              storePath: params.defaults.storePath,
+              sessionKey: replySessionKey,
+            })
+          : session.current();
+      assertOperatorCurrent();
+      if (
+        operation.abortSignal.aborted ||
+        !isGoalContinuationCurrent(goalContinuation, currentEntry) ||
+        getFollowupQueueDepth(replySessionKey ?? "") > 0
+      ) {
+        return { kind: "skipped", reason: "goal-inactive", operation };
+      }
+    }
+    // Only a returned turn transfers presentation cleanup to the runner.
+    queuedFollowupAdmitted = false;
     return { kind: "admitted", turn };
   } catch (error) {
+    admissionFailed = true;
+    throw error instanceof Error ? error : new Error(formatErrorMessage(error));
+  } finally {
     if (queuedFollowupAdmitted) {
       await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
     }
-    operation.complete();
-    throw error instanceof Error ? error : new Error(formatErrorMessage(error));
+    if (admissionFailed) {
+      operation.complete();
+    }
   }
 }

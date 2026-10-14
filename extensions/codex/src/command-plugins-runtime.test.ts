@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createEmptyPluginRegistry,
@@ -12,6 +9,11 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   clearSessionStoreCacheForTest,
   resolveStorePath,
@@ -63,9 +65,11 @@ afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
+  clearRuntimeConfigSnapshot();
   clearSessionStoreCacheForTest();
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -73,31 +77,24 @@ afterEach(async () => {
 async function fixture(stableAccount = true) {
   const agentDir = path.join(root, "agents", "second", "agent");
   const workspaceDir = path.join(root, "second-workspace");
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir,
-      store: {
-        version: 1,
-        profiles: {
-          "openai:second": {
-            type: "oauth",
-            provider: "openai",
-            access: stableAccount
-              ? "test-access-token"
-              : `e30.${Buffer.from(
-                  JSON.stringify({
-                    "https://api.openai.com/auth": { chatgpt_account_id: "test-second-account" },
-                  }),
-                ).toString("base64url")}.test-signature`,
-            refresh: "test-refresh-token",
-            expires: Date.now() + 24 * 60 * 60_000,
-            ...(stableAccount ? { accountId: "test-second-account" } : {}),
-          },
-        },
-        order: { openai: ["openai:second"] },
-      },
+  await upsertAuthProfileAsync({
+    agentDir,
+    profileId: "openai:second",
+    credential: {
+      type: "oauth",
+      provider: "openai",
+      access: stableAccount
+        ? "test-access-token"
+        : `e30.${Buffer.from(
+            JSON.stringify({
+              "https://api.openai.com/auth": { chatgpt_account_id: "test-second-account" },
+            }),
+          ).toString("base64url")}.test-signature`,
+      refresh: "test-refresh-token",
+      expires: Date.now() + 24 * 60 * 60_000,
+      ...(stableAccount ? { accountId: "test-second-account" } : {}),
     },
-  ]);
+  });
   const current = {
     enabled: true,
     plugins: { notes: { marketplaceName: "company-tools", pluginName: "notes", enabled: true } },
@@ -128,6 +125,7 @@ async function fixture(stableAccount = true) {
     requestConversationBinding: async () => ({ status: "error", message: "unused" }),
     detachConversationBinding: async () => ({ removed: false }),
   };
+  setRuntimeConfigSnapshot(ctx.config);
   await upsertSessionEntry({
     agentId: "second",
     sessionKey: ctx.sessionKey!,
@@ -178,7 +176,11 @@ describe("Codex plugin command context", () => {
           "https://api.openai.com/auth": { chatgpt_account_id: "test-replacement-account" },
         }),
       ).toString("base64url")}.test-signature`;
-      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: test.agentDir, store }]);
+      await upsertAuthProfileAsync({
+        agentDir: test.agentDir,
+        profileId: "openai:second",
+        credential: profile,
+      });
       return auth;
     });
     await expect(
@@ -225,7 +227,7 @@ describe("Codex plugin command context", () => {
     expect(test.request).toHaveBeenCalledWith(
       "account/login/start",
       expect.objectContaining({ type: "chatgptAuthTokens" }),
-      { assertCurrent: undefined },
+      expect.objectContaining({ assertCurrent: undefined }),
     );
     expect(test.release).toHaveBeenCalledOnce();
   });
@@ -352,6 +354,7 @@ describe("Codex plugin command context", () => {
           });
         }
         await vi.advanceTimersByTimeAsync(response === "overload" ? 1_000 : 0);
+        await pending;
         expect(test.harness.writes).toHaveLength(2);
         expect(String(failure)).toContain(
           change === "session"
@@ -395,85 +398,68 @@ describe("Codex plugin command context", () => {
     },
   );
 
-  it.each(["policy", "conversation session"] as const)(
-    "does not publish a refresh response after %s changes and releases the client",
-    async (change) => {
-      const test = await fixture();
-      const appCache = new CodexAppInventoryCache();
-      let appCacheKey = "";
-      const storePath =
-        change === "conversation session"
-          ? path.join(root, "explicit", "sessions.json")
-          : resolveStorePath(test.ctx.config.session?.store, { agentId: "second" });
-      if (change === "conversation session") {
-        await upsertSessionEntry({
-          agentId: "second",
-          storePath,
-          sessionKey: test.ctx.sessionKey!,
-          entry: { sessionId: test.ctx.sessionId!, updatedAt: Date.now() },
-        });
-        test.ctx.sessionTarget = {
-          agentId: "second",
-          sessionId: test.ctx.sessionId!,
-          sessionKey: test.ctx.sessionKey!,
-          storePath,
-        };
-        test.ctx.getCurrentConversationBinding = async () => ({
-          bindingId: "conversation-binding",
-          pluginId: "codex",
-          pluginRoot: root,
-          channel: "test",
-          accountId: "test-account",
-          conversationId: "conversation",
-          boundAt: 1,
-          data: {
-            kind: "codex-app-server-session",
-            version: 2,
-            bindingId: "conversation-binding",
-            workspaceDir: test.workspaceDir,
-            agentId: "second",
-          },
-        });
+  it("does not publish a refresh response after its conversation session changes and releases the client", async () => {
+    const test = await fixture();
+    const appCache = new CodexAppInventoryCache();
+    let appCacheKey = "";
+    const storePath = path.join(root, "explicit", "sessions.json");
+    await upsertSessionEntry({
+      agentId: "second",
+      storePath,
+      sessionKey: test.ctx.sessionKey!,
+      entry: { sessionId: test.ctx.sessionId!, updatedAt: Date.now() },
+    });
+    test.ctx.sessionTarget = {
+      agentId: "second",
+      sessionId: test.ctx.sessionId!,
+      sessionKey: test.ctx.sessionKey!,
+      storePath,
+    };
+    test.ctx.getCurrentConversationBinding = async () => ({
+      bindingId: "conversation-binding",
+      pluginId: "codex",
+      pluginRoot: root,
+      channel: "test",
+      accountId: "test-account",
+      conversationId: "conversation",
+      boundAt: 1,
+      data: {
+        kind: "codex-app-server-session",
+        version: 2,
+        bindingId: "conversation-binding",
+        workspaceDir: test.workspaceDir,
+        agentId: "second",
+      },
+    });
+    test.request.mockImplementation(async (method) => {
+      if (method !== "app/installed") {
+        return {};
       }
-      test.request.mockImplementation(async (method) => {
-        if (method !== "app/installed") {
-          return {};
-        }
-        if (change === "policy") {
-          test.current.plugins.notes.enabled = false;
-        }
-        if (change === "conversation session") {
-          await upsertSessionEntry({
-            agentId: "second",
-            storePath,
-            sessionKey: test.ctx.sessionKey!,
-            entry: { sessionId: "session-after-reset", updatedAt: 1 },
-          });
-        }
-        return { apps: [] };
+      await upsertSessionEntry({
+        agentId: "second",
+        storePath,
+        sessionKey: test.ctx.sessionKey!,
+        entry: { sessionId: "session-after-reset", updatedAt: 1 },
       });
-      await expect(
-        withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
-          appCacheKey = context.appCacheKey;
-          await refreshCodexAppRuntimeState({
-            request: context.request,
-            appCache,
-            appCacheKey,
-          });
-        }),
-      ).rejects.toThrow(
-        change === "conversation session"
-          ? "Codex session generation is no longer current"
-          : "Codex account, conversation, or plugin policy changed",
-      );
-      expect(
-        appCache.read({
-          key: appCacheKey,
-          request: (method, params) => test.harness.client.request(method, params),
-          suppressRefresh: true,
-        }).snapshot,
-      ).toBeUndefined();
-      expect(test.release).toHaveBeenCalledOnce();
-    },
-  );
+      return { apps: [] };
+    });
+    await expect(
+      withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
+        appCacheKey = context.appCacheKey;
+        await refreshCodexAppRuntimeState({
+          request: context.request,
+          appCache,
+          appCacheKey,
+        });
+      }),
+    ).rejects.toThrow("Codex session generation is no longer current");
+    expect(
+      appCache.read({
+        key: appCacheKey,
+        request: (method, params) => test.harness.client.request(method, params),
+        suppressRefresh: true,
+      }).snapshot,
+    ).toBeUndefined();
+    expect(test.release).toHaveBeenCalledOnce();
+  });
 });

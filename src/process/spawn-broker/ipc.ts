@@ -87,40 +87,15 @@ export function createBrokerSender(send: IpcSender) {
   return Object.assign(sender, {
     reserve<T>(run: (publish: BrokerPublisher) => Promise<T>): Promise<T> {
       // Prepay a frame before effects begin; later messages cannot consume its capacity.
-      return enqueue(FRAME_BYTES, async () => {
-        let active = true;
-        let publishing = false;
-        let publication: Promise<void> | undefined;
-        const publish: BrokerPublisher = (message) => {
-          if (!active || publishing) {
-            return Promise.reject(
-              new SpawnBrokerError("Spawn broker publication reservation is closed"),
-            );
+      // The launch owner awaits each publication before returning from its reservation.
+      return enqueue(FRAME_BYTES, () =>
+        run(async (message) => {
+          if (serialize(message).byteLength > FRAME_BYTES) {
+            throw new SpawnBrokerError("Spawn broker reserved publication exceeds one IPC frame");
           }
-          publishing = true;
-          publication = (async () => {
-            if (serialize(message).byteLength > FRAME_BYTES) {
-              throw new SpawnBrokerError("Spawn broker reserved publication exceeds one IPC frame");
-            }
-            await write(message);
-          })();
-          void publication.then(
-            () => {
-              publishing = false;
-            },
-            () => {},
-          );
-          void publication.catch(() => {});
-          return publication;
-        };
-        try {
-          return await run(publish);
-        } finally {
-          active = false;
-          // Even a callback that throws or forgets to await publication retains its write.
-          await publication;
-        }
-      });
+          await write(message);
+        }),
+      );
     },
   });
 }

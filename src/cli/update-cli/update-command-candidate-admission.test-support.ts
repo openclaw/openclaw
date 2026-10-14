@@ -456,7 +456,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     primeServiceCommand(["node", path.join(pkgRoot, "dist", "index.js"), "gateway", "run"]);
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "running", pid: gatewayFixturePid });
-    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid]));
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid, 1]));
     managedUpdateHandoff.start.mockResolvedValue({
       status: "started",
       handoffId: "candidate-handoff",

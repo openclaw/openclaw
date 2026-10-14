@@ -7,7 +7,7 @@ import {
   renderComposerFixture,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 
 afterEach(() => resetComposerFixture());
 

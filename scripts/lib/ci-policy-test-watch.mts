@@ -3,6 +3,10 @@ import { matchesGlob } from "node:path";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
 import { resolveUiTypeScriptPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { isTestFileTarget } from "./changed-path-facts.mjs";
+import {
+  NODE_WORKER_E2E_OWNER_GLOBS,
+  NODE_WORKER_E2E_TEST_FILES,
+} from "./ci-node-worker-e2e-inventory.mts";
 import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
 type PolicyTestWatch = {
@@ -17,6 +21,11 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches: readonly PolicyTestWatch[] = [
+  ...NODE_WORKER_E2E_TEST_FILES.map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: NODE_WORKER_E2E_OWNER_GLOBS,
+    sourceOnly: true,
+  })),
   {
     testFile: "test/scripts/ios-lifecycle-workflow.test.ts",
     watchGlobs: [
@@ -68,6 +77,18 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   // These owner contracts enter production through fixture adapters or a facade.
+  {
+    testFile: "src/gateway/server.agents.config-readiness.test.ts",
+    watchGlobs: [
+      "src/gateway/config-reload.ts",
+      "src/secrets/runtime-auth-store-admission.ts",
+      "src/agents/prepared-model-runtime.configured.ts",
+    ],
+  },
+  {
+    testFile: "src/gateway/server.config-patch.test.ts",
+    watchGlobs: ["src/gateway/config-reload.ts"],
+  },
   {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
     watchGlobs: ["src/agents/agent-bundle-mcp-manager.ts"],
@@ -1380,11 +1401,20 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["scripts/lib/bounded-command.mts"],
   },
   {
+    testFile: "test/scripts/run-vitest-bounded.test.ts",
+    watchGlobs: [
+      "package.json",
+      "scripts/lib/vitest-cli-bootstrap.mts",
+      "scripts/test-extension-batch.mts",
+    ],
+  },
+  {
     testFile: "test/scripts/vitest-report-owner.test.ts",
     watchGlobs: [
       "scripts/lib/vitest-report-capture.mts",
       "scripts/run-vitest.mts",
       "scripts/test-extension-batch.mts",
+      "scripts/test-extension-batch-run.mts",
       "scripts/test-projects-run.mts",
     ],
   },

@@ -1,6 +1,7 @@
 // Session patch tests cover model/provider edits, subagent patching, provider
 // aliases, model catalog validation, and rejected invalid patch payloads.
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -24,15 +25,16 @@ import {
 } from "./sessions-patch.test-support.js";
 
 const acpSessionMetaMocks = vi.hoisted(() => ({
-  readAcpSessionMetaForEntry: vi.fn(),
+  readAcpSessionMetaForEntryAsync: vi.fn(),
 }));
 const providerThinkingMocks = vi.hoisted(() => ({
   resolveProviderThinkingProfile:
     vi.fn<typeof import("../plugins/provider-thinking.js").resolveEffectiveThinkingProfile>(),
 }));
 
+// mock-isolation: Patch projection fixtures provide ACP metadata without opening real session stores.
 vi.mock("../acp/runtime/session-meta-readonly.js", () => ({
-  readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
+  readAcpSessionMetaForEntryAsync: acpSessionMetaMocks.readAcpSessionMetaForEntryAsync,
 }));
 
 // This suite owns patch projection; provider policy artifacts have dedicated contract coverage.
@@ -220,6 +222,10 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
 }
 
 describe("gateway sessions patch", () => {
+  beforeAll(async () => {
+    await prepareSharedAuthStoreOwnership();
+  });
+
   beforeEach(() => {
     providerThinkingMocks.resolveProviderThinkingProfile.mockReset();
     providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
@@ -247,7 +253,7 @@ describe("gateway sessions patch", () => {
   });
 
   afterEach(() => {
-    acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReset();
+    acpSessionMetaMocks.readAcpSessionMetaForEntryAsync.mockReset();
     clearPluginMetadataLifecycleCaches();
     resetPluginRuntimeStateForTest();
   });
@@ -1712,7 +1718,7 @@ describe("gateway sessions patch", () => {
   );
 
   test("does not persist a misleading runtime pin on an ACP-owned session", async () => {
-    acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReturnValue({
+    acpSessionMetaMocks.readAcpSessionMetaForEntryAsync.mockResolvedValue({
       backend: "codex",
       agent: "main",
       state: "idle",
@@ -1727,7 +1733,7 @@ describe("gateway sessions patch", () => {
   });
 
   test("uses ACP backend metadata on canonical agent keys for thinking validation", async () => {
-    acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReturnValue({
+    acpSessionMetaMocks.readAcpSessionMetaForEntryAsync.mockResolvedValue({
       backend: "codex",
       agent: "main",
       runtimeSessionName: MAIN_SESSION_KEY,
@@ -1753,7 +1759,7 @@ describe("gateway sessions patch", () => {
     });
 
     expectPatchError(result, 'thinkingLevel "xhigh" is not supported');
-    expect(acpSessionMetaMocks.readAcpSessionMetaForEntry).toHaveBeenCalledWith({
+    expect(acpSessionMetaMocks.readAcpSessionMetaForEntryAsync).toHaveBeenCalledWith({
       sessionKey: MAIN_SESSION_KEY,
       agentId: "main",
       entry: expect.objectContaining({ sessionId: "sess" }),

@@ -84,12 +84,45 @@ export type UserGitHubConnected = z.infer<typeof connected>;
 export type UserGitHubDevice = z.infer<typeof device>;
 export type UserGitHubTokenPair = z.infer<typeof tokenPair>;
 
+export type UserGitHubConnectionAuthority = {
+  generation: string;
+  selection:
+    | { kind: "disconnected" }
+    | (Omit<UserGitHubConnected, "refreshToken" | "refresh"> & { refreshing: boolean });
+};
 const connectionCommitSchema = z.strictObject({
   kind: z.literal("user-github-connection"),
   changedOwners: z.array(z.string()),
   retiredProfileIds: z.array(z.string()),
 });
 export type UserGitHubConnectionCommit = z.infer<typeof connectionCommitSchema>;
+
+/** Source snapshots carry only the connection facts needed for publication authority. */
+export function projectUserGitHubConnectionAuthority(
+  connection: UserGitHubConnection | undefined,
+): UserGitHubConnectionAuthority | null {
+  if (!connection) {
+    return null;
+  }
+  const selected = connection.selection;
+  return {
+    generation: connection.generation,
+    selection:
+      selected.kind === "disconnected"
+        ? { kind: "disconnected" }
+        : {
+            kind: selected.kind,
+            profileId: selected.profileId,
+            accountId: selected.accountId,
+            login: selected.login,
+            accessExpiresAtMs: selected.accessExpiresAtMs,
+            refreshExpiresAtMs: selected.refreshExpiresAtMs,
+            refreshFailure: selected.refreshFailure,
+            scopes: [...selected.scopes],
+            refreshing: Boolean(selected.refresh),
+          },
+  };
+}
 
 export function isUserGitHubConnectionCommit(value: unknown): value is UserGitHubConnectionCommit {
   return connectionCommitSchema.safeParse(value).success;

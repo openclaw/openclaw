@@ -180,6 +180,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
           loadedVersion?: SessionTranscriptContextVersion;
           limits?: SessionManagerBoundedContextLimits;
           admission?: UserTurnTranscriptAdmissionReceipt;
+          questionAnswers?: readonly UserTurnTranscriptAdmissionReceipt[];
         };
       };
       output: {

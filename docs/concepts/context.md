@@ -34,13 +34,20 @@ match. A qualifying turn refreshes this value. Current model metadata and
 configured limits take precedence; generic fallback windows and removable caps
 are not saved as verified model budgets.
 
+Status, context reports, and session lists use the selected model's discovered
+capacity and configured limits. If neither current metadata nor a matching
+verified budget is available, the denominator is `?` (`null` in session-list
+JSON); reports do not substitute a generic window or another model's capacity.
+
 The Control UI context meter uses the last run's prompt budget when it still
 matches the selected model and effective context cap. This budget leaves room
 for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
 it is an estimate, and crossing it can trigger tool-result reduction or compaction.
 After a model or context-cap change, the meter shows **Context window** until a
-new run supplies a matching estimate. Stale token totals remain approximate and
-do not trigger the context warning.
+new run supplies a matching estimate. If the selected model's capacity is unknown,
+the meter omits context usage instead of borrowing the agent's default model
+capacity; available provider plan usage remains visible. Stale token totals remain
+approximate and do not trigger the context warning.
 
 ## Example output
 
@@ -144,7 +151,7 @@ By default, OpenClaw injects a fixed set of workspace files (if present):
 
 Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `20000` chars). OpenClaw also enforces a total bootstrap injection cap across files with `agents.defaults.bootstrapTotalMaxChars` (default `60000` chars). `/context` shows **raw vs injected** sizes and whether truncation happened.
 
-When truncation occurs, the runtime injects a concise in-prompt notice under Project Context saying some bootstrap files were truncated; per-file names and sizes stay in `/context` and other diagnostics. This notice is built in and not configurable.
+When truncation occurs, the runtime injects a concise in-prompt notice under Project Context saying some bootstrap files were truncated; per-file names and sizes stay in `/context` and other diagnostics. This notice is built in and not configurable. Runtime logs warn once per file path, content revision, and effective limit per process; `/context` continues to show truncation on every report.
 
 ## Skills: injected vs loaded on-demand
 
@@ -214,7 +221,8 @@ another message.
 
 For embedded Responses requests, current request metadata stays after the user
 message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
-previous response across tool rounds without dropping live context. A later user
+previous response across tool rounds without dropping live context, so OpenClaw
+sends it once per user turn rather than after every tool result. A later user
 turn in an OpenAI Responses-family session preserves hidden runtime-context
 carriers append-only, so the previous turn, including tool calls and results,
 remains an unchanged cached prefix. Retained carriers count toward the context

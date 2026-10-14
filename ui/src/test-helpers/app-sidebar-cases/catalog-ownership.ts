@@ -9,8 +9,9 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session catalog ownership", () => {
   it.each([false, true])(
@@ -43,7 +44,7 @@ describe("AppSidebar session catalog ownership", () => {
       page.catalogs[0]!.error = { code: "UNAVAILABLE", message: "Another host is unavailable" };
       sidebar.sessionData.sessionCatalogs = page.catalogs;
       sidebar.sessionData.requestSessionDataUpdate();
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       const header = () =>
         sidebar.querySelector('[data-session-section="ungrouped"] .sidebar-recent-sessions__head');
       expect(header()).not.toBeNull();

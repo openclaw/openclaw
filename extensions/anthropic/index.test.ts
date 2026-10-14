@@ -468,6 +468,7 @@ describe("anthropic provider replay hooks", () => {
   );
 
   it.each([
+    { modelId: "claude-sonnet-5-5", pricingSource: "configured" },
     { modelId: "claude-opus-5", pricingSource: "configured" },
     { modelId: "claude-opus-4-8", pricingSource: "discovered" },
   ])(
@@ -956,6 +957,7 @@ describe("anthropic provider replay hooks", () => {
   it.each([
     { status: "available", authenticated: true },
     { status: "unreadable", authenticated: false },
+    { status: "timeout", authenticated: false },
   ] as const)(
     "publishes native Claude auth only when its CLI reports $status",
     async ({ status, authenticated }) => {

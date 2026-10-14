@@ -254,7 +254,9 @@ describe("update-cli", () => {
       mockFileBackedPathExists();
       mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
       if (ancestor) {
-        mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid]));
+        mockGetSelfAndAncestorPidsSync.mockReturnValue(
+          new Set([process.pid, gatewayFixturePid, 1]),
+        );
       }
       managedUpdateHandoff.start.mockResolvedValue({
         status: "started",

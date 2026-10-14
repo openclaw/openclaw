@@ -13,13 +13,16 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { resolveOutboundTargetWithPlugin } from "../../infra/outbound/targets-resolve-shared.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
@@ -149,10 +152,10 @@ vi.mock("../../plugins/loader.js", () => ({
   resolveRuntimePluginRegistry: vi.fn(),
 }));
 
-vi.mock("../../infra/outbound/channel-bootstrap.runtime.js", () => ({
+vi.mock("../../infra/outbound/channel-bootstrap.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/channel-bootstrap.runtime.js")>()),
   bootstrapOutboundChannelPlugin: vi.fn(),
   bootstrapOutboundChannelPluginAsync: vi.fn(),
-  resetOutboundChannelBootstrapStateForTests: vi.fn(),
 }));
 
 vi.mock("../../infra/outbound/targets.js", () => ({
@@ -190,13 +193,11 @@ vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
   completeRestartRecoveryTerminalDelivery: mocks.completeRestartRecoveryTerminalDelivery,
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadSessionEntry: mocks.loadSessionEntry,
-  };
-});
+// mock-isolation: Send-method fixtures bind synthetic session rows without opening session storage.
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string }) =>
+    mocks.loadSessionEntry(params.key),
+}));
 
 const {
   invokeGatewayMessageMethod,
@@ -1181,6 +1182,7 @@ describe("gateway send mirroring", () => {
   it("carries an authenticated creator's required sandbox into an outbound session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("required-outbound@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = {
         gateway: {
           roles: {
@@ -1195,7 +1197,8 @@ describe("gateway send mirroring", () => {
             },
           },
         },
-      };
+      } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const context = {
         ...makeContext(),
         getRuntimeConfig: () => cfg,

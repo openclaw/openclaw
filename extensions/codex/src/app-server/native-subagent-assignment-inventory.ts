@@ -17,6 +17,7 @@ import type { CodexNativeSubagentSubmission } from "./native-subagent-submission
 export class CodexNativeSubagentAssignmentInventory {
   private readonly writes = new Map<ParentState, Promise<void>>();
   private readonly snapshots = new WeakMap<ChildState, string>();
+  private readonly cancelled = new WeakSet<ChildState>();
 
   constructor(
     private readonly dependencies: {
@@ -143,6 +144,26 @@ export class CodexNativeSubagentAssignmentInventory {
     });
   }
 
+  settleCancelled(state: ParentState, child: ChildState, assertCurrent: () => void): Promise<void> {
+    return this.enqueue(state, async () => {
+      const assertAdmission = () => {
+        this.dependencies.assertCurrent(state);
+        assertCurrent();
+      };
+      assertAdmission();
+      const assignment = this.fact(child);
+      if (!assignment || !state.assignmentStore || this.cancelled.has(child)) {
+        return;
+      }
+      if (!(await state.assignmentStore.consume(assignment, assertAdmission))) {
+        throw new Error("Cancelled native assignment was not acknowledged.");
+      }
+      // Remember a committed acknowledgement even if the following authority read fails.
+      this.cancelled.add(child);
+      assertAdmission();
+    });
+  }
+
   async restore(state: ParentState, owner: ParentOwner): Promise<void> {
     const store = state.assignmentStore;
     const current = state.historyOwner;
@@ -153,7 +174,6 @@ export class CodexNativeSubagentAssignmentInventory {
     }
     const custody = owner.completionCustody.retain();
     try {
-      store.assertCurrent();
       const assignments = await store.read();
       if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
         return;
@@ -163,10 +183,10 @@ export class CodexNativeSubagentAssignmentInventory {
           continue;
         }
         const recovery = await this.dependencies.readHistory(assignment);
+        await store.assertCurrentAsync();
         if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
           return;
         }
-        store.assertCurrent();
         if (!recovery || recovery.parentThreadId !== assignment.nativeParentThreadId) {
           continue;
         }

@@ -44,18 +44,6 @@ vi.mock("../send-reactions.js", () => ({
   removeReactionSignal: removeReactionSignalMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
-    "openclaw/plugin-sdk/reply-runtime",
-  );
-  return {
-    ...actual,
-    dispatchInboundMessage: dispatchInboundMessageMock,
-    dispatchInboundMessageWithDispatcher: dispatchInboundMessageMock,
-    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessageMock,
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",

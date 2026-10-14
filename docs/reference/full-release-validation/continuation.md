@@ -55,6 +55,21 @@ prints the next eligible check and resumes automatically. Permission-denied
 403 responses remain terminal. A local state file under `$TMPDIR/openclaw-frv/`
 retains the retry boundary and reported events across watcher restarts.
 
+Once the immutable execution plan is available, `watch` reports its frozen
+candidate SHA and observes the admitted context ref's current tip freshly. If
+that tip advances, the watcher keeps observing the original run and labels the
+candidate **superseded**: this run does not qualify the new tip. A missing plan,
+SHA-only context, or unavailable tip remains **unknown**, never inferred from the
+parent's Tooling SHA. NDJSON candidate events include the candidate SHA, context
+ref, observed tip SHA, and `current`, `superseded`, or `unknown` state; none is
+a qualification verdict.
+
+Resume an absent or exited watcher with the same `watch --run` command and state
+path. It rechecks the run and mutable tip without dispatching anything. Existing
+state suppresses repeated attempt, candidate-observation, and terminal events;
+a later rerun or newly observed tip is reported. Losing the local notification
+state can repeat notifications, but cannot authorize a retry or publication.
+
 `rerun --child` waits for one failed child, sends exactly one retry request,
 confirms the new attempt has no duplicate jobs, and
 records an audit line. It refuses children past `--max-attempts` (default 2,

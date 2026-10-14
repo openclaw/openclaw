@@ -1,5 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
@@ -44,10 +46,13 @@ export function projectSessionMessagePayload(params: {
   payload?: Record<string, unknown>;
   projectionState: SessionMessageProjectionState;
   requiresHistoryReset?: true;
+  deferredAssistantError?: true;
 } {
   const idempotencyKey = readTranscriptMessageIdempotencyKey(params.message);
   const senderIsOwner = readTranscriptMessageSenderIsOwner(params.message);
+  const messageRunId = readSessionTranscriptRunId(params.message) ?? params.runId;
   const rawMessage = attachOpenClawTranscriptMeta(params.message, {
+    ...(messageRunId ? { runId: messageRunId } : {}),
     // Placement comes from the selected reader snapshot, never persisted/imported metadata.
     transcriptPosition: params.transcriptPosition,
     ...(params.messageId ? { id: params.messageId } : {}),
@@ -65,6 +70,7 @@ export function projectSessionMessagePayload(params: {
       })
     : undefined;
   if (
+    (historyProjection && historyProjection.messages.length > 1) ||
     historyProjection?.messages.some(
       (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
     )
@@ -100,7 +106,7 @@ export function projectSessionMessagePayload(params: {
                 resolveCronJobName: params.resolveCronJobName,
               }),
             ],
-            assistantErrorPending: false,
+            assistantErrorPending: isPendingAssistantError(rawMessage),
             turnBoundaryPending: false,
           };
   const projectionState = {
@@ -109,7 +115,10 @@ export function projectSessionMessagePayload(params: {
   };
   const message = projected.messages[0];
   if (!message) {
-    return { projectionState };
+    return {
+      projectionState,
+      ...(isPendingAssistantError(rawMessage) ? { deferredAssistantError: true as const } : {}),
+    };
   }
   if (readChatHistoryReplyMessageId(message)) {
     // The page owner resolves quoted originals once, with visibility and payload bounds.

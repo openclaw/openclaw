@@ -184,7 +184,15 @@ export type ResolveChannelMessageIngressParams = {
    * The plugin must verify every supplied context post is public; unknown audiences deny.
    * Recheck current account policy and delivery ownership synchronously at use time.
    */
-  childSessionPublication?: { audience: "public"; assertCurrent: () => void };
+  childSessionPublication?: {
+    audience: "public";
+    assertCurrent: () => void;
+    /** Renew source authorization at run admission; return its synchronous use-time guard.
+     * Return null if the original route, access tier, or public audience is no longer valid.
+     * Throw for operational failures so the runner reports a retryable verification failure.
+     */
+    prepare?: () => Promise<(() => void) | null>;
+  };
   policy: ChannelIngressPolicyInput;
   /** Raw direct-message allowlist entries. */
   allowFrom?: Array<string | number> | null;

@@ -42,7 +42,7 @@ export type TelegramThreadBindingManager = {
     targetSessionKey: string,
     update: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord,
   ) => Promise<TelegramThreadBindingRecord[]>;
-  /** @deprecated Use touchConversation or updateBySessionKey; removed in the next Plugin SDK major. */
+  /** @deprecated Use touchConversation or updateBySessionKey; compatible through 2026-12-31, removed in the first January 2027 stable. */
   updateConversationSync: (
     conversationId: string,
     update: (entry: TelegramThreadBindingRecord) => TelegramThreadBindingRecord | undefined,

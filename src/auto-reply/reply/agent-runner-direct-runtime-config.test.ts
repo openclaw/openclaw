@@ -1,11 +1,15 @@
 // Tests direct runtime config overrides passed into agent runner execution.
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -571,14 +575,15 @@ describe("runReplyAgent runtime config", () => {
           replyParams.sessionEntry = sessionEntry;
           replyParams.sessionStore = { [sessionKey]: sessionEntry };
           replyParams.storePath = storePath;
-          resolveQueuedReplyExecutionConfigMock.mockResolvedValue(
-            withTestModelContextTokens({
-              cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-              followupRun,
-              defaultModel: replyParams.defaultModel,
-              contextTokens: 100_000,
-            }),
-          );
+          const cfg = withTestModelContextTokens({
+            cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+            followupRun,
+            defaultModel: replyParams.defaultModel,
+            contextTokens: 100_000,
+          });
+          resolveQueuedReplyExecutionConfigMock.mockResolvedValue(cfg);
+          setRuntimeConfigSnapshot(cfg);
+          onTestFinished(() => clearRuntimeConfigSnapshot());
           const entered = createDeferred();
           const release = createDeferred();
           runEmbeddedAgentMock.mockImplementationOnce(async () => {

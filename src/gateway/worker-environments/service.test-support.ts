@@ -5,6 +5,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -26,9 +30,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import * as inferenceManager from "./inference.js";
 import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import {
@@ -52,7 +57,11 @@ export function waitForFast<T>(
 }
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
-export type WorkerEnvironmentServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
+export type WorkerEnvironmentServiceOptions = Parameters<
+  typeof createWorkerEnvironmentService
+>[0] & {
+  executeInference: WorkerInferenceExecutor;
+};
 export type WorkerEnvironmentServiceError = Error & { code: string };
 export const SSH_ENDPOINT: WorkerSshEndpoint = {
   host: "worker.example.test",
@@ -160,6 +169,8 @@ export function setupWorkerEnvironmentServiceSuite() {
         },
       },
     };
+    // The Gateway publishes its runtime config at startup.
+    setRuntimeConfigSnapshot(testState.config);
     testState.prepareInstallation = vi.fn(async (install) =>
       install === "bundle" ? BUNDLE_ARTIFACT : NPM_ARTIFACT,
     );
@@ -179,6 +190,7 @@ export function setupWorkerEnvironmentServiceSuite() {
       for (const release of testState.releaseTurnOwners) {
         await release();
       }
+      clearRuntimeConfigSnapshot();
     }
     await closeWorkerEnvironmentDatabase();
     await fs.rm(testState.root, { recursive: true, force: true });
@@ -256,6 +268,11 @@ export function createService(
     >
   > = {},
 ) {
+  const { executeInference, ...options } = serviceOptions;
+  vi.spyOn(inferenceManager, "executeWorkerInference").mockImplementation(
+    executeInference ??
+      (async () => ({ type: "error", reason: "cancelled", message: "Inference cancelled" })),
+  );
   testState.service = createWorkerEnvironmentService({
     scheduler: createTestGatewayScheduler(),
     store: testState.store,
@@ -269,18 +286,13 @@ export function createService(
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
     generateWorkerCredential: () => CREDENTIAL,
-    executeInference: async () => ({
-      type: "error",
-      reason: "cancelled",
-      message: "Inference cancelled",
-    }),
     inferenceStore: createWorkerInferenceStore({
       path: testState.stateDb.path,
       now: () => testState.nowMs,
     }),
     now: () => testState.nowMs,
     reconcileIntervalMs: 25,
-    ...serviceOptions,
+    ...options,
   });
   return testState.service;
 }

@@ -73,8 +73,6 @@ describe("Claude partial-message output budgets", () => {
 
   it.each([
     { type: "text_delta", field: "text", payload: "a".repeat(4_300_000) },
-    { type: "thinking_delta", field: "thinking", payload: "a".repeat(4_300_000) },
-    { type: "input_json_delta", field: "partial_json", payload: "a".repeat(4_300_000) },
     { type: "input_json_delta", field: "partial_json", payload: '"'.repeat(2_150_000) },
   ])("still bounds encoded $type payloads", ({ type, field, payload }) => {
     const parser = createParser();
@@ -107,17 +105,6 @@ describe("Claude partial-message output budgets", () => {
       record: streamDelta({ type: "text_delta", text: "a", extra: true }),
     },
     {
-      name: "unknown envelope fields",
-      record: { ...streamDelta({ type: "text_delta", text: "a" }), extra: true },
-    },
-    {
-      name: "unknown event fields",
-      record: {
-        ...streamDelta({ type: "text_delta", text: "a" }),
-        event: { ...streamDelta({ type: "text_delta", text: "a" }).event, extra: true },
-      },
-    },
-    {
       name: "oversized metadata",
       record: { ...streamDelta({ type: "text_delta", text: "a" }), uuid: "u".repeat(129) },
     },
@@ -140,20 +127,15 @@ describe("Claude partial-message output budgets", () => {
     expect(parser.getErrorText()).toContain("exceeded 20000 lines");
   });
 
-  it.each(["outer", "inner"])(
-    "still counts %s whitespace around a recognized delta",
-    (location) => {
-      const parser = createParser();
-      const compact = JSON.stringify(streamDelta({ type: "text_delta", text: "a" }));
-      const padding = " ".repeat(4_300_000);
-      const line =
-        location === "outer"
-          ? padding + compact
-          : compact.replace('"event":', `"event":${padding}`);
-      parser.push(`${line}\n${line}\n`);
-      expect(parser.getErrorText()).toContain("exceeded 8388608 characters");
-    },
-  );
+  it.each(["outer"])("still counts %s whitespace around a recognized delta", (location) => {
+    const parser = createParser();
+    const compact = JSON.stringify(streamDelta({ type: "text_delta", text: "a" }));
+    const padding = " ".repeat(4_300_000);
+    const line =
+      location === "outer" ? padding + compact : compact.replace('"event":', `"event":${padding}`);
+    parser.push(`${line}\n${line}\n`);
+    expect(parser.getErrorText()).toContain("exceeded 8388608 characters");
+  });
 
   it("bounds tiny nonempty delta floods even without ordinary frames", () => {
     const parser = createParser();

@@ -1,8 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
-import type { SsrFPolicy } from "./openclaw-runtime-network.js";
-import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
+import {
+  resolveProviderRequestPolicyConfig,
+  resolveProviderTransportSsrFPolicy,
+  type SsrFPolicy,
+} from "./openclaw-runtime-network.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
 
 // Builds authenticated remote embedding HTTP clients from agent memory config.
@@ -177,5 +180,36 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   const headers = Object.fromEntries(
     new Map(entries.map((entry) => [entry[0].toLowerCase(), entry])).values(),
   );
-  return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl) };
+  return {
+    baseUrl,
+    headers,
+    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+      provider: params.provider,
+      api: providerConfig?.api ?? "openai-completions",
+      baseUrl,
+      allowPrivateNetwork: providerConfig?.request?.allowPrivateNetwork,
+    }),
+  };
+}
+
+/** Embedding adapters share inference's endpoint classification and explicit network policy. */
+export function resolveEmbeddingProviderSsrFPolicy(params: {
+  provider: string;
+  api?: string;
+  baseUrl: string;
+  allowPrivateNetwork?: boolean;
+}): SsrFPolicy | undefined {
+  const policy = resolveProviderRequestPolicyConfig({
+    provider: params.provider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    capability: "other",
+    request: { allowPrivateNetwork: params.allowPrivateNetwork },
+  });
+  return resolveProviderTransportSsrFPolicy({
+    baseUrl: params.baseUrl,
+    url: params.baseUrl,
+    allowPrivateNetwork: policy.allowPrivateNetwork,
+    trustConfiguredBaseUrlOrigin: policy.trustConfiguredBaseUrlOrigin,
+  });
 }

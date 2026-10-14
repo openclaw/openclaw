@@ -12,6 +12,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
@@ -117,6 +121,7 @@ describe("ManagedWorktreeService branch discovery", () => {
     await fs.writeFile(path.join(repo, "README.md"), "base\n");
     await git(repo, "add", "README.md");
     await git(repo, "commit", "-m", "initial");
+    setRuntimeConfigSnapshot({});
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
@@ -127,12 +132,15 @@ describe("ManagedWorktreeService branch discovery", () => {
     vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("coalesces concurrent default discovery and fetch without retaining settled refs", async ({
+  it("coalesces default discovery and refreshes settled refs after their freshness window", async ({
     signal,
   }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const remote = await createRemote();
     const head = await git(repo, "rev-parse", "HEAD");
     const nested = path.join(repo, "nested");
@@ -193,6 +201,7 @@ describe("ManagedWorktreeService branch discovery", () => {
       );
       await git(remote, "update-ref", "refs/heads/next", next);
       await git(remote, "symbolic-ref", "HEAD", "refs/heads/next");
+      clock.mockReturnValue(now + 30_000);
       await expect(resolveWorktreeBase(repo)).resolves.toMatchObject({
         commit: next,
         recordRef: "origin/next",
@@ -233,7 +242,6 @@ describe("ManagedWorktreeService branch discovery", () => {
     "settles shared default fetching after its owner is $mode ($outcome)",
     async ({ mode, outcome }, { signal }) => {
       await createRemote();
-      const head = await git(repo, "rev-parse", "HEAD");
       const entered = createDeferred();
       const joined = createDeferred();
       const release = createDeferred();
@@ -317,8 +325,8 @@ describe("ManagedWorktreeService branch discovery", () => {
         );
         if (outcome === "settled") {
           expect(firstOutcome).toBe(failure);
-          expect(secondOutcome).toMatchObject({ commit: head, fetchSucceeded: true });
-          expect({ discoveries, fetches }).toEqual({ discoveries: 2, fetches: 2 });
+          expect(secondOutcome).toBe(failure);
+          expect({ discoveries, fetches }).toEqual({ discoveries: 1, fetches: 1 });
         } else {
           expect(hasWorktreeUnknownOutcome(firstOutcome)).toBe(true);
           expect(hasWorktreeUnknownOutcome(secondOutcome)).toBe(true);
@@ -739,6 +747,25 @@ describe("ManagedWorktreeService branch discovery", () => {
     await fs.unlink(path.join(refs, "0000"));
     expect((await service.listRepositoryBranches(repo)).branches).not.toContainEqual({
       name: "fleet/0000",
+      kind: "local",
+    });
+  });
+
+  it("reuses inventories with more than 1,024 pack metadata files and refreshes changed refs", async () => {
+    const packs = path.join(repo, ".git", "objects", "pack");
+    await fs.mkdir(packs, { recursive: true });
+    // Git ignores keep markers during discovery; all still participate in the revision.
+    await Promise.all(
+      Array.from({ length: 1_100 }, (_, index) =>
+        fs.writeFile(path.join(packs, `pack-${index}.keep`), "synthetic keep marker\n"),
+      ),
+    );
+    const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    await expectWarmBranchAdmission(repo, () => run.mockClear());
+    expect(run).toHaveBeenCalledTimes(0);
+    await git(repo, "branch", "new-branch");
+    expect((await service.listRepositoryBranches(repo)).branches).toContainEqual({
+      name: "new-branch",
       kind: "local",
     });
   });

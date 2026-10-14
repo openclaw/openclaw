@@ -8,12 +8,12 @@ import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-run
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { closePluginStateDatabaseAsync } from "../plugin-state/plugin-state-store.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
@@ -154,6 +154,7 @@ async function closeHttpListener(params: {
 }
 
 export type GatewayCloseParams = {
+  retainSharedState?: boolean;
   resolveGatewayContext: GatewayRunShutdownParams["resolveGatewayContext"];
   closePluginRegistry: ReturnType<typeof createPluginRegistryOwner>["close"];
   pluginMetadata: Pick<GatewayPluginMetadataOwner, "beginClose" | "close">;
@@ -164,9 +165,9 @@ export type GatewayCloseParams = {
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
   disposeAllBundleLspRuntimes: () => Promise<void>;
+  drainWorktreeRunEnd: () => Promise<void>;
   drainRetainedOpenAiEmbeddingProviders: () => Promise<void>;
   stopGmailWatcher: () => Promise<void>;
-  disposeAllCodeModeRuns: () => Promise<void> | void;
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
   stopCronMaintenance?: () => Promise<void>;
@@ -196,6 +197,7 @@ export type GatewayCloseParams = {
 };
 
 export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
+  disposeAllCodeModeRuns: () => Promise<void> | void;
   preparePluginRegistryClose: ReturnType<typeof createPluginRegistryOwner>["prepareClose"];
   updateCheckStop?: (() => Promise<void> | void) | null;
   configReloader: { stop: () => Promise<void> };
@@ -220,8 +222,8 @@ export async function prepareGatewayClose(
   const { reason } = notice;
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   const restart = restartExpectedMs !== null;
-  const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   const cleanupWork = new AsyncWorkScope();
+  const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
   // Debug-level: the signal handler already announced the stop/restart at
@@ -261,7 +263,7 @@ export async function prepareGatewayClose(
       typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
         ? Math.max(0, Math.floor(opts.drainTimeoutMs))
         : 0;
-    await measureCloseStep("reply-drain", () =>
+    const admissions = await measureCloseStep("reply-drain", () =>
       prepareGatewayRunShutdown({
         ...params,
         restart,
@@ -269,6 +271,15 @@ export async function prepareGatewayClose(
         warnings,
       }),
     );
+    const admissionSettlement = cleanupWork.track(() =>
+      measureCloseStep("session-admissions", () => admissions.released),
+    );
+    void admissionSettlement.catch((error: unknown) => {
+      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
+      recordShutdownWarning(warnings, "session-admissions");
+    });
+    // Cancel code cells before received work joins their pending bridge calls.
+    await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
     // ACPX owns agent-process cleanup; memory retirement must not overtake its drain.
     await shutdownStep("acp-session-manager", () => disposeAcpSessionManager("gateway-shutdown"));
     // Memory owns database borrows independent of stalled model/tool finalizers.
@@ -382,7 +393,6 @@ async function closeGatewayResources(
         await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId));
       }
     });
-    await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
     await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
     await shutdownStep("provider-transport-dispatchers", () =>
@@ -514,6 +524,9 @@ async function closeGatewayResources(
   } catch (error) {
     closeFailure = { error };
   } finally {
+    // Runtime shutdown releases run leases; join their final writes before
+    // registry retirement can close the workers needed to persist them.
+    await measureCloseStep("worktree-run-end", params.drainWorktreeRunEnd);
     // Grace lets independent teardown advance; raw cleanup and its descendants
     // still join before registry and shared-state retirement.
     await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));
@@ -551,17 +564,17 @@ async function closeGatewayResources(
               );
               await measureCloseStep("metadata-retirement", retire);
               await measureCloseStep("retirement-cleanup", () => cleanupWork.runWhenIdle(() => {}));
+              await measureCloseStep("incognito-sessions", () => memorySessionActorOwners.reset());
               // Releasing agent leases still writes shared state; keep its owner alive until then.
               await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
               await measureCloseStep("debug-proxy", () =>
                 finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
               );
-              if (mediaCleanupStopResult !== undefined) {
-                await measureCloseStep("plugin-state-database", closePluginStateDatabaseAsync);
-              }
               try {
                 await measureCloseStep("global-singletons", () =>
-                  drainGlobalSingletonLifecycleState(restart ? "restart" : "close"),
+                  drainGlobalSingletonLifecycleState(restart ? "restart" : "close", {
+                    retainSharedState: params.retainSharedState,
+                  }),
                 );
               } finally {
                 try {

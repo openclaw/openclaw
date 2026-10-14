@@ -10,6 +10,7 @@ import {
   replyRunRegistry,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
@@ -346,6 +347,7 @@ it("preserves a newer native view and tool-result state when a worker receipt ar
 
 it("keeps the active turn and all steers after an earlier steer receipt rewrites its transcript", async () => {
   await withOpenClawTestState({ label: "steer-transcript-conflict" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target = {
       agentId: "main",
       sessionId: "steer-conflict",

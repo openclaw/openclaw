@@ -447,7 +447,7 @@ vi.mock("../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
     ...actual,
-    runCommandBuffered: transport.runUpdateStateSnapshotFixture,
+    runCommandBuffered: transport.runUpdateBufferedCommandFixture,
     runCommandWithTimeout: await transport.createUpdateCommandTransportFixture({
       ...commandTransport,
       get npmPrefix() {

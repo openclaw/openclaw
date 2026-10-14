@@ -317,9 +317,7 @@ export class SwarmRosterHydrator {
       } finally {
         this.publishingParentRead = false;
       }
-      if (outcome.status === "invalidated") {
-        this.parentRefreshQueued = true;
-      } else if (outcome.status === "current") {
+      if (outcome.status === "current") {
         this.recovered("parent");
       }
     };

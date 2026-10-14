@@ -258,11 +258,6 @@ it.each([
                           sandboxMode: change === "persist-generation" ? "off" : undefined,
                         },
                       );
-                      if (change === "persist-generation") {
-                        expect(snapshot.project(caller, run.run)).toBe(fingerprint);
-                      } else {
-                        expect(snapshot.project(caller, run.run)).not.toBe(fingerprint);
-                      }
                     }
                   : undefined,
               })

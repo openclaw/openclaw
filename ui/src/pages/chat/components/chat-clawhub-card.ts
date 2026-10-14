@@ -1,1 +1,1 @@
-export { ChatClawHubCard } from "./chat-clawhub-card.tsx";
+import "./chat-clawhub-card.tsx";

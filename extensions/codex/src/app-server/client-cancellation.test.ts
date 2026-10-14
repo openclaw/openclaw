@@ -117,6 +117,7 @@ describe("Codex app-server cancellation diagnostics", () => {
       const onTimeout = vi.fn(() => controller.abort(reason));
       const deadline = createAgentHarnessAttemptDeadlineController({
         startedAtMs: Date.now() - 15_000,
+        startedAtMonotonicMs: performance.now() - 15_000,
         timeoutMs: 1_000,
         settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
         signal: controller.signal,

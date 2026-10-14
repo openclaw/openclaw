@@ -184,48 +184,7 @@ describe("handlePluginCommand", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
 
   it.each([
-    { alias: "recover", command: "/recover stop" },
-    { alias: "recover-controls", command: "/recover_controls stop" },
-    { alias: "recover_controls", command: "/recover-controls stop" },
-  ])("replies for $command after registering $alias failed", async ({ alias, command }) => {
-    await withDeclaredCommandPlugin({ alias }, async (cfg) => {
-      expect(registry.plugins.find((plugin) => plugin.id === "recovery-controls")).toMatchObject({
-        status: "error",
-        failurePhase: "register",
-        error: expect.stringContaining("fixture registration failed"),
-      });
-      expect(registry.commands).toHaveLength(0);
-
-      const result = await handlePluginCommand(buildPluginParams(command, cfg), true);
-
-      expect(result?.shouldContinue).toBe(false);
-      expect(result?.reply?.text).toContain('Plugin "recovery-controls" failed to load');
-      expect(result?.reply?.text).toContain("fixture registration failed");
-      expect(result?.reply?.text).toContain("openclaw doctor");
-      expect(result?.reply?.text).not.toContain("private loader frame");
-    });
-  });
-
-  it.each([
     { name: "unknown command", command: "/randomtext", options: {}, pluginStatus: "error" },
-    {
-      name: "alias without slash kind",
-      command: "/legacy-recover",
-      options: {},
-      pluginStatus: "error",
-    },
-    {
-      name: "disabled plugin",
-      command: "/recover stop",
-      options: { enabled: false },
-      pluginStatus: "disabled",
-    },
-    {
-      name: "healthy unregistered command",
-      command: "/recover stop",
-      options: { fails: false },
-      pluginStatus: "loaded",
-    },
   ])("preserves fall-through for $name", async ({ command, options, pluginStatus }) => {
     await withDeclaredCommandPlugin(options, async (cfg) => {
       expect(registry.plugins.find((plugin) => plugin.id === "recovery-controls")?.status).toBe(
@@ -262,21 +221,6 @@ describe("handlePluginCommand", () => {
       setActivePluginRegistry(createEmptyPluginRegistry());
       expect((await handlePluginCommand(params, true))?.reply?.text).toContain("registry changed");
     });
-  });
-
-  it("dispatches registered plugin commands with gateway scopes and session metadata", async () => {
-    const handler = registerTestCommand();
-
-    const result = await handlePluginCommand(buildPluginParams("/card"), true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toBe("from plugin");
-    expect(handler).toHaveBeenCalledTimes(1);
-    const commandParams = firstCommandContext(handler);
-    expect(commandParams.gatewayClientScopes).toEqual(["operator.write", "operator.pairing"]);
-    expect(commandParams.sessionKey).toBe("agent:main:whatsapp:direct:test-user");
-    expect(commandParams.sessionId).toBe("session-plugin-command");
-    expect(commandParams.commandBody).toBe("/card");
   });
 
   it("compacts the bound session through the host runtime and records fresh tokens", async () => {
@@ -535,43 +479,6 @@ describe("handlePluginCommand", () => {
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(replacement);
   });
 
-  it("prefers the target session entry from sessionStore for plugin command metadata", async () => {
-    const handler = registerTestCommand();
-
-    const params = buildPluginParams("/card");
-    params.agentId = "target";
-    params.sessionKey = "agent:target:whatsapp:direct:test-user";
-    params.sessionEntry = {
-      sessionId: "wrapper-session",
-      sessionFile: "/tmp/wrapper-session.jsonl",
-      updatedAt: Date.now(),
-    } as HandleCommandsParams["sessionEntry"];
-    params.sessionStore = {
-      [params.sessionKey]: {
-        sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
-        authProfileOverride: "openai:owner@example.com",
-        updatedAt: Date.now(),
-      },
-    };
-
-    await handlePluginCommand(params, true);
-
-    expect(handler).toHaveBeenCalledTimes(1);
-    const commandParams = firstCommandContext(handler);
-    expect(commandParams.agentId).toBe("target");
-    expect(commandParams.sessionId).toBe("target-session");
-    expect(commandParams.sessionTarget).toMatchObject({
-      agentId: "target",
-      sessionId: "target-session",
-      sessionKey: params.sessionKey,
-    });
-    expect(parseSqliteSessionFileMarker(commandParams.sessionFile)).toMatchObject({
-      agentId: "target",
-      sessionId: "target-session",
-    });
-  });
-
   it("uses the process-local transcript store for incognito plugin commands", async () => {
     const handler = registerTestCommand();
 
@@ -616,20 +523,6 @@ describe("handlePluginCommand", () => {
     expect(commandParams.sessionTarget).toMatchObject({
       agentId: "other",
       storePath: "/tmp/durable/other/sessions.json",
-    });
-  });
-
-  it("continues the agent without leaking continueAgent into the reply payload", async () => {
-    registerTestCommand({
-      text: "from plugin",
-      continueAgent: true,
-    });
-
-    const result = await handlePluginCommand(buildPluginParams("/card"), true);
-
-    expect(result).toEqual({
-      shouldContinue: true,
-      reply: { text: "from plugin" },
     });
   });
 

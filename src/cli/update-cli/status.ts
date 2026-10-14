@@ -22,7 +22,7 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   formatDeferredPluginMigration,
-  readDeferredPluginMigrations,
+  readDeferredPluginMigrationsAsync,
 } from "../../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayLastInstallationReplacement } from "../../infra/gateway-boot-lifecycle.js";
@@ -41,6 +41,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { VERSION } from "../../version.js";
+import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 
@@ -239,8 +240,8 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
   const migrationWarnings: string[] = [];
   const migrationWarningErrors: string[] = [];
   for (const readWarnings of [
-    () =>
-      readDeferredPluginMigrations().map((pending) =>
+    async () =>
+      (await readDeferredPluginMigrationsAsync()).map((pending) =>
         formatDeferredPluginMigration(
           pending,
           updateInProgress ? { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" } : process.env,
@@ -249,7 +250,7 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
     () => readSessionSqliteMigrationWarnings(),
   ]) {
     try {
-      migrationWarnings.push(...readWarnings().map(safeMessage));
+      migrationWarnings.push(...(await readWarnings()).map(safeMessage));
     } catch (error) {
       migrationWarningErrors.push(safeMessage(formatErrorMessage(error)));
     }
@@ -459,7 +460,7 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
       }
       if (abandonedRun) {
         defaultRuntime.log(
-          "Abandoned update detected; the Gateway will reconcile its recorded outcome. Run openclaw update repair to reconcile it now.",
+          `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
         );
       }
       const report = renderUpdateRunReport(

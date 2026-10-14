@@ -6,6 +6,7 @@ import type {
   SessionActorLifetime,
   SessionActorTarget,
 } from "./session-actor-contract.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
 import { createSessionActor } from "./session-actor.js";
 
@@ -42,9 +43,7 @@ export function captureDurableSessionActor(params: {
       target: params.target,
       lifetime,
       currentGeneration() {
-        const generation = execution.capturePreparedGenerationClaim();
-        generation?.assertCurrent();
-        return generation?.incarnation;
+        return execution.capturePreparedGenerationClaim()?.incarnation;
       },
     }),
     transport: {
@@ -56,7 +55,6 @@ export function captureDurableSessionActor(params: {
           async (_execution, source) => {
             await execution.prepare(source);
             return operation({
-              captureGeneration: () => execution.captureGenerationClaim(),
               async execute(command) {
                 const result = await execution.runExisting(source, (worker) =>
                   worker.execute(command),
@@ -83,11 +81,9 @@ export function captureDurableSessionActor(params: {
   });
 }
 
-type AcquisitionTarget =
-  | SessionActorTarget
-  | { database: { kind: "native-incognito" }; sessionKey: string };
+type AcquisitionTarget = SessionActorTarget | { database: { kind: "memory" }; sessionKey: string };
 
-/** Native incognito keeps its existing owner and gets no actor savings until P12. */
+/** One actor contract selects either its durable worker or memory owner at acquisition. */
 export function createSessionActorFactory(
   database: OpenClawAgentDatabaseOptions & { path: string },
 ) {
@@ -99,64 +95,29 @@ export function createSessionActorFactory(
     async acquire(requestedTarget: AcquisitionTarget, lifetime: SessionActorLifetime) {
       lifetime.assertAdmission?.();
       lifetime.assertCurrent();
-      if (requestedTarget.database.kind === "native-incognito") {
-        return { kind: "not-actor-owned" } as const;
+      if (requestedTarget.database.kind === "memory") {
+        const owner = memorySessionActorOwners.get(captured);
+        return owner.acquire(
+          {
+            sessionKey: requestedTarget.sessionKey,
+            database:
+              "handle" in requestedTarget.database ? requestedTarget.database : owner.identity,
+          },
+          lifetime,
+        );
       }
-      const target: SessionActorTarget = {
+      const target = {
         sessionKey: requestedTarget.sessionKey,
         database: structuredClone(requestedTarget.database),
       };
-      if (target.database.kind === "file") {
-        return captureDurableSessionActor({
-          database: captured,
-          target: { sessionKey: target.sessionKey, database: target.database },
-          lifetime,
-        });
-      }
-      const expected = target.database;
-      const existing = captureOpenClawAgentDatabaseExecution
-        .listIncognito(captured.env)
-        .find(
-          (owner) =>
-            owner.agentId === captured.agentId &&
-            owner.storePath === captured.path &&
-            owner.identity.handle === expected.handle &&
-            owner.identity.incarnation === expected.incarnation,
-        );
-      if (!existing) {
-        throw new Error("Incognito session actor lost its captured worker owner");
-      }
-      const execution = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: captured.agentId,
-        env: captured.env,
-        existingOnly: true,
-        authority: {
-          assertCurrent() {
-            lifetime.assertCurrent();
-            existing.assertCurrent();
-          },
-        },
+      return captureDurableSessionActor({
+        database: captured,
+        target: { sessionKey: target.sessionKey, database: target.database },
+        lifetime,
       });
-      if (!execution) {
-        throw new Error("Incognito session actor owner is unavailable");
-      }
-      try {
-        const actor = await execution.sessionActors.acquire(target, lifetime);
-        return {
-          ...actor,
-          async release() {
-            await actor.release();
-            await execution.release();
-          },
-        };
-      } catch (error) {
-        await execution.release();
-        throw error;
-      }
     },
   };
 }
 
-/** Existing cutover callers retain the factory name. */
+/** Existing durable callers share the same acquisition owner. */
 export const createDurableSessionActorFactory = createSessionActorFactory;

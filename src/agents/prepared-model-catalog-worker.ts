@@ -24,6 +24,8 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { beginAuthProfileCredentialBatch } from "../state/user-model-account-authority.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
@@ -55,7 +57,7 @@ import type {
   PreparedModelRuntimeCatalogFacts,
 } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
 import {
@@ -352,6 +354,7 @@ export function createPreparedModelCatalogWorker(
       throw new Error("prepared model catalog worker returned a stale generation");
     }
   };
+  let receiveResult = validate;
   const stop = async (error: Error) => {
     stoppedError ??= error;
     params.retirementSignal.removeEventListener("abort", retire);
@@ -397,6 +400,7 @@ export function createPreparedModelCatalogWorker(
     let message: PreparedModelWorkerResult;
     let requestPool: typeof pool;
     let pending: Promise<PreparedModelWorkerResult> | undefined;
+    let credentials: ReturnType<typeof beginAuthProfileCredentialBatch> | undefined;
     const task: { onRecovery?: (error: Error) => void } = {};
     const controller = new AbortController();
     let progress: NativeReferenceProgress | undefined;
@@ -473,7 +477,9 @@ export function createPreparedModelCatalogWorker(
         shared.borrowers.add(borrower);
       }
       requestPool = pool =
-        shared?.pool ?? pool ?? new CatalogWorkerTaskPool(workerInput.input.env, validate);
+        shared?.pool ??
+        pool ??
+        new CatalogWorkerTaskPool(workerInput.input.env, (result) => receiveResult(result));
       pending = requestPool.run(
         () => {
           assertCurrent();
@@ -495,8 +501,20 @@ export function createPreparedModelCatalogWorker(
             clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
           };
           expectedFingerprint = fingerprintPreparedModelWorkerRequest(workerInput, workerRequest);
+          const publication = beginAuthProfileCredentialBatch(
+            captureOpenClawStateWorkerContext({ env: input.env }),
+          );
+          credentials = publication;
+          receiveResult = (result) => {
+            // Even a failed or retired catalog may have committed a credential refresh.
+            publication.committed(result.authCredentials);
+            publication.finish(true);
+            credentials = undefined;
+            receiveResult = validate;
+            validate(result);
+          };
           if (shared) {
-            shared.validate = validate;
+            shared.validate = receiveResult;
           }
           return { value: workerInput, request: workerRequest };
         },
@@ -560,6 +578,7 @@ export function createPreparedModelCatalogWorker(
       await stop(failure);
       throw error;
     } finally {
+      credentials?.finish(false);
       task.onRecovery = undefined;
       if (pending) {
         tasks.delete(pending);

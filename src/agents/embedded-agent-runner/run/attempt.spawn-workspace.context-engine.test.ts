@@ -330,7 +330,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const sessionOptions = mockParams(hoisted.createAgentSessionMock);
     const customTools = requireRecords(sessionOptions.customTools, "customTools");
     expect(customTools.map((tool) => tool.name)).toEqual(
-      privateReply ? ["message"] : ["tool_search", "tool_describe", "tool_call", "message"],
+      privateReply ? ["message"] : ["tool_search", "tool_describe", "dispatch_action", "message"],
     );
   });
 
@@ -986,7 +986,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seen.messages).toStrictEqual([]);
     expect(seen.systemPrompt ?? "").toBe("");
     expect(result.finalPromptText).toBe("hello");
-    expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
+    expect(result.systemPromptReport?.systemPrompt).toEqual({
+      chars: 0,
+      hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      projectContextChars: 0,
+      nonProjectContextChars: 0,
+    });
     expect(result.messagesSnapshot).toHaveLength(1);
     const sessionOptions = mockParams(hoisted.createAgentSessionMock);
     expect(sessionOptions.customTools).toStrictEqual([]);

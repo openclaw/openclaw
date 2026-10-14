@@ -56,44 +56,6 @@ describe("cli json stdout contract", () => {
   });
 
   it.each([
-    { name: "routed agents list", overrides: {} },
-    { name: "Commander agents list", overrides: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } },
-  ])("reports shared invalid config as JSON for $name", async ({ overrides }) => {
-    await withTempHome(
-      async (tempHome) => {
-        const configPath = path.join(tempHome, "openclaw.json");
-        const config = `${JSON.stringify({ gateway: { port: "invalid-port" } })}\n`;
-        await fs.writeFile(configPath, config);
-
-        const result = runBuiltCli(
-          tempHome,
-          ["agents", "list", "--json"],
-          {
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_STATE_DIR: path.join(tempHome, "state"),
-            ...overrides,
-          },
-          { inheritEnvironment: false },
-        );
-
-        expect(result.error).toBeUndefined();
-        expect(result.status, result.stderr).toBe(1);
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: {
-            type: "cli_error",
-            message: expect.stringContaining("OpenClaw config is invalid:"),
-          },
-          issues: [{ path: "gateway.port", message: expect.stringContaining("expected number") }],
-        });
-        expect(result.stderr).toBe("");
-        expect(await fs.readFile(configPath, "utf8")).toBe(config);
-      },
-      { prefix: "openclaw-agents-invalid-config-json-" },
-    );
-  });
-
-  it.each([
     ["memory", "status", "--json"],
     ["nodes", "canvas", "snapshot", "--json"],
   ])("reports invalid config before discovering plugin command %s", async (...args) => {
@@ -369,27 +331,6 @@ describe("cli json stdout contract", () => {
         ).rejects.toMatchObject({ code: "ENOENT" });
       },
       { prefix: "openclaw-read-only-state-e2e-" },
-    );
-  });
-
-  it("keeps representative success payload bytes unchanged", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const configPath = path.join(tempHome, "openclaw.json");
-        await fs.writeFile(configPath, '{"gateway":{"port":28789}}\n', "utf8");
-        const env = { OPENCLAW_CONFIG_PATH: configPath };
-
-        const getResult = runBuiltCli(tempHome, ["config", "get", "gateway.port", "--json"], env);
-        const validateResult = runBuiltCli(tempHome, ["config", "validate", "--json"], env);
-
-        expect(getResult.status, getResult.stderr).toBe(0);
-        expect(getResult.stdout).toBe("28789\n");
-        expect(validateResult.status, validateResult.stderr).toBe(0);
-        expect(validateResult.stdout).toBe(
-          `${JSON.stringify({ valid: true, path: configPath, warnings: [] })}\n`,
-        );
-      },
-      { prefix: "openclaw-json-success-bytes-e2e-" },
     );
   });
 

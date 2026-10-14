@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fixture } from "./native-subagent-inventory.test-support.js";
 import {
   CodexNativeSubagentMonitor,
@@ -12,6 +16,9 @@ import {
   registerParent,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 const result = "Keep the accepted native result.";
 const completedChild = () =>

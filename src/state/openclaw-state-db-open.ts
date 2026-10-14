@@ -1,8 +1,14 @@
 import { statSync, type BigIntStats } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { openEngineStore } from "../infra/database-engine/open.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   runWithSqliteBusyTimeout,
   setSqliteBusyTimeout,
@@ -11,7 +17,6 @@ import {
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
@@ -21,7 +26,10 @@ import {
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
-import { getSqliteWorkerExistingDatabaseIdentity } from "../infra/sqlite-worker-state-context.js";
+import {
+  captureSqliteWorkerWalMaintenanceSuspension,
+  getSqliteWorkerExistingDatabaseIdentity,
+} from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
@@ -30,6 +38,12 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
+import {
+  admitStatePostgres,
+  inspectStateSqlite,
+  stateEngineInput,
+  stateEngineSchema,
+} from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import {
   prepareStateDatabaseInitialization,
@@ -38,6 +52,7 @@ import {
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import {
+  admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
@@ -53,6 +68,9 @@ function assertStateDatabaseIntegrityBeforeMutation(
     return;
   }
   const contentVersion = readStateSchemaContentVersion(database);
+  if (contentVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    return;
+  }
   const hasApplicationSchema = database // sqlite-allow-raw -- Cold-open schema presence probe before Kysely exposure.
     .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
     .get();
@@ -66,10 +84,8 @@ function assertStateDatabaseIntegrityBeforeMutation(
       toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     });
   }
-  if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    // Older content is verified before the migration owner can mutate it.
-    assertStateDatabaseIntegrityOnce(database, pathname);
-  }
+  // Older content is verified before the migration owner can mutate it.
+  assertStateDatabaseIntegrityOnce(database, pathname);
 }
 
 type UnpublishedStateDatabaseOptions = {
@@ -147,70 +163,122 @@ function openNativeStateDatabase(
     expectedIdentity: original ? `file:${original.dev}:${original.ino}` : undefined,
   });
   let walMaintenance: SqliteWalMaintenance | undefined;
+  let selected: EngineConnection = db;
+  let sqlite: OpenClawStateDatabase | undefined;
   try {
     assertSameFile();
     enableNodeSqliteKyselyStatementCache(db);
     setSqliteBusyTimeout(db, busyTimeoutMs);
-    if (getStateRuntimeSchemaAdmission(db)) {
-      admitSqliteSchema(db);
+    admitStateSchemaFacts(db, params.pathname);
+    selected = openEngineStore({
+      anchor: db,
+      schema: stateEngineSchema,
+      input: stateEngineInput(),
+      existingOnly: params.existingSchema,
+      inspectSqlite: () => inspectStateSqlite(db),
+      prepareAnchor: () => {},
+      admitPostgres: admitStatePostgres,
+      closeOnFailure: (connection, error) => {
+        selected = connection;
+        throw error;
+      },
+      openSqlite: () => {
+        assertOpenClawStateWriteAllowed({
+          database: db,
+          databasePath: params.pathname,
+          env: params.env,
+        });
+        if (params.existingSchema) {
+          assertSameFile();
+          params.ensureSchema(db, initialization);
+          assertSameFile();
+          sqlite = {
+            db,
+            path: params.pathname,
+            walMaintenance: {
+              checkpoint: () => false,
+              stop: async () => {},
+              close: () => true,
+              reclaimFreePages: createSqliteWalReclamationResult,
+            },
+          };
+          return;
+        }
+        ensureOpenClawStatePermissions(params.pathname, params.env);
+        const maintenance = runWithSqliteBusyTimeout(
+          db,
+          busyTimeoutMs,
+          () => {
+            assertSupportedStateSchemaVersion(db, params.pathname);
+            assertStateDatabaseIntegrityBeforeMutation(db, params.pathname);
+            configureSqlitePreSchemaPragmas(db, { busyTimeoutMs });
+            walMaintenance = configureSqliteConnectionPragmas(db, {
+              busyTimeoutMs,
+              databaseLabel: "openclaw-state",
+              databasePath: params.pathname,
+              onCheckpointError: (error) =>
+                stateDbLog.warn("Shared-state WAL maintenance failed", {
+                  error: formatErrorMessage(error),
+                  path: params.pathname,
+                  checkpoint: walMaintenance?.health,
+                }),
+              runMaintenance: (operation) => {
+                try {
+                  assertStateDatabaseAccessAllowed(params.pathname);
+                } catch (error) {
+                  if (
+                    !(error instanceof StateDatabaseAdmissionPendingError) &&
+                    !(error instanceof StateDatabaseOfflineMaintenanceError)
+                  ) {
+                    throw error;
+                  }
+                  // Another process's offline maintenance refuses this pass; the next tick retries.
+                  stateDbLog.debug(
+                    "Shared-state WAL maintenance deferred during offline maintenance",
+                    {
+                      path: params.pathname,
+                    },
+                  );
+                  return false;
+                }
+                return operation();
+              },
+              isScheduledMaintenanceSuspended: captureSqliteWorkerWalMaintenanceSuspension(),
+              foreignKeys: true,
+              synchronous: "NORMAL",
+            });
+            params.ensureSchema(db, initialization);
+            return walMaintenance;
+          },
+          { lockFailureReporting },
+        );
+        ensureOpenClawStatePermissions(params.pathname, params.env);
+        assertSameFile();
+        sqlite = { db, path: params.pathname, walMaintenance: maintenance };
+      },
+    });
+    if (sqlite) {
+      return sqlite;
     }
     assertOpenClawStateWriteAllowed({
-      database: db,
+      database: selected,
       databasePath: params.pathname,
       env: params.env,
     });
-    if (params.existingSchema) {
-      assertSameFile();
-      params.ensureSchema(db, initialization);
-      assertSameFile();
-      return {
-        db,
-        path: params.pathname,
-        walMaintenance: {
-          checkpoint: () => false,
-          stop: async () => {},
-          close: () => true,
-          reclaimFreePages: createSqliteWalReclamationResult,
-        },
-      };
-    }
-    ensureOpenClawStatePermissions(params.pathname, params.env);
-    const maintenance = runWithSqliteBusyTimeout(
-      db,
-      busyTimeoutMs,
-      () => {
-        assertSupportedStateSchemaVersion(db, params.pathname);
-        assertStateDatabaseIntegrityBeforeMutation(db, params.pathname);
-        configureSqlitePreSchemaPragmas(db, { busyTimeoutMs });
-        walMaintenance = configureSqliteConnectionPragmas(db, {
-          busyTimeoutMs,
-          databaseLabel: "openclaw-state",
-          databasePath: params.pathname,
-          onCheckpointError: (error) =>
-            stateDbLog.warn("Shared-state WAL maintenance failed", {
-              error: formatErrorMessage(error),
-              path: params.pathname,
-              checkpoint: walMaintenance?.health,
-            }),
-          runMaintenance: (operation) => {
-            assertStateDatabaseAccessAllowed(params.pathname);
-            return operation();
-          },
-          foreignKeys: true,
-          synchronous: "NORMAL",
-        });
-        params.ensureSchema(db, initialization);
-        return walMaintenance;
+    return {
+      db: selected,
+      path: params.pathname,
+      walMaintenance: {
+        checkpoint: () => false,
+        stop: async () => {},
+        close: () => true,
+        reclaimFreePages: createSqliteWalReclamationResult,
       },
-      { lockFailureReporting },
-    );
-    ensureOpenClawStatePermissions(params.pathname, params.env);
-    assertSameFile();
-    return { db, path: params.pathname, walMaintenance: maintenance };
+    };
   } catch (error) {
     // Acquisition owns the native handle until every setup and hardening step returns.
     const errors = openClawStateDatabaseCache.closeUnpublishedOpenClawStateDatabaseHandle({
-      db,
+      db: selected,
       path: params.pathname,
       walMaintenance,
     });

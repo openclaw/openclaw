@@ -1,11 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   runOpenClawStateWriteTransaction,
@@ -74,6 +75,7 @@ describe("worker load result publication", () => {
       const result: CronStoreWorkerOperations["cron.loadMutable"]["output"] = ok
         ? {
             ok: true,
+            storeKey: storePath,
             repairCommits,
             loaded: {
               store: { version: 1, jobs: [] },
@@ -85,6 +87,7 @@ describe("worker load result publication", () => {
           }
         : {
             ok: false,
+            storeKey: storePath,
             repairCommits,
             error: serializeCronLoadError(failure),
           };
@@ -131,6 +134,46 @@ describe("worker load result publication", () => {
       expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
     },
   );
+
+  it("invalidates retained stores when a default-partition load loses its result", async () => {
+    const storePath = "/synthetic/cron-default-unavailable/jobs.json";
+    noteCronJobsStoreCommit(storePath);
+    const before = getCronJobsStoreRevision(storePath);
+    const failure = new Error("worker result unavailable");
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockRejectedValue(failure);
+
+    await expect(loadCronJobsStoreWithConfigJobs()).rejects.toBe(failure);
+
+    expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
+  });
+});
+
+it("loads the current default cron partition after in-process writes without host SQL", async () => {
+  await withOpenClawTestState({ label: "cron-worker-default" }, async (state) => {
+    const firstPath = state.statePath("first", "jobs.json");
+    const secondPath = state.statePath("second", "jobs.json");
+    const first = cronWorkerFixture();
+    const second = { ...first, jobs: first.jobs.slice(1) };
+    await saveCronJobsStore(firstPath, first);
+    await saveCronJobsStore(secondPath, second);
+    const sql = observeMainThreadSql();
+    try {
+      for (const [storePath, expected] of [
+        [firstPath, ["first", "second"]],
+        [secondPath, ["second"]],
+      ] as const) {
+        writeConfigMachineState("cron.store", storePath);
+        sql.clear();
+
+        const loaded = await loadCronJobsStoreWithConfigJobs();
+
+        expect(loaded.store.jobs.map((job) => job.id)).toEqual(expected);
+        sql.expectIdle();
+      }
+    } finally {
+      sql.restore();
+    }
+  });
 });
 
 it("persists full, changed, and runtime-only cron saves off the host through reopen", async () => {
@@ -197,8 +240,8 @@ it.each([false, true])(
       const storePath = state.statePath("cron", "jobs.json");
       const store = cronWorkerFixture();
       const order: string[] = [];
-      let beforeDatabase: DatabaseSync | undefined;
-      let afterDatabase: DatabaseSync | undefined;
+      let beforeDatabase: EngineConnection | undefined;
+      let afterDatabase: EngineConnection | undefined;
       const before = getCronJobsStoreRevision(storePath);
       const failure = new Error("post-commit observer failed");
       const save = saveCronJobsStore(storePath, store, {

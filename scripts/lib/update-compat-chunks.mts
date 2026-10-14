@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
+import { controlUiBuildSiblingPid } from "./output-root-guard.mjs";
 import { isRecord as object } from "./record-shared.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 import {
@@ -11,7 +12,6 @@ import {
 import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
-export const UPDATE_COMPATIBILITY_INVENTORY_FILE = "update-compat-inventory.json";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
 const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
 
@@ -80,6 +80,13 @@ function moduleFiles(root: string): string[] {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) {
+        // The UI publishes its independent browser graph by renaming these trees.
+        if (
+          directory === root &&
+          (entry.name === "control-ui" || controlUiBuildSiblingPid(entry.name) !== null)
+        ) {
+          continue;
+        }
         // Plugin outputs and installed dependencies are independent runtime graphs.
         if (!["node_modules", "extensions", "plugin-sdk"].includes(entry.name)) {
           visit(file);
@@ -121,6 +128,75 @@ function isPostSwapImport(owner: string, node: ts.CallExpression): boolean {
   return false;
 }
 
+function consumedPromiseAllExports(node: ts.CallExpression): string[] | undefined {
+  const array = node.parent;
+  if (
+    !ts.isArrayLiteralExpression(array) ||
+    !array.elements.every(
+      (element) =>
+        ts.isCallExpression(element) &&
+        element.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        element.arguments.length === 1 &&
+        ts.isStringLiteralLikeNode(element.arguments[0]!),
+    )
+  ) {
+    return undefined;
+  }
+  const call = array.parent;
+  if (
+    !ts.isCallExpression(call) ||
+    call.questionDotToken ||
+    call.arguments.length !== 1 ||
+    !ts.isPropertyAccessExpression(call.expression) ||
+    call.expression.questionDotToken ||
+    !ts.isIdentifier(call.expression.expression) ||
+    call.expression.expression.text !== "Promise" ||
+    call.expression.name.text !== "all" ||
+    !ts.isAwaitExpression(call.parent)
+  ) {
+    return undefined;
+  }
+  const declaration = call.parent.parent;
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.initializer !== call.parent ||
+    !ts.isArrayBindingPattern(declaration.name) ||
+    declaration.name.elements.length !== array.elements.length
+  ) {
+    return undefined;
+  }
+  const names: string[][] = [];
+  for (const element of declaration.name.elements) {
+    if (
+      !ts.isBindingElement(element) ||
+      element.dotDotDotToken ||
+      element.initializer ||
+      !element.name ||
+      !ts.isObjectBindingPattern(element.name) ||
+      element.name.elements.length === 0
+    ) {
+      return undefined;
+    }
+    const exports: string[] = [];
+    for (const binding of element.name.elements) {
+      const name = binding.propertyName ?? binding.name;
+      if (
+        binding.dotDotDotToken ||
+        binding.initializer ||
+        !binding.name ||
+        !name ||
+        !ts.isIdentifier(binding.name) ||
+        !ts.isIdentifier(name)
+      ) {
+        return undefined;
+      }
+      exports.push(name.text);
+    }
+    names.push(exports);
+  }
+  return names[array.elements.indexOf(node)];
+}
+
 function consumedExports(node: ts.CallExpression): string[] | undefined {
   let expression: ts.Node = node;
   let awaited = false;
@@ -133,7 +209,7 @@ function consumedExports(node: ts.CallExpression): string[] | undefined {
   }
   // A direct import() is a Promise; its properties are not namespace exports.
   if (!awaited) {
-    return undefined;
+    return consumedPromiseAllExports(node);
   }
   const parent = expression.parent;
   if (ts.isPropertyAccessExpression(parent) && parent.expression === expression) {
@@ -600,9 +676,5 @@ export function writeUpdateCompatibilityChunks(params: {
       fs.writeFileSync(destination, contents);
     }
   }
-  fs.writeFileSync(
-    path.join(distDir, UPDATE_COMPATIBILITY_INVENTORY_FILE),
-    `${JSON.stringify(params.inventory, null, 2)}\n`,
-  );
   return [...outputs.keys()].toSorted();
 }

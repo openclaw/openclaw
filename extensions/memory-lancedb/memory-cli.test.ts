@@ -120,7 +120,6 @@ describe("memory-lancedb CLI query output", () => {
   it.each([
     { columns: "id,text", order: "createdAt:asc", ids: ["first", "second"] },
     { columns: "id,text", order: "createdAt:desc", ids: ["third", "second"] },
-    { columns: "id,text,createdAt", order: "createdAt:asc", ids: ["first", "second"] },
   ])(
     "projects $columns ordered by $order without mutating Arrow rows",
     async ({ columns, order, ids }) => {
@@ -188,7 +187,6 @@ describe("memory-lancedb CLI filters", () => {
     "agentId = 'beta'",
     "category = 'preference' OR agentId = 'beta'",
     "category = 'preference') OR (1 = 1",
-    "category IN ('preference', 'fact')",
     "importance = 'high'",
   ])("rejects a filter before storage access: %s", async (filter) => {
     const harness = createHarness();

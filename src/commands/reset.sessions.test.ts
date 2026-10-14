@@ -291,7 +291,7 @@ describe("reset canonical sessions", () => {
           expect(
             loadTranscriptEventsSync({ ...scope, sessionId: `${scope.agentId}-session` }),
           ).toEqual([]);
-          await expect(fs.access(scope.storePath)).resolves.toBeUndefined();
+          await fs.access(scope.storePath);
         }
         expect(loadTranscriptEventsSync({ ...main, sessionId: "current-session" })).toEqual([]);
         expect(
@@ -350,8 +350,8 @@ describe("reset canonical sessions", () => {
       await handleReset("config+creds+sessions", state.workspaceDir, runtime);
 
       expect(loadSessionEntry(scope)).toBeUndefined();
-      await expect(fs.access(scope.storePath)).resolves.toBeUndefined();
-      await expect(fs.access(state.workspaceDir)).resolves.toBeUndefined();
+      await fs.access(scope.storePath);
+      await fs.access(state.workspaceDir);
     });
   });
 

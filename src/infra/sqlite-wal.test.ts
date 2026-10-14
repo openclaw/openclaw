@@ -27,6 +27,7 @@ function createMockDb(checkpointResult = { busy: 0, log: 0, checkpointed: 0 }): 
     close: vi.fn(),
     exec: vi.fn(),
     isOpen: true,
+    location: () => "untracked.sqlite",
     prepare: vi.fn((sql: string) => ({
       get: vi.fn(() =>
         sql.includes("wal_checkpoint")

@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { canonicalizeTranscriptEventMedia } from "../config/sessions/transcript-event-media.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "./kysely-sync.js";
@@ -24,9 +25,9 @@ export function verifyTranscriptEvents(
       false,
       readTranscriptFingerprint(source.path),
       source.originalPath,
-    )((event) => stage.append(0, seq++, JSON.stringify(event)));
+    )((event) => stage.append(0, seq++, JSON.stringify(canonicalizeTranscriptEventMedia(event))));
+    const repair = stage.repairLegacyTranscript(0, mode !== "ordered");
     if (mode === "ordered") {
-      const repair = stage.repairLegacyTranscript(0);
       // Receipt adoption retains its original order and branch-repair contract.
       if (repair.repaired || !repair.recognized) {
         return undefined;
@@ -70,7 +71,7 @@ export function verifyTranscriptEvents(
     }
     if (mode === "ordered" || expected.done) {
       validate();
-      return expected.done ? { events: seq, missingEvents: 0, sqliteEvents } : undefined;
+      return expected.done ? { events: repair.events, missingEvents: 0, sqliteEvents } : undefined;
     }
     let missingEvents = 0;
     let firstMissing: string | undefined;
@@ -96,14 +97,14 @@ export function verifyTranscriptEvents(
       missingEvents += 1;
     }
     if (missingEvents > 0) {
-      const repair = stage.repairLegacyTranscript(0);
+      const branchRepair = stage.repairLegacyTranscript(0);
       // Missing history must be appendable without discarding or rewriting original rows.
-      if (repair.repaired || !repair.recognized) {
+      if (branchRepair.repaired || !branchRepair.recognized) {
         return undefined;
       }
     }
     validate();
-    return { events: seq, missingEvents, sqliteEvents };
+    return { events: repair.events, missingEvents, sqliteEvents };
   });
 }
 

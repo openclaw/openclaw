@@ -26,7 +26,12 @@ import {
   captureBackendEvents,
   registerEmbeddedBackendStreamTests,
 } from "./embedded-backend.stream.test-support.js";
-import { localSessionEntry } from "./embedded-backend.test-helpers.js";
+import {
+  deferred,
+  flushMicrotasks,
+  localSessionEntry,
+  sendMainChat,
+} from "./embedded-backend.test-helpers.js";
 import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
@@ -234,8 +239,10 @@ vi.mock("../gateway/server-methods/models-list-result.js", () => ({
     buildModelsListResultMock(...args),
 }));
 
+// mock-isolation: Embedded-backend fixtures own config publication and listeners without loading operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => getRuntimeConfigMock(),
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
   loadConfig: () => getRuntimeConfigMock(),
   registerConfigWriteListener: (
     listener: (event: { runtimeConfig: Record<string, unknown> }) => void,
@@ -260,8 +267,9 @@ vi.mock("../gateway/session-utils-row.js", () => ({
     buildGatewaySessionRowMock(params),
 }));
 
-vi.mock("../gateway/session-utils-store-lookup.js", () => ({
-  createGatewaySessionEntryReader: () => () => undefined,
+// mock-isolation: The embedded fixture has no stored parent sessions; never query a real lineage database.
+vi.mock("../gateway/session-utils-store-lineage.js", () => ({
+  prepareGatewaySessionEntryReader: async () => () => undefined,
 }));
 
 vi.mock("../gateway/session-utils-list.js", () => ({
@@ -296,18 +304,19 @@ vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
   readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
 }));
 
-vi.mock("../gateway/session-utils.js", () => ({
-  getSessionDefaults: () => getSessionDefaultsMock(),
-  listAgentsForGateway: () => [],
-  loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
-    loadSessionEntryMock(sessionKey, opts),
-  loadGatewaySessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
-    loadSessionEntryMock(sessionKey, opts),
-  resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
-    primaryKey: key,
-    target: { storeKeys: [key] },
-  }),
-  resolveGatewaySessionStoreTargetWithStore: ({
+// mock-isolation: Use the synthetic session fixture without opening Gateway worker databases.
+vi.mock("../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: ({
+    key,
+    cfg: _cfg,
+    ...opts
+  }: {
+    key: string;
+    cfg: unknown;
+    agentId?: string;
+    includeStoreChildEntries?: boolean;
+  }) => Promise.resolve(loadSessionEntryMock(key, Object.keys(opts).length ? opts : undefined)),
+  resolveGatewaySessionStoreTargetInWorker: async ({
     key,
     agentId,
   }: {
@@ -318,6 +327,16 @@ vi.mock("../gateway/session-utils.js", () => ({
     canonicalKey: key,
     storeKeys: [key],
     storePath: "/tmp/openclaw-sessions.json",
+  }),
+}));
+
+// mock-isolation: Embedded-backend tests supply defaults and model facts without loading Gateway storage.
+vi.mock("../gateway/session-utils.js", () => ({
+  getSessionDefaults: () => getSessionDefaultsMock(),
+  listAgentsForGateway: () => [],
+  resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
+    primaryKey: key,
+    target: { storeKeys: [key] },
   }),
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));
@@ -358,32 +377,10 @@ vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: () => ({}),
 }));
 
-function deferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((error?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
-
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 function emitRegisteredAgentEvent(evt: unknown) {
   if (registeredListener) {
     notifyListeners([registeredListener], evt);
   }
-}
-
-function sendMainChat(backend: EmbeddedTuiBackendType, message: string, runId: string) {
-  return backend.sendChat({ sessionKey: "agent:main:main", message, runId });
 }
 
 const selectedGlobalSessionCases = [
@@ -1282,7 +1279,6 @@ describe("EmbeddedTuiBackend", () => {
           entry,
           storePath: "/tmp/private.sqlite",
           lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
         }),
       );
       expect(sessionProjection.present).not.toHaveBeenCalled();
@@ -2647,6 +2643,7 @@ describe("EmbeddedTuiBackend", () => {
     "scopes selected global patch policy and result to the stored owner: $input.sessionKey",
     async ({ input, owner }) => {
       const sessionUtils = await import("../gateway/session-utils.js");
+      const sessionWorker = await import("../gateway/session-utils-store-worker.js");
       const entry = { sessionId: `session-${owner}`, updatedAt: embeddedEventTimestamp };
       const target = {
         agentId: owner,
@@ -2656,8 +2653,8 @@ describe("EmbeddedTuiBackend", () => {
         store: { global: entry },
       };
       const resolveTarget = vi
-        .spyOn(sessionUtils, "resolveGatewaySessionStoreTargetWithStore")
-        .mockReturnValue(target);
+        .spyOn(sessionWorker, "resolveGatewaySessionStoreTargetInWorker")
+        .mockResolvedValue(target);
       const resolveCanonical = vi
         .spyOn(sessionUtils, "resolveCanonicalGatewaySessionStoreKey")
         .mockReturnValue({ target, primaryKey: "global", entry });

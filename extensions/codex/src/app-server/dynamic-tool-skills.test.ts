@@ -2,6 +2,10 @@ import "./dynamic-tool-build.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderCodexSkillsInstructions } from "./attempt-context.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -19,6 +23,7 @@ let tempDir: string;
 const hostCapabilityClosers: Array<() => void> = [];
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({});
   hoisted.loadNodeExecAvailability.mockResolvedValue({
     cacheKey: "eligible",
     isAvailable: () => true,
@@ -28,6 +33,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers);
+  clearRuntimeConfigSnapshot();
 });
 
 describe("Codex installed skills", () => {
@@ -111,7 +117,15 @@ describe("Codex installed skills", () => {
         expect(JSON.stringify(read.contentItems)).toContain("cannot deliver the whole skill");
         expect(JSON.stringify(read.contentItems)).not.toContain("Complete instructions.");
       } else {
-        expect(read.contentItems).toEqual([{ type: "inputText", text: skill.readContent }]);
+        expect(read.contentItems).toEqual([
+          {
+            type: "inputText",
+            text:
+              `Skill location: ${skill.filePath}\n` +
+              "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+              skill.readContent,
+          },
+        ]);
       }
     }
   });

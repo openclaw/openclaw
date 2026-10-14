@@ -28,7 +28,7 @@ import {
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import "./app-host.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { createShellConfigFixture } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
@@ -42,6 +42,54 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("shares auth across config publications until the auth owner publishes changed facts", async () => {
+  vi.useFakeTimers();
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.(gatewayHelloForMethods([]));
+  const client = gateway.snapshot.client;
+  assert.ok(client);
+  const initial: ModelAuthStatusResult = { ts: 1, providers: [] };
+  const updated: ModelAuthStatusResult = {
+    ts: 2,
+    providers: [{ provider: "example", displayName: "Example", status: "missing", profiles: [] }],
+  };
+  const request = current().request.mockResolvedValue(initial);
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = {
+    context: {
+      config: createShellConfigFixture(),
+      gateway,
+    } as unknown as ApplicationContext,
+  };
+  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
+  const read = () =>
+    Promise.all(Array.from({ length: 40 }, () => loadModelAuthStatus(client, { agentId: "main" })));
+  try {
+    expect(await read()).toEqual(Array.from({ length: 40 }, () => initial));
+    request.mockResolvedValue(updated);
+    for (let index = 0; index < 10; index++) {
+      current().opts.onEvent?.({
+        type: "event",
+        event: "config.changed",
+        payload: { hash: `plugin-toggle-${index}`, ts: index },
+      });
+      expect(await read()).toEqual(Array.from({ length: 40 }, () => initial));
+    }
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
+    current().opts.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { authChanged: true, modelCatalogChanged: false, commandsChanged: false },
+    });
+    expect(await read()).toEqual(Array.from({ length: 40 }, () => updated));
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(2);
+  } finally {
+    stopShell();
+    gateway.stop();
+  }
+});
+
 it("retains model and auth reads across 50 metadata-only publications", async () => {
   vi.useFakeTimers();
   const { gateway, current } = createGatewayStoreTestStore();
@@ -52,7 +100,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
   const request = current().request.mockImplementation(async (method) =>
     method === "models.authStatus" ? { ts: Date.now(), providers: [] } : { models: [] },
   );
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
   shell.runtime = {
     context: {
       config: createShellConfigFixture(),
@@ -106,7 +154,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
       await read();
       await read();
       expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
-        1,
+        event === "chat.metadata.changed" ? 1 : 0,
       );
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
       expect(changed).toHaveBeenCalledOnce();
@@ -193,7 +241,7 @@ it.each([
     const invalidateSessions = vi.spyOn(state.sessions, "invalidate").mockImplementation(() => {});
     const messages = state.chatMessages;
     const queue = state.chatQueue;
-    const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+    const shell = createShellOwner() as unknown as ChatMetadataShell;
     shell.runtime = {
       context: {
         config: createShellConfigFixture(),
@@ -271,7 +319,7 @@ it("retires chat metadata through config.changed and the Gateway close callback"
       refresh: vi.fn(async () => null),
     },
   } as unknown as ApplicationContext;
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
   shell.runtime = { context };
 
   beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
@@ -325,7 +373,7 @@ it.each([
       refresh: vi.fn(async () => null),
     },
   } as unknown as ApplicationContext;
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
   shell.runtime = { context };
   const read = () =>
     kind === "auth"
@@ -407,7 +455,7 @@ it("retires an unmounted session catalog on session changes without evicting dra
   const otherAgent = { agentId: "writer", sessionKey: "main" };
   const otherSession = { agentId: "main", sessionKey: "agent:main:other" };
   const draft = { agentId: "main" };
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
   shell.runtime = {
     context: {
       config: createShellConfigFixture(),
@@ -474,7 +522,7 @@ describe("session command metadata events", () => {
       );
       const selected = states[0];
       assert.ok(selected);
-      const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+      const shell = createShellOwner() as unknown as ChatMetadataShell;
       shell.runtime = {
         context: {
           config: createShellConfigFixture(),

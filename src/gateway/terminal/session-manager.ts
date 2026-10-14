@@ -66,6 +66,7 @@ export class TerminalSessionManager {
   private readonly emit: TerminalEventSink;
   private readonly getBufferedAmount: (connId: string) => number | undefined;
   private readonly spawn: typeof spawnTerminalPty;
+  private readonly withOpenAdmission: TerminalSessionManagerOptions["withOpenAdmission"];
   private readonly maxSessions: number;
   private detachGraceMs: number;
   private readonly maxDetachedSessions: number;
@@ -83,6 +84,7 @@ export class TerminalSessionManager {
     this.emit = options.emit;
     this.getBufferedAmount = options.getBufferedAmount ?? (() => undefined);
     this.spawn = options.spawn ?? spawnTerminalPty;
+    this.withOpenAdmission = options.withOpenAdmission;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.detachGraceMs = options.detachGraceMs ?? 0;
     this.maxDetachedSessions = options.maxDetachedSessions ?? DEFAULT_MAX_DETACHED_SESSIONS;
@@ -94,10 +96,16 @@ export class TerminalSessionManager {
   }
 
   async open(request: TerminalOpenRequest): Promise<TerminalOpenOutcome> {
+    return this.withOpenAdmission
+      ? await this.withOpenAdmission(request, (admitted) => this.openAdmitted(admitted))
+      : await this.openAdmitted(request);
+  }
+
+  private async openAdmitted(request: TerminalOpenRequest): Promise<TerminalOpenOutcome> {
     if (request.signal?.aborted) {
       return { ok: false, code: "closed", message: this.openAbortMessage(request.signal) };
     }
-    if (request.owner.kind === "agent" && this.agentSessionDrain.isActive(request.owner)) {
+    if (this.agentSessionDrain.isActive(request.owner, request.agentId)) {
       return { ok: false, code: "closed", message: "terminal session is closing" };
     }
     if (this.spawning >= this.maxSessions * 2) {
@@ -269,7 +277,6 @@ export class TerminalSessionManager {
       }
     });
     backend.onExit((event) => {
-      const owner = session.owner?.kind === "agent" ? session.owner : undefined;
       this.agentSessionDrain.observeExit(session);
       const signal = event.signal && event.signal !== 0 ? event.signal : null;
       this.finalize(
@@ -282,9 +289,7 @@ export class TerminalSessionManager {
         },
         { backendExited: true },
       );
-      if (owner) {
-        this.resolveAgentSessionDrainIfIdle(owner);
-      }
+      this.agentSessionDrain.settleIfIdle(session.owner, session.agentId);
     });
 
     return {
@@ -399,21 +404,17 @@ export class TerminalSessionManager {
     return { ok: true };
   }
 
-  /** Fences and closes one durable agent-session incarnation through archive commit. */
-  beginAgentSessionDrain(owner: AgentTerminalOwner): AgentTerminalSessionDrain {
-    const drain = this.agentSessionDrain.begin(owner, () => this.hasAgentSessionWork(owner));
-    for (const [pending, pendingOwner] of this.pendingOpens) {
-      if (agentTerminalOwnerMatches(pendingOwner, owner)) {
-        pending.abort("terminal closed because its session was archived");
-      }
-    }
-    for (const session of Array.from(this.sessions.values())) {
-      if (!session.closed && agentTerminalOwnerMatches(session.owner, owner)) {
-        this.finalize(session, "closed", {});
-      }
-    }
-    this.resolveAgentSessionDrainIfIdle(owner);
-    return drain;
+  /** Exact session for Stop/archive; an agent ID includes every terminal during deletion. */
+  beginAgentSessionDrain(
+    owner: AgentTerminalOwner | string,
+    assertCurrent?: () => void,
+  ): AgentTerminalSessionDrain {
+    return this.agentSessionDrain.begin(owner, {
+      pendingOpens: this.pendingOpens,
+      sessions: this.sessions,
+      closeSession: (session) => this.finalize(session, "closed", {}, { assertCurrent }),
+      assertCurrent,
+    });
   }
 
   /**
@@ -493,22 +494,6 @@ export class TerminalSessionManager {
     }
   }
 
-  private hasAgentSessionWork(owner: AgentTerminalOwner): boolean {
-    return (
-      [...this.pendingOpens.values()].some((pendingOwner) =>
-        agentTerminalOwnerMatches(pendingOwner, owner),
-      ) ||
-      [...this.sessions.values()].some(
-        (session) => !session.closed && agentTerminalOwnerMatches(session.owner, owner),
-      ) ||
-      this.agentSessionDrain.hasExiting(owner)
-    );
-  }
-
-  private resolveAgentSessionDrainIfIdle(owner: AgentTerminalOwner): void {
-    this.agentSessionDrain.resolveIfIdle(owner, () => this.hasAgentSessionWork(owner));
-  }
-
   private openAbortMessage(signal: AbortSignal | undefined): string {
     return signal?.reason instanceof Error ? signal.reason.message : "terminal open cancelled";
   }
@@ -519,9 +504,7 @@ export class TerminalSessionManager {
     viewerConnId?: string,
   ): void {
     this.pendingOpens.delete(pending);
-    if (owner.kind === "agent") {
-      this.resolveAgentSessionDrainIfIdle(owner);
-    }
+    this.agentSessionDrain.settleIfIdle(owner, pending.agentId);
     const connId = owner.kind === "conn" ? owner.connId : viewerConnId;
     if (connId) {
       this.pendingConnections.remove(connId, pending);
@@ -716,19 +699,23 @@ export class TerminalSessionManager {
     session: TerminalSession,
     reason: TerminalExitReason,
     detail: { exitCode?: number | null; signal?: number | null; error?: string },
-    opts?: { silent?: boolean; backendExited?: boolean },
+    opts?: { silent?: boolean; backendExited?: boolean; assertCurrent?: () => void },
   ): void {
     if (session.closed) {
       return;
     }
     const recipients = terminalSessionRecipientIds(session);
-    session.output.dispose({ flush: !opts?.silent && recipients.length > 0 });
+    if (!opts?.silent && recipients.length > 0) {
+      session.output.flush();
+    }
+    opts?.assertCurrent?.();
+    session.output.dispose();
     session.closed = true;
     if (session.reaper) {
       clearTimeout(session.reaper);
       session.reaper = null;
     }
-    if (!opts?.backendExited && session.owner?.kind === "agent") {
+    if (!opts?.backendExited) {
       this.agentSessionDrain.trackExit(session);
     }
     killTerminalBackend(session.backend);

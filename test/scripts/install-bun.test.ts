@@ -110,6 +110,13 @@ esac
   executable(join(bin, "uname"), '#!/bin/sh\necho "${FIXTURE_ARCH:-x86_64}"\n');
   executable(join(bin, "getconf"), '#!/bin/sh\n[ "${FIXTURE_MUSL:-0}" = 0 ]\n');
   executable(
+    join(bin, "shasum"),
+    `#!/bin/bash
+[[ "$1" == -a && "$2" == 256 ]] || exit 1
+exec "$REAL_NODE" -e 'const fs = require("node:fs"); const { createHash } = require("node:crypto"); console.log(createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));' "$3"
+`,
+  );
+  executable(
     join(bin, "node"),
     '#!/bin/sh\necho forbidden-node >> "$FIXTURE_ROOT/effects"\nexit 99\n',
   );
@@ -147,6 +154,19 @@ function output(result: ReturnType<ReturnType<typeof fixture>["run"]>) {
 }
 
 describe("install.sh Bun runtime", () => {
+  it("rejects a renamed Bun executable before package or profile changes", () => {
+    const f = fixture();
+    const renamed = join(f.root, "bun-canary");
+    executable(renamed, readFileSync(f.bun, "utf8"));
+    const result = f.run(["--runtime", "bun", "--bun-path", renamed, "--no-onboard"], {
+      SERVICE_LOADED: "true",
+    });
+    expect(result.status, output(result)).not.toBe(0);
+    expect(output(result)).toContain("must name a bun or bun.exe executable");
+    expect(existsSync(join(f.root, "effects")), output(result)).toBe(false);
+    expect(existsSync(join(f.home, ".bashrc"))).toBe(false);
+  });
+
   it.each([
     ["linux-gnu", "x86_64", "linux-x64"],
     ["linux-gnu", "aarch64", "linux-arm64"],

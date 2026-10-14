@@ -120,7 +120,8 @@ omitted when the session did not capture the corresponding runtime data.
 ## Capture storage
 
 Runtime trajectory events are stored with the session in the per-agent SQLite
-database. Active runs persist events in batches; cleanup drains the final batch.
+database. Runtime batches carry the captured JSON bytes to the database worker
+for persistence. Cleanup drains the final batch.
 Queued events follow the same rolling byte limit while the database writer is busy.
 Exporting a trajectory materializes a redacted JSONL support bundle;
 the live runtime capture is not a session-adjacent JSONL sidecar.

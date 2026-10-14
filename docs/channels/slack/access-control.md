@@ -149,6 +149,8 @@ restart the Slack monitor. The Gateway remains running.
     - unresolved channel-name entries are kept as configured but ignored for routing by default
     - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
 
+    Per-channel `tools`/`toolsBySender`/`requireMention` follow the same rule: resolved names bind to channel IDs, so a renamed channel never inherits another channel's name entry unless direct name matching is explicitly enabled.
+
     <Warning>
     Name-based keys (`#channel-name` or `channel-name`) depend on successful Slack lookup to resolve a stable channel ID. Under `groupPolicy: "allowlist"`, unresolved names are denied unless `dangerouslyAllowNameMatching` explicitly enables direct name matching.
 

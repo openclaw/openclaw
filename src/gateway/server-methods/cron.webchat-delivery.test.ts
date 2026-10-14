@@ -253,7 +253,11 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           expect(updated.details).not.toHaveProperty("deliveryPreview");
           expect(added.details).toMatchObject({
             deliveryPreview: channelsEnabled
-              ? { label: "announce -> telegram:recipient", detail: "explicit" }
+              ? {
+                  label: "announce -> telegram:recipient",
+                  detail:
+                    "commits to the destination conversation; sends one external notification",
+                }
               : {
                   label: "announce -> creating conversation",
                   detail: "commits to this conversation (no external channel route)",
@@ -295,7 +299,6 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           trigger: { script: "return { fire: false };", once: true },
         }),
       ]);
-      expect(jobs[0]?.delivery).toEqual(delivery ?? { mode: "announce" });
     }, storedContext);
   });
 

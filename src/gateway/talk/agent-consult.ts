@@ -89,6 +89,7 @@ export async function startTalkRealtimeAgentConsult(
     ok: false as const,
     error: errorShape(ErrorCodes.UNAVAILABLE, errorMessage),
   });
+  let relayRegistration: RelayAgentRunRegistration | undefined;
   return await new Promise<
     { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }
   >((resolve) => {
@@ -153,13 +154,16 @@ export async function startTalkRealtimeAgentConsult(
       transferGatewayLocalUserIngress(request.client, chatSendOptions.client);
       transferGatewayOperatorSourceIdentity(request.client, chatSendOptions.client);
     }
-    // Speech owns reusable history; keep consult scaffolding only in the lossless archive.
+    // Speech owns normal history; detached transports leave the accepted answer to Chat.
     const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
       toolsAllow: authority.toolsAllow,
       transcript: { display: false, excludeFromContext: true },
-      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
+      prepareAssistantTranscriptMessage: (assistantMessage, sourceText) =>
+        (relayRegistration?.prepareTranscript ?? prepareTalkAgentConsultTranscript)(
+          assistantMessage,
+          sourceText,
+        ),
       beforeDispatch: async ({ runId, assertCurrent, assertWorkAdmissionCurrent }) => {
-        let relayRegistration: RelayAgentRunRegistration | undefined;
         let releaseClient: void | (() => void);
         const hasRelay = Boolean(params.relaySessionId && params.connId);
         const chat = request.context.chatAbortControllers.get(runId);
@@ -170,12 +174,16 @@ export async function startTalkRealtimeAgentConsult(
         try {
           assertCurrent();
           if (params.relaySessionId && params.connId) {
+            if (!chat) {
+              throw new Error("Realtime relay agent run is not registered");
+            }
             relayRegistration = await registerTalkRealtimeRelayAgentRun({
               relaySessionId: params.relaySessionId,
               connId: params.connId,
               sessionKey: params.sessionTarget.canonicalKey,
               runId,
               callId: params.callId,
+              transcriptSessionId: chat.sessionId,
               assertCurrent: assertWorkAdmissionCurrent,
               registerVoice: async (assertRelayCurrent, physicalSource, onRegistered) => {
                 await params.onRunStarted(runId, {

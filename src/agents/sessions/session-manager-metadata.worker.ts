@@ -49,11 +49,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
+import { sessionMetadataAppendNeedsReload } from "./session-manager-append-codec.js";
 import {
   applySessionDirectMessageInTransaction,
   applySessionMetadataAppendInTransaction,
   prepareSessionMetadataAppend,
-  sessionMetadataAppendNeedsReload,
 } from "./session-manager-append.kernel.js";
 import { executeSessionMaintenance } from "./session-manager-maintenance.worker.js";
 import { runWithMetadataMessageAdmission } from "./session-manager-message-admission.worker.js";

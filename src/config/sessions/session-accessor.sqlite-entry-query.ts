@@ -15,10 +15,8 @@ import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-pr
 import { selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import type { CanonicalSessionValidationRow } from "./session-canonical-row.js";
-import {
-  sessionEntrySnapshotColumnsForKeys,
-  type SessionEntryProjection,
-} from "./session-entry-snapshots.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 
 function cacheSessionEntryQuery<Row extends ResolvedSessionEntryRow["row"]>(
@@ -42,7 +40,7 @@ function cacheSessionEntryQuery<Row extends ResolvedSessionEntryRow["row"]>(
 }
 
 // Each query retains only its last exact row at the connection's admitted revision.
-export const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
+export const getExactSessionEntryQueries = createSqliteQueryCache((database: DatabaseSync) => {
   const rowQueries = new Map<string, (key: string) => ResolvedSessionEntryRow["row"] | undefined>();
   const canonicalQueries = new Map<
     string,
@@ -121,6 +119,6 @@ export function selectReadableSessionEntryRows(
     ? selectSessionEntryRows(database, projection).select(["current_session_id", "updated_at"])
     : getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
         .selectFrom("session_nodes")
-        .selectAll()
+        .selectAll("session_nodes")
         .select(sessionEntrySnapshotColumnsForKeys(undefined, projection));
 }

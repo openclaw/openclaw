@@ -1,7 +1,7 @@
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   extractQaContentText,
-  readQaMessageFunctionCalls,
+  readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 import { projectQaToolActivity } from "./tool-activity.js";
@@ -51,40 +51,22 @@ function extractTranscriptText(value: unknown): string {
 
 function extractTranscriptToolCalls(message: Record<string, unknown>): Record<string, unknown>[] {
   const calls: Record<string, unknown>[] = [];
-  const rawContent = message.content;
-  if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (!isRecord(block)) {
-        continue;
-      }
-      const type = normalizeOptionalString(block.type)?.toLowerCase();
-      if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
-        continue;
-      }
-      const tool = normalizeOptionalString(block.name);
-      if (!tool) {
-        continue;
-      }
-      calls.push({
-        ...block,
-        type: "toolCall",
-        id:
-          normalizeOptionalString(block.id) ??
-          normalizeOptionalString(block.toolCallId) ??
-          normalizeOptionalString(block.toolUseId),
-        name: tool,
-        // OpenClaw mirrors provider arguments separately; a placeholder input
-        // can be empty even though arguments contains the executed patch.
-        arguments: block.arguments ?? block.input ?? block.args ?? block.payload ?? null,
-      });
+  // OpenClaw mirrors provider arguments separately; a placeholder input can be empty.
+  for (const { block, id, tool, args } of readQaMessageToolCalls(message, {
+    preferArguments: true,
+  })) {
+    if (!tool) {
+      continue;
     }
+    calls.push({
+      ...block,
+      type: "toolCall",
+      id,
+      name: tool,
+      arguments: args,
+    });
   }
 
-  for (const call of readQaMessageFunctionCalls(message)) {
-    if (call.tool) {
-      calls.push({ type: "toolCall", id: call.id, name: call.tool, arguments: call.args });
-    }
-  }
   return calls;
 }
 

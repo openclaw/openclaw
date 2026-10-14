@@ -1,6 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { captureSessionWorkRunInterruptions } from "../sessions/session-lifecycle-admission.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -50,6 +53,7 @@ describe("Gateway close during agent admission", () => {
     let serviceCompletion: Promise<void> | undefined;
     let closing: Promise<void> | undefined;
     let observedTerminal = false;
+    let terminalAcceptance: unknown;
     const release = () => {
       releaseAdmission.resolve();
       releaseCommand.resolve();
@@ -80,7 +84,8 @@ describe("Gateway close during agent admission", () => {
             ...params.io,
             emitAcceptance: (...frame) => {
               params.io.emitAcceptance(...frame);
-              if (!frame[0][0]) {
+              if (!frame[0][0] || (isRecord(frame[0][1]) && frame[0][1].status === "timeout")) {
+                terminalAcceptance = frame[0];
                 observedTerminal = true;
                 terminalObserved.resolve();
               }
@@ -118,6 +123,21 @@ describe("Gateway close during agent admission", () => {
       );
       await admissionHeld.promise;
       expect(kernel.gatewayRequestContext.chatAbortControllers.size).toBe(0);
+      const session = await loadSessionEntryAsync("main");
+      expect(
+        captureSessionWorkRunInterruptions({
+          scope: session.storePath,
+          identities: [session.canonicalKey, session.entry?.sessionId],
+          accept: (run) => run.runId === "late-admission",
+        }).map(({ run }) => run),
+      ).toEqual([
+        {
+          runId: "late-admission",
+          sessionKey: session.canonicalKey,
+          sessionId: session.entry?.sessionId,
+          agentId: "main",
+        },
+      ]);
       const drain = kernel.connectionWork.drain.bind(kernel.connectionWork);
       vi.spyOn(kernel.connectionWork, "drain").mockImplementationOnce(() => {
         const operation = drain();
@@ -129,13 +149,23 @@ describe("Gateway close during agent admission", () => {
       await drainEntered.promise;
       releaseAdmission.resolve();
       await Promise.race([commandStarted.promise, terminalObserved.promise]);
-      const providerStartedAfterClose = vi.mocked(agentCommandMock).mock.calls.length > 0;
       releaseCommand.resolve();
       await terminalObserved.promise;
       await serviceCompletion;
       await closing;
       expect(observedTerminal).toBe(true);
-      expect(providerStartedAfterClose).toBe(false);
+      expect(agentCommandMock).not.toHaveBeenCalled();
+      expect(terminalAcceptance).toEqual([
+        true,
+        expect.objectContaining({
+          runId: "late-admission",
+          status: "timeout",
+          summary: "aborted",
+          stopReason: "rpc",
+          providerStarted: false,
+        }),
+        undefined,
+      ]);
     } finally {
       release();
       await Promise.allSettled([serviceCompletion]);

@@ -5,10 +5,8 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import {
-  assertSqliteJsonlReadBudget,
-  SqliteJsonlReadBudgetExceededError,
-} from "../../infra/sqlite-jsonl-budget.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
+import { assertSqliteJsonlReadBudget } from "../../infra/sqlite-jsonl-budget.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { TranscriptEntryAnchor, TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
@@ -208,7 +206,7 @@ export function readClosedTranscriptTurnInDatabase(
               "identity.parent_id",
               "active.message_position",
               "rewrite.generation",
-              transcriptEventNavigationSql("event").as("event_json"),
+              transcriptEventNavigationSql(connection, "event").as("event_json"),
             ])
             .where("identity.session_id", "=", target.sessionId)
             .where("identity.event_id", "=", anchor.entryId)

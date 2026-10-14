@@ -719,6 +719,14 @@ pnpm ci:full-release \
   -f dispatch_release_evidence=false
 ```
 
+The helper captures qualification baselines from npm before admission. An
+extended-stable candidate's primary upgrade baseline, used by cross-OS upgrade
+and the upgrade survivor lanes, is the newest published extended-stable
+release below it (2026.8.35 for 2026.9.33); the survivor set also keeps the
+frozen month's newest stable predecessor (2026.9.9). Upgrades between
+extended-stable releases run the old updater's real `extended-stable` selector
+against the loopback candidate registry, never an explicit `--tag`.
+
 Only the helper creates the immutable `release-ci/<Q-prefix>-<timestamp>`
 transport after admission. Never raw-dispatch, manually create its ref, or mint
 a protected publication tag for Q. Reconcile an existing historical cross-revision
@@ -781,6 +789,14 @@ overrides), so a restart after a harness or Monitor timeout does not re-report.
 and `--json` prints NDJSON. It exits once the parent and every dispatched child
 are terminal; restart it after a later rerun. Do not hand-roll bash or `gh`
 watchers.
+
+Watch candidate events derive the frozen SHA and context ref from the sealed
+execution plan, not monitor scratch prose or the parent's tooling SHA. The tip
+is read freshly; a changed tip labels that candidate superseded without stopping
+observation or claiming qualification of the new tip. Missing evidence or a
+SHA-only context stays unknown. Resume a missing or exited watcher with the same
+command and state path: it performs reads only and suppresses already reported
+terminal and candidate events. Never redispatch merely to restore a watcher.
 
 For the parent's Release Decision, use the transition-only summary watcher:
 

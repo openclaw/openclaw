@@ -49,6 +49,7 @@ export const ConfigApplyParamsSchema = closedObject(ConfigApplyLikeParamProperti
 export const ConfigPatchParamsSchema = closedObject({
   ...ConfigApplyLikeParamProperties,
   replacePaths: Type.Optional(Type.Array(NonEmptyString, { maxItems: 256 })),
+  response: Type.Optional(Type.Literal("summary")),
 });
 
 /** Empty request payload for fetching the generated config schema. */
@@ -368,6 +369,7 @@ const ConfigUiHintSchema = closedObject({
   advanced: Type.Optional(Type.Boolean()),
   sensitive: Type.Optional(Type.Boolean()),
   placeholder: Type.Optional(Type.String()),
+  multiline: Type.Optional(Type.Boolean()),
   presentation: Type.Optional(Type.Literal("phone-number")),
   itemTemplate: Type.Optional(Type.Unknown()),
 });

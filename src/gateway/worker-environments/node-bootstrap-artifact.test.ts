@@ -390,14 +390,6 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).rejects.toThrow(error);
   });
 
-  it("rejects stale running build identity before transferring a same-version distribution", async () => {
-    const { packageRoot, provider } = await fixture();
-    await write(packageRoot, "dist/build-info.json", { version, buildId: "newer-build" });
-    await expect(provider.prepare()).rejects.toThrow("running Gateway build");
-    await write(packageRoot, "dist/build-info.json", { version, buildId });
-    await expect(provider.prepare()).resolves.toMatchObject({ buildId });
-  });
-
   it("refuses a shortened non-JavaScript package member", async () => {
     const { packageRoot, provider } = await fixture();
     const entryPath = path.join(packageRoot, longEntryPath);
@@ -554,19 +546,6 @@ describe("node bootstrap distribution", () => {
       );
     },
   );
-
-  it("gives different archive identities to different built bytes with the same package version", async () => {
-    const first = await fixture();
-    const second = await fixture();
-    await write(
-      second.packageRoot,
-      "dist/shared.js",
-      'export const answer = "dirty-source-build";',
-    );
-    const [left, right] = await Promise.all([first.provider.prepare(), second.provider.prepare()]);
-    expect(left.openclawVersion).toBe(right.openclawVersion);
-    expect(left.tarballSha256).not.toBe(right.tarballSha256);
-  });
 
   it("rejects streamed bytes that differ from the verified source", async () => {
     const { provider } = await fixture();

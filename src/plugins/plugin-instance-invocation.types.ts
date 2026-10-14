@@ -5,7 +5,6 @@ import type { PluginInvocationInstance } from "./plugin-instance.types.js";
 export type PluginInstanceInvocation = {
   instance: PluginInvocationInstance;
   token: object;
-  /** The invocation this one was entered from, so drain dependencies survive nested calls. */
   readonly parent?: PluginInstanceInvocation;
 };
 

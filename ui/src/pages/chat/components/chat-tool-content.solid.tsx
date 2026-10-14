@@ -1,11 +1,11 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
-import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
+import { TabPanel, Tabs } from "../../../components/solid/tabs.tsx";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
@@ -26,20 +26,6 @@ import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-tab-group": HTMLAttributes<HTMLElement> & {
-        "prop:active": string;
-        activation: "auto";
-        "without-scroll-controls": boolean;
-      };
-      "wa-tab": HTMLAttributes<HTMLElement> & { panel: string; "prop:active": boolean };
-      "wa-tab-panel": HTMLAttributes<HTMLElement> & { name: string; "prop:active": boolean };
-    }
-  }
-}
 
 function handleRawDetailsToggle(event: Event) {
   // SAFETY: Only the raw-details HTML button installs this handler.
@@ -160,7 +146,7 @@ function WorkspaceFilePath(props: {
   );
 }
 
-export function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
+function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
   const label = () =>
     props.outcome === "failed" && props.exitCode !== undefined
       ? t("chat.toolCards.exitCode", { code: String(props.exitCode) })
@@ -199,44 +185,32 @@ function ToolCardModes(props: {
   const modes = ["diff", "raw"] as const;
   // Tool call IDs repeat across messages, so every tab and panel includes its message key.
   const id = () => `${props.messageKey}:${props.card.id}`;
-  const active = () => (props.isError || props.outcome === "skipped" ? "raw" : "diff");
-  const modeLabel = () => t("chat.toolCards.viewMode");
-  let group: HTMLElement | undefined;
-  createEffect(
-    () => [props.card, modeLabel()] as const,
-    ([, label]) => syncTabGroupLabel(group, label),
+  const initialMode = createMemo(() =>
+    props.isError || props.outcome === "skipped" ? "raw" : "diff",
   );
+  const [active, setActive] = createSignal<string>(initialMode);
   return (
-    <wa-tab-group
-      class="chat-tool-card__modes"
-      aria-label={modeLabel()}
-      prop:active={active()}
-      activation="auto"
-      without-scroll-controls
-      ref={(element) => {
-        group = element;
-      }}
-    >
+    <div class="chat-tool-card__modes">
+      <Tabs
+        ariaLabel={t("chat.toolCards.viewMode")}
+        active={active()}
+        activation="auto"
+        onSelect={(value) => {
+          setActive(value);
+        }}
+        items={modes.map((mode) => ({
+          value: mode,
+          label: t(`chat.toolCards.${mode}`),
+          id: `${id()}-${mode}-tab`,
+          panelId: `${id()}-${mode}-panel`,
+        }))}
+      />
       <For each={modes}>
         {(mode) => (
-          <wa-tab
-            slot="nav"
-            id={`${id()}-${mode}-tab`}
-            aria-controls={`${id()}-${mode}-panel`}
-            panel={mode}
-            prop:active={active() === mode}
-          >
-            {t(`chat.toolCards.${mode}`)}
-          </wa-tab>
-        )}
-      </For>
-      <For each={modes}>
-        {(mode) => (
-          <wa-tab-panel
+          <TabPanel
             id={`${id()}-${mode}-panel`}
-            aria-labelledby={`${id()}-${mode}-tab`}
-            name={mode}
-            prop:active={active() === mode}
+            tabId={`${id()}-${mode}-tab`}
+            active={active() === mode}
           >
             {mode === "diff" ? (
               <DiffBlock lines={props.diff} outcome={props.outcome} file={props.file} />
@@ -246,10 +220,10 @@ function ToolCardModes(props: {
                 text={props.card.outputText!}
               />
             )}
-          </wa-tab-panel>
+          </TabPanel>
         )}
       </For>
-    </wa-tab-group>
+    </div>
   );
 }
 
@@ -340,20 +314,13 @@ function CommandBody(props: { state: ContentState }) {
           <TerminalBlock command={props.state.view.command!} output={props.state.card.outputText} />
         }
       >
-        <Show
-          when={sourceKey() === "input"}
-          fallback={
-            <>
-              <ToolDataBlock label={t("chat.toolCards.toolInput")} text={props.state.view.code!} />
-              <Show when={props.state.card.outputText !== undefined}>
-                <ToolDataBlock text={props.state.card.outputText!} />
-              </Show>
-            </>
-          }
-        >
-          <Show when={props.state.card.outputText !== undefined}>
-            <ToolDataBlock text={props.state.card.outputText!} />
-          </Show>
+        <Show when={sourceKey() !== "input"}>
+          <ToolDataBlock label={t("chat.toolCards.toolInput")} text={props.state.view.code!} />
+        </Show>
+        <Show when={props.state.card.outputText !== undefined}>
+          <ToolDataBlock text={props.state.card.outputText!} />
+        </Show>
+        <Show when={sourceKey() === "input"}>
           <details class="chat-tool-card__input">
             <summary>{t("chat.toolCards.toolInput")}</summary>
             <ToolDataBlock text={props.state.view.code!} />
@@ -545,7 +512,7 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
 }
 
 const defaults: ToolRenderOptions = { messageKey: "" };
-export const ToolContentHost = defineSolidBridge<{
+export const ChatToolContent = defineSolidBridge<{
   card: ToolCard | null;
   options: ToolRenderOptions;
 }>(
@@ -562,14 +529,16 @@ export const ToolContentHost = defineSolidBridge<{
     },
   },
 );
-export const RawOutputHost = defineSolidBridge<{ text: string }>(
+export const ChatToolRawOutput = defineSolidBridge<{ text: string }>(
   "openclaw-chat-tool-raw",
-  (props) => <RawOutputToggle text={props.text} />,
-  { properties: { text: { default: "", attribute: false } } },
+  RawOutputToggle,
+  {
+    properties: { text: { default: "", attribute: false } },
+  },
 );
-export const ToolOutcomeHost = defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
+export const ChatToolOutcome = defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
   "openclaw-chat-tool-outcome",
-  (props) => <ToolOutcome outcome={props.outcome} exitCode={props.exitCode} />,
+  ToolOutcome,
   {
     properties: {
       outcome: { default: "unknown", attribute: false },

@@ -274,7 +274,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         sessionKey: state.sessionKey,
         sessionKeys,
         clearLocalRun: true,
-        clearChatStream: true,
       });
       return;
     }
@@ -296,7 +295,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       sessionKey: state.sessionKey,
       sessionKeys,
       clearLocalRun: true,
-      clearChatStream: true,
       armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
     });
   };
@@ -419,6 +417,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       ? typeof payload.seq === "number" && {
           phase: "retrying" as const,
           seq: payload.seq,
+          ...(payload.retry.retryAt === undefined ? {} : { retryAt: payload.retry.retryAt }),
           message: t("chat.startupStatus.retrying", {
             attempt: String(payload.retry.attempt),
             maxAttempts: String(payload.retry.maxAttempts),

@@ -122,7 +122,6 @@ export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 
 type SessionRowReadOutcome =
   | { status: "current"; row: GatewaySessionRow | null }
-  | { status: "invalidated" }
   | { status: "retired" };
 
 export type SessionRowObservation = {
@@ -268,7 +267,6 @@ export type SessionCapability = {
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions & {
-      sourceCanonicalListRevision?: number;
       sourceListScope?: SessionListScope;
     },
   ) => boolean | "defaults-only";
@@ -393,7 +391,6 @@ export type SessionCapability = {
   /** Loads one connection-owned group catalog; null means the attempt retired or failed. */
   groupsLoad: () => Promise<readonly SessionGroupSettings[] | null>;
   /** Generation of the catalog/defaults snapshot used by group-target routes. */
-  groupsGeneration: () => number;
   /** Whether group defaults are current enough for a group-target route. */
   groupsStatus: () => SessionGroupDefaultsStatus;
   /** Invalidates the connection-owned group catalog before an explicit route retry. */

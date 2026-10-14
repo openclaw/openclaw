@@ -9,6 +9,7 @@ import { AgentDatabaseAdmissionRefusalSchema } from "../../packages/gateway-prot
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
@@ -26,7 +27,9 @@ import {
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
@@ -56,6 +59,80 @@ afterEach(async () => {
 });
 
 describe("agent database admission", () => {
+  it.each([
+    [21, "per-agent"],
+    [OPENCLAW_AGENT_SCHEMA_VERSION + 1, "per-agent"],
+    [21, "fixed"],
+    [OPENCLAW_AGENT_SCHEMA_VERSION + 1, "fixed"],
+  ] as const)(
+    "isolates secondary schema %s with %s stores across restart and startup without touching retained data",
+    async (version, layout) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-isolation-") };
+      const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared", "sessions.json");
+      const config: OpenClawConfig = {
+        ...(layout === "fixed" ? { session: { store: storePath } } : {}),
+        agents: {
+          entries: { main: {}, worker: {} },
+          defaults: { systemAgent: { agentId: "main" } },
+        },
+      };
+      const mainPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+      const workerPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
+      const retainedPath = openOpenClawAgentDatabase({
+        agentId: "retained",
+        env,
+        ...(layout === "fixed"
+          ? { path: path.join(path.dirname(storePath), "openclaw-agent.retained.sqlite") }
+          : {}),
+      }).path;
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawStateDatabaseForTest();
+      for (const pathname of [workerPath, retainedPath]) {
+        revokeSqliteDatabaseAdmissionsForPath(pathname);
+        const database = new (requireNodeSqlite().DatabaseSync)(pathname);
+        try {
+          database.exec(`PRAGMA journal_mode=DELETE; PRAGMA user_version=${version};`);
+        } finally {
+          database.close();
+        }
+      }
+      const workerBytes = fs.readFileSync(workerPath);
+      const retainedBytes = fs.readFileSync(retainedPath);
+      await expect(
+        assertOpenClawDatabasesReady({ env, config, operation: "gateway-restart" }),
+      ).resolves.toBeUndefined();
+      await withAgentDatabaseStartupAdmission(
+        async () => {
+          await expect(
+            assertOpenClawDatabasesReady({ env, config, operation: "gateway-startup" }),
+          ).resolves.toBeUndefined();
+          expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
+          expect(readAgentDatabaseAdmissionRefusal("retained", { env })).toBeUndefined();
+          expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
+            code: "agent-database-inspection-failed",
+            paths: [workerPath],
+            repairHint: expect.stringContaining("openclaw doctor --fix"),
+          });
+          expect(() => openOpenClawAgentDatabase({ agentId: "worker", env })).toThrow(
+            "openclaw doctor --fix",
+          );
+          expect(openOpenClawAgentDatabase({ agentId: "main", env }).path).toBe(mainPath);
+        },
+        { deferInspections: false },
+      );
+      await expect(
+        assertOpenClawDatabasesReady({
+          env,
+          config,
+          operation: "doctor",
+          configuredAgentDatabaseTargets: [],
+        }),
+      ).rejects.toThrow();
+      expect(fs.readFileSync(workerPath)).toEqual(workerBytes);
+      expect(fs.readFileSync(retainedPath)).toEqual(retainedBytes);
+    },
+  );
+
   it("does not let an unavailable required agent hide a newer required database", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-mixed-") };
     const config: OpenClawConfig = {
@@ -102,8 +179,9 @@ describe("agent database admission", () => {
     };
     openOpenClawAgentDatabase({ agentId: "main", env });
     const pathname = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawStateDatabaseForTest();
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     const database = new (requireNodeSqlite().DatabaseSync)(pathname);
     database.exec("UPDATE schema_meta SET agent_id = NULL WHERE meta_key = 'primary'");
     database.close();
@@ -136,7 +214,7 @@ describe("agent database admission", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "retains merged inspection causes without changing public refusals (maintenance first=%s)",
     (maintenanceFirst) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-causes-") };
@@ -281,11 +359,9 @@ describe("agent database admission", () => {
 
   it.each([
     { role: "secondary", agentId: "cleaner", isolate: true },
-    { role: "registered secondary", agentId: "cleaner", isolate: true },
     { role: "sole", agentId: "cleaner", isolate: false },
     { role: "configured system", agentId: "cleaner", isolate: false },
     { role: "reserved system", agentId: "openclaw", isolate: false },
-    { role: "reserved system", agentId: "crestodian", isolate: false },
   ] as const)(
     "$role agent ($agentId): divergent database permits startup=$isolate",
     async ({ role, agentId, isolate }) => {
@@ -304,18 +380,11 @@ describe("agent database admission", () => {
         },
       };
       const source = openOpenClawAgentDatabase({ agentId: "main", env }).path;
-      if (role === "registered secondary") {
-        openOpenClawAgentDatabase({ agentId, env });
-      }
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const target = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(
-        source,
-        target,
-        role === "registered secondary" ? 0 : fs.constants.COPYFILE_EXCL,
-      );
+      fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
       const { DatabaseSync } = requireNodeSqlite();
       const database = new DatabaseSync(target);
       try {

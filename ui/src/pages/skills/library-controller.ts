@@ -1,5 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveControllerHost } from "lit";
 import type {
   SkillLibraryEntry,
   SkillLibraryFile,
@@ -10,12 +9,12 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { assertUploadsEnabled, uploadsEnabled } from "../../lib/uploads.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
 
 export type LibraryView = "workspace" | "mine" | "team" | "all";
@@ -67,8 +66,12 @@ export class SkillLibraryController {
   query = "";
 
   constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly gateway: GatewayPageController,
+    private readonly host: { requestUpdate(): void },
+    private readonly gateway: {
+      readonly snapshot: ApplicationGatewaySnapshot | null;
+      capture(): GatewayConnectionScope | null;
+      isCurrent(scope: GatewayConnectionScope): boolean;
+    },
     private readonly config: () => ApplicationConfigCapability | undefined = () => undefined,
   ) {}
 

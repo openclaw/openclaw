@@ -1,19 +1,22 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   readClosedTranscriptTurnInDatabase,
   type ClosedTranscriptTurnReadResult,
 } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import type { TranscriptTurnBoundary } from "../../config/sessions/transcript-entry-anchor.js";
+import { requireNativeDatabaseFile } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { ensureContextEngineTurnOutboxSchema } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db.generated.js";
+import { deriveContextEngineTurnOutboxState } from "./context-engine-turn-outbox-state.js";
 import {
   isRetryableContextEngineTurnReadFailure,
   type AcceptedContextEngineTurnOutboxPayload,
@@ -53,7 +56,7 @@ function oldestOutboxEnqueueSequence() {
 function outboxPayloadRequiresAdvancement() {
   // Blocked rows are terminal audit evidence, not retryable work. Keep them
   // inspectable without letting them hold later same-session turns behind them.
-  return /* kysely-allow-raw: Payload state is owned by the closed outbox union above. */ sql<boolean>`json_extract(context_engine_turn_outbox.payload_json, '$.state') IS NOT 'blocked'`;
+  return /* kysely-allow-raw: NULL and unknown payload states retain their existing retry eligibility. */ sql<boolean>`context_engine_turn_outbox.payload_state IS DISTINCT FROM 'blocked'`;
 }
 
 function outboxDb(database: ContextEngineTurnOutboxConnection) {
@@ -116,6 +119,7 @@ function writeContextEngineTurnOutboxPayload(
             last_attempt_at: null,
             last_error: null,
             payload_json: payloadJson,
+            payload_state: deriveContextEngineTurnOutboxState(params.payload),
           })
           .where("advancement_key", "=", advancementKey),
       );
@@ -136,6 +140,7 @@ function writeContextEngineTurnOutboxPayload(
         owner_plugin_id: params.ownerPluginId ?? null,
         session_id: admission.sessionId,
         payload_json: payloadJson,
+        payload_state: deriveContextEngineTurnOutboxState(params.payload),
         created_at: Date.now(),
         last_attempt_at: null,
         last_error: null,
@@ -207,11 +212,7 @@ function discardContextEngineTurnIntent(params: OutboxKernelParams<"discardInten
       .where("advancement_key", "=", params.admission.logicalTurnId)
       .where("engine_id", "=", params.engineId)
       // Accepted work remains recoverable when publication or acknowledgment fails.
-      .where(
-        /* kysely-allow-raw: Closed outbox payload state. */ sql`json_extract(payload_json, '$.state')`,
-        "=",
-        "admitted",
-      )
+      .where("payload_state", "=", "admitted")
       .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null),
   );
   return result.numAffectedRows !== undefined && result.numAffectedRows > 0n;
@@ -284,6 +285,8 @@ export function recoverContextEngineTurnOutbox(params: {
       .where("engine_id", "=", params.engineId)
       .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
       .where("session_id", "=", params.sessionId)
+      // Blocked rows are terminal; their outcome was logged once when the turn was blocked.
+      .where(outboxPayloadRequiresAdvancement())
       .orderBy(outboxEnqueueSequence(), "asc"),
   ).rows;
   let pending = false;
@@ -295,9 +298,6 @@ export function recoverContextEngineTurnOutbox(params: {
       continue;
     }
     if (payload.state === "blocked") {
-      params.warn(
-        `[context-engine] durable turn advancement is blocked: ${row.advancement_key}: transcript range is ${payload.failure}`,
-      );
       continue;
     }
     if (payload.state === "admitted") {
@@ -441,9 +441,12 @@ type OutboxOutput =
 
 /** Runs one outbox command's kernel on the borrowed connection. */
 export function executeContextEngineTurnOutboxCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: OutboxCommand,
 ): OutboxOutput {
+  if (isPostgresSqlConnection(db)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   const database = { db };
   switch (command.type) {
     case "prepareRun":

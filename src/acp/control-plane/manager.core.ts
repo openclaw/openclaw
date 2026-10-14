@@ -112,7 +112,7 @@ export class AcpSessionManager {
     });
   }
 
-  /** @deprecated Use resolveSessionAsync; retained for the v2026.9.4 Plugin SDK contract. */
+  /** @deprecated Use resolveSessionAsync; final compatibility day: 2026-12-31. */
   resolveSession(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -356,6 +356,7 @@ export class AcpSessionManager {
             await recordSubagentTerminalState(
               {
                 childSessionKey: target.sessionKey,
+                agentId: target.agentId,
                 runId: input.requestId,
                 requesterSessionKey,
                 outcomeStatus: "cancelled",

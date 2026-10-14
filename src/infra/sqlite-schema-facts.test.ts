@@ -14,7 +14,6 @@ import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js"
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   getSqliteDatabaseSchemaRevision,
-  hasPendingSqliteDatabaseSchemaMutation,
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseSiblingWriteRevision,
 } from "./sqlite-database-admission.js";
@@ -75,7 +74,7 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
-  it("validates a physical file once across handles and close, and validates its replacement", () => {
+  it("shares validation across open handles and revalidates after final close or replacement", () => {
     const root = tempDirs.make("openclaw-schema-process-");
     const filename = path.join(root, "state.sqlite");
     const first = openDatabase(undefined, true, filename);
@@ -84,14 +83,21 @@ describe("admitted SQLite schema facts", () => {
       observation.queries.filter((sql) =>
         /sqlite_schema|PRAGMA (?:user_version|schema_version)/iu.test(sql),
       );
+    const validations = () => schemaReads().filter((sql) => /^PRAGMA user_version$/iu.test(sql));
     try {
       const second = openDatabase("", true, filename);
       expect(tableExists(second, "original")).toBe(true);
       second.close();
+      expect(tableExists(first, "original")).toBe(true);
+      expect(schemaReads()).toEqual([]);
       first.close();
       const reopened = openDatabase("", true, filename);
       expect(tableExists(reopened, "original")).toBe(true);
-      expect(schemaReads()).toEqual([]);
+      expect(validations()).toHaveLength(1);
+      const sibling = openDatabase("", true, filename);
+      expect(tableExists(sibling, "original")).toBe(true);
+      expect(validations()).toHaveLength(1);
+      sibling.close();
       reopened.close();
 
       const replacementPath = path.join(root, "replacement.sqlite");
@@ -102,12 +108,11 @@ describe("admitted SQLite schema facts", () => {
       const replaced = openDatabase("", true, filename);
       expect(tableExists(replaced, "replacement")).toBe(true);
       expect(tableExists(replaced, "original")).toBe(false);
-      expect(schemaReads().length).toBeGreaterThan(0);
-      const firstValidationCount = schemaReads().length;
+      expect(validations()).toHaveLength(2);
       replaced.close();
       const replacementReopened = openDatabase("", true, filename);
       expect(tableExists(replacementReopened, "replacement")).toBe(true);
-      expect(schemaReads()).toHaveLength(firstValidationCount);
+      expect(validations()).toHaveLength(3);
     } finally {
       observation.restore();
     }
@@ -388,7 +393,7 @@ describe("admitted SQLite schema facts", () => {
       observation.restore();
     }
   });
-  it.each(["data_version", "schema_version", "user_version"])(
+  it.each(["data_version", "schema_version", "user_version", "encoding"])(
     "uses native freshness without consulting a table shadowing %s",
     (name) => {
       const database = openDatabase(
@@ -399,6 +404,8 @@ describe("admitted SQLite schema facts", () => {
         true,
       );
       expect(readSqliteDataVersion(database)).not.toBe(999);
+      expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(1);
+      expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
     },
   );
 
@@ -491,7 +498,7 @@ describe("admitted SQLite schema facts", () => {
       expect(before).toBeDefined();
       expect(revision()).toBe(before);
       writer.exec("BEGIN IMMEDIATE; INSERT INTO original VALUES (1)");
-      expect(revision()).toBeUndefined();
+      expect(revision()).toBe(before);
       expect(readSqliteDatabaseWriteRevision(writer)).toBeTypeOf("number");
       const sibling = readSqliteDatabaseSiblingWriteRevision(writer);
       writer.exec("COMMIT");
@@ -576,6 +583,9 @@ describe("admitted SQLite schema facts", () => {
           expect(read()).toEqual(["first"]);
           const reads = rowReads();
           writer.exec("UPDATE session_participants SET actor_id='second'");
+          expect(reader.prepare("SELECT actor_id FROM session_participants").get()?.actor_id).toBe(
+            "first",
+          );
           expect(read()).toEqual(["first"]);
           expect(rowReads()).toBe(reads);
           reader.exec("COMMIT; BEGIN");
@@ -645,9 +655,7 @@ describe("admitted SQLite schema facts", () => {
     });
     expect(tableExists(reader, "implicit_snapshot")).toBe(true);
     writer.exec("BEGIN; CREATE TABLE closed_rollback (id)");
-    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
     writer.close();
-    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
     expect(tableExists(reader, "closed_rollback")).toBe(false);
   });
 

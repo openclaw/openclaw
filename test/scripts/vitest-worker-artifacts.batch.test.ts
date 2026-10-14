@@ -5,6 +5,7 @@ import { expect } from "vitest";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
@@ -46,7 +47,7 @@ process.exitCode = await runVitestBatch({
   },
 });`,
       );
-      const compiler = createControlledWorkerCompiler(directory, process.env);
+      const compiler = createControlledWorkerCompiler(directory, testRunnerFixtureEnv());
       const result = await node(
         ["--import", path.join(root, "scripts/tsx.mjs"), entry],
         root,
@@ -80,6 +81,7 @@ const infraConfig = "test/vitest/vitest.infra.config.ts";
 const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts";
 const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 const channelsConfig = "test/vitest/vitest.channels.config.ts";
+const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
 const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
 const agentsCoreConfig = agentVitestProjectOwners.core.config;
 const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts";
@@ -97,6 +99,20 @@ it.for([
     prepare: false,
   },
   { name: "empty channels", config: channelsConfig, args: [], include: [], prepare: false },
+  { name: "full gateway methods", config: gatewayMethodsConfig, args: [], prepare: true },
+  {
+    name: "focused gateway methods",
+    config: gatewayMethodsConfig,
+    args: ["src/gateway/server-methods/health.test.ts"],
+    prepare: false,
+  },
+  {
+    name: "empty gateway methods",
+    config: gatewayMethodsConfig,
+    args: [],
+    include: [],
+    prepare: false,
+  },
   {
     name: "code-mode all agents",
     config: agentVitestProjectOwners.all.config,
@@ -151,7 +167,9 @@ it.runIf(process.platform !== "win32").for([
           "metadata",
           "custom-root",
           "custom-project",
-          ...(route === "direct" ? ["include-worker", "include-excluded", "channels"] : []),
+          ...(route === "direct"
+            ? ["include-worker", "include-excluded", "channels", "gateway-methods"]
+            : []),
         ]
     ).map((mode) => ({
       route,
@@ -305,7 +323,11 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
                 "scripts/run-vitest.mjs",
                 "run",
                 "--config",
-                ...(mode === "channels" ? [channelsConfig] : [selectedConfig, selectedFile]),
+                ...(mode === "channels"
+                  ? [channelsConfig]
+                  : mode === "gateway-methods"
+                    ? [gatewayMethodsConfig]
+                    : [selectedConfig, selectedFile]),
                 ...controls,
               ]
             : [
@@ -324,7 +346,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           )
         : "";
       const result = await node(args, root, {
-        ...process.env,
+        ...testRunnerFixtureEnv(),
         // Each nested invocation owns its selection, independently of the outer tooling shard.
         OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
         OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
@@ -339,12 +361,13 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           : {}),
       });
       expect(result.code, result.stdout + result.stderr).toBe(
-        mode === "cancel" ? 143 : mode === "failure" ? 1 : 0,
+        mode === "cancel" ? 143 : mode === "failure" ? 2 : 0,
       );
       const ready =
         mode === "ready" ||
         mode === "include-worker" ||
         mode === "channels" ||
+        mode === "gateway-methods" ||
         mode === "code-mode" ||
         mode === "capture";
       const prepared = ready || mode === "failure" || mode === "cancel";

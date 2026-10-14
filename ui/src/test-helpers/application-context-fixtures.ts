@@ -78,7 +78,7 @@ export function createApplicationGateway(
         listener(event);
       }
     },
-    publish(next: ApplicationGatewaySnapshot) {
+    publish(this: void, next: ApplicationGatewaySnapshot) {
       snapshot = next;
       for (const listener of listeners) {
         listener(snapshot);
@@ -92,7 +92,6 @@ export function createNavigationPreferencesFixture(): ApplicationContext["naviga
     navCollapsed: false,
     navWidth: 258,
     sidebarEntries: [],
-    navigationScope: "mine",
     pinnedAgentIds: [],
   };
   const listeners = new Set<(next: typeof snapshot) => void>();

@@ -141,6 +141,8 @@ describe("buildPromptSection", () => {
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
     expect(result[1]).toContain("for memory-file hits, use memory_get");
+    expect(result[1]).toContain("not already present in the current turn");
+    expect(result[1]).toContain("Do not repeat memory retrieval");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -154,6 +156,8 @@ describe("buildPromptSection", () => {
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
     expect(result[1]).not.toContain("then use memory_get");
+    expect(result[1]).toContain("not already present in the current turn");
+    expect(result[1]).toContain("Do not repeat memory retrieval");
   });
 
   it("limits the guidance to memory_get when only get is available", () => {
@@ -163,6 +167,8 @@ describe("buildPromptSection", () => {
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_get");
     expect(result[1]).not.toContain("run memory_search");
+    expect(result[1]).toContain("not already present in the current turn");
+    expect(result[1]).toContain("Do not repeat memory retrieval");
   });
 
   it.each([
@@ -242,7 +248,7 @@ describe("buildPromptSection", () => {
       expect(text.includes("configured extra paths")).toBe(sourceCase.extraPaths.length > 0);
       expect(text.length).toBeLessThan(3_000);
     }
-    const defaultSearchScope = lazy.search.description.split(" before answering", 1)[0] ?? "";
+    const defaultSearchScope = lazy.search.description.split(". ", 1)[0] ?? "";
     expect(defaultSearchScope.includes("indexed session transcripts")).toBe(sourceCase.sessions);
     expect(lazy.get.description).not.toContain("indexed session transcripts");
     expect(lazy.search.description).toContain("Corpus outcomes cover each requested corpus");
@@ -324,7 +330,7 @@ describe("memory-core plugin runtime registration", () => {
     expect(subagentRun).not.toHaveBeenCalled();
   });
 
-  it("scopes both reply hooks to scheduled turns across three registrations", () => {
+  it("scopes the dreaming reply hook to scheduled turns across three registrations", () => {
     for (let cycle = 1; cycle <= 3; cycle += 1) {
       const replyHookTriggers: unknown[] = [];
       plugin.register(
@@ -338,10 +344,7 @@ describe("memory-core plugin runtime registration", () => {
         }),
       );
 
-      expect(replyHookTriggers, `cycle ${cycle}`).toEqual([
-        ["heartbeat", "cron"],
-        ["heartbeat", "cron"],
-      ]);
+      expect(replyHookTriggers, `cycle ${cycle}`).toEqual([["heartbeat", "cron"]]);
     }
   });
 

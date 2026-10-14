@@ -74,7 +74,7 @@ job. Open the page that matches your task.
 - Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is
   hidden as a standalone model tool and exposed inside the guest program as an
   async global function. MCP stays under the `MCP` namespace.
-- The `exec` description carries a bounded quick index of final callable names,
+- The run's prompt carries a bounded quick index of final callable names,
   compact input hints, and compact declared output hints when a
   trusted tool provides an output schema. It omits descriptions, full schemas,
   MCP entries, and overflow entries. Callable `catalog.search(...)` results are
@@ -83,7 +83,8 @@ job. Open the page that matches your task.
   the full schema available through `describe()`. These hints do not change
   tool validation or output contracts. Core file and shell tool signatures stay
   first in the bounded index, followed by tools with declared output hints, so
-  catalog growth does not hide their input argument names.
+  catalog growth does not hide their input argument names. The index follows
+  the stable prompt prefix; catalog changes do not rewrite the `exec` schema.
 - Guest code calls globals directly or searches the hidden catalog for callable
   handles. A handle exposes bounded metadata and `describe()`, but never the
   exact internal catalog id. Calls use the same execution path as normal agent

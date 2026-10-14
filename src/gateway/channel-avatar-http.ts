@@ -1,16 +1,15 @@
 // Serves channel-owned conversation images without exposing media-store paths.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../config/sessions/session-incognito-binding.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { readMediaBuffer } from "../media/store.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
+import { matchesChannelAvatarSender } from "./channel-avatar-reference.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
@@ -39,7 +38,9 @@ const channelAvatarLoads = new Map<
   }
 >();
 
-const getSessionStoreModule = createLazyRuntimeModule(() => import("./session-utils-store.js"));
+const getSessionStoreModule = createLazyRuntimeModule(
+  () => import("./session-utils-store-worker.js"),
+);
 
 async function loadChannelAvatar(
   sessionKey: string,
@@ -92,7 +93,8 @@ export async function handleChannelAvatarHttpRequest(
     basePath?: string;
   },
 ): Promise<boolean> {
-  const pathname = req.url ? new URL(req.url, "http://localhost").pathname : undefined;
+  const requestUrl = new URL(req.url ?? "/", "http://localhost");
+  const pathname = requestUrl.pathname;
   const parsed = parseControlUiResourcePath("channelAvatar", pathname, opts.basePath);
   if (!parsed.matched) {
     return false;
@@ -105,19 +107,11 @@ export async function handleChannelAvatarHttpRequest(
   const sessionKey = requestedKey
     ? normalizeSessionKeyPreservingOpaquePeerIds(requestedKey)
     : undefined;
-  let selected: Result<ReturnType<typeof captureIncognitoSessionSource>, unknown>;
-  let assertSourceCurrent = () => {};
+  let selected: Result<ReturnType<typeof captureSessionEntryMetadataRead>, unknown>;
   try {
-    const source = sessionKey ? captureIncognitoSessionSource({ sessionKey }) : undefined;
-    if (sessionKey && source && !("kind" in source)) {
-      const claim = source.actor.sessions.captureCurrent(sessionKey);
-      assertSourceCurrent = () => {
-        source.admissionSignal?.throwIfAborted();
-        source.actor.assertReadable();
-        claim.assertCurrent();
-      };
-    }
-    selected = ok(source);
+    selected = ok(
+      sessionKey ? captureSessionEntryMetadataRead({ sessionKey }, () => {}) : undefined,
+    );
   } catch (error) {
     selected = err(error);
   }
@@ -164,24 +158,38 @@ export async function handleChannelAvatarHttpRequest(
     return true;
   };
   if (source) {
+    const entry = source.readCurrent();
+    const origin = sessionDeliveryOrigin(entry);
+    const reference = origin?.avatar;
     const assertCurrent = () => {
       requestAuth.assertCurrent();
-      assertSourceCurrent();
+      const current = source.readCurrent();
+      if (
+        current?.sessionId !== entry?.sessionId ||
+        current?.lifecycleRevision !== entry?.lifecycleRevision ||
+        sessionDeliveryOrigin(current)?.avatar !== reference
+      ) {
+        throw new Error("Channel avatar session authority changed");
+      }
     };
-    return withIncognitoSessionEntry(
-      source,
-      sessionKey,
+    return serve(
+      matchesChannelAvatarSender(requestUrl.searchParams, origin) ? reference : undefined,
       assertCurrent,
-      (entry, assertReadCurrent) => serve(sessionDeliveryOrigin(entry)?.avatar, assertReadCurrent),
     );
   }
   let reference: string | undefined;
   try {
-    const { entry } = (await getSessionStoreModule()).loadGatewaySessionEntryReadOnly(
-      requestedKey,
-      { clone: false },
-    );
-    reference = sessionDeliveryOrigin(entry)?.avatar;
+    const { entry } = await (
+      await getSessionStoreModule()
+    ).loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: requestedKey,
+      assertActive: requestAuth.assertCurrent,
+    });
+    const origin = sessionDeliveryOrigin(entry);
+    reference = matchesChannelAvatarSender(requestUrl.searchParams, origin)
+      ? origin?.avatar
+      : undefined;
   } catch {
     // Invalid or missing session keys are ordinary route misses.
   }

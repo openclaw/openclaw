@@ -3,7 +3,6 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 // Claude's native transcript augments display history, never canonical model context.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { withTranscriptRedactionSnapshot } from "../agents/transcript-redact-text.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type {
   ChatHistoryPage,
@@ -22,6 +21,8 @@ import {
   dropPreSessionStartAnnouncePairs,
   isPreSessionStartAssistantMessage,
 } from "./chat-display-projection.history.js";
+import { MemoryCliSessionHistoryIndex } from "./cli-session-history-index-memory.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
@@ -55,7 +56,7 @@ type Readers = CliHistoryReaders;
 type CachedIndex = {
   database?: DatabaseSync;
   key: string;
-  index: CliSessionHistoryIndex;
+  index: CliHistoryIndex;
   release: () => void;
   readWindow?: TranscriptReadWindow;
   displaySource?: string;
@@ -112,10 +113,6 @@ export async function prepareCliSessionHistoryReader(
       return undefined;
     }
   }
-  const redaction = params.cliHistoryRedaction;
-  if (!redaction) {
-    throw new Error("CLI history requires prepared transcript redaction");
-  }
   const native = {
     cliSessionId: binding.sessionId,
     homeDir: params.cliHistoryHomeDir,
@@ -131,12 +128,7 @@ export async function prepareCliSessionHistoryReader(
   const revisionKey = (value: CliHistoryRevision) =>
     JSON.stringify([value.generation, value.indexedSeq, value.leafEventId]);
   const localRevision = revision ? revisionKey(revision) : undefined;
-  const key = JSON.stringify([
-    localRevision,
-    source[1],
-    params.entry?.sessionStartedAt,
-    redaction.policyToken,
-  ]);
+  const key = JSON.stringify([localRevision, source[1], params.entry?.sessionStartedAt]);
   let cached = revision?.database ? indexes.get(identity) : undefined;
   if (cached && (cached.database !== revision?.database || cached.key !== key)) {
     retire(identity);
@@ -155,15 +147,16 @@ export async function prepareCliSessionHistoryReader(
     }
   };
   if (!cached) {
-    const index = new CliSessionHistoryIndex(!revision?.database);
+    const index =
+      params.entry?.incognito === true
+        ? new MemoryCliSessionHistoryIndex()
+        : new CliSessionHistoryIndex();
     try {
-      await withTranscriptRedactionSnapshot(redaction, () =>
-        visitClaudeCliSessionMessages(
-          source[0],
-          native,
-          (message) => index.appendImported(message),
-          source[2],
-        ),
+      await visitClaudeCliSessionMessages(
+        source[0],
+        native,
+        (message) => index.appendImported(message),
+        source[2],
       );
       if (!index.importedCount) {
         index.close();

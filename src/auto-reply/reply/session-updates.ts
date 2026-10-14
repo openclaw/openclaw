@@ -7,7 +7,6 @@ import {
 } from "../../agents/exec-defaults.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
@@ -51,15 +50,12 @@ async function persistSkillSnapshot(params: {
     publishReplySessionEntry(params, nextEntry);
     return nextEntry;
   }
-  const persistedEntry = await patchSessionEntryCore(
+  const persistedEntry = await applySessionEntryOperation(
     {
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
-    () => {
-      params.assertCurrent?.();
-      return updates;
-    },
+    { kind: "fields", patch: updates },
     sessionEntryCommitGuardOptions(params.assertCurrent),
   );
   params.assertCurrent?.();

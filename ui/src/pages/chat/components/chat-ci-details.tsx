@@ -211,24 +211,13 @@ class ChatCiDetailsController extends ChatCiDisclosure {
     }
     clearTimeout(this.refreshTimer);
     const generation = ++this.requestGeneration;
-    const target = this.targetKey();
-    const connectionGeneration = scope.client.connectionGeneration;
-    const connectionRevision = gateway.connectionRevision;
     const controller = new AbortController();
     this.requestController = controller;
     this.loading = true;
     this.error = null;
     this.publish();
     const current = () =>
-      this.visible &&
-      generation === this.requestGeneration &&
-      target === this.targetKey() &&
-      gateway === this.gateway &&
-      gateway.connectionRevision === connectionRevision &&
-      gateway.snapshot.client === scope.client &&
-      gateway.snapshot.phase === "connected" &&
-      this.connection.isCurrent(scope) &&
-      scope.client.connectionGeneration === connectionGeneration;
+      this.visible && generation === this.requestGeneration && this.connection.isCurrent(scope);
     try {
       const result = await scope.client.request<ControlUiSessionPullRequestCheckDetails>(
         "controlUi.sessionPullRequests.checks",
@@ -491,15 +480,11 @@ function ChatCiDetailsContent(
   );
 }
 
-export const ChatCiDetails = defineSolidBridge<ChatCiDisclosureProps>(
-  "openclaw-chat-ci-details",
-  ChatCiDetailsContent,
-  {
-    properties: {
-      gateway: { default: undefined, attribute: false },
-      pullRequest: { default: undefined, attribute: false },
-      sessionKey: { default: "", attribute: false },
-      presented: { default: true, type: Boolean },
-    },
+defineSolidBridge<ChatCiDisclosureProps>("openclaw-chat-ci-details", ChatCiDetailsContent, {
+  properties: {
+    gateway: { default: undefined, attribute: false },
+    pullRequest: { default: undefined, attribute: false },
+    sessionKey: { default: "", attribute: false },
+    presented: { default: true, type: Boolean },
   },
-);
+});

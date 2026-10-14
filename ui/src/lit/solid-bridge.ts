@@ -1,11 +1,11 @@
-import { render, spread } from "@solidjs/web";
-import { nothing, render as renderLit } from "lit";
+import { ContextProvider } from "@lit/context";
+import { insert, render, spread } from "@solidjs/web";
 import {
   createComponent,
-  createEffect,
   createRenderEffect,
+  createRoot,
   createSignal,
-  flush,
+  getOwner,
   onCleanup,
   runWithOwner,
   untrack,
@@ -15,6 +15,52 @@ import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
+import { mountLitContent } from "./solid-content.tsx";
+
+/** Temporary DOM-context bridge for unported Lit descendants; delete at cutover. */
+export function connectLegacyApplicationContext(
+  host: HTMLElement,
+  context: ApplicationContext,
+): () => void {
+  const provider = new ContextProvider(host, {
+    context: applicationContext,
+    initialValue: context,
+  });
+  provider.hostConnected();
+  return () => {
+    provider.clearCallbacks();
+    host.removeEventListener("context-request", provider.onContextRequest);
+    host.removeEventListener("context-provider", provider.onProviderRequest);
+  };
+}
+
+/** Temporary renderer island; remove with the last Lit route and template caller. */
+export function createLitContentRef(value: () => unknown): (element: HTMLElement) => void {
+  const owner = getOwner();
+  let host: HTMLElement;
+  let mount: ReturnType<typeof mountLitContent> | undefined;
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+    mount?.dispose();
+  });
+  queueMicrotask(() => {
+    if (disposed) {
+      return;
+    }
+    // Wait for connection outside Solid's flush: Lit can mount another Solid island.
+    runWithOwner(owner, () => {
+      const content = mountLitContent(undefined, host, { host });
+      mount = content;
+      createRenderEffect(value, (next) => {
+        content.update(next);
+      });
+    });
+  });
+  return (element) => {
+    host = element;
+  };
+}
 
 type Property<T> = {
   default: T;
@@ -31,6 +77,8 @@ export type SolidBridgeElement<Props, Methods = object> = HTMLElement &
 
 type Spec<Props, Methods> = {
   properties: { [Key in keyof Props]-?: Property<Props[Key]> };
+  connected?: (host: SolidBridgeElement<Props, Methods>) => void;
+  disconnected?: (host: SolidBridgeElement<Props, Methods>) => void;
   propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
   methods?: {
     [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
@@ -56,7 +104,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   const properties = Object.entries<Property<unknown>>(spec.properties);
   const defaults = Object.fromEntries(
     properties.map(([key, property]) => [key, property.default]),
-  ) as Props; // SAFETY: spec.properties maps every Props key to its typed default.
+  ) as Props; // SAFETY: The property map materializes every declared key.
   const declarations = new Map(properties);
   const attributes = new Map(
     properties.flatMap(([key, property]) =>
@@ -68,7 +116,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     static observedAttributes = [...attributes.keys()];
     #values = new Map(properties.map(([key, property]) => [key, property.default]));
     #upgraded = new Map<string, unknown>();
-    #notify?: () => void;
+    #publish = new Map<string, () => void>();
     #dispose?: () => void;
     #unsubscribe?: () => void;
     #application?: ApplicationContext;
@@ -91,7 +139,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             (...args: unknown[]) => Reflect.apply(method, undefined, [this.#host, ...args]),
           ];
         }),
-      ) as Methods; // SAFETY: Callers declare all Methods; wrappers forward the typed host and arguments.
+      ) as Methods; // SAFETY: Each declared method is validated and bound to this host.
       const upgraded = properties.filter(([key]) => Object.hasOwn(this, key));
       for (const [key] of upgraded) {
         this.#upgraded.set(key, Reflect.get(this, key));
@@ -129,8 +177,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           throw new TypeError(`Cannot reflect non-primitive bridge property ${key}`);
         }
       }
-      this.#notify?.();
-      void this.#commit();
+      this.#publish.get(key)?.();
+      if (!this.#solidOwned) {
+        void this.#commit();
+      }
     }
 
     attributeChangedCallback(name: string, _old: string | null, value: string | null) {
@@ -160,12 +210,18 @@ export function defineSolidBridge<Props extends object, Methods extends object =
 
     connectedCallback() {
       if (this.#solidOwned) {
+        spec.connected?.(this.#host);
         return;
       }
       for (const [key, value] of this.#upgraded) {
         this.#write(key, value);
       }
       this.#upgraded.clear();
+      spec.connected?.(this.#host);
+      this.#connectContext();
+    }
+
+    #connectContext() {
       this.#unsubscribe?.();
       this.#unsubscribe = undefined;
       this.#application = undefined;
@@ -188,6 +244,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     disconnectedCallback() {
+      spec.disconnected?.(this.#host);
       if (!this.#solidOwned) {
         // Reparenting within a turn keeps the root (and the live sidebar) intact.
         queueMicrotask(() => {
@@ -204,15 +261,12 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         if (this.isConnected && !this.#solidOwned) {
           if (this.#dispose && this.#application !== this.#mountedApplication) {
             this.#disposeRoot();
-            this.connectedCallback();
+            this.#connectContext();
           }
           if (!this.#dispose) {
             runWithOwner(null, () => this.#mount());
           }
         }
-        // Queued during Lit's property commit, before its updateComplete reactions.
-        // Never flush reentrantly from a Solid render/effect callback.
-        flush();
         return true;
       }));
     }
@@ -232,50 +286,58 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       }
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
-      this.#dispose = render(
-        () => {
-          const [revision, setRevision] = createSignal(0);
-          this.#notify = () => setRevision((value) => value + 1);
-          const props = {
-            ...defaults,
-            get children() {
-              return children ? children() : source;
+      const view = () => {
+        const props = {
+          ...defaults,
+          get children() {
+            return children ? children() : source;
+          },
+        };
+        for (const [key] of properties) {
+          // Wrap callable values so Solid treats callbacks as data, not computations.
+          const [value, setValue] = createSignal(
+            { value: this.#values.get(key) },
+            { ownedWrite: true, equals: (left, right) => Object.is(left.value, right.value) },
+          );
+          this.#publish.set(key, () => setValue({ value: this.#values.get(key) }));
+          Object.defineProperty(props, key, {
+            get: () => {
+              value();
+              return this.#values.get(key);
             },
-          };
-          for (const [key] of properties) {
-            Object.defineProperty(props, key, {
-              get: () => {
-                revision();
-                return this.#values.get(key);
-              },
-            });
-          }
-          const renderContent = () => content(props, this.#host);
-          const view = () =>
-            layout
-              ? createComponent(ShellLayoutProvider, {
-                  value: { owner: layout, host: this },
-                  get children() {
-                    return renderContent();
-                  },
-                })
-              : renderContent();
-          return this.#application
-            ? createComponent(ApplicationProvider, {
-                value: this.#application,
+          });
+        }
+        // Provider child memos must not subscribe to component setup reads.
+        const renderContent = () => createComponent(() => content(props, this.#host), {});
+        const contentView = () =>
+          layout
+            ? createComponent(ShellLayoutProvider, {
+                value: { owner: layout, host: this },
                 get children() {
-                  return view();
+                  return renderContent();
                 },
               })
-            : view();
-        },
-        this,
-        source,
-      );
+            : renderContent();
+        return this.#application
+          ? createComponent(ApplicationProvider, {
+              value: this.#application,
+              get children() {
+                return contentView();
+              },
+            })
+          : contentView();
+      };
+      // A nested top-level render would flush child effects under the parent's render owner.
+      this.#dispose = this.#solidOwned
+        ? createRoot((dispose) => {
+            insert(this, view());
+            return dispose;
+          })
+        : render(view, this, source);
     }
 
     #disposeRoot() {
-      this.#notify = undefined;
+      this.#publish.clear();
       this.#unsubscribe?.();
       this.#unsubscribe = undefined;
       const outlet = this.#start?.parentNode;
@@ -284,6 +346,9 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         this.#content.append(...outlet.childNodes);
       }
       this.#dispose?.();
+      if (this.#solidOwned) {
+        this.replaceChildren();
+      }
       this.#dispose = undefined;
       this.#application = undefined;
       this.#mountedApplication = undefined;
@@ -311,9 +376,16 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   }
   customElements.define(tag, BridgeElement);
 
-  return function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
-    return BridgeElement.render(props);
-  };
+  return Object.assign(
+    function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
+      return BridgeElement.render(props);
+    },
+    {
+      // SAFETY: The constructor materializes every declared property and method above.
+      Element: BridgeElement as (new () => SolidBridgeElement<Props, Methods>) &
+        typeof BridgeElement,
+    },
+  );
 }
 
 /** Unported stateless templates exclusively own this adapter's descendants. */
@@ -328,20 +400,18 @@ export function LitContent(props: {
   if (tag === "span") {
     host.style.display = "contents";
   }
-  const className = untrack(() => props.class);
+  const className = untrack(() => props.class ?? "lit-content");
   if (className) {
     host.className = className;
   }
-  let part: ReturnType<typeof renderLit> | undefined;
-  createEffect(
+  const mount = mountLitContent(undefined, host, { host });
+  // Commit Lit descendants before post-render observers inspect the host.
+  createRenderEffect(
     () => props.render(),
     (template) => {
-      part = renderLit(template, host, { host });
+      mount.update(template);
     },
   );
-  onCleanup(() => {
-    part?.setConnected(false);
-    renderLit(nothing, host);
-  });
+  onCleanup(mount.dispose);
   return host;
 }

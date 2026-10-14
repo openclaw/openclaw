@@ -158,7 +158,7 @@ Narrow, explicit allowlists are fastest and least flaky:
   - `OPENCLAW_LIVE_GATEWAY_MODELS=small pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Ollama Cloud API smoke:
-  - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.1:cloud OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=0 pnpm test:live -- extensions/ollama/ollama.live.test.ts`
+  - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.2:cloud OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=0 pnpm test:live -- extensions/ollama/ollama.live.test.ts`
 
 - Single model, gateway smoke:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
@@ -262,5 +262,5 @@ More providers you can include in the live matrix (if you have creds/config):
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 <Tip>
-Do not hardcode "all models" in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine plus whatever keys are available.
+Do not hardcode "all models" in docs. The authoritative list is whatever `await discoverModelsAsync(...)` returns on your machine plus whatever keys are available.
 </Tip>

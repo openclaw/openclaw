@@ -15,6 +15,7 @@ export function resolveCodexAppServerFallbackApiKeyCacheKey(params: {
   startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
   baseEnv?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  allowNativeAuthFile?: boolean;
 }): string | undefined {
   if (params.startOptions.transport !== "stdio") {
     return undefined;
@@ -26,7 +27,9 @@ export function resolveCodexAppServerFallbackApiKeyCacheKey(params: {
   );
   const apiKey = readFirstNonEmptyEnvEntry(env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
   if (!apiKey) {
-    return resolveCodexCliAuthFileApiKeyCacheKey(params.baseEnv ?? process.env);
+    return params.allowNativeAuthFile === false
+      ? undefined
+      : resolveCodexCliAuthFileApiKeyCacheKey(params.baseEnv ?? process.env);
   }
   return fingerprintAuthCacheKey(apiKey.key, "env-api-key", apiKey.key, apiKey.value);
 }

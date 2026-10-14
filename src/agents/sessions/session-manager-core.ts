@@ -110,7 +110,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** @deprecated Runtime callers should await setSessionTargetAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
     this.setSessionTargetSync(target);
@@ -327,27 +327,23 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   }
 
   /** The loaded view only: bounded managers must never hydrate inactive history for a rewrite. */
-  protected captureTranscriptView(copy = false) {
+  protected captureTranscriptView() {
     this.assertTranscriptViewAvailable();
     return {
       sessionId: this.sessionId,
       transcriptVersion: this.transcriptVersion,
       persistenceHeaderPending: this.persistenceHeaderPending,
       migrated: this.migrated,
-      fileEntries: copy ? [...this.fileEntries] : this.fileEntries,
-      opaqueFileEntries: copy
-        ? this.opaqueFileEntries.map((entry) => ({ ...entry }))
-        : this.opaqueFileEntries,
-      byId: copy ? new Map(this.byId) : this.byId,
-      opaqueParentsById: copy ? new Map(this.opaqueParentsById) : this.opaqueParentsById,
-      logicalParentsById: copy ? new Map(this.logicalParentsById) : this.logicalParentsById,
-      invalidLeafControlIds: copy
-        ? new Set(this.invalidLeafControlIds)
-        : this.invalidLeafControlIds,
-      labelsById: copy ? new Map(this.labelsById) : this.labelsById,
-      labelTimestampsById: copy ? new Map(this.labelTimestampsById) : this.labelTimestampsById,
-      boundedFirstKeptById: copy ? new Map(this.boundedFirstKeptById) : this.boundedFirstKeptById,
-      boundedParentIds: copy ? new Map(this.boundedParentIds) : this.boundedParentIds,
+      fileEntries: this.fileEntries,
+      opaqueFileEntries: this.opaqueFileEntries,
+      byId: this.byId,
+      opaqueParentsById: this.opaqueParentsById,
+      logicalParentsById: this.logicalParentsById,
+      invalidLeafControlIds: this.invalidLeafControlIds,
+      labelsById: this.labelsById,
+      labelTimestampsById: this.labelTimestampsById,
+      boundedFirstKeptById: this.boundedFirstKeptById,
+      boundedParentIds: this.boundedParentIds,
       cacheTtlProjectionPrefixes: this.cacheTtlProjectionPrefixes,
       boundedContextIncomplete: this.boundedContextIncomplete,
       boundedContextLimits: this.boundedContextLimits,
@@ -361,7 +357,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     };
   }
 
-  /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Await reloadPersistedTranscriptAsync. Supported through 2026-12-31. */
   reloadPersistedTranscript(): void {
     prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
     this.reloadPersistedTranscriptSync();

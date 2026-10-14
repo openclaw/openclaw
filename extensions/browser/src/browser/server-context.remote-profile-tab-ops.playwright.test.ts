@@ -75,7 +75,7 @@ describe("browser remote profile tab ops via Playwright", () => {
       timeoutMs: 60_000,
     });
 
-    const opened = await remote.openTab("http://127.0.0.1:3000");
+    const opened = await remote.openTab("http://127.0.0.1:3000", { timeoutMs: 60_000 });
     expect(opened.targetId).toBe("T2");
     expect((opened as { ownership?: unknown }).ownership).toMatchObject({
       status: "durable",
@@ -87,6 +87,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(createPageViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       url: "http://127.0.0.1:3000",
+      timeoutMs: 60_000,
       cdpPolicy: permissiveRemoteCdpPolicy,
       ssrfPolicy: { allowPrivateNetwork: true },
     });

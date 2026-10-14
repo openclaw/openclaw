@@ -1,11 +1,15 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import * as sessionActors from "../../config/sessions/session-actor.js";
+import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -14,7 +18,6 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
@@ -101,28 +104,72 @@ describe("session actor usage accounting", () => {
     contextTokensUsed: 1_000_000,
     contextTokensSource: "runtime",
   } satisfies UsageUpdate;
-  it("completes usage in the existing unbound native incognito owner", async () => {
+
+  it("persists terminal usage through an actor rebase while participant writes queue", async () => {
+    const session = await usageSession();
+    const competingWrites: Promise<unknown>[] = [];
+    const createActor = sessionActors.createSessionActor;
+    vi.spyOn(sessionActors, "createSessionActor").mockImplementation((params) => {
+      const actor = createActor(params);
+      if (params.target.sessionKey === session.scope.sessionKey) {
+        const complete = actor.completeTurn;
+        vi.spyOn(actor, "completeTurn").mockImplementationOnce(async (...command) => {
+          const recordParticipant = (promptedAt: number) =>
+            recordSessionParticipantInWorker(session.scope, {
+              identity: {
+                type: "observation",
+                pluginId: null,
+                accountId: null,
+                senderKind: "unknown",
+                id: "gateway-client",
+              },
+              promptedAt,
+              sessionAgentId: "main",
+            });
+          await recordParticipant(1);
+          const pending = complete(...command);
+          competingWrites.push(runOutsideStoreWriterContext(() => recordParticipant(2)));
+          const outcome = await pending;
+          expect(outcome).toMatchObject({
+            kind: "stale-version",
+            postimage: { target: actor.target },
+          });
+          return outcome;
+        });
+      }
+      return actor;
+    });
+    try {
+      await expect(session.update(producingUpdate)).resolves.toBeUndefined();
+      await Promise.all(competingWrites);
+      expect(session.read()).toMatchObject({ inputTokens: 120, outputTokens: 8 });
+    } finally {
+      await Promise.all(competingWrites);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("completes usage in the existing unbound memory actor", async () => {
     const session = await usageSession(
       { incognito: true },
-      "agent:main:dashboard:incognito-native-completion",
+      "agent:main:dashboard:incognito-memory-completion",
     );
     const { scope } = session;
     const database = { agentId: scope.agentId, path: scope.storePath, env: scope.env };
-    const native = expectDefined(
-      getOpenClawAgentDatabaseIfOpen(database),
-      "native incognito owner",
-    );
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(scope.env)).toEqual([]);
+    const memory = expectDefined(memorySessionActorOwners.read(database), "memory session owner");
+    try {
+      await session.update(producingUpdate);
 
-    await session.update(producingUpdate);
-
-    expect(session.read()).toMatchObject({ incognito: true, inputTokens: 120, outputTokens: 8 });
-    expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(native);
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(scope.env)).toEqual([]);
-    expect(existsSync(scope.storePath)).toBe(false);
-    expect(
-      existsSync(resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env: scope.env })),
-    ).toBe(false);
+      expect(session.read()).toMatchObject({ incognito: true, inputTokens: 120, outputTokens: 8 });
+      expect(memorySessionActorOwners.read(database)).toBe(memory);
+      expect(getOpenClawAgentDatabaseIfOpen(database)).toBeUndefined();
+      expect(existsSync(scope.storePath)).toBe(false);
+      expect(
+        existsSync(resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env: scope.env })),
+      ).toBe(false);
+    } finally {
+      memorySessionActorOwners.closeDatabase(database);
+    }
   });
 
   const retainedRuntime = {
@@ -234,6 +281,53 @@ describe("session actor usage accounting", () => {
         cacheRead: 0,
         contextBudgetStatus: undefined,
       },
+    },
+    {
+      name: "clears a previous complete snapshot after an interrupted response",
+      seed: {
+        inputTokens: 123,
+        outputTokens: 45,
+        cacheRead: 12,
+        estimatedCostUsd: 0.25,
+        totalTokens: 135,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      update: {
+        usage: { usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } },
+        currentContextSnapshot: { tokens: undefined },
+      },
+      expected: {
+        usageReport: { state: "unavailable" },
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheRead: undefined,
+        estimatedCostUsd: undefined,
+        totalTokens: undefined,
+        totalTokensFresh: false,
+        totalTokensVersion: undefined,
+      },
+    },
+    {
+      name: "persists complete zero accounting without a price over a previous snapshot",
+      seed: {
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheRead: 5,
+        cacheWrite: 2,
+        estimatedCostUsd: 0.5,
+      },
+      update: {
+        usage: { input: 0, output: 0, total: 0, usageReport: { state: "available" } },
+      },
+      expected: {
+        usageReport: { state: "available" },
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      absent: ["estimatedCostUsd"],
     },
     {
       name: "persists totalTokens from promptTokens when usage is unavailable",

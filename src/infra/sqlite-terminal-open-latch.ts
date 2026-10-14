@@ -46,22 +46,12 @@ export function createSqliteTerminalOpenLatch(options: {
       isCurrentGeneration: (pathname: string, generation: SqliteFileGeneration) => Promise<boolean>,
     ): Promise<Error | undefined> {
       const resolvedPath = path.resolve(pathname);
-      for (;;) {
-        const failure = failures.get(resolvedPath);
-        if (!failure?.generation) {
-          return failure?.error;
-        }
-        const current = await isCurrentGeneration(resolvedPath, failure.generation);
-        // A repair or a newer failure can replace this entry while inspection runs.
-        if (failures.get(resolvedPath) !== failure) {
-          continue;
-        }
-        if (!current) {
-          failures.delete(resolvedPath);
-          return undefined;
-        }
-        return failure.error;
+      const failure = failures.get(resolvedPath);
+      if (failure?.generation && !(await isCurrentGeneration(resolvedPath, failure.generation))) {
+        failures.delete(resolvedPath);
+        return undefined;
       }
+      return failure?.error;
     },
     record: (pathname: string, error: Error, generation?: SqliteFileGeneration): boolean => {
       const resolvedPath = path.resolve(pathname);
@@ -69,12 +59,7 @@ export function createSqliteTerminalOpenLatch(options: {
         return false;
       }
       failures.set(resolvedPath, { error, ...(generation ? { generation } : {}) });
-      // Latch first. Close hooks may reenter.
       options.closeByPath(resolvedPath, error);
-      if (generation && !generationMatchesPath(resolvedPath, generation)) {
-        failures.delete(resolvedPath);
-        return false;
-      }
       return true;
     },
     clear: (pathname: string): void => {

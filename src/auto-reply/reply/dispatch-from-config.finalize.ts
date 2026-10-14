@@ -9,8 +9,10 @@ import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
   isReplyPayloadTerminalContent,
   markReplyPayloadAsTtsSupplement,
+  setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
@@ -42,6 +44,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ctx,
     deferFinalTtsText,
     deliveryChannel,
+    rawLlmResponse,
     dispatcher,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
@@ -146,10 +149,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         continue;
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
+      if (getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion) {
+        setReplyPayloadMetadata(reply, { pendingFinalDeliveryCleanup: pendingFinalOptions });
+      }
       const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
       const finalReply = await state.sendFinalPayload(reply, {
         deliveryId: String(replyIndex),
-        ...(heartbeat ? { skipTts: true } : {}),
+        ...(heartbeat ? { skipTts: !hasReplyPayloadSpeechContent(reply) } : {}),
         ...(shouldAttachDeferredText
           ? {
               deferredTtsText: deferredTtsTextPending,
@@ -164,10 +170,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             finalReply.blockDeliveryOutcome ?? finalReply.routedOutcome ?? "cancelled",
           );
         registerReplyDispatcherSettledTask(dispatcher, () => outcome.then(settle));
-      }
-      if (finalReply.sessionWriterDeliveryRevoked) {
-        sessionWriterDeliveryRevoked = true;
-        continue;
       }
       if (finalReply.suppressionReason) {
         channelTransformSuppressedFinal ||= finalReply.suppressionReason === "channel_transform";
@@ -248,18 +250,28 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       queuedFinal &&
       finalDeliveries.every((reply) => !reply.queuedFinal || reply.dispatcherOutcome !== undefined)
     ) {
-      // Delivery observers run from the queue itself, so direct low-level callers
-      // reconcile too; the settle task only makes lifecycle owners await it.
+      const hasCustomDelivery = finalDeliveries.some(
+        (reply) => !reply.blockDeliveryOutcome && !reply.dispatcherOutcome,
+      );
       const reconcilePendingFinal = Promise.all(
         finalDeliveries.flatMap((reply) =>
           reply.dispatcherOutcome ? [reply.dispatcherOutcome] : [],
         ),
       )
-        .then(async () => {
-          await clearPendingFinalDeliveryAfterSuccess(
-            pendingFinalDeliveryIdentity,
-            pendingFinalOptions,
-          );
+        .then(async (outcomes) => {
+          // Core terminal settlement includes cleanup. A cancelled send may have
+          // found an already-delivered intent before reaching that settlement.
+          if (
+            hasCustomDelivery ||
+            outcomes.some(
+              (outcome) => outcome === "cancelled" || outcome === "failed-before-deliver",
+            )
+          ) {
+            await clearPendingFinalDeliveryAfterSuccess(
+              pendingFinalDeliveryIdentity,
+              pendingFinalOptions,
+            );
+          }
         })
         .catch((error: unknown) => {
           logVerbose(
@@ -275,8 +287,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         pendingFinalOptions,
       );
     }
-    // Register successful queued cleanup before honoring a late abort. The
-    // outer settle owner still runs it from finally (#89115).
+    // Register any remaining cleanup before honoring a late abort. The outer
+    // settle owner still runs it from finally (#89115).
     throwIfDispatchOperationAborted();
   }
   if (!suppressDelivery && !channelTransformSuppressed) {
@@ -502,11 +514,16 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             : channelTransformSuppressed
               ? "channel_transform"
               : state.bindingState.pluginFallbackReason);
-  state.recordAgentDispatchCompleted(
-    dispatchOutcome,
-    dispatchReason ? { reason: dispatchReason } : undefined,
-  );
-  state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
+  const dispatchDetails = {
+    ...(dispatchReason ? { reason: dispatchReason } : {}),
+    ...(state.replyResolverError ? { error: state.replyResolverError } : {}),
+  };
+  state.recordAgentDispatchCompleted(dispatchOutcome, dispatchDetails);
+  // output.value is model-authored text only; delivered text is never a substitute.
+  state.recordProcessed(dispatchOutcome, {
+    ...dispatchDetails,
+    ...(rawLlmResponse !== undefined ? { finalResponse: rawLlmResponse } : {}),
+  });
   state.markIdle(
     dispatchOutcome === "error"
       ? "message_error"

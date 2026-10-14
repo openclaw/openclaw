@@ -628,6 +628,11 @@ commands resolve them from the active gateway snapshot; if the gateway is
 unavailable, the command fails fast. This requires a gateway supporting the
 `secrets.resolve` method; older gateways return an unknown-method error.
 
+When another plugin owns the memory slot, `memory status` and Doctor's memory
+probe also resolve that plugin's manifest-declared credentials before opening
+the provider. If a credential cannot be resolved, they report the provider as
+unavailable instead of authenticating with the unresolved reference.
+
 ## Related
 
 - [CLI reference](/cli)

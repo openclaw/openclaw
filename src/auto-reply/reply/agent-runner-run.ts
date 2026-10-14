@@ -150,9 +150,9 @@ export async function runReplyAgent(
             payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0],
           ) => {
             const observed = await settleProgressVisibilityCallbackResult(onPartialReply(payload));
-            if (observed.visible && hasOutboundReplyContent(payload, { trimText: true })) {
-              didDeliverVisiblePartialReply = true;
-            }
+            // Visibility is sticky; avoid materializing lazy text after the first content.
+            didDeliverVisiblePartialReply ||=
+              observed.visible && hasOutboundReplyContent(payload, { trimText: true });
             return observed.result;
           },
         }
@@ -195,7 +195,7 @@ export async function runReplyAgent(
   let restartRecoveryTarget: SessionEntryTargetPatchScope | undefined;
   try {
     restartRecoveryEntry =
-      sessionKey && storePath
+      sessionKey && storePath && (restartRecoverySourceTurnId || (shouldSteer && isActive))
         ? ((await readSessionEntryInWorker(
             { agentId: followupRun.run.agentId, storePath, sessionKey },
             assertReadCurrent,
@@ -286,8 +286,9 @@ export async function runReplyAgent(
   }
 
   const toolResultOptions = {
-    sessionKey,
-    storePath,
+    getVerboseLevel: () =>
+      (sessionKey ? activeSessionStore?.[sessionKey]?.verboseLevel : undefined) ??
+      activeSessionEntry?.verboseLevel,
     resolvedVerboseLevel,
     verboseLevelOverride: followupRun.run.verboseLevelOverride,
   };
@@ -440,7 +441,7 @@ export async function runReplyAgent(
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
     releaseAdmissionTicket();
-    const queuedBehindActiveRun = isRunActive?.() === true;
+    const queuedBehindActiveRun = (await isRunActive?.()) === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
       await typingSignals.signalToolStart();
@@ -542,6 +543,7 @@ export async function runReplyAgent(
   } else {
     const replyTurnKind = resolveReplyTurnKind(opts);
     const admission = await admitReplyTurn({
+      onDatabaseRegistration: opts?.onDatabaseRegistration,
       providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId: followupRun.run.agentId,
       resolveGatewayContext,
@@ -606,13 +608,15 @@ export async function runReplyAgent(
     // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
     // instead. The same sender's next queued request inherits the guidance; otherwise one
     // recovery run bound to this turn's route and authority is queued.
-    replyOperationRunState.continueStalledTurn = () =>
+    replyOperationRunState.continueStalledTurn = (guidance, owner = replyOperation) =>
+      owner === replyOperation &&
       continueStalledReplyTurn({
         followupRun,
         queueKey,
         resolvedQueue,
         replyOperation,
         runFollowupTurn,
+        guidance,
       });
   }
   const {
@@ -620,6 +624,7 @@ export async function runReplyAgent(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
+    prepareCompletionCleanup: prepareRestartClaimCleanup,
     isArmed: isRestartRecoveryArmed,
   } = createReplyAgentRestartRecoveryController({
     activeSessionStore,
@@ -657,6 +662,7 @@ export async function runReplyAgent(
       blockReplyPipeline,
       cfg,
       checkpointBeforeAgentReply,
+      prepareRestartClaimCleanup,
       resolveVisibleReplyDelivery,
       activeIsNewSession: isNewSession,
       getActiveSessionEntry: () => activeSessionEntry,
@@ -672,9 +678,7 @@ export async function runReplyAgent(
       returnWithQueuedFollowupDrain,
       runFollowupTurn,
       sendDirectCompactionNotice,
-      onCompactionNoticePayload: (payload) => {
-        pendingCompactionNotices.push(payload);
-      },
+      onCompactionNoticePayload: (payload) => pendingCompactionNotices.push(payload),
       setActiveSessionEntry: (entry) => {
         activeSessionEntry = entry;
       },

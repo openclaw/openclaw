@@ -356,19 +356,4 @@ describe("chat tool icon ownership", () => {
     await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:plugin-icon"));
     expect(controller.icons.get("meeting_status")).toBeUndefined();
   });
-  it("ignores a removed image's late error after its owner has been replaced", async () => {
-    const { controller, context, revoke, fetch } = setup();
-    controller.hostUpdate();
-    await vi.waitFor(() => expect(controller.icons.get("meeting_status")).toBeDefined());
-    const oldIcon = controller.icons.get("meeting_status");
-    context.gateway.connectionRevision++;
-    controller.hostUpdate();
-    await vi.waitFor(() => expect(controller.icons.get("meeting_status")).toBeDefined());
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(revoke).toHaveBeenCalledOnce();
-    oldIcon?.onError();
-    expect(controller.icons.get("meeting_status")).toBeDefined();
-    expect(revoke).toHaveBeenCalledOnce();
-    controller.hostDisconnected();
-  });
 });

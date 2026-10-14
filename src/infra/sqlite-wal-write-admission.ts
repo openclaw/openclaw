@@ -25,6 +25,7 @@ type MaintenanceAdmission = {
   execute?: (request: SqliteWalPeriodicRequest) => Promise<SqliteWalPeriodicResult | undefined>;
   flush?: (assertCurrent: () => void) => void;
   cancel?: () => void | Promise<void>;
+  stopCheckpointTick?: () => void;
 };
 
 const admissions = resolveGlobalSingleton(
@@ -38,21 +39,14 @@ export function registerSqliteWalWorkerMaintenance(
   execute: NonNullable<MaintenanceAdmission["execute"]>,
   cancel?: MaintenanceAdmission["cancel"],
 ): void {
-  const previous = Number(
-    // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
-    database.prepare("PRAGMA wal_autocheckpoint;").get()?.wal_autocheckpoint ?? 0,
-  );
   database.exec("PRAGMA wal_autocheckpoint = 0;"); // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
-  admissions.set(database, {
-    execute,
-    cancel: () => {
-      // Without its worker the writer falls back to the bounded inline threshold.
-      if (previous > 0 && database.isOpen && !database.isTransaction) {
-        database.exec(`PRAGMA wal_autocheckpoint = ${previous};`); // sqlite-allow-raw -- Restore the connection-local threshold.
-      }
-      return cancel?.();
-    },
-  });
+  const stopCheckpointTick = admissions.get(database)?.stopCheckpointTick;
+  admissions.set(database, { execute, cancel });
+  stopCheckpointTick?.();
+}
+
+export function isSqliteWalWorkerMaintained(database: DatabaseSync): boolean {
+  return admissions.get(database)?.execute !== undefined;
 }
 
 export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void | Promise<void> {
@@ -66,7 +60,10 @@ export function createSqliteWalMaintenanceScheduler(
   observe: (snapshot: SqliteWalCheckpointSnapshot) => void,
   onError: (error: unknown) => void,
   pageBudget: () => number,
+  stopCheckpointTick: () => void,
 ): () => Promise<void> {
+  const existingAdmission = admissions.get(database);
+  admissions.set(database, { ...existingAdmission, stopCheckpointTick });
   let pending: Promise<void> | undefined;
   return () => {
     if (!pending) {
@@ -156,6 +153,7 @@ export function registerDeferredSqliteWalWriteAdmission(
     }
   };
   admissions.set(database, {
+    stopCheckpointTick: admissions.get(database)?.stopCheckpointTick,
     admit: (operation) =>
       new Promise<void>((resolve, reject) => {
         pending = { operation, resolve, reject };

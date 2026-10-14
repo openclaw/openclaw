@@ -3,42 +3,14 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
+import { createGatewayMethodCapture } from "./test/gateway-method-capture.js";
 import { startEmptySessionsBoardService } from "./test/sessions-board.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
 } from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
-
-function createGatewayMethodCapture() {
-  type RegisteredMethod = {
-    handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-    opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-  };
-  const methods = new Map<string, RegisteredMethod>();
-  const api = {
-    runtime: {
-      state: {
-        openKeyedStore: vi.fn(),
-      },
-    },
-    registerGatewayMethod: vi.fn(
-      (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-        methods.set(method, { handler, opts });
-      },
-    ),
-  } as unknown as OpenClawPluginApi;
-  const invoke = async (name: string, params: Record<string, unknown>) => {
-    const method = methods.get(name);
-    if (!method) {
-      throw new Error(`Missing Gateway method: ${name}`);
-    }
-    const respond = vi.fn();
-    await method.handler({ params, respond } as never);
-    return respond;
-  };
-  return { api, methods, invoke, registerGatewayMethod: api.registerGatewayMethod };
-}
 
 describe("workboard gateway methods", () => {
   it("refuses a Sessions board edit after the Gateway caller loses authority", async () => {
@@ -132,7 +104,8 @@ describe("workboard gateway methods", () => {
     expect(reenabled.mock.calls[0]?.[0]).toBe(true);
   });
 
-  it.each(["card-read", "attachment-write", "attachment-committed", "metadata-write"] as const)(
+  // Inspects committed and orphaned blobs through a native SQLite file handle.
+  test.each(["card-read", "attachment-write", "attachment-committed", "metadata-write"] as const)(
     "rejects attachment bytes when %s observes hot disable",
     async (phase) => {
       const { api, methods } = createGatewayMethodCapture();

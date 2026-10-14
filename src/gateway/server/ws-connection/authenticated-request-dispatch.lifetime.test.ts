@@ -12,6 +12,7 @@ afterEach(() => {
   vi.doUnmock("./authenticated-request-dispatch.server-methods.runtime.js");
   vi.doUnmock("./request-start.js");
   vi.doUnmock("../../session-sharing.js");
+  vi.doUnmock("../../session-sharing-authorization-async.js");
   vi.doUnmock("../../session-sharing-target-input.js");
   vi.doUnmock("../../server-methods/gateway-personal-caller.js");
   vi.resetModules();
@@ -174,6 +175,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
             resolveSessionMutationAuthorization: () => ({ error: null }),
           };
         });
+        // mock-isolation: This admin auxiliary request has no session target or sharing storage.
+        vi.doMock("../../session-sharing-authorization-async.js", () => ({
+          resolveSessionMutationAuthorizationAsync: async () => ({ error: null }),
+        }));
         vi.doMock("../../session-sharing-target-input.js", () => ({
           resolveDirectIncognitoTargets: () => [],
           resolveDirectSessionTargets: () => [],

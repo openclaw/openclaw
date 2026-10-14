@@ -26,7 +26,7 @@ import {
   writeToolCallSessionFile,
 } from "./export.test-helpers.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES } from "./paths.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));

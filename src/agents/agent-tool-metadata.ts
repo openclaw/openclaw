@@ -102,6 +102,7 @@ export function copyBeforeToolCallWrapperMetadata(
   // SAFETY: both metadata owners attach to the same runtime tool object shape.
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
+  copyCodeModeControlToolIdentity(source, target);
   const state = ToolActionMetadata.get(source);
   if (state) {
     ToolActionMetadata.set(target, state);
@@ -133,7 +134,6 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(
   }
   copyBeforeToolCallWrapperMetadata(source, target);
   copyBeforeToolCallMetadata(source, target, wrapExecution);
-  copyCodeModeControlToolIdentity(source, target);
   copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
   return target;

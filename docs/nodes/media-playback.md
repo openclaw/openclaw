@@ -91,6 +91,11 @@ attachment reference in visible history. For indexed messages, issuing a ticket
 does not read the original file or validate unrelated transcript payloads. The
 HTTP request transfers the file separately.
 
+Managed media cleanup reads transcript history in bounded pages. If a single
+message exceeds the 8 MiB page limit, cleanup retains that session's media and
+logs a warning while continuing to clean other sessions. Incomplete history
+is never treated as proof that an attachment is unreferenced.
+
 Download filenames preserve Unicode characters and literal percent sequences
 such as `%20`.
 

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { WorkboardCard, WorkboardExecution } from "@openclaw/workboard-contract";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
@@ -11,10 +11,11 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PersistedWorkboardCard, WorkboardCardStore } from "./persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
-import { createWorkboardSqliteKernel } from "./sqlite-store-kernel.js";
-import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
+import { createWorkboardSqliteStores } from "./test/database-config.js";
+import { codexExecution } from "./test/execution.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
@@ -22,24 +23,6 @@ import {
 } from "./test/sqlite-store.js";
 
 const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
-
-function codexExecution(
-  id: string,
-  startedAt: number,
-  overrides: Partial<WorkboardExecution> = {},
-): WorkboardExecution {
-  return {
-    id,
-    kind: "agent-session",
-    engine: "codex",
-    mode: "autonomous",
-    status: "running",
-    model: "openai/gpt-5.5",
-    startedAt,
-    updatedAt: startedAt,
-    ...overrides,
-  };
-}
 
 function expectSameCardState(actual: WorkboardCard | undefined, expected: WorkboardCard): void {
   expect(actual).toBeDefined();
@@ -185,19 +168,6 @@ function createConcurrentSqliteHarness(prefix: string) {
   };
 }
 
-function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
-  return {
-    type,
-    bsize: 1024,
-    blocks: 1,
-    bfree: 1,
-    bavail: 1,
-    files: 0,
-    frsize: 1024,
-    ffree: 0,
-  };
-}
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("WorkboardStore", () => {
@@ -218,25 +188,6 @@ describe("WorkboardStore", () => {
     await expect(store.update("missing", { notes: "failed" })).rejects.toThrow("card not found");
     expect(changes.mock.calls.map(([change]) => change.revision)).toEqual([1, 2]);
     expect(changes.mock.calls[1]?.[0].epoch).toBe(changes.mock.calls[0]?.[0].epoch);
-  });
-
-  it("announces an epoch and reports failed commands that partially committed", async () => {
-    const {
-      store,
-      stores: { subscriptions },
-    } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
-    subscriptions.entries = async () => {
-      throw new Error("subscription cleanup failed");
-    };
-    const changes = vi.fn();
-    store.subscribeChanges(changes);
-    store.announceChangeEpoch();
-    const card = await store.create({ title: "Partial delete" });
-
-    await expect(store.delete(card.id)).rejects.toThrow("subscription cleanup failed");
-
-    expect(changes.mock.calls.map(([change]) => change.revision)).toEqual([1, 2, 3]);
-    await expect(store.get(card.id)).resolves.toBeUndefined();
   });
 
   it("reports a reference cleanup conflict without overwriting a concurrent peer edit", async () => {
@@ -409,7 +360,8 @@ describe("WorkboardStore", () => {
     expect((await first.list()).filter((card) => card.status === "running")).toHaveLength(1);
   });
 
-  it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
+  // Verifies SQLite file permissions, WAL mode, catalogs, and physical blob rows.
+  test("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     if (process.platform !== "win32") {
@@ -559,7 +511,8 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("lists sqlite board summaries without hydrating card child rows", async () => {
+  // Injects malformed child rows through a native SQLite file handle.
+  test("lists sqlite board summaries without hydrating card child rows", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-summary-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     try {
@@ -611,27 +564,6 @@ describe("WorkboardStore", () => {
         await reopenedStores.close();
       }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("uses rollback journaling on network-backed volumes", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-network-"));
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0xff534d42));
-    try {
-      const stores = createWorkboardSqliteKernel(dbPath);
-      stores.close();
-
-      const rawDb = new DatabaseSync(dbPath);
-      expect(rawDb.prepare("PRAGMA journal_mode").get()).toMatchObject({
-        journal_mode: "delete",
-      });
-      rawDb.close();
-      expect(fs.existsSync(`${dbPath}-wal`)).toBe(false);
-      expect(fs.existsSync(`${dbPath}-shm`)).toBe(false);
-    } finally {
-      statfs.mockRestore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -899,35 +831,6 @@ describe("WorkboardStore", () => {
     expect(rolledBack.completedAt).toBeUndefined();
   });
 
-  it("keeps creation status from stale lifecycle patches", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(2000);
-      const store = createWorkboardSqliteTestStore();
-      const card = await store.create({
-        title: "Initial running status",
-        status: "running",
-      });
-
-      const staleLifecycle = await store.update(card.id, {
-        status: "review",
-        metadata: { lifecycleStatusSourceUpdatedAt: 1000 },
-      });
-      expect(staleLifecycle).toEqual(card);
-      expect(staleLifecycle.status).toBe("running");
-      expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
-
-      const freshLifecycle = await store.update(card.id, {
-        status: "review",
-        metadata: { lifecycleStatusSourceUpdatedAt: 3000 },
-      });
-      expect(freshLifecycle.status).toBe("review");
-      expect(freshLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(3000);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("does not let one stale bulk lifecycle patch strip later card updates", async () => {
     vi.useFakeTimers();
     try {
@@ -1148,27 +1051,6 @@ describe("WorkboardStore", () => {
     expect(Buffer.byteLength(JSON.stringify(completed.metadata), "utf8")).toBeLessThanOrEqual(
       24 * 1024,
     );
-  });
-
-  it("keeps identical completion proof append-only without an explicit proof id", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const proofInput = { command: "pnpm test extensions/workboard", note: "94 tests" };
-    const card = await store.create({
-      title: "Preserve historical proof",
-      metadata: {
-        proof: [{ id: "proof-unknown", status: "unknown", createdAt: 1_000, ...proofInput }],
-      },
-    });
-
-    const failed = await store.complete(card.id, {
-      summary: "A later run failed.",
-      proof: { ...proofInput, status: "failed" },
-    });
-
-    expect(failed.metadata?.proof?.map((entry) => [entry.id, entry.status])).toEqual([
-      ["proof-unknown", "unknown"],
-      [expect.any(String), "failed"],
-    ]);
   });
 
   it("resolves only correlated proof and refuses to rewrite terminal evidence", async () => {
@@ -1626,6 +1508,31 @@ describe("WorkboardStore", () => {
     await expect(store.linkCards(lateParent.id, child.id)).rejects.toThrow(/active child/);
   });
 
+  it("lets a released review card be claimed again once its parents are done", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const parent = await store.create({ title: "Parent" });
+    const child = await store.create({ title: "Child", parents: [parent.id] });
+    await store.complete(parent.id, { summary: "Parent done." });
+    await store.claim(child.id, { ownerId: "worker" });
+    await store.releaseClaim(child.id, { ownerId: "worker", status: "review" });
+
+    const reviewed = await store.claim(child.id, { ownerId: "reviewer" });
+    expect(reviewed.card.status).toBe("review");
+    await expect(
+      store.complete(child.id, { summary: "Accepted.", ownerId: "reviewer" }),
+    ).resolves.toMatchObject({ status: "done" });
+
+    const reopened = await store.create({ title: "Reopened parent" });
+    const dependent = await store.create({ title: "Dependent", parents: [reopened.id] });
+    await store.complete(reopened.id, { summary: "Done." });
+    await store.claim(dependent.id, { ownerId: "worker" });
+    await store.releaseClaim(dependent.id, { ownerId: "worker", status: "review" });
+    await store.update(reopened.id, { status: "running" });
+    await expect(store.claim(dependent.id, { ownerId: "reviewer" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+  });
+
   it("resolves parent dependency status with targeted lookups instead of a full-corpus scan", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const entriesSpy = vi.spyOn(stores.cards, "entries");
@@ -1834,23 +1741,8 @@ describe("WorkboardStore", () => {
     expect(recovered.metadata?.failureCount).toBeUndefined();
   });
 
-  it("keeps long lifecycle handoffs in comments while capping notifications", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const completeCard = await store.create({ title: "Long complete" });
-    const blockCard = await store.create({ title: "Long block" });
-    const longSummary = "x".repeat(1000);
-    const longReason = "y".repeat(1000);
-
-    const completed = await store.complete(completeCard.id, { summary: longSummary });
-    const blocked = await store.block(blockCard.id, { reason: longReason });
-
-    expect(completed.metadata?.comments?.[0]?.body).toBe(longSummary);
-    expect(completed.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
-    expect(blocked.metadata?.comments?.[0]?.body).toBe(longReason);
-    expect(blocked.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
-  });
-
-  it("heals oversized notifications during timeout recovery without rewriting ready siblings", async () => {
+  // Injects and inspects malformed notifications through a native SQLite file handle.
+  test("heals oversized notifications during timeout recovery without rewriting ready siblings", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-notification-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
@@ -2848,41 +2740,8 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("deletes only the removed card's physical attachment blobs", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness();
-    const removed = await store.create({ title: "Removed card" });
-    const retained = await store.create({ title: "Retained card" });
-    const withRemovedAttachment = await store.addAttachment(removed.id, {
-      fileName: "removed.txt",
-      contentBase64: Buffer.from("removed bytes").toString("base64"),
-    });
-    const withRetainedAttachment = await store.addAttachment(retained.id, {
-      fileName: "retained.txt",
-      contentBase64: Buffer.from("retained bytes").toString("base64"),
-    });
-    const removedId = withRemovedAttachment.metadata!.attachments![0]!.id;
-    const retainedId = withRetainedAttachment.metadata!.attachments![0]!.id;
-    const expectedAttachment = await store.getAttachment(retainedId);
-
-    await expect(store.delete(removed.id)).resolves.toEqual({ deleted: true });
-    await expect(store.delete(removed.id)).resolves.toEqual({ deleted: false });
-    await expect(store.getAttachment(removedId)).resolves.toBeUndefined();
-    await expect(store.getAttachment(retainedId)).resolves.toEqual(expectedAttachment);
-    await expect(store.get(retained.id)).resolves.toEqual(withRetainedAttachment);
-    const raw = new DatabaseSync(dbPath, { readOnly: true });
-    try {
-      expect(raw.prepare("SELECT attachment_id FROM workboard_attachment_blobs").all()).toEqual([
-        { attachment_id: retainedId },
-      ]);
-      expect(raw.prepare("SELECT id FROM workboard_card_attachments").all()).toEqual([
-        { id: retainedId },
-      ]);
-    } finally {
-      raw.close();
-    }
-  });
-
-  it("rolls back attachment deletion when the card deletion fails", async () => {
+  // Injects a failing SQLite trigger through a native file handle.
+  test("rolls back attachment deletion when the card deletion fails", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Atomic deletion" });
     const attached = await store.addAttachment(card.id, {
@@ -3046,46 +2905,6 @@ describe("WorkboardStore", () => {
       title: "Specified",
       status: "todo",
     });
-  });
-
-  it("rolls back every task-owned decomposition write in sqlite when uncontended", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-decompose-control-"));
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
-    try {
-      const parent = await store.create({ title: "Parent" });
-      let reusedChild = await store.create({
-        title: "Existing child",
-        status: "ready",
-        idempotencyKey: "child-key",
-      });
-
-      reusedChild = await store.addLink(reusedChild.id, {
-        type: "relates_to",
-        targetCardId: parent.id,
-      });
-
-      await expect(
-        store.decompose(parent.id, {
-          children: [
-            { title: "New child" },
-            { title: "Existing child", idempotencyKey: "child-key" },
-            { notes: "Missing title" },
-          ],
-        }),
-      ).rejects.toThrow(/title is required/);
-
-      await expect(store.list()).resolves.toEqual([
-        expect.objectContaining({ id: parent.id }),
-        expect.objectContaining({ id: reusedChild.id }),
-      ]);
-      expectSameCardState(await store.get(parent.id), parent);
-      expectSameCardState(await store.get(reusedChild.id), reusedChild);
-    } finally {
-      await stores.close();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("leaves an edited card intact when compensating a failed decomposition", async () => {
@@ -3261,7 +3080,8 @@ describe("WorkboardStore attachments", () => {
     });
   });
 
-  it("removes attachment blobs when the card attachment index prunes old entries", async () => {
+  // Inspects pruned physical blob rows through a native SQLite file handle.
+  test("removes attachment blobs when the card attachment index prunes old entries", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Many attachments", templateId: "docs" });
     let firstAttachmentId = "";

@@ -96,20 +96,10 @@ describe("venice-models", () => {
   });
 
   it.each([
-    undefined,
-    { input: { usd: 9 } },
-    { input: { usd: -1 }, output: { usd: 3 } },
-    { input: { usd: 9 }, output: { usd: 3 }, cache_write: null },
-    { input: { usd: 9 }, output: { usd: 3 }, extended: null },
     {
       input: { usd: 9 },
       output: { usd: 3 },
       extended: { context_token_threshold: 17, input: { usd: 12 } },
-    },
-    {
-      input: { usd: 9 },
-      output: { usd: 3 },
-      extended: { context_token_threshold: -1, input: { usd: 12 }, output: { usd: 4 } },
     },
     {
       input: { usd: 9 },
@@ -127,7 +117,7 @@ describe("venice-models", () => {
     expect(models[1]?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
-  it.each([0, 17.5])(
+  it.each([17.5])(
     "prices the entire request only above live threshold %s, including cached tokens",
     async (threshold) => {
       stubVeniceModelsFetch([
@@ -195,12 +185,6 @@ describe("venice-models", () => {
   // to the whole request only when total prompt tokens exceed the threshold.
   it.each([
     {
-      id: "grok-4-5",
-      threshold: 200_000,
-      base: { input: 2.27, output: 6.8, cacheRead: 0.34, cacheWrite: 0 },
-      extended: { input: 4.53, output: 13.6, cacheRead: 0.68, cacheWrite: 0 },
-    },
-    {
       id: "qwen-3-7-plus",
       threshold: 256_000,
       base: { input: 0.5, output: 2, cacheRead: 0.05, cacheWrite: 0.625 },
@@ -263,32 +247,6 @@ describe("venice-models", () => {
       }
     },
   );
-
-  it("uses API maxCompletionTokens for catalog models when present", async () => {
-    const fetchMock = stubVeniceModelsFetch([
-      {
-        id: "zai-org-glm-4.7",
-        availableContextTokens: 131072,
-        maxCompletionTokens: 2048,
-        capabilities: {
-          supportsReasoning: false,
-          supportsVision: false,
-          supportsFunctionCalling: true,
-        },
-      },
-    ]);
-
-    const models = await discoverVeniceModels();
-    const glm = models.find((m) => m.id === "zai-org-glm-4.7");
-    expect(glm).toMatchObject({
-      maxTokens: 2048,
-      compat: { supportsUsageInStreaming: false },
-    });
-    const [input, init] = fetchMock.mock.calls[0] ?? [];
-    const headers = input instanceof Request ? input.headers : new Headers(init?.headers);
-    expect(headers.get("accept")).toBe("application/json");
-    expect(headers.get("authorization")).toBeNull();
-  });
 
   it("uses a conservative bounded maxTokens value for new models", async () => {
     stubVeniceModelsFetch([

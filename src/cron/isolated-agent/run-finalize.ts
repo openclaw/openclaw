@@ -214,12 +214,8 @@ export async function finalizeCronRun(params: {
       ...telemetry,
     });
   }
-  const {
-    deliveryDisposition,
-    deliveryPayloadHasStructuredContent,
-    hasFatalStructuredErrorPayload,
-    pendingPresentationWarningError,
-  } = cronPayloadOutcome;
+  const { deliveryDisposition, hasFatalStructuredErrorPayload, pendingPresentationWarningError } =
+    cronPayloadOutcome;
   let {
     synthesizedText,
     deliveryPayloads,
@@ -227,7 +223,6 @@ export async function finalizeCronRun(params: {
     outputText,
     hasFatalErrorPayload,
     embeddedRunError,
-    agentReportedFailure,
   } = cronPayloadOutcome;
   const terminalToolFailure = finalRunResult.meta?.terminalToolFailure;
   const hasTerminalToolFailure = isEmbeddedRunTerminalToolFailure(terminalToolFailure);
@@ -261,14 +256,7 @@ export async function finalizeCronRun(params: {
       ...(failure
         ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }
         : hasFatalErrorPayload
-          ? {
-              error: runError,
-              // The agent already judged the task blocked: rerunning it would repeat that turn,
-              // and its prose must not be text-classified into a transient retry reason.
-              ...(agentReportedFailure
-                ? { errorClassification: { kind: "permanent" as const, reportedByAgent: true } }
-                : {}),
-            }
+          ? { error: runError }
           : {}),
       ...output,
       replyDisposition,
@@ -283,6 +271,7 @@ export async function finalizeCronRun(params: {
       delivery: result?.delivery,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
+        result?.diagnostics,
         useRunFailure && !hasTerminalToolFailure
           ? createCronRunDiagnosticsFromError("agent-run", runError)
           : undefined,
@@ -317,22 +306,6 @@ export async function finalizeCronRun(params: {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
-  let queueSourceSessionMessageToolAwareness: (() => Promise<void>) | undefined;
-  if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
-    const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
-    queueSourceSessionMessageToolAwareness = await queueCronMessageToolDeliveryAwareness({
-      cfg: prepared.cfgWithAgentDefaults,
-      runSessionKey: prepared.runSessionKey,
-      job: prepared.input.job,
-      agentId: prepared.agentId,
-      agentSessionKey: prepared.agentSessionKey,
-      deferredTargetSessionKey:
-        prepared.input.job.sessionTarget === "current" ? prepared.sourceSessionKey : undefined,
-      runStartedAt: execution.runStartedAt,
-      resolvedDelivery: prepared.resolvedDelivery,
-      sourceDeliveryOutcome,
-    });
-  }
   const hasIntentionalSilentReply =
     finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
     isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantRawText) ||
@@ -348,7 +321,6 @@ export async function finalizeCronRun(params: {
       fallbackUsed: false,
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
     });
-    await queueSourceSessionMessageToolAwareness?.();
     return resolveRunOutcome({
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
       deliveryAttempted: sourceDeliveryOutcome.verifiedMessageToolDelivery,
@@ -385,9 +357,7 @@ export async function finalizeCronRun(params: {
       : undefined,
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
-    queueSourceSessionMessageToolAwareness,
     deliveryBestEffort: prepared.input.job.delivery?.bestEffort === true,
-    deliveryPayloadHasStructuredContent,
     deliveryPayloads,
     synthesizedText,
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
@@ -414,11 +384,6 @@ export async function finalizeCronRun(params: {
   if (pendingPresentationWarningError && deliveryResult.delivered !== true) {
     hasFatalErrorPayload = true;
     embeddedRunError = pendingPresentationWarningError;
-  }
-  if (deliveryResult.agentReportedFailure && !hasFatalErrorPayload) {
-    hasFatalErrorPayload = true;
-    embeddedRunError = deliveryResult.agentReportedFailure;
-    agentReportedFailure = true;
   }
   return resolveRunOutcome({ ...deliveryResult, delivery: deliveryTrace });
 }

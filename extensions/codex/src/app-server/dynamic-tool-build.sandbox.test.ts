@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import "./dynamic-tool-build.test-support.js";
 import path from "node:path";
+import "./dynamic-tool-build.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentHarnessBeforePromptBuildResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -8,6 +8,10 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createRemoteShellSandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
@@ -15,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
+import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 
 const {
   bindProductionCodexHostCapabilities,
@@ -31,6 +36,7 @@ describe("Codex app-server sandbox shell tools", () => {
   let tempDir: string;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     hoisted.loadNodeExecAvailability.mockResolvedValue({
       cacheKey: "eligible",
       isAvailable: () => true,
@@ -45,6 +51,7 @@ describe("Codex app-server sandbox shell tools", () => {
       close();
     }
     resetGlobalHookRunner();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -76,7 +83,11 @@ describe("Codex app-server sandbox shell tools", () => {
     params.toolsAllow = ["read", "write", "edit", "exec", "process"];
     await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+      }),
+    ).toBe(false);
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       nativeToolSurfaceEnabled: false,
     });
@@ -128,7 +139,15 @@ describe("Codex app-server sandbox shell tools", () => {
         backendId: "docker",
         docker: { binds: ["/tmp/openclaw-data:/data:rw"] },
       } as never;
-      const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
+      const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+        params,
+        sandbox,
+        {
+          nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
+            sandbox,
+          }),
+        },
+      );
       expect(nativeToolSurfaceEnabled).toBe(false);
       const tools = await buildDynamicToolsForTest(params, workspaceDir, {
         sandbox,
@@ -214,6 +233,7 @@ describe("Codex app-server sandbox shell tools", () => {
     await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
     const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
       sandboxExecServerEnabled: true,
+      nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, { sandbox }),
     });
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       sandbox,

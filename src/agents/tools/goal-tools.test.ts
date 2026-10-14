@@ -44,6 +44,13 @@ async function upsertSessionEntry(params: {
 }
 
 describe("goal tools", () => {
+  it("reuses the empty input schema without retaining another session's executor", () => {
+    const first = createGetGoalTool({ agentSessionKey: "agent:one:main" });
+    const next = createGetGoalTool({ agentSessionKey: "agent:two:main" });
+    expect(next.parameters).toBe(first.parameters);
+    expect(next.execute).not.toBe(first.execute);
+  });
+
   it("keeps get_goal read-only when accounting changes are projected", async () => {
     // Budget-limited status can be derived for display without mutating the
     // stored active goal record.

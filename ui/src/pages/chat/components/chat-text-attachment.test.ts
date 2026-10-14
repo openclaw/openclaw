@@ -2,8 +2,9 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 async function mountAttachment(
   overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
@@ -138,9 +139,10 @@ it.each([
   { title: "long.md", mimeType: "text/plain", kind: "long" },
   { title: "notes.md", mimeType: "text/plain", kind: "inert" },
 ])("renders $kind Markdown attachment $title ($mimeType)", async ({ title, mimeType, kind }) => {
+  // Cross the message parse limit without creating thousands of paragraph elements.
   const text =
     kind === "long"
-      ? `# Long document\n\n${"Paragraph of notes.\n\n".repeat(2_100)}## Last section\n`
+      ? `# Long document\n\n${"Paragraph of notes. ".repeat(2_100)}\n\n## Last section\n`
       : kind === "inert"
         ? "# שלום\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert(1))\n\n![tracking](https://example.com/tracking.png)\n"
         : "# Release notes\n\n**Ready** with [details](https://example.com).\n\n- First item\n\n| Feature | State |\n| --- | --- |\n| Sidebar | Ready |\n\n```ts\nconst ready = true;\n```\n";
@@ -323,7 +325,7 @@ it("aborts a closed preview and reloads it after remount", async () => {
   const panel = await mountAttachment();
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   panel.remove();
-  expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  await waitForSolid(() => expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true));
   document.body.append(panel);
   await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Reloaded text"));
 });

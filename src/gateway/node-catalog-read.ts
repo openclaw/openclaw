@@ -52,7 +52,7 @@ export async function readKnownNodeCatalog(
   if (!result) {
     const nodePairing = projectNodePairing(pairing.paired);
     const catalog = createKnownNodeCatalog({
-      pairedDevices: pairing.paired,
+      pairedDevices: pairing.paired.filter((device) => pairing.bindings.has(device.deviceId)),
       pairedNodes: nodePairing.paired,
       // Environment discovery never exposes pending-only node metadata.
       pendingNodes: view === "nodes" ? nodePairing.pending : undefined,

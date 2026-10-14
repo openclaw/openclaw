@@ -2,6 +2,7 @@ import { isNativeError, isProxy } from "node:util/types";
 import type { MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
+import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission.js";
 import {
   SQLITE_WORKER_SOURCE_FENCE,
@@ -12,13 +13,38 @@ import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
 
-export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
-/** Process-private locator; live owner admission remains separate from this identity. */
-export type SqliteWorkerEphemeralTarget = {
-  kind: "ephemeral";
-  handle: string;
-  incarnation: string;
+export type SqliteWorkerRequestCustodyDescriptor = {
+  slot: Int32Array<SharedArrayBuffer>;
+  request: Int32Array<SharedArrayBuffer>;
 };
+
+export type SqliteWorkerExecutionAuthority = {
+  logical: Int32Array<SharedArrayBuffer>;
+  native: Int32Array<SharedArrayBuffer>;
+  physicalIdentity: string;
+  incarnation: string;
+  birthtime?: string;
+};
+
+export type SqliteWorkerAdmissionRequest = {
+  stage: "open" | "prepare" | "transaction" | "commit";
+  facts: unknown;
+  /** Opt-in wait budget in milliseconds; omission retains the live-owner wait. */
+  deadlineMs?: number;
+};
+
+// Admission deadlines cross threads, so both sides keep the process monotonic
+// clock captured at import. Fake timers replace `process.hrtime` on one thread
+// with a clock that starts at zero; reading that replacement would expire, or
+// extend, every deadline the other thread set.
+const processMonotonicClock = process.hrtime;
+
+/** Monotonic nanoseconds shared by every thread of this process. */
+export function readSqliteWorkerMonotonicNs(): bigint {
+  return processMonotonicClock.bigint();
+}
+
+export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
 }[keyof Operations];
@@ -73,29 +99,34 @@ export type SqliteWorkerRequest = {
   actor: number;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
+  requestCustody?: SqliteWorkerRequestCustodyDescriptor;
+  executionAuthority?: SqliteWorkerExecutionAuthority;
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
+  timing?: DiagnosticWorkerRequestFields["timing"];
 } & (
   | {
       type: "open";
       moduleUrl: string;
       sourceLoaderUrl?: string;
       databasePath: string;
-      target?: SqliteWorkerEphemeralTarget;
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
-      input: Uint8Array;
-      preparation?: Uint8Array;
+      input: Uint8Array<ArrayBuffer>;
+      preparation?: Uint8Array<ArrayBuffer>;
     }
-  | { type: "execute"; input: Uint8Array }
+  | { type: "execute"; input: Uint8Array<ArrayBuffer> }
   | { type: "execute-start"; transfer: SqliteWorkerTransferHandle }
-  | { type: "execute-frame"; input: Uint8Array }
+  | { type: "execute-frame"; input: Uint8Array<ArrayBuffer> }
   | { type: "result-next"; transferId: number }
   | { type: "close" }
 );
 
 export type SqliteWorkerReply = {
   id: number;
+  /** Explicit outer BEGINs in this frame, including rollback; excludes savepoints/autocommit. */
+  transactionCount?: number;
+  timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
   databaseAdmissions?: SqliteDatabaseAdmissions;
 } & (

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -28,6 +29,7 @@ const actualAccessor = await vi.importActual<
   typeof import("../../config/sessions/session-accessor.js")
 >("../../config/sessions/session-accessor.js");
 const { prepareCronRunContext } = await import("./run-prepare.js");
+const { beginCronSessionWorkAdmission } = await import("./run-session-state.js");
 const bootstrapSnapshots = new Set<string>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -45,6 +47,87 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("cron session preparation", () => {
+  it.each(["unchanged", "workspace"] as const)(
+    "revalidates %s authority across absent-field snapshot representations",
+    async (change) => {
+      resetRunCronIsolatedAgentTurnHarness();
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-authority-"));
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+      const sessionKey = "agent:main:conversation";
+      const target = { agentId: "main", storePath: database.path, sessionKey };
+      const now = Date.now();
+      const entry: SessionEntry = {
+        sessionId: "creator-session",
+        lifecycleRevision: "creator-revision",
+        updatedAt: now,
+        sessionStartedAt: now,
+        createdActor: { type: "human", source: "profile", id: "creator" },
+        spawnedCwd: "/tmp/creator-workspace",
+      };
+      await actualAccessor.replaceSessionEntry(target, entry);
+      const cronSession = await actualSession.prepareCronSession({
+        agentId: "main",
+        cfg: { session: { store: database.path } },
+        sessionKey,
+        nowMs: now,
+      });
+      const initial = expectDefined(cronSession.initialSessionEntry, "initial session");
+      expect([initial.owner, initial.participants, initial.participantCount]).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      delete initial.owner;
+      delete initial.participants;
+      delete initial.participantCount;
+      if (change !== "unchanged") {
+        await actualAccessor.replaceSessionEntry(target, {
+          ...entry,
+          spawnedCwd: "/tmp/another-workspace",
+        });
+      }
+      loadSessionEntryMock.mockImplementation(
+        async (...args: Parameters<typeof actualSession.loadCronSessionEntryLatest>) => {
+          const current = await actualSession.loadCronSessionEntryLatest(...args);
+          // Published snapshots can include absent fields that SQL-backed rows omit.
+          return (
+            current && {
+              ...current,
+              owner: current.owner,
+              participants: current.participants,
+              participantCount: current.participantCount,
+            }
+          );
+        },
+      );
+      const admission = beginCronSessionWorkAdmission({
+        agentId: "main",
+        cronSession,
+        agentSessionKey: sessionKey,
+        runSessionKey: sessionKey,
+        onInterrupt: () => {},
+      });
+      if (change === "unchanged") {
+        const lease = await admission;
+        try {
+          expect(lease.isActive()).toBe(true);
+        } finally {
+          lease.release();
+        }
+      } else {
+        await expect(
+          admission.then((lease) => {
+            lease.release();
+            return lease;
+          }),
+        ).rejects.toMatchObject({
+          name: "CronSessionLifecycleClaimError",
+          admissionDisposition: "session-conflict",
+        });
+      }
+    },
+  );
+
   it("persists scheduled session rows through the worker without caller SQL", async () => {
     resetRunCronIsolatedAgentTurnHarness();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-write-"));

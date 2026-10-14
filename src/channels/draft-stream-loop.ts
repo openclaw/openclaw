@@ -94,11 +94,7 @@ export function createDraftStreamLoop<T = string>(params: {
 
   const startBackgroundFlush = () => {
     void flush(true).catch((err: unknown) => {
-      try {
-        params.onBackgroundFlushError?.(err);
-      } catch {
-        // Error reporting must not recreate the unhandled background rejection path.
-      }
+      params.onBackgroundFlushError?.(err);
     });
   };
 

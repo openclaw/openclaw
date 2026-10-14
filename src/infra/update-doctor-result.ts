@@ -26,6 +26,7 @@ import type {
   UpdateDoctorConfigChange,
   UpdateDoctorConfigWriteRefusal,
 } from "./update-doctor-config.js";
+import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
@@ -52,6 +53,9 @@ const configFileWriteSchema = z.object({
   inputHash: configHashSchema.optional(),
   hash: configHashSchema,
 });
+export const UpdateDoctorDeferredInspectionCheckIdsSchema = z
+  .array(UpdateDoctorLintFindingSchema.shape.checkId.max(256))
+  .max(128);
 const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("deferred"),
@@ -80,6 +84,8 @@ const doctorResultEvidence = {
     .optional()
     .catch(undefined),
   warnings: z.array(z.string()).optional(),
+  deferredInspectionCheckIds:
+    UpdateDoctorDeferredInspectionCheckIdsSchema.optional().catch(undefined),
   maintenanceRefusal: DoctorMaintenanceRefusalSchema.optional(),
   // Invalid optional diagnostics cannot change the child's classified outcome.
   failureFacts: z.array(UpdateFailureFactSchema).catch([]).optional(),
@@ -164,6 +170,7 @@ export type DoctorConfigCapture = {
   fileWrites?: Record<string, z.infer<typeof configFileWriteSchema>>;
   configChanges: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
+  deferredInspectionCheckIds?: string[];
 };
 export type UpdateDoctorWriteAuthority = {
   inputHash: string;
@@ -255,6 +262,19 @@ const doctorConfigWrites = new AsyncLocalStorage<{
   capture: DoctorConfigCapture;
   authority?: UpdateDoctorWriteAuthority;
 }>();
+
+/** Deferral requires an owned result channel, not just an inherited marker. */
+export function recordUpdateDoctorDeferredInspectionChecks(
+  checkIds: string[],
+): string[] | undefined {
+  const capture = doctorConfigWrites.getStore()?.capture;
+  if (!capture) {
+    return undefined;
+  }
+  return (capture.deferredInspectionCheckIds = UpdateDoctorDeferredInspectionCheckIdsSchema.parse([
+    ...new Set([...(capture.deferredInspectionCheckIds ?? []), ...checkIds]),
+  ]));
+}
 
 export function captureUpdateDoctorConfigWrites<T>(
   configPath: string,

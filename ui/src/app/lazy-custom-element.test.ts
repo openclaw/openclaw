@@ -46,8 +46,14 @@ describe("optional custom element requests", () => {
     const retryStale = vi
       .fn<(canReload: () => boolean) => Promise<boolean>>()
       .mockResolvedValue(false);
-    const requests = new LazyCustomElementRequestController(host, undefined, retryStale);
-    return { requests, retryStale };
+    const cancelStale = vi.fn();
+    const requests = new LazyCustomElementRequestController(
+      host,
+      undefined,
+      retryStale,
+      cancelStale,
+    );
+    return { requests, retryStale, cancelStale };
   }
 
   it("publishes loading and error before retrying the canonical load and replaying once", async () => {
@@ -220,6 +226,37 @@ describe("optional custom element requests", () => {
     expect(retryStale).toHaveBeenCalledOnce();
     expect(retryStale.mock.calls[0]?.[0]?.()).toBe(false);
     expect(element.loadModule).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels pending page recovery only when a stale failure surface is retired", async () => {
+    const staleError = new Error("Failed to fetch dynamically imported module: panel-abc.js");
+    const { requests, cancelStale } = createRequestHarness();
+    const stalePanel = {
+      tagName: uniqueTag(),
+      label: "stale panel",
+      loadModule: vi.fn<() => Promise<void>>().mockRejectedValue(staleError),
+    };
+
+    requests.request(stalePanel);
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
+    requests.abandon();
+    expect(cancelStale).toHaveBeenCalledOnce();
+
+    requests.request(stalePanel);
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
+    requests.retry();
+    requests.close();
+    expect(cancelStale).toHaveBeenCalledTimes(2);
+
+    const brokenPanel = {
+      tagName: uniqueTag(),
+      label: "broken panel",
+      loadModule: vi.fn<() => Promise<void>>().mockRejectedValue(new Error("render failed")),
+    };
+    requests.request(brokenPanel);
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
+    requests.close();
+    expect(cancelStale).toHaveBeenCalledTimes(2);
   });
 
   it("closes a loading request without replaying after its late definition", async () => {

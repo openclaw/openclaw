@@ -24,6 +24,28 @@ import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as capability from "./update-post-core-capability.js";
 
+async function prepareFixtureActivation(
+  f: Awaited<ReturnType<typeof createPackageSwapFixture>>,
+  fence: Parameters<typeof preparePackageActivation>[0]["options"]["fence"],
+) {
+  const reader = integrity.createPackageIntegrityReader();
+  return preparePackageActivation({
+    options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+    installTarget: f.params.installTarget,
+    liveRoot: f.packageRoot,
+    stageRoot: f.params.stage.packageRoot,
+    launcherRoot: f.params.stage.layout.binDir,
+    binDir: path.dirname(f.launcher),
+    previous: await reader.tree(f.packageRoot),
+    launchers: [
+      {
+        name: "openclaw",
+        previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
+      },
+    ],
+  });
+}
+
 const fixture = createPackageActivationLifetimeFixture();
 let root: string;
 beforeEach(() => {
@@ -44,8 +66,16 @@ afterEach(async () => {
 
 it
   .skipIf(process.platform === "win32")
-  .each(["unchanged", "initially-fresh", "previous", "candidate"] as const)(
-  "reuses settled preparation digests while refusing changed publication bytes (%s)",
+  .each([
+    "unchanged",
+    "initially-fresh",
+    "previous",
+    "candidate",
+    "candidate-version",
+    "candidate-directory",
+    "interrupted",
+  ] as const)(
+  "reuses the previous digest and trusts freshly prepared candidate contents (%s)",
   (changed) =>
     fixture.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
@@ -57,29 +87,31 @@ it
       vi.spyOn(Date, "now").mockImplementation(() => now);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
-        const reader = integrity.createPackageIntegrityReader();
-        const prepared = await preparePackageActivation({
-          options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          installTarget: f.params.installTarget,
-          liveRoot: f.packageRoot,
-          stageRoot: f.params.stage.packageRoot,
-          launcherRoot: f.params.stage.layout.binDir,
-          binDir: path.dirname(f.launcher),
-          previous: await reader.tree(f.packageRoot),
-          launchers: [
-            {
-              name: "openclaw",
-              previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
-            },
-          ],
-        });
+        const prepared = await prepareFixtureActivation(f, fence);
         expect(prepared).toBeDefined();
+        if (changed === "interrupted") {
+          const failure = new Error("package helper read interrupted");
+          const read = vi.spyOn(fsp, "readFile").mockRejectedValueOnce(failure);
+          await expect(prepared!.publish(false)).rejects.toBe(failure);
+          read.mockRestore();
+        }
         const tampered = path.join(
           changed === "previous" ? f.packageRoot : candidateRoot,
           "dist/index.js",
         );
-        const tamper = changed === "previous" || changed === "candidate";
-        if (tamper) {
+        if (changed === "candidate-version") {
+          await fsp.writeFile(
+            path.join(candidateRoot, "package.json"),
+            '{"name":"openclaw","version":"3.0.0"}',
+          );
+        } else if (changed === "candidate-directory") {
+          await fsp.rename(candidateRoot, path.join(root, "displaced-candidate"));
+          await fsp.mkdir(candidateRoot);
+          await fsp.writeFile(
+            path.join(candidateRoot, "package.json"),
+            '{"name":"openclaw","version":"2.0.0"}',
+          );
+        } else if (changed === "previous" || changed === "candidate" || changed === "interrupted") {
           await fsp.writeFile(tampered, `changed ${changed} package content\n`);
         }
         now += 6_000;
@@ -99,7 +131,13 @@ it
           return open(...args);
         });
         const publishing = prepared!.publish(false);
-        if (tamper) {
+        if (changed === "candidate-version" || changed === "candidate-directory") {
+          await expect(publishing).rejects.toThrow("Package publication object changed");
+          expect(hash).not.toHaveBeenCalled();
+          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+          return;
+        }
+        if (changed === "previous" || changed === "interrupted") {
           await expect(publishing).rejects.toBeInstanceOf(integrity.PackageIntegrityMismatchError);
           expect(hash.mock.calls.map(([file]) => file)).toEqual([tampered]);
           expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
@@ -108,9 +146,12 @@ it
         await expect(publishing).resolves.toMatchObject({ phase: "publication-complete" });
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
         if (changed === "initially-fresh") {
-          // Re-read recent preparation bytes once after they settle, then reuse
-          // that observation even when publication moves the same inode.
+          // Re-read recent previous-package bytes once after they settle;
+          // the private candidate does not enter the content verifier.
           expect(hash.mock.calls.length).toBeGreaterThan(0);
+          expect(
+            hash.mock.calls.every(([file]) => file.startsWith(`${f.packageRoot}${path.sep}`)),
+          ).toBe(true);
           expect(new Set(hash.mock.calls.map(([, stat]) => `${stat.dev}:${stat.ino}`)).size).toBe(
             hash.mock.calls.length,
           );
@@ -118,7 +159,7 @@ it
         } else {
           expect(hash).not.toHaveBeenCalled();
         }
-        // Each of the four remaining content walks still reads its manifest version.
+        // Version checks still read manifests without rescanning candidate payloads.
         if (changed !== "initially-fresh") {
           expect(packageOpens).toHaveLength(4);
           expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
@@ -177,22 +218,7 @@ it.skipIf(process.platform === "win32").each([
       });
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
-        const reader = integrity.createPackageIntegrityReader();
-        const prepared = await preparePackageActivation({
-          options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          installTarget: f.params.installTarget,
-          liveRoot: f.packageRoot,
-          stageRoot: f.params.stage.packageRoot,
-          launcherRoot: f.params.stage.layout.binDir,
-          binDir: path.dirname(f.launcher),
-          previous: await reader.tree(f.packageRoot),
-          launchers: [
-            {
-              name: "openclaw",
-              previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
-            },
-          ],
-        });
+        const prepared = await prepareFixtureActivation(f, fence);
         expect(prepared).toBeDefined();
         await expect(
           prepared!.publish(false, () => {
@@ -372,22 +398,7 @@ it.skipIf(process.platform === "win32").each([
         });
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
-        const reader = integrity.createPackageIntegrityReader();
-        const prepared = await preparePackageActivation({
-          options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          installTarget: f.params.installTarget,
-          liveRoot: f.packageRoot,
-          stageRoot: f.params.stage.packageRoot,
-          launcherRoot: f.params.stage.layout.binDir,
-          binDir: path.dirname(f.launcher),
-          previous: await reader.tree(f.packageRoot),
-          launchers: [
-            {
-              name: "openclaw",
-              previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
-            },
-          ],
-        });
+        const prepared = await prepareFixtureActivation(f, fence);
         expect(prepared).toBeDefined();
         // Exercise the actual publication owner without the outer swap's automatic
         // compensation, leaving the interrupted operation available for recovery.

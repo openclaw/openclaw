@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
   loadSessionEntry,
@@ -26,7 +27,6 @@ import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
-  readAcpSessionMetaBatch,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
@@ -342,9 +342,6 @@ describe("ACP session metadata SQLite store", () => {
           },
         });
         expect(readAcpSessionMetaForEntry({ databasePath, sessionKey, entry })).toBeUndefined();
-        expect(
-          readAcpSessionMetaBatch({ databasePath, entries: [{ sessionKey, entry }] }).get(entry),
-        ).toBeUndefined();
       });
     },
   );
@@ -365,6 +362,7 @@ async function seedCanonicalSession(state: OpenClawTestState, sessionKey = SESSI
     agents: { ownership: "explicit", entries: { main: {} } },
   };
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   const scope = { cfg, env: state.env, agentId: "main", sessionKey };
   await replaceSessionEntry(scope, {
     sessionId: "alias-session",
@@ -445,13 +443,6 @@ describe("ACP raw alias lifecycle", () => {
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
       expect(readAcpSessionEntry(fixture.scope)?.acp).toBeUndefined();
-      expect(
-        readAcpSessionMetaBatch({
-          cfg: fixture.scope.cfg,
-          env: state.env,
-          entries: [{ sessionKey: SESSION_KEY, agentId: "main", entry: fixture.entry }],
-        }).get(fixture.entry),
-      ).toBeUndefined();
     });
   });
 

@@ -14,6 +14,7 @@ import {
   type StreamRunRenderItem,
   type WorkGroupRenderItem,
 } from "./chat-thread-grouping.ts";
+import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
@@ -35,6 +36,7 @@ export type AgentRunFrameRenderItem = {
   outcome:
     | { kind: "active" }
     | { kind: "completed"; actionOwner: MessageGroup["messages"][number] | null }
+    | { kind: "interrupted" }
     | { kind: "failed" };
   parts: AgentRunFramePart[];
 };
@@ -151,12 +153,34 @@ export function agentRunFrameActiveStatusParts(
 /** Wrap semantic work/activity rows in one run-owned presentation frame. */
 export function coalesceAgentRunFrames(
   items: AgentRunFrameInput[],
-  opts: { searchActive?: boolean } = {},
+  opts: {
+    searchActive?: boolean;
+    /** Source history includes silent/empty terminals omitted from rendered groups. */
+    messages?: readonly unknown[];
+    activeRunId?: string | null;
+  } = {},
 ): Array<AgentRunFrameInput | AgentRunFrameRenderItem> {
   if (opts.searchActive) {
     return items;
   }
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
+  const lastAssistantByRun = new Map<string, unknown>();
+  const terminalRuns = new Set<string>();
+  for (const message of opts.messages ?? []) {
+    const id = transcriptRunId(message);
+    const record = asRecord(message);
+    if (id && record?.role === "assistant") {
+      lastAssistantByRun.set(id, message);
+      if (
+        record.stopReason === "stop" ||
+        record.stopReason === "error" ||
+        assistantMessageIsInterrupted(message) ||
+        resolveAssistantReplyPhase(message) === "final_answer"
+      ) {
+        terminalRuns.add(id);
+      }
+    }
+  }
   let boundaryId: string | undefined;
   let presentationBoundaryKey: string | undefined;
   const emittedFrameKeys = new Set<string>();
@@ -183,15 +207,24 @@ export function coalesceAgentRunFrames(
   const flush = (failed = false) => {
     const frameRunId = opened?.runId ?? runId;
     const openedBoundaryId = opened ? opened.boundaryId : boundaryId;
+    const handedOff = opened !== undefined;
     opened = undefined;
     resuming = false;
     afterHandoff = false;
     if (!runId || !frameRunId || parts.length === 0) {
       return;
     }
-    const active = parts.some(itemIsActive);
+    const active = runId === opts.activeRunId || parts.some(itemIsActive);
+    // A stopped history snapshot can end between tool iterations. Keep its
+    // saved output, but never claim that the absent final answer completed.
+    const interrupted =
+      !active &&
+      !handedOff &&
+      !terminalRuns.has(runId) &&
+      frameRunId !== opts.activeRunId &&
+      asRecord(lastAssistantByRun.get(runId))?.stopReason === "toolUse";
     const actionOwner = active || failed ? null : completedFrameActionOwner(parts);
-    if (!openedBoundaryId && !active && !actionOwner) {
+    if (!openedBoundaryId && !active && !actionOwner && !interrupted) {
       result.push(...parts);
       parts = [];
       runId = undefined;
@@ -225,7 +258,9 @@ export function coalesceAgentRunFrames(
         ? { kind: "failed" }
         : active
           ? { kind: "active" }
-          : { kind: "completed", actionOwner },
+          : interrupted
+            ? { kind: "interrupted" }
+            : { kind: "completed", actionOwner },
       parts,
     });
     parts = [];

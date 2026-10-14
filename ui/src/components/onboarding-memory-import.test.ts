@@ -3,17 +3,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./onboarding-memory-import.ts";
 
 type OnboardingMemoryImportElement = HTMLElement & {
   active: boolean;
   context: ApplicationContext;
-  requestUpdate: () => void;
   updateComplete: Promise<boolean>;
 };
 
 function waitForOnboardingMemoryImport(assertion: () => void) {
-  return vi.waitFor(assertion, { interval: 1 });
+  return waitForSolid(assertion);
 }
 
 async function waitForAction(
@@ -86,6 +87,8 @@ function createApplyResult(providerId: string, migrated = 1, skipped = 0) {
   };
 }
 
+const contextNotifications = new WeakMap<ApplicationContext, () => void>();
+
 function createContext(
   request: ReturnType<typeof vi.fn>,
   options: { connected?: boolean; admin?: boolean; agentsLoaded?: boolean } = {},
@@ -108,8 +111,14 @@ function createContext(
     lastError: null,
     lastErrorCode: null,
   };
-  const subscribe = () => () => undefined;
-  return {
+  const listeners = new Set<() => void>();
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+  const context = {
     gateway: { snapshot, subscribe },
     agents: {
       state: {
@@ -136,6 +145,8 @@ function createContext(
     },
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
+  contextNotifications.set(context, () => listeners.forEach((listener) => listener()));
+  return context;
 }
 
 async function mount(
@@ -147,7 +158,7 @@ async function mount(
   ) as OnboardingMemoryImportElement;
   element.context = context;
   element.active = active;
-  document.body.append(element);
+  mountSolid(() => element);
   await element.updateComplete;
   return element;
 }
@@ -175,7 +186,7 @@ describe("OnboardingMemoryImport", () => {
   it("waits for the agents list and triggers loading it", async () => {
     const request = vi.fn();
     const context = createContext(request, { agentsLoaded: false });
-    const element = await mount(context);
+    await mount(context);
 
     await waitForOnboardingMemoryImport(() =>
       expect(context.agents.ensureList).toHaveBeenCalledTimes(1),
@@ -183,7 +194,7 @@ describe("OnboardingMemoryImport", () => {
     expect(request).not.toHaveBeenCalled();
 
     await Promise.resolve();
-    element.requestUpdate();
+    contextNotifications.get(context)!();
     await waitForOnboardingMemoryImport(() =>
       expect(context.agents.ensureList).toHaveBeenCalledTimes(2),
     );
@@ -348,6 +359,35 @@ describe("OnboardingMemoryImport", () => {
 
     await waitForOnboardingMemoryImport(() => expect(element.textContent).toContain("1 failed"));
     expect(element.textContent).toContain("Migrated 1");
+  });
+
+  it("restores pending import results after reactivation without exposing them to another gateway", async () => {
+    let resolveApply!: (result: ReturnType<typeof createApplyResult>) => void;
+    const request = vi.fn(async (method: string) =>
+      method === "migrations.memory.plan"
+        ? createPlan()
+        : await new Promise<ReturnType<typeof createApplyResult>>((resolve) => {
+            resolveApply = resolve;
+          }),
+    );
+    const element = await mount(createContext(request));
+    (await waitForAction(element)).click();
+    await waitForOnboardingMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
+
+    element.active = false;
+    await element.updateComplete;
+    expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
+    element.active = true;
+    await element.updateComplete;
+    resolveApply(createApplyResult("codex"));
+
+    await waitForAction(element, "continue");
+    expect(element.textContent).toContain("Migrated 1, skipped 0");
+    expect(request).toHaveBeenCalledTimes(2);
+
+    element.context = createContext(vi.fn(async () => createPlan()));
+    await element.updateComplete;
+    expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
   it("sets the guard when skipped", async () => {

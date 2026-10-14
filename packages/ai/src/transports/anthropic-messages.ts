@@ -170,6 +170,11 @@ async function convertAnthropicMessages(
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
   const appendMessage = (message: AnthropicWireMessage) => {
+    if (message.role === "system" && (!params.length || params.at(-1)?.role === "assistant")) {
+      // Replay can exclude a consult's user anchor. Preserve its updates in place
+      // without moving them into the pinned system prompt or dropping instructions.
+      params.push({ role: "user", content: "." });
+    }
     // Interrupted turns can leave a system update last; retain it before the next user turn.
     if (message.role === "user" && params.at(-1)?.role === "system") {
       params.push({

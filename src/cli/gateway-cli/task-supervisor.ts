@@ -53,11 +53,9 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
     const launcher = process.env[WINDOWS_TASK_LAUNCHER_ENV];
     delete process.env[WINDOWS_TASK_LAUNCHER_ENV];
     if (launcher === WINDOWS_TASK_LAUNCHER_ACTIVE || launcher === "cmd") {
-      const [{ default: koffi }, { bindWindowsTaskLauncher }] = await Promise.all([
-        import("koffi"),
-        import("../../process/supervisor/service-child-windows-task-launcher.js"),
-      ]);
-      bindWindowsTaskLauncher(koffi, launcher);
+      const { bindWindowsTaskLauncher } =
+        await import("../../process/supervisor/service-child-windows-task-launcher.js");
+      bindWindowsTaskLauncher(launcher);
     }
     while (true) {
       stderr = "";

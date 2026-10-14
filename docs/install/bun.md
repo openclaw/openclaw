@@ -12,7 +12,9 @@ Node remains OpenClaw's primary, default, and recommended runtime. Bun 1.4+ buil
 </Warning>
 
 Desktop apps manage their own runtime: the native macOS app and fresh local
-Tauri installations on Linux use the same pinned OpenClaw Bun fork. Existing
+Tauri installations on Linux and Windows use the same pinned OpenClaw Bun fork.
+On Windows, [Windows Hub](/platforms/windows#recommended-windows-hub) is the
+recommended desktop app; Tauri is the backup. Existing
 Linux Tauri installations retain their runtime across startup and app updates
 until you explicitly choose **Use bundled runtime…**. macOS Tauri keeps its
 existing behavior, separate from the native macOS app. See
@@ -90,7 +92,8 @@ onboarding installs the Gateway with Bun and records its exact runtime path.
 `--no-onboard` does not create a service on a fresh installation.
 
 With an existing fork executable, add `--bun-path /absolute/path/to/bun` or set
-`OPENCLAW_BUN_PATH`. Published versions require the exact pinned executable;
+`OPENCLAW_BUN_PATH`. Its filename must be `bun` or `bun.exe` (case-insensitive) so
+Gateway services can pin it. Published versions require the exact pinned executable;
 custom package specs also require `--bun-path` and are checked against the
 installed package's pin before running the CLI. Stock Bun, git-checkout builds,
 Windows, and musl/Alpine are unsupported by this installer path.

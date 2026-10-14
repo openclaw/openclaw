@@ -80,6 +80,7 @@ openclaw tui --local
 - Messages always go to the Gateway (or embedded runtime in local mode). Delivering the assistant's reply back out to a chat provider is a separate, off-by-default step.
 - The TUI is an internal source surface like WebChat, not a generic outbound channel. Harnesses that require `tools.message` for visible replies can satisfy the active TUI turn with a targetless `message.send`. Explicit provider delivery still uses normal configured channels and never falls back to `lastChannel`.
 - Delivery is fixed for the whole TUI session when it starts. Start with `openclaw tui --deliver` to turn it on. There is no `/deliver` slash command or Settings toggle to flip it mid-session. Restart the TUI to change it.
+- Delivered turns return to idle when their persisted completion arrives, even without a chat reply event. Escape clears stale local busy state after confirming that the session is idle; a run that is still finishing keeps its completion tracking.
 
 ## Pickers + overlays
 

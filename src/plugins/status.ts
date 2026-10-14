@@ -306,6 +306,7 @@ function buildPluginReport(
             env: params?.env,
             logger: params?.logger,
             loadModules: false,
+            throwOnLoadError: false,
             onlyPluginIds,
             manifestRegistry: metadataSnapshot.manifestRegistry,
             runtimeContext: context,
@@ -428,6 +429,7 @@ function resolvePluginInspectContext({ report, ...params }: PluginInspectParams)
   const { config } = resolvePluginRuntimeLoadContext(params);
   return {
     report,
+    config,
     entries: normalizePluginsConfig(config.plugins).entries,
   };
 }
@@ -452,7 +454,7 @@ type PluginInspectRows = Pick<
 
 function buildPluginInspectRecord(
   plugin: PluginRegistry["plugins"][number],
-  { report, entries }: ReturnType<typeof resolvePluginInspectContext>,
+  { report, config, entries }: ReturnType<typeof resolvePluginInspectContext>,
   rows?: PluginInspectRows,
 ): PluginInspectReport {
   const typedHooks = (
@@ -555,7 +557,7 @@ function buildPluginInspectRecord(
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
-    decisions: inspectDecisionProviders(getRuntimeConfig(), report).filter(
+    decisions: inspectDecisionProviders(config, report).filter(
       (entry) => entry.pluginId === plugin.id,
     ),
     gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],

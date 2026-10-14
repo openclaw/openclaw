@@ -5,7 +5,7 @@ import {
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { defaultRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createClackPrompter } from "openclaw/plugin-sdk/setup-runtime";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
@@ -22,7 +22,7 @@ import {
 
 export async function runMemoryReset(opts: MemoryResetCommandOptions): Promise<void> {
   // Reset needs no embedding provider or credentials, including when search is disabled.
-  const cfg = getRuntimeConfig({ skipPluginValidation: true });
+  const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const agentIds = resolveMemoryAgentIds(cfg, opts.agent);
   const slotOwner = resolveForeignMemorySlotOwner(cfg);
   if (slotOwner) {
