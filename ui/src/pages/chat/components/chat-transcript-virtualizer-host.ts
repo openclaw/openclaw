@@ -292,9 +292,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
     this.connected = true;
     this.renderer.connect();
-    if (this.host instanceof HTMLElement) {
-      this.host.addEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
-    }
+    const target = this.callbacks.geometryEventTarget;
+    target?.addEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
     for (const controller of this.controllers) {
       controller.hostConnected?.();
     }
@@ -397,9 +396,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       return;
     }
     this.connected = false;
-    if (this.host instanceof HTMLElement) {
-      this.host.removeEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
-    }
+    const target = this.callbacks.geometryEventTarget;
+    target?.removeEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }
@@ -549,6 +547,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   get isMaintenanceScroll(): boolean {
     return (
+      // Intermediate end-command movement remains owned until native input cancels it.
+      (this.offsetState.scrollCommand?.target === "end" && this.canAutoFollow()) ||
       (this.endAnchor.isResizeAnchor(this.scrollElement) && this.canAutoFollow()) ||
       isTranscriptMaintenanceScroll(this.offsetState, this.scrollElement)
     );

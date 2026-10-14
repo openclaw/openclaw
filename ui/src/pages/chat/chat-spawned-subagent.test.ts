@@ -7,7 +7,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
-import { renderActivityGroup } from "./components/chat-message-group.ts";
+import { renderActivityGroup } from "./components/chat-message-group.test-support.ts";
 import {
   createAssistantMessage,
   createMessageEntry,

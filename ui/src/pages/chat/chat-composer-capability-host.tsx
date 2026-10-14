@@ -1,13 +1,12 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { nothing } from "lit";
+import { createMemo } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
-import { t } from "../../i18n/index.ts";
-import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import "../../components/modal-dialog.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
@@ -22,6 +21,7 @@ import {
 } from "../../lib/config/mcp-servers.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentListParamsForSession,
@@ -30,12 +30,12 @@ import {
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import { renderLibraryPinRead } from "../skills/library-detail.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { ComposerAddServerDialog } from "./components/chat-composer-add-server-dialog.tsx";
-import { solidTemplate } from "./components/chat-composer-controls.ts";
 import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.tsx";
 import {
   ComposerSkillCatalog,
@@ -221,7 +221,6 @@ export class ChatComposerCapabilityHost {
         if (isCurrentPatch()) {
           state.lastError = message;
           state.chatError = message;
-          state.requestUpdate?.();
         }
       }
       return { ok: false, error: message };
@@ -375,29 +374,48 @@ export class ChatComposerCapabilityHost {
     this.notify();
   }
 
-  renderAddServerDialog(
+  dialogView(
     context: ApplicationContext,
     state: ChatPageHost,
     session: GatewaySessionRow | undefined,
   ) {
-    if (!this.addDialogOpen) {
-      return nothing;
-    }
-    return solidTemplate(ComposerAddServerDialog, {
+    return {
       open: this.addDialogOpen,
       busy: this.addBusy,
       scope: this.addScope,
+      error: this.addError,
       scopeBlockedReason: this.addServerBlockedReason(context, state, session, "everywhere"),
       submitBlockedReason: this.addServerBlockedReason(context, state, session, this.addScope),
-      error: this.addError,
-      onScopeChange: (scope) => {
+      onCancel: (event?: Event) => {
+        if (this.addBusy) {
+          event?.preventDefault();
+          return;
+        }
+        this.closeAddDialog();
+      },
+      onScopeChange: (scope: ComposerMcpServerScope) => {
         this.addScope = scope;
         this.addError = null;
         this.notify();
       },
-      onCancel: () => this.closeAddDialog(),
-      onSubmit: (form) => void this.submitAddServer(context, state, session, form),
-    });
+      onSubmit: (form: McpServerForm) => {
+        void this.submitAddServer(context, state, session, form);
+      },
+      libraryContent: this.library.read
+        ? renderLibraryPinRead({
+            read: this.library.read,
+            file: this.library.selectedFile,
+            onFile: (file) => {
+              this.library.selectedFile = file;
+              this.notify();
+            },
+            onClose: () => {
+              this.library.closeRead();
+              this.notify();
+            },
+          })
+        : null,
+    };
   }
 
   props(
@@ -446,7 +464,7 @@ export class ChatComposerCapabilityHost {
     const gatewayAvailable = state.connected && Boolean(state.client);
     const effectiveToolsAvailable =
       isGatewayMethodAdvertised(context.gateway.snapshot, "tools.effective") === true;
-    // Start before projecting loading state; a notification during Lit render
+    // Start before projecting loading state; a notification during render
     // cannot schedule the second render that the old menu callback relied on.
     if (effectiveToolsAvailable && toolAccessOpen) {
       this.loadEffectiveTools(context, state, agentId);
@@ -502,7 +520,6 @@ export class ChatComposerCapabilityHost {
       mutationBlockedReason,
       canAdmin: access.canAdmin && gatewayAvailable,
       adminBlockedReason,
-      addServerDialog: this.renderAddServerDialog(context, state, session),
       library: {
         result: this.library.result,
         loading: this.library.loading,
@@ -526,20 +543,6 @@ export class ChatComposerCapabilityHost {
           }
         },
       },
-      libraryDialog: this.library.read
-        ? renderLibraryPinRead({
-            read: this.library.read,
-            file: this.library.selectedFile,
-            onFile: (file) => {
-              this.library.selectedFile = file;
-              this.notify();
-            },
-            onClose: () => {
-              this.library.closeRead();
-              this.notify();
-            },
-          })
-        : nothing,
       onLoadSkills: () => {
         if (!current()) {
           return;
@@ -577,4 +580,22 @@ export class ChatComposerCapabilityHost {
         : {}),
     };
   }
+}
+
+export type ChatComposerCapabilityDialogsProps = {
+  read: () => ReturnType<ChatComposerCapabilityHost["dialogView"]>;
+  revision: object;
+};
+
+export function ChatComposerCapabilityDialogs(props: ChatComposerCapabilityDialogsProps) {
+  const view = createMemo(() => {
+    void props.revision;
+    return props.read();
+  });
+  return (
+    <>
+      <ComposerAddServerDialog {...view()} />
+      <LitContent value={view().libraryContent} />
+    </>
+  );
 }

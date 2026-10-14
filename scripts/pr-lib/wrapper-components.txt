@@ -352,6 +352,7 @@ src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
 src/infra/database-engine/admission-scope.ts
+src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/policy.ts
 src/infra/postgres-sync/connection.ts
@@ -1051,6 +1052,7 @@ src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-key.ts
+src/infra/sqlite-database-admission-read.ts
 src/infra/sqlite-database-admission-record.ts
 src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts

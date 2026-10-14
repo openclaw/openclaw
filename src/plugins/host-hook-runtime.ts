@@ -293,6 +293,18 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     if (streams && streams.length > 0 && !streams.includes(params.event.stream)) {
       continue;
     }
+    const phases = registration.subscription.phases;
+    if (phases && phases.length > 0) {
+      const data = params.event.data;
+      if (
+        !data ||
+        typeof data !== "object" ||
+        typeof data.phase !== "string" ||
+        !phases.includes(data.phase)
+      ) {
+        continue;
+      }
+    }
     const pluginId = registration.pluginId;
     const runId = params.event.runId;
     let handlerActive = true;

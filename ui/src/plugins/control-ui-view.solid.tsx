@@ -102,6 +102,7 @@ function MountedContent(props: {
 const views = new WeakMap<HTMLElement, { focus(options?: FocusOptions): void }>();
 
 function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
+  const owner = getOwner();
   const context = useOptionalApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const notify = () => setRevision((value) => value + 1);
@@ -240,7 +241,9 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       handle?.update?.(viewContext);
       if (!host.mountDefaultView) {
         for (const target of defaultContainers.keys()) {
-          renderLegacyTemplate(host.defaultView, target, host.defaultHost ?? host);
+          runWithOwner(owner, () =>
+            renderLegacyTemplate(host.defaultView, target, host.defaultHost ?? host),
+          );
         }
       }
     } catch (failure) {
@@ -310,7 +313,9 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
           if (host.mountDefaultView) {
             dispose = host.mountDefaultView(target);
           } else {
-            renderLegacyTemplate(host.defaultView, target, host.defaultHost ?? host);
+            runWithOwner(owner, () =>
+              renderLegacyTemplate(host.defaultView, target, host.defaultHost ?? host),
+            );
             dispose = () => renderLegacyTemplate(undefined, target);
           }
           defaultContainers.set(target, dispose);
@@ -333,9 +338,10 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     }
   };
   function ViewRoot() {
+    const viewOwner = getOwner();
     let container!: HTMLDivElement;
     onSettled(() => {
-      mount(container);
+      runWithOwner(viewOwner, () => mount(container));
     });
     return (
       <div
