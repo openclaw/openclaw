@@ -17,7 +17,6 @@ import {
   NODE_WORKER_STATUS_WAIT_VERSION,
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
-import type { SpawnResult } from "../../process/exec.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   nodeWorkerPlanHash,
@@ -33,6 +32,7 @@ import {
   parseWorkerAdmissionDeadlineResult,
   WORKER_ADMISSION_DEADLINE_MS,
 } from "../../worker/worker-connection-contract.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { measureWorkerProcessTurnBytes } from "../../worker/worker-process-protocol.js";
 import { buildNodeInvokeRequest, serializeNodeEvent } from "../node-invoke-request.js";
 import type {
@@ -40,13 +40,18 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
-import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
+import {
+  WorkerRunnerCapacityError,
+  WorkerRunnerUnavailableError,
+  type WorkerTurnProcessResult,
+} from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export function nodeWorkerSpawnResultFromReceipt(
   receipt: TerminalNodeWorkerSupervisorReceipt,
-): SpawnResult {
+): WorkerTurnProcessResult {
   return {
+    ...(receipt.state === "interrupted" ? { nodeLoss: new WorkerNodeLostError() } : {}),
     stdout: receipt.state === "completed" ? receipt.resultJson : "",
     stderr: receipt.state === "completed" ? "" : receipt.errorText,
     code: receipt.state === "completed" ? 0 : 1,
@@ -663,11 +668,16 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       try {
         terminal = await cancelUntilTerminal({ request: stableRequest, expected });
       } catch (cancelError) {
-        throw new AggregateError(
+        const failure = new AggregateError(
           [error, cancelError],
           "node worker launch failed and cancellation could not be confirmed",
           { cause: cancelError },
         );
+        throw error instanceof NodeWorkerLaunchTransportError &&
+          (error.code === "DISCONNECTED" || error.code === "NOT_CONNECTED") &&
+          !request.signal?.aborted
+          ? new WorkerNodeLostError({ cause: failure })
+          : failure;
       }
       if (deadline.signal.aborted || !stableRequest.isDispatchAuthorized()) {
         return terminal;

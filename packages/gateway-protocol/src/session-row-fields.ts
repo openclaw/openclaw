@@ -115,11 +115,13 @@ export const SESSION_SIDEBAR_ROW_FIELDS: ReadonlySet<string> = new Set([
 
 /** Response-local facts: no cross-request catalog or invalidation protocol. */
 export function shareSessionRowFacts<T extends SessionRow>(sessions: T[]) {
-  type SharedFact = { fact: Partial<T>; fields: string[]; rows: { index: number; row: T }[] };
+  type SharedFact = { fact: Partial<T>; rows: { index: number; row: T }[] };
   const candidates = new Map<string, SharedFact>();
   const rows = sessions.map((row) => ({ ...row }));
   rows.forEach((row, index) => {
-    for (const [field, value] of Object.entries(row)) {
+    const recipient = { index, row };
+    for (const field in row) {
+      const value = row[field];
       // Keep required fields and the projection marker readable without expanding the table.
       if (
         value === undefined ||
@@ -128,13 +130,13 @@ export function shareSessionRowFacts<T extends SessionRow>(sessions: T[]) {
         continue;
       }
       const fact: Partial<T> = {};
-      Object.assign(fact, { [field]: value });
+      fact[field] = value;
       const key = JSON.stringify(fact);
       const candidate = candidates.get(key);
       if (candidate) {
-        candidate.rows.push({ index, row });
+        candidate.rows.push(recipient);
       } else {
-        candidates.set(key, { fact, fields: [field], rows: [{ index, row }] });
+        candidates.set(key, { fact, rows: [recipient] });
       }
     }
   });
@@ -148,7 +150,6 @@ export function shareSessionRowFacts<T extends SessionRow>(sessions: T[]) {
     const group = groups.get(key);
     if (group) {
       Object.assign(group.fact, candidate.fact);
-      group.fields.push(...candidate.fields);
     } else {
       groups.set(key, candidate);
     }
@@ -156,8 +157,9 @@ export function shareSessionRowFacts<T extends SessionRow>(sessions: T[]) {
   const sharedFacts: Partial<T>[] = [];
   for (const group of groups.values()) {
     const reference = sharedFacts.push(group.fact) - 1;
+    const fields = Object.keys(group.fact);
     for (const { row } of group.rows) {
-      for (const field of group.fields) {
+      for (const field of fields) {
         Reflect.deleteProperty(row, field);
       }
       (row.sharedFacts ??= []).push(reference);

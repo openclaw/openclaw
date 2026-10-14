@@ -242,6 +242,8 @@ This surprises people who add one channel to give it special settings and find t
 
 Channel entries override guild-level values, so a channel entry with `users: ["*"]` opens that one room to any sender even when the guild `users` list is narrow. Entries match by channel ID, name, or slug, and a thread falls back to its parent channel's entry.
 
+Channel ID entries win; name or slug keys resolved at startup or on a policy reload bind tool and mention policies to that channel ID, so a thread or renamed channel with the same name does not inherit them. Unresolved name keys still match by name, so use channel IDs for entries that grant extra tools.
+
 ### Applying access-policy changes
 
 For running Discord accounts, policy-only changes saved in the Control UI apply

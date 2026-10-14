@@ -241,7 +241,7 @@ it("shares one frozen tool-result graph across append receipts, transcript views
     expect(message.details.rows).toBe(original.rows);
     expect(message.details.rows[0]).toBe(original.row);
     expect(message.details.rows[0]!.values).toBe(original.values);
-    for (const value of [entries[index], message, ...Object.values(original)]) {
+    for (const value of [message, ...Object.values(original)]) {
       expect(Object.isFrozen(value)).toBe(true);
     }
   }

@@ -47,7 +47,11 @@ type TransactionDatabase = DatabaseSync & {
   [abortedTransactionSymbol]?: { error: unknown };
 };
 
-export function assertTransactionUsable(db: TransactionDatabase): void {
+export function assertTransactionUsable(db: TransactionDatabase | PostgresSqlConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    assertPostgresTransactionUsable(db);
+    return;
+  }
   const aborted = db[abortedTransactionSymbol];
   if (aborted) {
     throw aborted.error;
@@ -428,6 +432,9 @@ function runSqliteTransactionSync<T>(
     sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
+  if (timing) {
+    timing.transactions.count += 1;
+  }
   return settleSqliteTransactionSync(db, operation, mode, beginMs, prepareMs, options);
 }
 

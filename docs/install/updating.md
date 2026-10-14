@@ -318,6 +318,9 @@ publication are not detected. Its full fingerprint is retained for recovery;
 resumed publication and repair still verify package contents. This optimization
 applies when the installed updater contains it; older updaters keep their checks.
 
+pnpm updates use the installation's own pnpm home and bin directory, even when
+macOS service PATH excludes pnpm. The installed updater must contain this fix.
+
 Native pnpm updates also relocate pnpm 12 launcher paths before publishing them.
 After activation, unresolved launcher targets produce a warning with repair
 guidance without rolling back the updated package. These protections require
@@ -453,6 +456,12 @@ selectors cause the checks to run before startup instead.
 The final report records downtime through convergence and final verification,
 plus verification results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
+
+Post-update configuration and settlement reads wait for temporary SQLite
+maintenance custody within the existing update allowance. If that wait expires,
+contention alone preserves automatic Gateway recovery; an actual data-at-risk
+refusal still blocks recovery. Doctor publishes its completion result only after
+its maintenance resources have been released.
 
 Source updates also admit build-artifact ownership and runtime staging access in
 the installed checkout before stopping the Gateway. A retained

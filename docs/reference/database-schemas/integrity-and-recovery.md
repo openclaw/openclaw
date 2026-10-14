@@ -62,6 +62,25 @@ and the admission policy revision. Commit and build
 IDs do not invalidate seals for otherwise compatible builds. Maintainers must advance
 the policy revision for migrations or schema-version changes not reflected in canonical
 SQL, and for changes to validation rules or serialized admission facts.
+Same-version session columns are admission prerequisites, not optional reader
+projections. Declare them in `STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS`: the
+same declarations drive installation, pending-repair detection, and saved-catalog
+admission. Seal loading checks the saved catalog for these columns before publishing
+any completed-validation facts. Absent feature-local tables remain absent.
+An existing table missing a required column cannot reuse its seal, even when
+the schema version is unchanged.
+
+Startup keeps each affected agent unavailable until its writable admission owner
+installs the columns under existing maintenance authority and publishes the
+committed schema facts. Session preparation and readers run afterward; a cold
+reader refuses pending additive repairs before preparing session queries.
+Same-schema managed activations rely on this ordering even when no version
+crossing invokes Doctor. Do not add an independent reader migration or controller
+SQL repair. Regression coverage must prove that every column installed by the
+same-version installer is represented in admission facts. A complete prior-build
+catalog retains seal reuse without validation SQL; adding requirements alone does
+not invalidate seals whose catalogs already satisfy them.
+
 Updating from an older seal-identity format requires one full validation;
 subsequent compatible builds reuse the new seal. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
@@ -500,6 +519,14 @@ and deletion status remain checked before publication. A failed inspection or
 preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
+
+Startup deletion-journal checks use at most eight concurrent reads, so releasing
+more than 128 agents from preparation readiness does not exhaust the shared
+state-read pool. If other readers saturate that pool, startup retries only the
+typed capacity rejection up to four attempts with cancellable backoff. Deletion
+tombstones, genuine read failures, and exhausted retries still leave the agent
+degraded. Gateway ownership and database identity are checked after waiting for
+admission and before consuming the read result.
 
 Configured ACP-only session stores follow the same deferred inspection and
 session preparation path, including IDs from `acp.defaultAgent`,

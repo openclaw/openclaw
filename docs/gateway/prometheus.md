@@ -100,7 +100,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | --------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | `openclaw_gateway_build_info`                             | gauge     | `process_instance_id`, optional `build_id`                                                |
 | `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
-| `openclaw_gc_duration_seconds`                            | histogram | none                                                                                      |
+| `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_response_bytes`                     | histogram | `method`                                                                                  |
@@ -544,8 +544,9 @@ live Workers. Direct Workers contribute to `workerCount` without a pool entry.
 These are JavaScript Worker counts, not an operating-system thread census.
 
 `openclaw_child_process_spawn_total{family="...",operation="..."}` counts successful launches
-through OpenClaw's shared spawn and exec owners, including brokered launches,
-and the streaming workspace inventory runner.
+through OpenClaw's shared spawn and exec owners, including brokered and native
+PTY launches, and the streaming workspace inventory runner. Windows PTYs are
+attributed at their first output or exit after their asynchronous PID publication.
 Diagnostics must be enabled. The existing heartbeat publishes accumulated
 counts after at least one minute, with debug logs reporting counts and rates
 using the actual elapsed interval. Failed launches, direct calls bypassing
@@ -568,7 +569,15 @@ Global Git options and their values are skipped before classifying the command;
 unrecognized commands, aliases, and option layouts use `unscoped.other`.
 These labels replace `unknown` for unscoped launches, so update queries that
 select that label. Invalid explicit owners still use `unknown`.
-Other executable families use `none`.
+Other executable families use bounded owners such as `agent.exec`, `shell.snapshot`,
+and `service.relay`, or fixed fallback classifications such as
+`unscoped.shell-command`, `unscoped.shell`, `unscoped.runtime`, `unscoped.version`,
+`unscoped.gh`, and `unscoped.command`. Relays for agent exec retain `agent.exec`.
+SQLite read launches retain their `sqlite.scoped-read.broker`,
+`sqlite.scoped-read.native`, `sqlite.session.broker`, or `sqlite.session.native` labels.
+Update queries selecting `operation="none"` to select the relevant owners or
+remove the operation filter to retain the per-family view. Linux OOM-protection
+exec wrappers report the logical target family, since the broker can omit the shell.
 Arguments, repository paths, session IDs, and free-text caller names are never recorded.
 For launches per minute grouped by Git owner, use
 `60 * sum by (operation) (rate(openclaw_child_process_spawn_total{family="git"}[5m]))`.
@@ -586,7 +595,14 @@ cleanup pass. Normal result settlement still removes its own refs immediately.
 ### Garbage collection duration
 
 `openclaw_gc_duration_seconds` records elapsed garbage collection (GC) duration
-reported by Node.js for the hosting JavaScript isolate. Each observation is one
+reported by Node.js for the main isolate and instrumented workers. `kind` is
+`scavenge` (minor), `mark_sweep_compact` (major), `incremental`, or
+`weak_processing`, taken from the native entry's `detail.kind`. `thread` is `main`
+or an allowlisted worker script basename; unknown worker scripts use `other`.
+Workers of the same kind share series, without thread IDs or paths. Older SDK
+producers that omit attribution use `kind="unknown",thread="main"`. SDK-provided
+unknown kinds and worker names fold into `unknown` and `other` at event emission.
+Each observation is one
 GC entry, not CPU time, allocated bytes, or a guaranteed stop-the-world pause.
 Compare its bucket counts with event-loop window maxima to investigate GC as a
 possible contributor to stalls; matching scrape intervals do not prove causality.
@@ -598,13 +614,31 @@ event loop is stalled. Entries preceding observer activation are not backfilled.
 Demand is checked when entries are delivered, so a brief consumer gap before the
 next heartbeat can still yield delayed observations. Losing the last
 consumer suppresses new exports; the observer disconnects at the next heartbeat.
-Disabling diagnostics or stopping the heartbeat disconnects it immediately.
+Disabling diagnostics or stopping the heartbeat disconnects the main observer
+immediately and sends worker disconnect requests over their existing memory
+telemetry ports. A busy worker processes the request when its event loop resumes;
+exports are suppressed in the meantime.
 
 The histogram is absent until the first observation, so absence does not prove
 zero GC. Queue drops, the series cap, observation gaps and process restarts limit
 coverage. Diagnostics disable/re-enable preserves the exporter's existing
 counters; restarting the exporter resets them as usual. No extra timer, GC
-trigger, trace attribution or application payload is collected.
+trigger, trace attribution or application payload is collected. Worker GC batches
+reuse the memory telemetry port; port closure stops its observer. Workers without
+that port, nested workers outside this registry, and runtimes without native GC
+entries are not covered. Worker exit can lose a final undelivered batch.
+
+The histogram's `_count` and `_sum` are the collection count and total elapsed
+seconds for each label pair. Existing queries that need a single total should
+aggregate the new labels; select `thread="main"` to retain main-isolate scope:
+
+```promql
+sum by (kind, thread) (rate(openclaw_gc_duration_seconds_count[5m]))
+sum by (kind, thread) (rate(openclaw_gc_duration_seconds_sum[5m]))
+```
+
+OpenTelemetry's `openclaw.gc.duration_ms` uses the corresponding
+`openclaw.gc.kind` and `openclaw.gc.thread` attributes.
 
 ## Label policy
 

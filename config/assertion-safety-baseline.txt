@@ -565,7 +565,6 @@ extensions/minimax/video-generation-provider.ts	3
 extensions/moonshot/index.ts	2
 extensions/moonshot/native-video.ts	2
 extensions/moonshot/provider-policy-api.ts	1
-extensions/moonshot/src/kimi-web-search-provider.runtime.ts	2
 extensions/msteams/doctor-contract-api.ts	1
 extensions/msteams/src/attachments/graph.ts	1
 extensions/msteams/src/attachments/shared.ts	1
@@ -2042,7 +2041,6 @@ src/gateway/worker-environments/state.ts	1
 src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3
 src/gateway/worker-environments/workspace-accepted-publication.ts	1
-src/gateway/worker-environments/workspace-manifest.ts	14
 src/gateway/worker-environments/workspace-result-staging.ts	2
 src/gateway/worker-workspace-conflict-transcript.ts	4
 src/gateway/ws-log.ts	3
@@ -2187,7 +2185,7 @@ src/infra/system-presence.ts	1
 src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
-src/infra/update-global.ts	3
+src/infra/update-global.ts	2
 src/infra/update-package-manager.ts	1
 src/infra/warning-filter.ts	4
 src/infra/windows-gateway-firewall-diagnostics.ts	2
@@ -2329,7 +2327,7 @@ src/plugins/capability-provider-runtime.ts	8
 src/plugins/captured-registration.ts	1
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
-src/plugins/clawhub.ts	4
+src/plugins/clawhub.ts	3
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/config-normalization-shared.ts	1

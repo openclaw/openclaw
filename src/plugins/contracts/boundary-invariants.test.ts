@@ -64,7 +64,7 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   "extensions/diffs/src/plugin.ts": [
     "resolveLivePluginConfigObject(",
     '"diffs"',
-    "api.runtime.config?.current?.() ?? api.config",
+    "api.runtime.config.current()",
   ],
   "extensions/memory-core/src/dreaming.ts": [
     "resolveMemoryDreamingPluginConfig(startupCfg)",

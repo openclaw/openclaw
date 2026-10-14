@@ -21,6 +21,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { recordSessionCreated } from "./session-created.js";
 import { prepareAmbientGroupWatchTargetsRead } from "./session-state-events.ambient-read.js";
 import {
@@ -421,7 +422,7 @@ describe("session state watcher cursor batches", () => {
   it("advances watcher fanout with bounded cursor reads and preserves excluded cursors", async () => {
     const database = createDatabaseOptions();
     await seedChild(database, nestedWatcher);
-    const { db } = openOpenClawStateDatabase(database);
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
     const watchers = Array.from(
       { length: 1_001 },
       (_, index) => `agent:main:subagent:fanout-${index}`,

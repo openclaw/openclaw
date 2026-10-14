@@ -36,7 +36,11 @@ export type UsageCostCollectionAccess = {
   ) => Promise<Array<{ agentId: string; sessionId: string; updatedAtMs: number }>>;
   readSqliteStats: (
     markers: readonly SqliteSessionFileMarker[],
-  ) => Promise<Array<SessionTranscriptStats | undefined>>;
+  ) => Promise<
+    Array<
+      (SessionTranscriptStats & Pick<UsageCostTranscriptFile, "generation" | "cold">) | undefined
+    >
+  >;
 };
 
 type UsageCostJsonlSource = {
@@ -165,6 +169,8 @@ async function readUsageCostSqliteFiles(
       size: stats.sizeBytes,
       eventCount: stats.eventCount,
       maxSeq: stats.maxSeq,
+      generation: stats.generation,
+      cold: stats.cold,
     };
   });
 }

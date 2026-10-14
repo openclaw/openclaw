@@ -94,6 +94,8 @@ export type Row = {
   agentId: string;
   storeTarget: SessionStoreTarget;
   storedEntry?: SessionEntry;
+  /** Committed archive metadata awaits the lineage registry before entry acquisition. */
+  entryAcquisitionPending?: true;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
   /** Presentation retains committed facets until their owner publishes or the row is demoted. */
@@ -350,6 +352,7 @@ export function renewGeneration(row: Row): Row {
     ...row,
     entry: undefined,
     storedEntry: undefined,
+    entryAcquisitionPending: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
     preparedAcpMeta: undefined,
@@ -685,6 +688,7 @@ export function acquireSessionRowEntry(params: {
   let next: Row = {
     ...row,
     storedEntry,
+    entryAcquisitionPending: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts,
     databaseFactsRevision: row.databaseFactsRevision + (retainedDatabaseFacts ? 0 : 1),

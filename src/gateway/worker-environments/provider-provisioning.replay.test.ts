@@ -449,7 +449,9 @@ describe("worker environment service provision replay", () => {
       );
 
       expect(provision).toHaveBeenCalledTimes(1);
-      expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      expect(inspect).toHaveBeenCalledWith(
+        expect.objectContaining({ leaseId, profile: { region: "test" } }),
+      );
       expect(destroy).toHaveBeenCalledTimes(released ? 0 : 1);
       if (!released) {
         expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });

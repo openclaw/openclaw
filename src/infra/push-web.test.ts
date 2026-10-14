@@ -23,6 +23,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   deleteWebPushApprovalDeliveryTargets,
   withBoundWebPushSubscriptionByEndpoint,
@@ -868,8 +869,11 @@ describe("sending", () => {
     const { db } = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
     });
-    const reads = trackSqliteStatementExecutions(db, ["subscriptions"], (sql) =>
-      /^select\b/i.test(sql) && sql.includes('"web_push_subscriptions"') ? "subscriptions" : null,
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(db),
+      ["subscriptions"],
+      (sql) =>
+        /^select\b/i.test(sql) && sql.includes('"web_push_subscriptions"') ? "subscriptions" : null,
     );
     try {
       const results = await broadcastWebPush({ title: "Broadcast" }, tmpDir);

@@ -3,6 +3,7 @@ import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statem
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import * as stateDb from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { executeDevicePairingRead } from "./device-pairing-read.kernel.js";
 import {
   loadDevicePairingStoreState,
@@ -43,12 +44,15 @@ afterEach(async () => {
 });
 
 test("invalidates retained pairing rows after a worker commit without freshness probes", async () => {
-  const reads = trackSqliteStatementExecutions(database.db, ["freshness", "paired"], (sql) =>
-    /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
-      ? "freshness"
-      : /\bfrom "device_pairing_paired"/iu.test(sql)
-        ? "paired"
-        : null,
+  const reads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["freshness", "paired"],
+    (sql) =>
+      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
+        ? "freshness"
+        : /\bfrom "device_pairing_paired"/iu.test(sql)
+          ? "paired"
+          : null,
   );
   const read = () =>
     executeDevicePairingRead(database.db, database.path, {
@@ -141,8 +145,10 @@ test.each([false, true])(
 test.each([false, true])(
   "reuses one paired snapshot without stale reads or escaped rollback state (rollback=%s)",
   (rollback) => {
-    const reads = trackSqliteStatementExecutions(database.db, ["paired"], (sql) =>
-      /^\s*select\b.*\bfrom "device_pairing_paired"/iu.test(sql) ? "paired" : null,
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["paired"],
+      (sql) => (/^\s*select\b.*\bfrom "device_pairing_paired"/iu.test(sql) ? "paired" : null),
     );
     const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
     const expected = {

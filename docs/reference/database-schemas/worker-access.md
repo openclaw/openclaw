@@ -22,6 +22,13 @@ maintenance and unbound SDK managers retain their existing storage admission.
 Slow direct-reservation warnings label session-manager, actor-command, and selected
 history-read callers. The `openclaw.agent-database.reservation` diagnostic channel
 publishes holder timing without paths, session identities, or message content.
+Worker reservations also report bounded operation labels and the number of explicit
+outer SQLite transactions observed in their worker replies. This counts begun
+transactions, including rollbacks and read snapshots, rather than host admission
+requests, nested savepoints, or implicit autocommit. An absent count means no broker
+counter was received, not zero transactions; reclamation-worker close uses its own
+caller label. A reservation includes worker queueing, preparation, and result
+delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
 Use the existing read-only worker scope for descriptive reads and the store's
@@ -49,17 +56,20 @@ Gateway startup binds existing auth-file observers to its read-only scope and
 spawn broker, including observations retained across an in-process restart.
 New observers capture those resources when admitting a directory. File scans
 publish through the current binding, including scans spanning a restart.
-Detached filesystem notifications use that cancellation scope and the shared
-serialized process pool; they do not launch a native process for each WAL change.
-Every refresh still re-admits the current database source and checks its authority.
-Scope retirement stops change publications and joins accepted reads;
-the next Gateway generation rebinds retained observers before startup admission.
+Filesystem notifications retire physical replacements and changed legacy sources;
+ordinary database and WAL contents changes do not reload auth rows. Scope retirement
+stops change publications, and the next Gateway generation rebinds retained observers
+before startup admission.
 
-Persisted auth-row observation belongs to the host. Catalog workers reload
-credentials through their native task owner instead of retaining background row
-readers for WAL notifications. Workers still observe physical file replacement
-to retire native SQLite handles; session-only WAL activity needs no worker auth
-reread.
+Canonical auth rows belong to one Gateway cache shared by runtime loading, scoped
+credentials, source detection, and usage preparation. Agent and shared readers reuse
+immutable rows while their auth-scoped write receipt remains current. Session-only
+writes do not invalidate them; auth and unscoped writes do. Committed canonical
+postimages update the same cache before runtime overlays are applied. Explicit
+refresh drops cached rows, and maintenance, artifact-preserving, pinned-snapshot,
+and worker-owned reads retain their own custody. In-place writes from another process
+are unsupported while the Gateway owns the database. Credential effects still check
+current published credential authority at the fetch boundary without reading SQL.
 
 Generic scoped SQLite reads share at most four process slots, matched by captured
 runtime generation, environment, working directory, and spawn-broker owner.
@@ -449,7 +459,10 @@ preserving the supplied mtime. A cache miss uses one existing writer command to
 read a bounded tail and store its result, including an empty result. Unavailable
 or cold projections remain incomplete and are not marked as successfully backfilled.
 Usage-cost refresh reads a stale rollup body and its monthly partitions in one
-worker snapshot; discovery still reads only metadata. Its transcript statistics
+worker snapshot; discovery still reads only metadata. Transcript statistics use
+the existing batched read directly, without registering per-session write scopes
+for a stats cache. Large inventories would otherwise repeatedly transfer a growing
+scope map while churning the bounded cache. The transcript statistics
 batch carries the rewrite generation and hot/cold state alongside the bounds,
 so the subsequent scan reuses those facts without another watermark read. A
 rewrite during a background scan converges on the next receipt-driven refresh.
@@ -1799,6 +1812,9 @@ The MAIN replica retains complete committed hot state. A synchronous snapshot
 reads installed facts; an ordered read joins the existing physical writer FIFO
 and requests actor state only on a miss. Commit receipts identify the command,
 phase, and before/after version, and install before command acknowledgement.
+Worker transport already detaches these internal postimages. Settlement and
+replica installation share them without another deep freeze or copy; internal
+borrowers treat snapshots and receipts as read-only and copy before editing.
 If a receipt supersedes an in-flight read, that read uses the current replica.
 An empty replica permits one worker-read retry. A replacement before disclosure
 is reacquired once and authorized again; revoked authority still refuses the read.
@@ -4088,20 +4104,25 @@ retains its physical store, rereads its voice record inside the worker transacti
 and publishes acknowledged facts before dependent work. Request and session authority
 are prepared before dispatch; session creation publishes its committed identity
 through the existing authorization owner. The committing worker checks same-store predicates;
-custom-store sources retain their native authority, and incognito sources use
+published custom-store sharing sources admit once against the sharing owner's current
+entry and membership facts, and incognito sources use
 committed memory actor facts, without opening readers inside a grant. Opaque synchronous `sessionMutationCommitGuard` and unclassified
 `hasCurrentClientAuthority` callbacks from the released v2026.9.8 Gateway SDK,
 including guards retained by voice replacement,
 keep native voice admission through the same FIFO and mutation kernel. These callbacks
 may read SQLite and remain live throughout native preparation and commit. Ordinary
-prepared same-store Gateway requests use the worker; foreign-store requester
-and session-source authority retain native admission. Incognito sources carry
-committed memory actor facts into the durable voice owner. Other-store predicates use their retained connection before and after the native mutation;
+prepared Gateway requests use the worker, including foreign sharing sources with
+complete owner publication. An admitted cross-store durable voice write may finish
+after session or membership revocation; new admissions fail once revocation starts.
+Disclosure, credential handoff, tool launch, and external sends still check live
+authority immediately before their effect. Incognito sources carry
+committed memory actor facts into the durable voice owner. Uncovered foreign predicates
+and opaque SDK compositions retain native admission and use their retained connection before and after the native mutation;
 same-store predicates use that transaction's connection. This preserves event-loop
 atomicity with synchronous SDK writers without reopening source readers or
 discovering schema capabilities under the write lock. These final native authority
-checks remain until raw synchronous writers are removed at the next Plugin SDK
-major and owner publications cover revocation completely.
+checks remain until the deprecated synchronous SDK APIs are removed and owner
+publications cover revocation completely.
 Native SDK opening hands its admitted file identity to that same executor; refused
 worker preparations finish cleanup before the handoff. Fixed stores retain their
 physical schema owner independently of logical agent routing. Each create/resume
@@ -5875,9 +5896,8 @@ definition-generation, expiry, and exact-operation checks. Cancellation, expiry,
 failed launch, and unknown consumption never refund or replay usage. A fallback
 proven to precede initiation revalidates the same grant without consuming again.
 Close refuses new effects and joins accepted accounting before retiring workers.
-An unconfirmed native launch makes drain and close fail while retaining database
-custody and the admission seal. The Gateway process must retire before that
-authority can be reopened; an uncertain launch is never replayed or refunded.
+An unconfirmed native launch keeps the exec-policy mutation fence until canonical
+close releases that use; an uncertain launch is never replayed or refunded.
 Grant eligibility, released SDK contracts, schemas, retention, and update behavior
 are unchanged.
 

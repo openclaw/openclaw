@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover nested config edit rejection and draft preservation.
 import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
-
-type ConfigFormStructuredDraftElement = HTMLElement & {
-  updateComplete: Promise<unknown>;
-};
+import { flush } from "../test-helpers/solid-settle.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -161,7 +158,7 @@ describe("config form rejection integrity", () => {
     container.remove();
   });
 
-  it("commits an optional object only after all required children are valid", async () => {
+  it("commits an optional object only after all required children are valid", () => {
     const container = document.createElement("div");
     document.body.append(container);
     let currentValue: Record<string, unknown> = {};
@@ -194,23 +191,21 @@ describe("config form rejection integrity", () => {
 
     renderValue();
     const draft = expectElement(
-      container.querySelector<ConfigFormStructuredDraftElement>(
-        "openclaw-config-form-structured-draft",
-      ),
+      container.querySelector<HTMLElement>("openclaw-config-form-structured-draft"),
       "optional object draft",
     );
-    await draft.updateComplete;
+    flush();
     const host = expectElement(
       draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
       "optional host",
     );
     host.value = "gateway.local";
     host.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
+    flush();
     expect(onPatch).not.toHaveBeenCalled();
 
     renderValue();
-    await draft.updateComplete;
+    flush();
     expect(
       expectElement(
         draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
@@ -237,7 +232,7 @@ describe("config form rejection integrity", () => {
     container.remove();
   });
 
-  it("retains a complete optional object draft when its atomic commit is rejected", async () => {
+  it("retains a complete optional object draft when its atomic commit is rejected", () => {
     const onPatch = vi.fn(() => false);
     const container = document.createElement("div");
     document.body.append(container);
@@ -265,26 +260,24 @@ describe("config form rejection integrity", () => {
 
     renderValue();
     const draft = expectElement(
-      container.querySelector<ConfigFormStructuredDraftElement>(
-        "openclaw-config-form-structured-draft",
-      ),
+      container.querySelector<HTMLElement>("openclaw-config-form-structured-draft"),
       "rejected optional object draft",
     );
-    await draft.updateComplete;
+    flush();
     const host = expectElement(
       draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
       "rejected optional host",
     );
     host.value = "gateway.local";
     host.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
+    flush();
     const port = expectElement(
       draft.querySelector<HTMLInputElement>("input[aria-label='Port']"),
       "rejected optional port",
     );
     port.value = "18789";
     port.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
+    flush();
 
     expect(onPatch).toHaveBeenCalledTimes(1);
     expect(onPatch).toHaveBeenCalledWith(["settings", "connection"], {
@@ -308,7 +301,7 @@ describe("config form rejection integrity", () => {
     ).toContain("draft is still here");
 
     renderValue();
-    await draft.updateComplete;
+    flush();
     expect(
       expectElement(
         draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
@@ -321,7 +314,7 @@ describe("config form rejection integrity", () => {
     container.remove();
   });
 
-  it("constructs an optional large-minimum array without leaking partial values", async () => {
+  it("constructs an optional large-minimum array without leaking partial values", () => {
     const onPatch = vi.fn((_path: Array<string | number>, _value: unknown) => false);
     const container = document.createElement("div");
     document.body.append(container);
@@ -344,7 +337,7 @@ describe("config form rejection integrity", () => {
         onPatch,
       });
     };
-    const add = (draft: ConfigFormStructuredDraftElement) =>
+    const add = (draft: HTMLElement) =>
       expectElement(
         Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
           (button) => button.textContent?.trim() === "Add",
@@ -354,23 +347,21 @@ describe("config form rejection integrity", () => {
 
     renderValue();
     const draft = expectElement(
-      container.querySelector<ConfigFormStructuredDraftElement>(
-        "openclaw-config-form-structured-draft",
-      ),
+      container.querySelector<HTMLElement>("openclaw-config-form-structured-draft"),
       "large-minimum array draft",
     );
-    await draft.updateComplete;
+    flush();
     add(draft).click();
-    await draft.updateComplete;
+    flush();
     expect(onPatch).not.toHaveBeenCalled();
     expect(draft.textContent).toContain("1 item");
 
     renderValue();
-    await draft.updateComplete;
+    flush();
     expect(draft.textContent).toContain("1 item");
 
     add(draft).click();
-    await draft.updateComplete;
+    flush();
     expect(onPatch).toHaveBeenCalledTimes(1);
     const [path, value] = onPatch.mock.calls[0] ?? [];
     expect(path).toEqual(["settings", "codes"]);
@@ -381,7 +372,7 @@ describe("config form rejection integrity", () => {
     ).toContain("draft is still here");
 
     renderValue();
-    await draft.updateComplete;
+    flush();
     expect(draft.textContent).toContain("101 items");
     expect(
       draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,

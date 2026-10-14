@@ -28,6 +28,9 @@ Startup does not trigger collection. The first scheduled run catches up yesterda
 reusing accepted closed days when retrying a partially failed run; manual generation
 still refreshes the requested day. Automatic collection waits at least five minutes
 after service start, and intraday runs keep their aligned UTC boundaries.
+Set `schedule.enabled: false` to stop automatic collection and catch-up while keeping
+stored reports, work sessions, and explicit `generate` commands available. Status
+then reports `scheduleEnabled: false` with no scheduled runs. The default is `true`.
 The Control UI tab opens at `/reports` (prefixed by the Control UI base path).
 Model summary calls are optional; set `summaries.enabled: false` for text without a model.
 

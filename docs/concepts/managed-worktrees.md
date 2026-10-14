@@ -448,7 +448,7 @@ Cleanup remembers protected checkouts' deferral reasons and fingerprints instead
 
 A Git timeout records its removal stage, elapsed milliseconds, attempt count, and next retry time in the existing revision-bound cleanup disposition. Automatic retries wait two hours initially, then double up to 24 hours; passes inside that window skip checkout inventory work. This backoff survives Gateway restarts. An explicit `--retry-deferred` bypasses the wait, while owner activity or a new registry lifecycle invalidates the old disposition. Existing rows require no migration; builds that understand only the deferral reason retain their existing protection behavior. Slow-removal log lines include the checkout path, stage durations, tracked and non-ignored untracked counts when available, and the deferral decision. A timeout during deletion preserves the pending snapshot and prevents a new run from using the potentially partial checkout; use the recovery procedure below.
 
-Missing or corrupt Git objects also use this persisted backoff. One failed idle-cleanup attempt pauses further idle snapshots and Git maintenance for the shared repository, including sibling checkouts in the same sweep. Cleanup reports the repository needing repair and preserves the checkouts. Restore missing objects or repair the clone, then run `openclaw worktrees gc --retry-deferred` to retry immediately. The existing cleanup revision invalidates the remembered failure when its worktree's owner or lifecycle changes; no database migration is required. Explicit removal and capacity eviction retain their existing policies.
+Missing or corrupt Git objects also use this persisted backoff. One failed idle-cleanup attempt pauses further idle snapshots for the shared repository, including sibling checkouts in the same sweep. Pack maintenance remains paused unless a promisor remote is configured and a full native Git integrity check confirms that absent objects are promised by the partial clone. That check validates local objects and pack checksums without fetching; missing unpromised objects or damaged packs still stop maintenance. Checkouts remain protected until the objects needed by their snapshots are available locally. Cleanup reports the repository needing repair and preserves the checkouts. Restore missing objects or repair the clone, then run `openclaw worktrees gc --retry-deferred` to retry immediately. The existing cleanup revision invalidates the remembered failure when its worktree's owner or lifecycle changes; no database migration is required. Explicit removal and capacity eviction retain their existing policies.
 
 Listing and cleanup mark a missing checkout as removed only if its recorded path, activity, and repository identity still match the earlier check. A restore or repository repair that completes during that check preserves the newer live record.
 
@@ -712,6 +712,11 @@ and a 4,096-object limit per pass; completed fetches survive interruption. If
 repair cannot finish, maintenance logs a warning. Restore remote access and run
 the command again to resume from the remaining missing objects. Locally created
 objects unavailable from the remote still require recovery from another copy.
+
+Gateway Git inspections also use only locally available objects. In partial
+clones, missing objects can leave optional checkout, branch, or diff facts
+unavailable instead of downloading packs during a read. Explicit fetches,
+checkout preparation, and requested object repair retain their transfer behavior.
 
 UI preferences and other unrelated configuration writes do not interrupt cleanup.
 Changes to cleanup inputs, such as the worktree root or capacity, agent workspaces,

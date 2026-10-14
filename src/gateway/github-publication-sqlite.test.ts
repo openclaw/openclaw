@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
 import { readSharedGitHubPublicationRequestInDatabase } from "./github-publication-shared-read.kernel.js";
 import { deferGitHubPublicationRequestsFixture } from "./github-publication-store.test-support.js";
@@ -32,7 +33,7 @@ describe("publication SQLite materialization", () => {
       }
       insertSharedWorktreeReceipt("latest", { createdAtMs: 100 });
     });
-    const db = openOpenClawStateDatabase().db;
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
     const readRows = () =>
       db.prepare("SELECT * FROM github_publication_requests ORDER BY request_id").all();
     const before = readRows();
@@ -80,7 +81,7 @@ describe("publication SQLite materialization", () => {
     const second = insertSharedWorktreeReceipt("second", {
       session: { ...session, sessionKey: session.sessionKey + ":other" },
     });
-    const db = openOpenClawStateDatabase().db;
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
     const body = "synthetic publication body ".repeat(512);
     for (const row of [first, second]) {
       db.prepare(

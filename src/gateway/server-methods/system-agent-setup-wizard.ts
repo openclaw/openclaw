@@ -23,6 +23,7 @@ type SetupActivation = Pick<
   | "apiKey"
   | "workspace"
   | "nativeSessionCatalogsEnabled"
+  | "selectModel"
 >;
 type AuthWizardRequest = {
   ownerKey: string;
@@ -60,6 +61,7 @@ async function createSetupActivationSession(
       previous.activation.agentId !== activation.agentId ||
       previous.activation.workspace !== activation.workspace ||
       previous.activation.modelTarget !== activation.modelTarget ||
+      previous.activation.selectModel !== activation.selectModel ||
       previous.activation.nativeSessionCatalogsEnabled !== activation.nativeSessionCatalogsEnabled)
   ) {
     return undefined;
