@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { ColumnType, Insertable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -32,7 +33,7 @@ type AuditSkillSelectionDatabase = Pick<
   sqlite_sequence: SqliteSequenceTable;
 };
 
-function getSkillSelectionAuditKysely(db: DatabaseSync) {
+function getSkillSelectionAuditKysely(db: EngineConnection) {
   return getNodeSqliteKysely<AuditSkillSelectionDatabase>(db);
 }
 
@@ -41,7 +42,7 @@ function getSkillSelectionAuditKysely(db: DatabaseSync) {
  * `auditEventRowCounts` pattern of the canonical ledger: ordinary writes
  * do bounded work and only fall back to COUNT(*) on a cold cache.
  */
-const skillSelectionAuditRowCounts = new Map<DatabaseSync, number>();
+const skillSelectionAuditRowCounts = new Map<EngineConnection, number>();
 
 /**
  * Connections whose companion schema is established. The canonical schema
@@ -49,17 +50,23 @@ const skillSelectionAuditRowCounts = new Map<DatabaseSync, number>();
  * below only runs for databases created before admission, at most once
  * per connection.
  */
-const skillSelectionSchemaEstablished = new WeakSet<DatabaseSync>();
+const skillSelectionSchemaEstablished = new WeakSet<EngineConnection>();
 
 /** Drops cached skill-selection facts for a connection (rollback path). */
-export function invalidateSkillSelectionAuditCachesForDatabase(db: DatabaseSync): void {
+export function invalidateSkillSelectionAuditCachesForDatabase(db: EngineConnection): void {
   skillSelectionAuditRowCounts.delete(db);
   skillSelectionSchemaEstablished.delete(db);
 }
 
-function ensureSkillSelectionAuditSchema(db: DatabaseSync): void {
+function ensureSkillSelectionAuditSchema(db: EngineConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    // Postgres DDL is owned by canonical schema admission/migrations;
+    // this legacy backfill DDL is SQLite-only (STRICT tables).
+    return;
+  }
+  const sqlite = db as import("node:sqlite").DatabaseSync;
   // sqlite-allow-raw -- Canonical additive DDL only; skill-selection rows use Kysely.
-  db.exec(`
+  sqlite.exec(`
     CREATE TABLE IF NOT EXISTS audit_skill_selection_events (
       sequence INTEGER PRIMARY KEY,
       event_id TEXT NOT NULL UNIQUE,
@@ -90,7 +97,7 @@ function ensureSkillSelectionAuditSchema(db: DatabaseSync): void {
   `);
 }
 
-function countSkillSelectionAuditEvents(db: DatabaseSync): number {
+function countSkillSelectionAuditEvents(db: EngineConnection): number {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     getSkillSelectionAuditKysely(db)
@@ -100,7 +107,7 @@ function countSkillSelectionAuditEvents(db: DatabaseSync): number {
   return normalizeSqliteNumber(row?.count ?? null) ?? 0;
 }
 
-function ensureSkillSelectionAuditSchemaOnce(db: DatabaseSync): void {
+function ensureSkillSelectionAuditSchemaOnce(db: EngineConnection): void {
   if (skillSelectionSchemaEstablished.has(db)) {
     return;
   }
@@ -110,7 +117,10 @@ function ensureSkillSelectionAuditSchemaOnce(db: DatabaseSync): void {
   skillSelectionSchemaEstablished.add(db);
 }
 
-function deleteExpiredSkillSelectionAuditEvents(db: DatabaseSync, retainedAfter: number): number {
+function deleteExpiredSkillSelectionAuditEvents(
+  db: EngineConnection,
+  retainedAfter: number,
+): number {
   ensureSkillSelectionAuditSchemaOnce(db);
   const kysely = getSkillSelectionAuditKysely(db);
   const expiredSequences = kysely
@@ -130,7 +140,10 @@ function deleteExpiredSkillSelectionAuditEvents(db: DatabaseSync, retainedAfter:
   return Number(result.numAffectedRows ?? 0n);
 }
 
-function pruneSkillSelectionAuditEventsAfterInsert(db: DatabaseSync, retainedAfter: number): void {
+function pruneSkillSelectionAuditEventsAfterInsert(
+  db: EngineConnection,
+  retainedAfter: number,
+): void {
   const expiredCount = deleteExpiredSkillSelectionAuditEvents(db, retainedAfter);
   // One COUNT(*) per connection lifetime: a warm cache advances by
   // (+1 insert, −expired) exactly like the canonical ledger pattern.
@@ -191,12 +204,16 @@ function normalizeSequenceHighWater(value: unknown): number {
   throw new Error("audit event sequence high-water mark is invalid");
 }
 
-function readAuditSequenceHighWater(db: DatabaseSync): number {
+function readAuditSequenceHighWater(db: EngineConnection): number {
   const kysely = getSkillSelectionAuditKysely(db);
-  const sequenceRow = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely.selectFrom("sqlite_sequence").select("seq").where("name", "=", "audit_events"),
-  );
+  // sqlite_sequence is SQLite-only; Postgres derives the high-water mark
+  // from MAX(sequence) below.
+  const sequenceRow = isPostgresSqlConnection(db)
+    ? undefined
+    : executeSqliteQueryTakeFirstSync(
+        db,
+        kysely.selectFrom("sqlite_sequence").select("seq").where("name", "=", "audit_events"),
+      );
   const auditRow = executeSqliteQueryTakeFirstSync(
     db,
     kysely.selectFrom("audit_events").select((eb) => eb.fn.max("sequence").as("sequence")),
@@ -216,10 +233,15 @@ function readAuditSequenceHighWater(db: DatabaseSync): number {
   );
 }
 
-function allocateAuditSequence(db: DatabaseSync): number {
+function allocateAuditSequence(db: EngineConnection): number {
   const nextSequence = readAuditSequenceHighWater(db) + 1;
   if (!Number.isSafeInteger(nextSequence) || nextSequence < 1) {
     throw new Error("audit event sequence is outside the supported integer range");
+  }
+  if (isPostgresSqlConnection(db)) {
+    // No sqlite_sequence on Postgres; the AUTOINCREMENT/sequence-backed
+    // column owns allocation and MAX(sequence) above keeps us ahead.
+    return nextSequence;
   }
   const kysely = getSkillSelectionAuditKysely(db);
   const updated = executeSqliteQuerySync(
@@ -263,7 +285,7 @@ function bindSkillSelectionAuditEvent(
 
 export function recordSkillSelectionAuditEvent(
   input: Extract<AuditEventInput, { kind: "skill_selection" }>,
-  db: DatabaseSync,
+  db: EngineConnection,
   retainedAfter: number,
 ): AuditEventRecord | undefined {
   ensureSkillSelectionAuditSchemaOnce(db);
@@ -285,7 +307,7 @@ export function recordSkillSelectionAuditEvent(
 }
 
 export function listSkillSelectionAuditEvents(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   filters: AuditEventListFilters;
   retainedAfter: number;
   cursor?: number;
@@ -334,7 +356,7 @@ export function listSkillSelectionAuditEvents(params: {
 }
 
 export function pruneExpiredSkillSelectionAuditEvents(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   retainedAfter: number;
 }): number {
   const deleted = deleteExpiredSkillSelectionAuditEvents(params.db, params.retainedAfter);
