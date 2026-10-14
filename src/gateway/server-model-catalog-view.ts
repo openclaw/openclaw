@@ -95,9 +95,9 @@ function captureSessionRowPolicy(params: {
         },
       },
       workspaceEnvironment: harness.workspaceEnvironment && { ...harness.workspaceEnvironment },
-      supports: Boolean(harness.supports),
-      ownership: Boolean(harness.resolveSessionRuntimeOwnership),
-      asyncOwnership: Boolean(harness.resolveSessionRuntimeOwnershipAsync),
+      supports: typeof harness.supports === "function",
+      ownership: typeof harness.resolveSessionRuntimeOwnership === "function",
+      asyncOwnership: typeof harness.resolveSessionRuntimeOwnershipAsync === "function",
     })),
     cliBackends: pluginRegistry.cliBackends.map(({ pluginId, source, rootDir, backend }) => ({
       pluginId,

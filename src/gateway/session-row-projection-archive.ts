@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import * as records from "./session-row-projection-record.js";
 
@@ -106,7 +107,7 @@ export function createSessionRowProjectionArchive(params: {
         if (change.factsInvalidated) {
           params.invalidateFacts(row);
         }
-        if (change.runtimeOwnershipChanged) {
+        if (change.runtimeOwnershipChanged && resolveSessionPinnedHarnessId(row.entry)) {
           // Completed policy changes expire native ownership; queued work keeps accepted facts.
           records.invalidateDatabaseFacts(
             row,
