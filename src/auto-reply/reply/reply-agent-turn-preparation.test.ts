@@ -16,7 +16,6 @@ import {
   createDefaults,
   registerFollowupOwnerPolicyCases,
 } from "./followup-turn-admission.owner-policy.test-support.js";
-import type { FollowupRun } from "./queue.js";
 
 const state = vi.hoisted(() => ({
   admitReply: vi.fn(),

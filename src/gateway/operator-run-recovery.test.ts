@@ -907,7 +907,11 @@ describe("restart recovery authenticated operator source", () => {
           const predecessorTarget = target;
           const accepted = await acceptCompactionSuccessor({
             currentTarget: target,
-            expectedEntry: predecessor,
+            expectedEntry: {
+              sessionId: predecessor.sessionId,
+              lifecycleRevision: predecessor.lifecycleRevision,
+              activeWriterRunId: predecessor.activeWriterRunId,
+            },
             assertActive: active.authority.assertCurrent,
             onCommitted: () => {
               if (sessionId === "second-successor") {
@@ -938,7 +942,11 @@ describe("restart recovery authenticated operator source", () => {
         await expect(
           acceptCompactionSuccessor({
             currentTarget: fixture.target,
-            expectedEntry: fixture.entry,
+            expectedEntry: {
+              sessionId: fixture.entry.sessionId,
+              lifecycleRevision: fixture.entry.lifecycleRevision,
+              activeWriterRunId: fixture.entry.activeWriterRunId,
+            },
             assertActive: active.authority.assertCurrent,
             result: {
               ok: true,
@@ -967,13 +975,18 @@ describe("restart recovery authenticated operator source", () => {
         expect(active.authority.assertCurrent).toThrow("authority changed");
         expect(restored.authority.assertCurrent).toThrow("authority changed");
         await expect(restore()).rejects.toThrow(/Restart recovery operator/);
+        const retainedSuccessor = expectDefined(
+          await readSessionEntryReadOnlyInWorker(target),
+          "retained successor",
+        );
         await expect(
           acceptCompactionSuccessor({
             currentTarget: target,
-            expectedEntry: expectDefined(
-              await readSessionEntryReadOnlyInWorker(target),
-              "retained successor",
-            ),
+            expectedEntry: {
+              sessionId: retainedSuccessor.sessionId,
+              lifecycleRevision: retainedSuccessor.lifecycleRevision,
+              activeWriterRunId: retainedSuccessor.activeWriterRunId,
+            },
             assertActive: active.authority.assertCurrent,
             result: {
               ok: true,
