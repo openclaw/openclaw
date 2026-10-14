@@ -25,7 +25,7 @@
  * No hosted model, operator config, live Gateway or credentials are used.
  *
  * Control: without restart, the Gateway observes its child's hard timeout and
- * publishes exited/timed_out. Main: with recovery, an expired registry wait
+ * publishes an exited `timeout` outcome. Main: with recovery, an expired wait
  * remains nonterminal, then the actual recovered child's completion succeeds.
  * Both runs must pass; a clock-only terminal transition fails the main run.
  *
@@ -48,6 +48,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import type { SubagentRunReadRecord } from "../src/agents/subagents/registry/subagent-registry-read.types.js";
+import { resolveSubagentDisplayStatus } from "../src/agents/subagents/registry/subagent-session-metrics.js";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -143,18 +145,13 @@ async function waitFor(
   throw new Error(`timed out waiting for: ${description}`);
 }
 
-type RegistryRow = {
+type RegistryRow = Pick<
+  SubagentRunReadRecord,
+  "endedReason" | "pauseReason" | "delivery" | "execution" | "waitExpiryObservedAt"
+> & {
   runId: string;
   childSessionKey?: string;
   generation?: number;
-  execution: {
-    status?: string;
-    startedAt?: number;
-    endedAt?: number;
-    outcome?: { status?: string; disposition?: string };
-  };
-  endedReason?: string;
-  waitExpiryObservedAt?: number;
 };
 
 const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proof-126924-gw-"));
@@ -191,22 +188,56 @@ function readRegistryRows(): RegistryRow[] {
   }
 }
 
-/** The gateway's own detached-task projection — what a parent or operator reads. */
-function readTaskStatus(childSessionKey: string): string | undefined {
-  if (!fs.existsSync(statePath)) {
-    return undefined;
-  }
-  const db = new DatabaseSync(statePath, { readOnly: true });
-  try {
-    const row = db
-      .prepare("select status from task_runs where child_session_key = ? order by created_at desc")
-      .get(childSessionKey) as { status?: string } | undefined;
-    return row?.status;
-  } catch {
-    return undefined;
-  } finally {
-    db.close();
-  }
+/**
+ * The run status a parent actually reads, computed by the production projection
+ * the `subagents` tool and `/subagents` render from
+ * (`resolveSubagentDisplayStatus`), against the gateway's own persisted row.
+ *
+ * This replaces an earlier read of `task_runs.status`. That projection is gone:
+ * the Tasks/TaskFlow runtime removal left `src/cron/store/run-history.kernel.ts`
+ * as the only writer of that table and it hardcodes `runtime: "cron"`, so a
+ * native child writes no row there and the query could only ever answer
+ * `undefined`.
+ *
+ * It is read from the row rather than by child session key because the ordinary
+ * terminal owner RETIRES a settled row, so the last status a parent could have
+ * read has to be latched while the row still exists — see `latchStatus` below.
+ */
+function parentVisibleStatus(row: RegistryRow | undefined): string | undefined {
+  return row ? resolveSubagentDisplayStatus(row) : undefined;
+}
+
+/**
+ * What `resolveSubagentDisplayStatus` words an unconfirmed stop as. Its own
+ * comment pins the contract: the status a parent reads "must never contradict
+ * the completion warning that told it the child may still be working", so it is
+ * deliberately not `timeout`.
+ */
+const PARENT_STATUS_STOP_UNCONFIRMED = "running (wait expired; child stop unconfirmed)";
+/** What the same projection words a real, successfully settled run as. */
+const PARENT_STATUS_DONE = "done";
+/** What it words a run the clock terminalized as. */
+const PARENT_STATUS_TIMEOUT = "timeout";
+
+/**
+ * Samples one run's parent-visible status and remembers the last one that
+ * existed. The ordinary terminal owner retires a settled row, so a reader that
+ * samples after retirement sees nothing; latching keeps the terminal status the
+ * row actually published instead of racing its cleanup.
+ */
+function createStatusLatch(runId: string) {
+  let latched: string | undefined;
+  return {
+    sample(): string | undefined {
+      const status = parentVisibleStatus(
+        readRegistryRows().find((candidate) => candidate.runId === runId),
+      );
+      if (status !== undefined) {
+        latched = status;
+      }
+      return latched;
+    },
+  };
 }
 
 function readMockRequests(): Array<Record<string, unknown>> {
@@ -287,6 +318,12 @@ try {
     // child's. An empty string is the documented opt-out for utility routing.
     agents: { defaults: { utilityModel: "" } },
     plugins: { enabled: false },
+    // The scripted turn calls `sessions_spawn` BY NAME. Tool search is on by
+    // default (`resolveToolSearchConfig` reads an absent `tools.toolSearch` as
+    // `{enabled:true}`) and defers most of the catalog behind
+    // `tool_search`/`tool_call`, so the named call would answer "Tool
+    // sessions_spawn not found" and no child would ever be created.
+    tools: { toolSearch: false },
   };
   applyMockOpenAiModelConfig(config, { mockPort, modelRef: "openai/gpt-5.6-luna" });
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
@@ -539,7 +576,7 @@ try {
   );
   const expiredRow = readRegistryRows().find((row) => row.runId === childRunId);
   const disposition = expiredRow?.execution.outcome?.disposition ?? "exited";
-  const expiredTaskStatus = readTaskStatus(childSessionKey);
+  const expiredParentStatus = parentVisibleStatus(expiredRow);
   if (CONTROL_MODE) {
     assert.equal(
       disposition,
@@ -547,12 +584,12 @@ try {
       `a gateway that observed its own child's stop must record exited (saw ${disposition})`,
     );
     assert.equal(
-      expiredTaskStatus,
-      "timed_out",
+      expiredParentStatus,
+      PARENT_STATUS_TIMEOUT,
       "an observed stop is publishable as a terminal timeout",
     );
     log(
-      `[3/5] control: disposition=exited, detached task=timed_out — the observed-stop path still terminalizes`,
+      `[3/5] control: disposition=exited, parent-visible status="${PARENT_STATUS_TIMEOUT}" — the observed-stop path still terminalizes`,
     );
     log("");
     log("All isolated-Gateway control assertions passed.");
@@ -580,12 +617,13 @@ try {
       "the row must stay provisional until something observes a stop",
     );
     assert.equal(
-      readTaskStatus(childSessionKey),
-      "running",
-      "the recovered child's task must remain running while its provider response is held",
+      parentVisibleStatus(retainedRow),
+      PARENT_STATUS_STOP_UNCONFIRMED,
+      "the recovered child must still read as running to its parent while its provider " +
+        "response is held",
     );
     log(
-      `[4/5] fail-closed: row retained across ${dwellMs}ms, detached task="${String(readTaskStatus(childSessionKey))}" (the control run reaches "timed_out" here)`,
+      `[4/5] fail-closed: row retained across ${dwellMs}ms, parent-visible status="${String(parentVisibleStatus(retainedRow))}" (the control run reaches "${PARENT_STATUS_TIMEOUT}" here)`,
     );
 
     // ---------------------------------------------------------- assertion 5
@@ -596,20 +634,23 @@ try {
     // actually reads. A row promoted through the ordinary lifecycle is then
     // retired by the ordinary owner, so "the registry row is gone" is not by
     // itself the interesting fact — what the provisional state had to protect is
-    // the task's ability to publish a non-timeout terminal outcome afterwards.
+    // the run's ability to publish a non-timeout terminal outcome afterwards.
+    const settledStatus = createStatusLatch(childRunId);
     await waitFor(
-      "the child's own settled record to terminalize the detached task",
+      "the child's own settled record to terminalize the status a parent reads",
       () => {
-        const status = readTaskStatus(childSessionKey);
-        return status !== undefined && status !== "running" && status !== "queued";
+        const status = settledStatus.sample();
+        return (
+          status !== undefined && status !== PARENT_STATUS_STOP_UNCONFIRMED && status !== "queued"
+        );
       },
       120_000,
       500,
     );
-    const finalTaskStatus = readTaskStatus(childSessionKey);
+    const finalParentStatus = settledStatus.sample();
     assert.equal(
-      finalTaskStatus,
-      "succeeded",
+      finalParentStatus,
+      PARENT_STATUS_DONE,
       "the same recovered child's real successful completion must remain publishable",
     );
     const finalRow = readRegistryRows().find((row) => row.runId === childRunId);
@@ -618,7 +659,7 @@ try {
       "the row must not still be provisional after its child settled",
     );
     log(
-      `[5/5] the child's own real completion promoted the run: detached task="${finalTaskStatus}" (not timed_out), registry row ${finalRow ? `promoted to ${JSON.stringify(finalRow.execution.outcome)}` : "retired by the ordinary terminal owner after promotion"}`,
+      `[5/5] the child's own real completion promoted the run: parent-visible status="${finalParentStatus}" (not "${PARENT_STATUS_TIMEOUT}"), registry row ${finalRow ? `promoted to ${JSON.stringify(finalRow.execution.outcome)}` : "retired by the ordinary terminal owner after promotion"}`,
     );
     log("");
     log("All isolated-Gateway assertions passed.");

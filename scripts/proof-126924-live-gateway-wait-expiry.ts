@@ -21,7 +21,7 @@
  * NONTERMINAL `waitExpiryObservedAt` and wakes the parent with
  * `{status:"timeout", disposition:"still-running"}` instead of calling
  * `completeAsRunTimeout`. Current main terminalizes at that same point: it
- * publishes `timed_out` and runs terminal cleanup for a child that may still be
+ * publishes a `timeout` outcome and runs terminal cleanup for a child that may still be
  * working — or, as here, for a child that has not started yet.
  *
  * HOW THE SCENARIO REACHES IT, WITHOUT TUNING THE PRODUCT
@@ -52,8 +52,9 @@
  * A real Gateway process started from `dist/entry.js` against a temp
  * `OPENCLAW_STATE_DIR`; real parent agent turns; the real `sessions_spawn` tool;
  * the real subagent registry, wait manager, sweeper, announce flow and
- * detached-task projection; real SQLite. Every assertion reads the Gateway's own
- * persisted rows read-only, from outside the process.
+ * parent-visible status projection (`resolveSubagentDisplayStatus`, the wording
+ * the `subagents` tool and `/subagents` render); real SQLite. Every assertion
+ * reads the Gateway's own persisted rows read-only, from outside the process.
  *
  * WHAT IS STUBBED, AND ONLY THIS
  * The repository's loopback OpenAI provider
@@ -65,16 +66,18 @@
  *
  * ASSERTIONS (the script exits non-zero on any violation)
  *  1. Provisional, not terminal — `waitExpiryObservedAt` is persisted while
- *     `execution.endedAt` is unset and the detached task still reads `running`.
+ *     `execution.endedAt` is unset and the status a parent reads is still
+ *     `running (wait expired; child stop unconfirmed)`.
  *  2. Continued child activity — the same child's own run starts AFTER that
  *     observation, and its own model request reaches the provider afterwards.
- *     On current main this child has already been published `timed_out`.
+ *     On current main this child has already been terminalized as a `timeout`.
  *  3. The provisional notification settles on its own — `waitExpiryAnnouncedAt`
  *     is persisted while the run is still nonterminal.
  *  4. Later final settlement and delivery — a child's real success then settles
  *     the run (`outcome.status === "ok"`), the provisional marker is retained
- *     rather than rewritten, the detached task publishes `succeeded` rather than
- *     the clock's `timed_out`, and no expired child is retired at its deadline.
+ *     rather than rewritten, the status a parent reads becomes `done` rather
+ *     than the clock's `timeout`, and no expired child is retired at its
+ *     deadline.
  *  5. Terminal-notification RECEIPT for the same child, after its own
  *     provisional notification settled — the run reaches
  *     `delivery.status === "delivered"` with a `deliveredAt` later than its
@@ -124,6 +127,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import type { SubagentRunReadRecord } from "../src/agents/subagents/registry/subagent-registry-read.types.js";
+import { resolveSubagentDisplayStatus } from "../src/agents/subagents/registry/subagent-session-metrics.js";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -156,6 +161,15 @@ const OBSERVE_TIMEOUT_MS = 240_000;
  * inside the block that names the child.
  */
 const NOTIFICATION_BLOCK_SCAN_CHARS = 900;
+/**
+ * What `resolveSubagentDisplayStatus` words an unconfirmed stop as. Its own
+ * comment pins the contract this proof is checking: the status a parent reads
+ * "must never contradict the completion warning that told it the child may
+ * still be working", so it is deliberately not `timeout`.
+ */
+const PARENT_STATUS_STOP_UNCONFIRMED = "running (wait expired; child stop unconfirmed)";
+/** What the same projection words a real, successfully settled run as. */
+const PARENT_STATUS_DONE = "done";
 const CHILD_TASK_MARKER = "PROOF126924LIVEEXPIRY";
 const PARENT_PROMPT_PREFIX = "Delegate the long task to a subagent.";
 
@@ -226,25 +240,15 @@ function captureOutput(child: ChildProcessWithoutNullStreams) {
   return () => buffer;
 }
 
-type RegistryRow = {
+type RegistryRow = Pick<
+  SubagentRunReadRecord,
+  "endedReason" | "pauseReason" | "delivery" | "execution" | "waitExpiryObservedAt"
+> & {
   runId: string;
   childSessionKey?: string;
   requesterSessionKey?: string;
   createdAt?: number;
   collect?: boolean;
-  delivery?: {
-    status?: string;
-    deliveredAt?: number;
-    announcedAt?: number;
-    disposition?: string;
-  };
-  execution: {
-    status?: string;
-    startedAt?: number;
-    endedAt?: number;
-    outcome?: { status?: string; disposition?: string; elapsedMs?: number };
-  };
-  waitExpiryObservedAt?: number;
   waitExpiryAnnouncedAt?: number;
 };
 
@@ -256,7 +260,7 @@ type ChildObservation = {
   createdAt: number;
   expiryObservedAt?: number;
   endedAtWhenExpiryObserved?: number;
-  taskStatusWhenExpiryObserved?: string;
+  parentStatusWhenExpiryObserved?: string;
   startedAtAfterExpiry?: number;
   childRequestsAtExpiry?: number;
 
@@ -267,7 +271,7 @@ type ChildObservation = {
   finalOutcome?: RegistryRow["execution"]["outcome"];
   finalEndedAt?: number;
   finalExpiryObservedAt?: number;
-  finalTaskStatus?: string;
+  finalParentStatus?: string;
   /** The run's own delivery receipt for its terminal completion notification. */
   finalDelivery?: RegistryRow["delivery"];
 };
@@ -309,22 +313,20 @@ function readRegistryRows(): RegistryRow[] {
   }
 }
 
-/** The Gateway's detached-task projection — what a parent or operator reads. */
-function readTaskStatus(childSessionKey: string): string | undefined {
-  if (!fs.existsSync(statePath)) {
-    return undefined;
-  }
-  const db = new DatabaseSync(statePath, { readOnly: true });
-  try {
-    const row = db
-      .prepare("select status from task_runs where child_session_key = ? order by created_at desc")
-      .get(childSessionKey) as { status?: string } | undefined;
-    return row?.status;
-  } catch {
-    return undefined;
-  } finally {
-    db.close();
-  }
+/**
+ * The run status a parent actually reads, computed by the production projection
+ * the `subagents` tool and `/subagents` render from
+ * (`resolveSubagentDisplayStatus`), against the Gateway's own persisted row.
+ *
+ * This replaces an earlier read of `task_runs.status`. That projection is gone:
+ * the Tasks/TaskFlow runtime removal left `src/cron/store/run-history.kernel.ts`
+ * as the only writer of that table and it hardcodes `runtime: "cron"`, so a
+ * native child writes no row there and the query could only ever answer
+ * `undefined`. The registry row IS the parent-visible projection now, and
+ * `resolveSubagentDisplayStatus` is the function that words it.
+ */
+function parentVisibleStatus(row: RegistryRow): string {
+  return resolveSubagentDisplayStatus(row);
 }
 
 /**
@@ -429,7 +431,7 @@ function describeObservations(observations: Map<string, ChildObservation>): stri
         `${observation.runId.slice(-8)}{expiry=${observation.expiryObservedAt ?? "-"},` +
         `startAfterExpiry=${observation.startedAtAfterExpiry ?? "-"},` +
         `announced=${observation.announcedAt ?? "-"},` +
-        `outcome=${observation.finalOutcome?.status ?? "-"},task=${observation.finalTaskStatus ?? "-"}}`,
+        `outcome=${observation.finalOutcome?.status ?? "-"},parentStatus=${observation.finalParentStatus ?? "-"}}`,
     )
     .join(" ");
 }
@@ -482,6 +484,18 @@ try {
     // opt-out for utility routing.
     agents: { defaults: { utilityModel: "" } },
     plugins: { enabled: false },
+    // The scripted turn calls `sessions_spawn` BY NAME, so the tool has to be on
+    // the model's own surface. Tool search is on by default —
+    // `resolveToolSearchConfig` reads an absent `tools.toolSearch` as
+    // `{enabled:true}` — and it defers a 60-tool catalog behind
+    // `tool_search`/`tool_describe`/`tool_call`, leaving 14 tools visible.
+    // `sessions_spawn` is one of the deferred ones, so the named call answers
+    // "Tool sessions_spawn not found", every parent wraps up without delegating,
+    // and the registry never sees a child: the whole proof then reads as
+    // "0 real children" rather than as the failure it is. The contract under
+    // proof is the registry's wait expiry, not the catalog surface, so this
+    // harness opts out and drives the real tool directly.
+    tools: { toolSearch: false },
   };
   applyMockOpenAiModelConfig(config, { mockPort, modelRef: "openai/gpt-5.6-luna" });
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
@@ -622,7 +636,7 @@ try {
       ) {
         observation.expiryObservedAt = row.waitExpiryObservedAt;
         observation.endedAtWhenExpiryObserved = row.execution.endedAt;
-        observation.taskStatusWhenExpiryObserved = readTaskStatus(row.childSessionKey);
+        observation.parentStatusWhenExpiryObserved = parentVisibleStatus(row);
         observation.childRequestsAtExpiry = countChildProviderRequests();
       }
       if (
@@ -642,7 +656,7 @@ try {
         observation.finalOutcome = row.execution.outcome;
         observation.finalEndedAt = row.execution.endedAt;
         observation.finalExpiryObservedAt = row.waitExpiryObservedAt;
-        observation.finalTaskStatus = readTaskStatus(row.childSessionKey);
+        observation.finalParentStatus = parentVisibleStatus(row);
       }
       observation.finalDelivery = row.delivery ? { ...row.delivery } : undefined;
     }
@@ -744,16 +758,16 @@ try {
   const provisional = expired.filter(
     (observation) =>
       observation.endedAtWhenExpiryObserved === undefined &&
-      observation.taskStatusWhenExpiryObserved === "running",
+      observation.parentStatusWhenExpiryObserved === PARENT_STATUS_STOP_UNCONFIRMED,
   );
   assert.ok(
     provisional.length > 0,
-    `every wait expiry terminalized its run or task; observed: ${describeObservations(observations)}`,
+    `every wait expiry terminalized its run or its parent-visible status; observed: ${describeObservations(observations)}`,
   );
   log(
     `[1/5] ${provisional.length} of ${observations.size} real children recorded a NONTERMINAL ` +
       `wait expiry: waitExpiryObservedAt persisted, execution.endedAt still unset, and the ` +
-      `detached task a parent reads still "running"`,
+      `status a parent reads still "${PARENT_STATUS_STOP_UNCONFIRMED}"`,
   );
 
   // --------------------------------------------------------------- assert 2
@@ -809,7 +823,8 @@ try {
   // drawn from the expired set, not only from the announced subset.
   const delivered = stillActive.filter(
     (observation) =>
-      observation.finalOutcome?.status === "ok" && observation.finalTaskStatus === "succeeded",
+      observation.finalOutcome?.status === "ok" &&
+      observation.finalParentStatus === PARENT_STATUS_DONE,
   );
   assert.ok(
     delivered.length > 0,
@@ -839,8 +854,9 @@ try {
     `[4/5] later final settlement and delivery: ${delivered.length} of them then finished for ` +
       `real — e.g. run ${deliveredExample.runId.slice(-8)} settled with ` +
       `${JSON.stringify(deliveredExample.finalOutcome)} at ${deliveredExample.finalEndedAt}, ` +
-      `waitExpiryObservedAt retained, and the detached task published "succeeded" rather than ` +
-      `the clock's "timed_out". No expired child was retired at its deadline.`,
+      `waitExpiryObservedAt retained, and the status a parent reads became ` +
+      `"${PARENT_STATUS_DONE}" rather than the clock's "timeout". No expired child was retired ` +
+      `at its deadline.`,
   );
 
   // --------------------------------------------------------------- assert 5

@@ -96,6 +96,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import type { SubagentRunReadRecord } from "../src/agents/subagents/registry/subagent-registry-read.types.js";
+import { resolveSubagentDisplayStatus } from "../src/agents/subagents/registry/subagent-session-metrics.js";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -237,16 +239,12 @@ function readRawRows(): Array<{ runId: string; payload: string }> {
   }
 }
 
-type StoredRun = {
-  waitExpiryObservedAt?: number;
+type StoredRun = Pick<
+  SubagentRunReadRecord,
+  "endedReason" | "pauseReason" | "delivery" | "execution" | "waitExpiryObservedAt"
+> & {
   waitExpiryAnnouncedAt?: number;
   childSessionKey?: string;
-  execution: {
-    status?: string;
-    startedAt?: number;
-    endedAt?: number;
-    outcome?: { status?: string; disposition?: string; timeoutDisposition?: string };
-  };
 };
 
 /** One persisted run, parsed from the bytes the writing build actually left. */
@@ -255,23 +253,31 @@ function readStoredRun(runId: string): { payload: string; record: StoredRun } | 
   return row ? { payload: row.payload, record: JSON.parse(row.payload) as StoredRun } : undefined;
 }
 
-/** The Gateway's own detached-task projection — what a parent or operator reads. */
-function readTaskStatus(childSessionKey: string): string | undefined {
-  if (!fs.existsSync(statePath)) {
-    return undefined;
-  }
-  const db = new DatabaseSync(statePath, { readOnly: true });
-  try {
-    const row = db
-      .prepare("select status from task_runs where child_session_key = ? order by created_at desc")
-      .get(childSessionKey) as { status?: string } | undefined;
-    return row?.status;
-  } catch {
-    return undefined;
-  } finally {
-    db.close();
-  }
+/**
+ * The run status a parent actually reads, computed by the production projection
+ * the `subagents` tool and `/subagents` render from
+ * (`resolveSubagentDisplayStatus`), against the persisted record each build left.
+ *
+ * This replaces an earlier read of `task_runs.status`. That projection is gone:
+ * the Tasks/TaskFlow runtime removal left `src/cron/store/run-history.kernel.ts`
+ * as the only writer of that table and it hardcodes `runtime: "cron"`, so a
+ * native child writes no row there and the query could only ever answer
+ * `undefined`. Reading the stored record instead is also the stricter test for
+ * THIS proof's question: it asks what each build's own persisted bytes mean to
+ * the reader, which is exactly what an upgrade and a rollback change.
+ */
+function parentVisibleStatus(record: StoredRun): string {
+  return resolveSubagentDisplayStatus(record);
 }
+
+/**
+ * What `resolveSubagentDisplayStatus` words an unconfirmed stop as — deliberately
+ * not `timeout`, so the status a parent reads cannot contradict the completion
+ * warning that told it the child may still be working.
+ */
+const PARENT_STATUS_STOP_UNCONFIRMED = "running (wait expired; child stop unconfirmed)";
+/** What it words a run the clock terminalized as — the pre-change reading. */
+const PARENT_STATUS_TIMEOUT = "timeout";
 
 function rowsCarryingNewObservations(rows: Array<{ runId: string; payload: string }>): string[] {
   return rows
@@ -345,6 +351,12 @@ try {
     },
     agents: { defaults: { utilityModel: "" } },
     plugins: { enabled: false },
+    // The scripted turn calls `sessions_spawn` BY NAME. Tool search is on by
+    // default (`resolveToolSearchConfig` reads an absent `tools.toolSearch` as
+    // `{enabled:true}`) and defers most of the catalog behind
+    // `tool_search`/`tool_call`, so the named call would answer "Tool
+    // sessions_spawn not found" and no child would ever be created.
+    tools: { toolSearch: false },
   };
   applyMockOpenAiModelConfig(config, { mockPort, modelRef: "openai/gpt-5.6-luna" });
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
@@ -627,12 +639,12 @@ try {
   );
   const heldChildSessionKey = heldBeforeStop.record.childSessionKey;
   assert.ok(heldChildSessionKey, "the held run must name its child session");
-  const heldTaskStatusUnderBranch = readTaskStatus(heldChildSessionKey);
+  const heldParentStatusUnderBranch = parentVisibleStatus(heldBeforeStop.record);
   assert.equal(
-    heldTaskStatusUnderBranch,
-    "running",
+    heldParentStatusUnderBranch,
+    PARENT_STATUS_STOP_UNCONFIRMED,
     `the branch build must report an unconfirmed child as still running; read ` +
-      `"${heldTaskStatusUnderBranch}" instead`,
+      `"${heldParentStatusUnderBranch}" instead`,
   );
   await stopGateway();
   const heldAfterStop = readStoredRun(heldRunId);
@@ -644,9 +656,10 @@ try {
       "one that finds it unsettled",
   );
   log(
-    `[B3] mid-flight: run ${heldRunId.slice(-8)} is persisted with ` +
+    `[B3] mid-flight: run ${heldRunId.slice(-8)} (child ${heldChildSessionKey}) is persisted with ` +
       `waitExpiryObservedAt=${heldAfterStop.record.waitExpiryObservedAt}, no execution.endedAt, ` +
-      `and its detached task read "running" under the branch build — the state a rollback finds`,
+      `and a parent read "${heldParentStatusUnderBranch}" under the branch build — the state a ` +
+      `rollback finds`,
   );
 
   // ------------------------------------------------------- phase C: rollback
@@ -719,12 +732,12 @@ try {
     undefined,
     "the older build cannot record the branch's timeout disposition",
   );
-  const heldTaskStatusUnderRollback = readTaskStatus(heldChildSessionKey);
+  const heldParentStatusUnderRollback = parentVisibleStatus(heldUnderRollback.record);
   assert.equal(
-    heldTaskStatusUnderRollback,
-    "timed_out",
+    heldParentStatusUnderRollback,
+    PARENT_STATUS_TIMEOUT,
     `the rolled-back build must publish the pre-change terminal status; read ` +
-      `"${heldTaskStatusUnderRollback}" instead`,
+      `"${heldParentStatusUnderRollback}" instead`,
   );
   await stopGateway();
   log(
@@ -733,8 +746,9 @@ try {
       `kept waitExpiryObservedAt=${heldUnderRollback.record.waitExpiryObservedAt} unchanged — the ` +
       `keys are NOT dropped. What it changed is the interpretation: ` +
       `${JSON.stringify(heldUnderRollback.record.execution.outcome)} with ` +
-      `endedAt=${heldUnderRollback.record.execution.endedAt}, and the detached task a parent reads ` +
-      `moved "running" -> "${heldTaskStatusUnderRollback}" for a child whose stop was never observed.`,
+      `endedAt=${heldUnderRollback.record.execution.endedAt}, and the status a parent reads ` +
+      `moved "${PARENT_STATUS_STOP_UNCONFIRMED}" -> "${heldParentStatusUnderRollback}" for a ` +
+      `child whose stop was never observed.`,
   );
 
   // ---------------------------------------------------- phase D: re-upgrade
@@ -773,12 +787,12 @@ try {
     heldUnderRollback.record.execution.endedAt,
     "the branch build must not move a terminal timestamp an older build recorded",
   );
-  const heldTaskStatusAfterReupgrade = readTaskStatus(heldChildSessionKey);
+  const heldParentStatusAfterReupgrade = parentVisibleStatus(heldAfterReupgrade.record);
   assert.equal(
-    heldTaskStatusAfterReupgrade,
-    "timed_out",
+    heldParentStatusAfterReupgrade,
+    PARENT_STATUS_TIMEOUT,
     `a settlement made while rolled back must not un-wind on re-upgrade; read ` +
-      `"${heldTaskStatusAfterReupgrade}" instead`,
+      `"${heldParentStatusAfterReupgrade}" instead`,
   );
   await stopGateway();
   log(
