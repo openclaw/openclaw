@@ -663,6 +663,7 @@ describe("session-scoped method admission", () => {
   it.each([
     ["chat.send", { sessionKey: "agent:main:own", message: "hello" }, "operator.write"],
     ["question.resolve", {}, "operator.questions"],
+    ["users.prefs.set", { entries: { "ui.theme": "claw" } }, "operator.write"],
   ] as const)("requires the narrow write grant for %s", (method, params, broad) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.sessions.write"], params)).toEqual({
       allowed: true,
