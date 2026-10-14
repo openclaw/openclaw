@@ -3009,7 +3009,11 @@ function listCompactToolingTestFiles(): string[] {
     ...toolingIsolatedTestFiles,
     ...databaseWorkerCoreTestFiles,
   ]);
-  return [...listTrackedTestFiles("test", ""), ...listTrackedTestFiles("src/scripts")].filter(
+  return [
+    ...listTrackedTestFiles("test"),
+    ...listTrackedTestFiles("test", ".test.mjs"),
+    ...listTrackedTestFiles("src/scripts"),
+  ].filter(
     (file) =>
       /\.test\.(?:ts|mjs)$/u.test(file) &&
       !file.startsWith("test/fixtures/") &&
