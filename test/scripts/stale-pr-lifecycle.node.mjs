@@ -24,6 +24,7 @@ const warningBody =
 function comment(id, body, at = WARNING, user = bot) {
   return {
     id,
+    node_id: `comment-${id}`,
     body,
     user,
     created_at: at,
@@ -36,6 +37,7 @@ function snapshot(number = 10) {
   return {
     pr: {
       number,
+      node_id: `pr-${number}`,
       state: "open",
       merged: false,
       head: { sha: HEAD, ref: "feature", repo: { id: 55 } },
@@ -63,8 +65,8 @@ function snapshot(number = 10) {
         created_at: "2026-07-02T00:00:00Z",
       },
     ],
+    edits: [],
     lastEditedAt: null,
-    editor: null,
     ownershipProtection: null,
   };
 }
@@ -134,17 +136,58 @@ function harness(seed = snapshot(), onComment) {
         listCommitStatusesForRef: list("statuses", () => state.statuses),
       },
     },
-    graphql: async () => ({
-      rateLimit: { remaining: 5000, resetAt: "2027-01-15T08:00:00Z", cost: 1 },
-      repository: {
-        object: { oid: state.pr.head.sha, statusCheckRollup: { state: state.checkRollup } },
-        pullRequest: {
-          lastEditedAt: state.lastEditedAt,
-          editor: state.editor,
-          reviews: { nodes: state.reviews, pageInfo: { hasNextPage: false, endCursor: null } },
+    graphql: async (query, variables = {}) => {
+      const rateLimit = { remaining: 5000, resetAt: "2027-01-15T08:00:00Z", cost: 1 };
+      if (variables.ids || variables.id) {
+        const contents = [
+          { ...state.pr, lastEditedAt: state.lastEditedAt },
+          ...state.comments,
+          ...state.reviewComments,
+          ...state.reviews,
+        ];
+        const nodes = (variables.ids ?? [variables.id]).map((id) => {
+          const content = contents.find((item) => item.node_id === id || item.id === id);
+          if (!content) return null;
+          const edits = state.edits
+            .filter((edit) => edit.nodeId === id)
+            .map((edit, index) => ({ ...edit, id: `${id}-edit-${index}` }))
+            .toReversed();
+          const start = Number(variables.after ?? 0);
+          pages.push({ endpoint: "edits", id, start });
+          return {
+            id,
+            lastEditedAt: content.lastEditedAt ?? edits[0]?.editedAt ?? null,
+            userContentEdits: {
+              totalCount: edits.length,
+              nodes: edits.slice(start, start + 100),
+              pageInfo: {
+                hasNextPage: edits.length > start + 100,
+                endCursor: String(start + 100),
+              },
+            },
+          };
+        });
+        return { rateLimit, ...(variables.ids ? { nodes } : { node: nodes[0] }) };
+      }
+      return {
+        rateLimit: { remaining: 5000, resetAt: "2027-01-15T08:00:00Z", cost: 1 },
+        repository: {
+          object: { oid: state.pr.head.sha, statusCheckRollup: { state: state.checkRollup } },
+          pullRequest: {
+            id: state.pr.node_id,
+            lastEditedAt: state.lastEditedAt,
+            reviews: {
+              nodes: state.reviews.map((review) => ({
+                ...review,
+                id: review.node_id,
+                databaseId: review.id,
+              })),
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
         },
-      },
-    }),
+      };
+    },
   };
   const options = {
     github,
@@ -440,20 +483,17 @@ describe("Barnacle PR inactivity", () => {
     it(`returns recent ${kind} activity to the 14-day inactivity gate`, () => {
       const seed = snapshot();
       if (kind.startsWith("comment"))
-        seed.comments.push({ ...comment(2, "response", OLD, human), updated_at: RECENT });
+        seed.comments.push(comment(2, "response", kind === "comment" ? RECENT : OLD, human));
       if (kind === "review")
         seed.reviews.push({
           id: 3,
           author: { __typename: "User" },
-          submittedAt: OLD,
-          updatedAt: RECENT,
+          submittedAt: RECENT,
         });
       if (kind === "inline-edit")
         seed.reviewComments.push({ ...comment(4, "inline", OLD, human), updated_at: RECENT });
-      if (kind === "body-edit") {
-        seed.lastEditedAt = RECENT;
-        seed.editor = { __typename: "User" };
-      }
+      if (["comment-edit", "inline-edit", "body-edit"].includes(kind))
+        seed.edits.push({ editedAt: RECENT, editor: human });
       if (kind === "force-push")
         seed.timeline.push({
           event: "head_ref_force_pushed",
@@ -509,6 +549,139 @@ describe("Barnacle PR inactivity", () => {
     });
     assert.equal(evaluatePullRequest(h.state, NOW + 7 * 86_400_000).action, "close");
   });
+
+  for (const witness of ["review", "workflow-run"])
+    it(`retains an eight-day bound warning despite a recent bot ${witness}`, () => {
+      const seed = snapshot();
+      seed.comments = [
+        comment(
+          1,
+          `${warningBody}\n\n<!-- barnacle-stale-pr:v1 head=${HEAD} -->`,
+          "2026-10-06T12:00:00Z",
+        ),
+      ];
+      seed.workflowRuns = [];
+      if (witness === "review")
+        seed.reviews.push({ id: 3, author: bot, commit_id: HEAD, submittedAt: RECENT });
+      else seed.workflowRuns = [{ ...snapshot().workflowRuns[0], created_at: RECENT }];
+      assert.partialDeepStrictEqual(evaluatePullRequest(seed, NOW), {
+        action: "close",
+        reason: "expired-warning",
+        witness: "warning-head",
+      });
+      seed.timeline.push({ event: "head_ref_force_pushed", actor: bot, created_at: RECENT });
+      assert.equal(evaluatePullRequest(seed, NOW).action, "unmark");
+      seed.timeline = [];
+      seed.comments.push(comment(2, "working on it", RECENT, human));
+      assert.equal(evaluatePullRequest(seed, NOW).action, "unmark");
+    });
+
+  it("does not use an edited warning as a head witness", () => {
+    const seed = snapshot();
+    seed.comments[0].body += `\n\n<!-- barnacle-stale-pr:v1 head=${HEAD} -->`;
+    seed.comments[0].updated_at = RECENT;
+    seed.workflowRuns = [];
+    assert.partialDeepStrictEqual(evaluatePullRequest(seed, NOW), {
+      action: "preserve",
+      reason: "unknown-head-timing",
+    });
+  });
+
+  it("closes at seven days plus one millisecond with only a bound warning and new bot review", () => {
+    const seed = snapshot();
+    seed.comments = [
+      comment(
+        1,
+        `${warningBody}\n\n<!-- barnacle-stale-pr:v1 head=${HEAD} -->`,
+        new Date(NOW - 7 * 86_400_000 - 1).toISOString(),
+      ),
+    ];
+    seed.workflowRuns = [];
+    seed.reviews = [{ id: 3, author: bot, commit_id: HEAD, submittedAt: RECENT }];
+    assert.equal(evaluatePullRequest(seed, NOW).action, "close");
+  });
+
+  for (const surface of ["body", "comment", "review", "inline"])
+    for (const humanEdit of [false, true])
+      it(`attributes ${surface} edits to actual editors, human edit=${humanEdit}`, async () => {
+        const seed = snapshot();
+        let nodeId;
+        if (surface === "body") {
+          nodeId = seed.pr.node_id;
+          seed.lastEditedAt = RECENT;
+        } else if (surface === "review") {
+          nodeId = "review-3";
+          seed.reviews.push({
+            id: 3,
+            node_id: nodeId,
+            author: humanEdit ? bot : human,
+            submittedAt: OLD,
+            lastEditedAt: RECENT,
+            commit: { oid: HEAD },
+          });
+        } else {
+          const content = {
+            ...comment(3, "old content", OLD, humanEdit ? bot : human),
+            updated_at: RECENT,
+          };
+          nodeId = content.node_id;
+          (surface === "comment" ? seed.comments : seed.reviewComments).push(content);
+        }
+        // A subsequent bot edit must not hide an earlier human edit.
+        if (humanEdit) seed.edits.push({ nodeId, editedAt: "2026-10-13T10:00:00Z", editor: human });
+        seed.edits.push({ nodeId, editedAt: RECENT, editor: bot });
+        const h = harness(seed);
+        const result = await runStalePullRequests(h.options);
+        assert.equal(result.decisions[0].action, humanEdit ? "unmark" : "close");
+        assert.equal(h.pages.filter((page) => page.endpoint === "edits").length, 1);
+        assert.deepEqual(h.writes, []);
+      });
+
+  it("paginates all edits and retains a human edit behind newer bot edits", async () => {
+    const seed = snapshot();
+    seed.comments.push({ ...comment(3, "review", OLD), updated_at: RECENT });
+    seed.edits = [
+      { nodeId: "comment-3", editedAt: "2026-10-13T10:00:00Z", editor: human },
+      ...Array.from({ length: 100 }, () => ({
+        nodeId: "comment-3",
+        editedAt: RECENT,
+        editor: bot,
+      })),
+    ];
+    const h = harness(seed);
+    const result = await runStalePullRequests(h.options);
+    assert.equal(result.decisions[0].action, "unmark");
+    assert.ok(h.pages.some((page) => page.endpoint === "edits" && page.start === 100));
+  });
+
+  for (const missing of ["editor", "node", "page", "latest", "duplicate"])
+    it(`preserves missing ${missing} edit evidence`, async () => {
+      const seed = snapshot();
+      seed.lastEditedAt = RECENT;
+      seed.edits.push({ nodeId: seed.pr.node_id, editedAt: RECENT, editor: bot });
+      const h = harness(seed);
+      const graphql = h.options.github.graphql;
+      h.options.github.graphql = async (query, variables) => {
+        const result = await graphql(query, variables);
+        if (result.nodes) {
+          if (missing === "node") result.nodes[0] = null;
+          if (missing === "editor") result.nodes[0].userContentEdits.nodes[0].editor = null;
+          if (missing === "page") result.nodes[0].userContentEdits.pageInfo.endCursor = null;
+          if (missing === "page") result.nodes[0].userContentEdits.pageInfo.hasNextPage = true;
+          if (missing === "latest") result.nodes[0].lastEditedAt = "2026-10-14T11:00:00Z";
+          if (missing === "duplicate") {
+            result.nodes[0].userContentEdits.nodes.push(result.nodes[0].userContentEdits.nodes[0]);
+            result.nodes[0].userContentEdits.totalCount++;
+          }
+        }
+        return result;
+      };
+      const result = await runStalePullRequests({ ...h.options, dryRun: false });
+      assert.equal(result.decisions[0].action, "preserve");
+      assert.match(result.decisions[0].reason, /edit/);
+      assert.equal(result.unfinished, false);
+      assert.deepEqual(h.writes, []);
+    });
 
   it("keeps the assigned 27-day creation gate distinct from human inactivity", () => {
     const seed = snapshot();
@@ -631,9 +804,11 @@ describe("Barnacle PR inactivity", () => {
         h.options.github.rest.repos.getCollaboratorPermissionLevel = async () => ({
           data: { permission: h.state.ownershipProtection ? "write" : "read", role_name: "read" },
         });
-      const result = await runStalePullRequests({ ...h.options, dryRun: false });
+      await assert.rejects(
+        runStalePullRequests({ ...h.options, dryRun: false }),
+        /Unfinished PR mutation.*"commentId":200.*changed-before-close/,
+      );
       assert.deepEqual(h.writes, ["close-comment"]);
-      assert.equal(result.closed, 0);
     });
 
   it("preserves incomplete filtered workflow history", async () => {
@@ -656,10 +831,111 @@ describe("Barnacle PR inactivity", () => {
 
   it("preserves a security exemption arriving after its close comment", async () => {
     const h = harness(snapshot(), (state) => state.pr.labels.push({ name: "security" }));
-    const result = await runStalePullRequests({ ...h.options, dryRun: false });
+    await assert.rejects(
+      runStalePullRequests({ ...h.options, dryRun: false }),
+      /Unfinished PR mutation.*"commentId":200.*changed-before-close/,
+    );
     assert.deepEqual(h.writes, ["close-comment"]);
-    assert.equal(result.closed, 0);
-    assert.equal(result.decisions[0].reason, "changed-before-close");
+  });
+
+  it("keeps post-warning receipts and checkpoints before an unfinished target", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "stale-pr-test-"));
+    try {
+      const seed = snapshot(11);
+      seed.comments = [];
+      const h = harness(seed, (state) =>
+        state.comments.push(
+          comment(999, "author response", new Date(NOW + 1000).toISOString(), human),
+        ),
+      );
+      const cursorPath = join(dir, "cursor");
+      const logs = [];
+      h.options.core.info = (line) => logs.push(line);
+      h.options.github.rest.pulls.list = async () => ({
+        data: [snapshot(10).pr, seed.pr, snapshot(12).pr],
+      });
+      let active;
+      h.options.github.rest.pulls.get = async ({ pull_number }) => {
+        active = pull_number;
+        return { data: { ...structuredClone(h.state.pr), number: pull_number } };
+      };
+      h.options.github.rest.checks.listForRef = async () => ({
+        data: {
+          check_runs:
+            active === 10
+              ? [
+                  {
+                    head_sha: HEAD,
+                    name: "openclaw/ci-gate",
+                    status: "completed",
+                    conclusion: "success",
+                  },
+                ]
+              : [],
+        },
+      });
+      h.options.core.error = (line) => logs.push(line);
+      await assert.rejects(
+        runStalePullRequests({
+          ...h.options,
+          targets: [],
+          dryRun: false,
+          cursorPath,
+        }),
+        /Unfinished PR mutation.*"commentId":200.*changed-after-warning/,
+      );
+      assert.deepEqual(h.writes, ["warning"]);
+      assert.deepEqual(JSON.parse(await readFile(cursorPath, "utf8")), { lastNumber: 10 });
+      assert.ok(logs.some((line) => line.includes('"number":10')));
+      assert.ok(logs.some((line) => line.includes('"commentId":200')));
+      assert.ok(logs.some((line) => line.includes('"unfinished":true')));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains earlier confirmed closes when a later close comment hits a race", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "stale-pr-test-"));
+    try {
+      const first = harness(snapshot(10));
+      const second = harness(snapshot(11), (state) => state.pr.labels.push({ name: "security" }));
+      let active = first;
+      const github = { rest: {}, graphql: (...args) => active.options.github.graphql(...args) };
+      for (const [group, methods] of Object.entries(first.options.github.rest)) {
+        github.rest[group] = {};
+        for (const method of Object.keys(methods)) {
+          github.rest[group][method] = async (params) => {
+            if (group === "pulls" && method === "get")
+              active = params.pull_number === 10 ? first : second;
+            return active.options.github.rest[group][method](params);
+          };
+        }
+      }
+      github.rest.pulls.list = async () => ({ data: [first.state.pr, second.state.pr] });
+      const logs = [];
+      const cursorPath = join(dir, "cursor");
+      await assert.rejects(
+        runStalePullRequests({
+          ...first.options,
+          github,
+          checksGithub: github,
+          mutationGithub: github,
+          targets: [],
+          dryRun: false,
+          cursorPath,
+          core: { info: (line) => logs.push(line) },
+        }),
+        /Unfinished PR mutation.*"number":11.*"commentId":200/,
+      );
+      assert.deepEqual(first.writes, ["close-comment", "close"]);
+      assert.deepEqual(second.writes, ["close-comment"]);
+      assert.deepEqual(JSON.parse(await readFile(cursorPath, "utf8")), { lastNumber: 10 });
+      assert.ok(
+        logs.some((line) => line.includes('"closed":1') && line.includes('"unfinished":true')),
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("honors an explicit zero closure cap", async () => {

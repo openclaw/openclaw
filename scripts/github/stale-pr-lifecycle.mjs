@@ -57,6 +57,8 @@ const labelsOf = (pr) =>
   (pr.labels ?? []).map((label) => (typeof label === "string" ? label : label.name).toLowerCase());
 const isWarning = (comment) =>
   [WARN, ASSIGNED_WARN].includes(comment.body.split("\n\n<!-- barnacle-stale-pr:v1")[0].trimEnd());
+const warningHead = (comment) =>
+  /<!-- barnacle-stale-pr:v1 head=([0-9a-f]{40}) -->/.exec(comment.body)?.[1];
 
 function cheapProtection(pr) {
   if (pr.state !== "open" || pr.merged) {
@@ -123,6 +125,15 @@ function headWitnesses(snapshot) {
     (review) => review.commit_id === pr.head.sha && time(review.submitted_at ?? review.submittedAt),
   );
   return [
+    ...snapshot.comments
+      .filter(
+        (comment) =>
+          trustedBarnacle(comment) &&
+          isWarning(comment) &&
+          comment.created_at === comment.updated_at &&
+          warningHead(comment) === pr.head.sha,
+      )
+      .map((comment) => ({ at: time(comment.created_at), source: "warning-head" })),
     ...runs.map((run) => ({ at: time(run.created_at), source: `workflow-run:${run.id}` })),
     ...reviews.map((review) => ({
       at: time(review.submitted_at ?? review.submittedAt),
@@ -134,11 +145,11 @@ function headWitnesses(snapshot) {
 function activityAt(snapshot, ignoredComment) {
   let latest = time(snapshot.pr.created_at);
   const witnesses = headWitnesses(snapshot);
-  if (witnesses.length) {
-    latest = Math.max(latest, Math.min(...witnesses.map((witness) => witness.at)));
-  }
-  if (!automated(snapshot.editor)) {
-    latest = Math.max(latest, time(snapshot.lastEditedAt));
+  const earliest = witnesses.toSorted((a, b) => a.at - b.at)[0];
+  // A bound warning records already-validated inactivity, not a new push. Later
+  // bot reviews cannot restart either that admission clock or its seven-day grace.
+  if (earliest && earliest.source !== "warning-head") {
+    latest = Math.max(latest, earliest.at);
   }
   for (const comment of [...snapshot.comments, ...snapshot.reviewComments, ...snapshot.reviews]) {
     if (comment.id === ignoredComment || automated(comment.user ?? comment.author)) {
@@ -146,10 +157,14 @@ function activityAt(snapshot, ignoredComment) {
     }
     latest = Math.max(
       latest,
-      time(comment.updated_at ?? comment.updatedAt),
       time(comment.submitted_at ?? comment.submittedAt),
       time(comment.created_at ?? comment.createdAt),
     );
+  }
+  for (const edit of snapshot.edits ?? []) {
+    if ((ignoredComment == null || edit.commentId !== ignoredComment) && !automated(edit.editor)) {
+      latest = Math.max(latest, time(edit.editedAt));
+    }
   }
   for (const event of snapshot.timeline) {
     if (
@@ -180,7 +195,8 @@ export function evaluatePullRequest(snapshot, now = Date.now(), ignoredComment =
     cheapProtection(pr) ||
     snapshot.ownershipProtection ||
     securityProtection(comments, pr) ||
-    snapshot.historyProtection;
+    snapshot.historyProtection ||
+    snapshot.activityProtection;
   if (protectedReason) {
     return result("preserve", protectedReason);
   }
@@ -248,9 +264,9 @@ export function evaluatePullRequest(snapshot, now = Date.now(), ignoredComment =
       witnesses.length || assigned ? "edited-warning" : "unknown-head-timing",
     );
   }
-  const marker = /<!-- barnacle-stale-pr:v1 head=([0-9a-f]{40}) -->/.exec(warning.body);
-  let witness = marker?.[1] === head ? "warning-head" : null;
-  if (marker && marker[1] !== head) {
+  const marker = warningHead(warning);
+  let witness = marker === head ? "warning-head" : null;
+  if (marker && marker !== head) {
     return result(
       witnesses.length ? "warn" : "preserve",
       witnesses.length ? "head-changed" : "unknown-head-timing",
@@ -403,6 +419,78 @@ function reader(github, checksGithub, context, budget) {
   };
 }
 
+async function contentEdits(io, contents) {
+  const edits = [];
+  const fields = `id ...on Comment{lastEditedAt userContentEdits(first:100,after:$after){totalCount nodes{id editedAt editor{__typename ...on User{id:databaseId} ...on Bot{id:databaseId}}} pageInfo{hasNextPage endCursor}}}`;
+  let protection = null;
+  const collect = async (content, initial) => {
+    let node = initial;
+    let latest = 0;
+    let count = 0;
+    const seen = new Set();
+    for (let page = 0; page < 100; page++) {
+      const history = node?.userContentEdits;
+      if (node?.id !== content.nodeId || !history?.nodes || !history.pageInfo) {
+        protection = "unknown-edit-history";
+        return;
+      }
+      for (const edit of history.nodes) {
+        if (
+          !time(edit?.editedAt) ||
+          !edit.id ||
+          seen.has(edit.id) ||
+          !Number.isSafeInteger(edit.editor?.id) ||
+          edit.editor.id <= 0
+        ) {
+          protection = "unknown-edit-identity";
+          return;
+        }
+        latest = Math.max(latest, time(edit.editedAt));
+        count++;
+        seen.add(edit.id);
+        edits.push({ ...edit, commentId: content.commentId });
+      }
+      if (!history.pageInfo.hasNextPage) {
+        if (
+          count !== history.totalCount ||
+          (node.lastEditedAt && latest !== time(node.lastEditedAt))
+        ) {
+          protection = "incomplete-edit-history";
+        }
+        return;
+      }
+      if (!history.pageInfo.endCursor) {
+        break;
+      }
+      const response = await io.graphql(
+        `query($id:ID!,$after:String){rateLimit{remaining resetAt cost} node(id:$id){${fields}}}`,
+        { id: content.nodeId, after: history.pageInfo.endCursor },
+      );
+      node = response.node;
+    }
+    protection = "incomplete-edit-history";
+  };
+  // Fetch only content that reports an edit/update. REST updated_at selects
+  // candidates; actual editor history alone decides whether activity occurred.
+  for (let offset = 0; offset < contents.length; offset += 25) {
+    const batch = contents.slice(offset, offset + 25);
+    if (batch.some((content) => !content.nodeId)) {
+      return { edits, activityProtection: "unknown-edit-history" };
+    }
+    const response = await io.graphql(
+      `query($ids:[ID!]!,$after:String){rateLimit{remaining resetAt cost} nodes(ids:$ids){${fields}}}`,
+      { ids: batch.map((content) => content.nodeId), after: null },
+    );
+    for (const content of batch) {
+      await collect(
+        content,
+        response.nodes?.find((node) => node?.id === content.nodeId),
+      );
+    }
+  }
+  return { edits, activityProtection: protection };
+}
+
 async function snapshotOf(github, checksGithub, io, number) {
   const { data: pr } = await io.call(github.rest.pulls.get, { pull_number: number });
   const base = { issue_number: number };
@@ -441,7 +529,7 @@ async function snapshotOf(github, checksGithub, io, number) {
   let checkRollup;
   do {
     const response = await io.graphql(
-      `query($owner:String!,$repo:String!,$number:Int!,$head:GitObjectID!,$after:String){rateLimit{remaining resetAt cost} repository(owner:$owner,name:$repo){object(oid:$head){...on Commit{oid statusCheckRollup{state}}} pullRequest(number:$number){lastEditedAt editor{__typename} reviews(first:100,after:$after){nodes{databaseId:fullDatabaseId submittedAt updatedAt commit{oid} author{__typename}} pageInfo{hasNextPage endCursor}}}}}`,
+      `query($owner:String!,$repo:String!,$number:Int!,$head:GitObjectID!,$after:String){rateLimit{remaining resetAt cost} repository(owner:$owner,name:$repo){object(oid:$head){...on Commit{oid statusCheckRollup{state}}} pullRequest(number:$number){id lastEditedAt reviews(first:100,after:$after){nodes{id databaseId:fullDatabaseId submittedAt lastEditedAt commit{oid} author{__typename ...on User{id:databaseId} ...on Bot{id:databaseId}}} pageInfo{hasNextPage endCursor}}}}}`,
       { number, head: pr.head.sha, after },
     );
     checkRollup =
@@ -452,12 +540,22 @@ async function snapshotOf(github, checksGithub, io, number) {
     reviews.push(
       ...meta.reviews.nodes.map((review) => ({
         ...review,
+        node_id: review.id,
         id: Number(review.databaseId),
         commit_id: review.commit?.oid,
       })),
     );
     after = meta.reviews.pageInfo.hasNextPage ? meta.reviews.pageInfo.endCursor : null;
   } while (after);
+  const editHistory = await contentEdits(io, [
+    ...(meta.lastEditedAt ? [{ nodeId: meta.id }] : []),
+    ...[...comments, ...reviewComments]
+      .filter((comment) => comment.updated_at !== comment.created_at)
+      .map((comment) => ({ nodeId: comment.node_id, commentId: comment.id })),
+    ...reviews
+      .filter((review) => review.lastEditedAt)
+      .map((review) => ({ nodeId: review.node_id })),
+  ]);
   let ownershipProtection = null;
   for (const user of [pr.user, ...pr.assignees]) {
     try {
@@ -494,8 +592,7 @@ async function snapshotOf(github, checksGithub, io, number) {
     ownershipProtection,
     historyProtection,
     unstable,
-    lastEditedAt: meta.lastEditedAt,
-    editor: meta.editor,
+    ...editHistory,
   };
 }
 
@@ -521,7 +618,7 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
   const progress = {
     number: decision.number,
     head: decision.head,
-    attempted: false,
+    attempted: Boolean(checked.closeComment),
     commentId: checked.closeComment,
     closed: false,
   };
@@ -559,7 +656,7 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
         afterDecision.reason !== "warning-grace" ||
         afterDecision.warning !== stored.id
       ) {
-        return { ...afterDecision, action: "preserve", reason: "changed-after-warning" };
+        throw new Error(`changed-after-warning: ${afterDecision.reason}`);
       }
       await write(mutationGithub.rest.issues.addLabels, { ...base, labels: ["stale"] });
     } else if (decision.action === "close") {
@@ -584,7 +681,7 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
         commentId,
       );
       if (!sameDecision(checked, final)) {
-        return { ...final, action: "preserve", reason: "changed-before-close" };
+        throw new Error(`changed-before-close: ${final.reason}`);
       }
       io.reserve({ app: 3 });
       const { data: closed } = await write(mutationGithub.rest.pulls.update, {
