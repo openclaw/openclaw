@@ -2294,7 +2294,7 @@
     "@modelcontextprotocol/sdk": "1.32.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.4",
+    "@openclaw/fs-safe": "0.26.5",
     "@openclaw/proc-safe": "0.3.0",
     "@openclaw/proxyline": "0.4.0",
     "@resvg/resvg-js": "2.6.2",
