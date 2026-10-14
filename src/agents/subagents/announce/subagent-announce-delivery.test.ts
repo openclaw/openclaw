@@ -2867,6 +2867,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       "retryable",
     ],
     [
+      "keeps exhausted wrapped writer rebound retryable",
+      new Error("requester handoff failed", { cause: writerRebound() }),
+      4,
+      "retryable",
+    ],
+    [
+      "keeps a permanent cause of writer rebound permanent",
+      writerRebound(new Error("chat not found")),
+      1,
+      "permanent_failure",
+    ],
+    [
       "does not text-fallback after an identified incomplete platform send",
       new OutboundDeliveryError("incomplete terminal response", {
         cause: new Error("incomplete terminal response"),
@@ -2883,6 +2895,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       "ambiguous",
     ],
   ])("%s", async (_name, error, attempts, outcome, route) => {
+    vi.useFakeTimers();
     const callGateway = createGatewayMock();
     const gatewayMock = vi.mocked(callGateway).mockRejectedValue(error);
     if (outcome === "delivered") {
@@ -2898,19 +2911,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const sendMessage = createSendMessageMock();
-    const result =
+    const delivery =
       route === "direct"
-        ? await deliverDiscordDirectMessageCompletion({
+        ? deliverDiscordDirectMessageCompletion({
             callGateway,
             sendMessage,
             sourceTool: "subagent_announce",
             internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
           })
-        : await deliverSlackChannelAnnouncement({
+        : deliverSlackChannelAnnouncement({
             callGateway,
             directIdempotencyKey: "announce-retry-contract",
             ...(route === "active" ? { isActive: true, queueEmbeddedAgentMessageWithOutcome } : {}),
           });
+    await vi.runAllTimersAsync();
+    const result = await delivery;
     expect(result).toMatchObject({
       delivered: outcome === "delivered",
       path: "direct",

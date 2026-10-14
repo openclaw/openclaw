@@ -50,6 +50,11 @@ context messages. If transcript persistence rejects a completion because its
 keyed input belongs to a closed turn, delivery records a permanent failure with
 the error. It does not retry other models or keep scheduling the same completion.
 
+Transcript writer-claim changes remain retryable when no send is confirmed. If
+local retries are exhausted, the completion stays eligible for bounded requester
+recovery. Permanent delivery rejections still stop recovery, including when they
+are wrapped by a writer-claim error.
+
 If a chunk in a direct-message text fallback fails or is aborted after earlier
 chunks were sent, OpenClaw records an incomplete delivery. It stops automatic
 retries to avoid duplicating chunks the recipient already received. A successful

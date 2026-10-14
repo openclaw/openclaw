@@ -55,11 +55,6 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
 const WRITER_CLAIM_REBOUND_ANNOUNCE_RE =
   /session writer claim changed before transcript persistence/i;
 
-// Writer-claim rebounds are deliberately absent: the transcript writer claim
-// changed underneath the send, which says nothing about the payload, so a
-// later attempt can persist and deliver the same result. Each error must
-// resolve to exactly one retryability outcome, and this family's outcome is
-// retryable — isPermanentAnnounceDeliveryError must never claim it.
 const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
   /unknown channel/i,
@@ -87,11 +82,7 @@ function hasAnnounceErrorMatch(error: unknown, matches: (candidate: unknown) => 
   ]).some(matches);
 }
 
-function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
-}
-
-function isPermanentNonWriterAnnounceError(error: unknown): boolean {
+function hasPermanentAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(
     error,
     (candidate) =>
@@ -115,11 +106,11 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return typedRetryability;
   }
 
-  if (isPermanentNonWriterAnnounceError(error)) {
+  if (hasPermanentAnnounceError(error)) {
     return false;
   }
 
-  if (hasWriterClaimReboundAnnounceError(error)) {
+  if (hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError)) {
     return true;
   }
 
@@ -146,7 +137,7 @@ export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   if (typedRetryability !== undefined) {
     return !typedRetryability;
   }
-  return isPermanentNonWriterAnnounceError(error);
+  return hasPermanentAnnounceError(error);
 }
 
 export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
