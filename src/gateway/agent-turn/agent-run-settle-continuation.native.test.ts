@@ -23,7 +23,7 @@ import {
 import type { AgentTurnIo } from "./types.js";
 
 const reads = vi.hoisted(() => ({ command: vi.fn() }));
-// Keep model/tools outside this regression; the Gateway terminal dispatcher stays native.
+// mock-isolation: Keep model/tools outside this regression; the Gateway terminal dispatcher stays native.
 vi.mock("../../commands/agent.js", () => ({ agentCommandFromGatewayIngress: reads.command }));
 
 describe("requester-settle processing survives later user turns", () => {
