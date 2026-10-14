@@ -67,150 +67,146 @@ describe("stuck session recovery integration", () => {
     resetDiagnosticEventsForTest();
   });
 
-  it.each(["queued", "idle without backlog", "idle with runtime wait"] as const)(
-    "keeps %s work behind a live backend allowance and recovers once after expiry",
-    async (mode) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(Date.parse("2026-08-04T03:00:00Z"));
-      const sessionKey = "agent:main:backend-allowance";
-      const sessionId = "backend-allowance-session";
-      const lane = resolveEmbeddedSessionLane(sessionKey);
-      const events: DiagnosticEventPayload[] = [];
-      const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-      startGatewayDiagnosticHeartbeat(
-        createTestGatewayScheduler("fake-timers"),
-        { diagnostics: { enabled: true } },
-        {
-          recoverStuckSession: recoverStuckDiagnosticSession,
-          testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
-        },
-      );
-      const admission = prepareSystemAgentRunAdmission(
-        {},
+  const modes = ["queued", "idle", "runtime wait"] as const;
+  it.each(modes)("recovers %s work once after liveness protection ends", async (mode) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-08-04T03:00:00Z"));
+    const sessionKey = "agent:main:backend-allowance";
+    const sessionId = "backend-allowance-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession: recoverStuckDiagnosticSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      },
+    );
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      sessionId,
+      "main",
+      "backend-allowance-test",
+    );
+    const admitted = await admission.admit("embedded");
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.setPhase("running");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const owner = createDiagnosticEmbeddedRunOwner({ sessionKey, sessionId, runId: sessionId });
+    const abort = vi.fn<() => void>();
+    let ownsLiveness = mode === "runtime wait";
+    const handle = {
+      runId: sessionId,
+      diagnosticOwner: owner,
+      closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(owner),
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      ownsLiveness: () => ownsLiveness,
+      abort,
+    };
+    abort.mockImplementation(() => {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      operation.complete();
+      release.resolve();
+    });
+    await withGatewayToolCallerIdentity(
+      createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: admitted,
+        agentId: "main",
+        sessionKey,
+      }),
+      () => setActiveEmbeddedRun(sessionId, handle, sessionKey),
+    );
+    const backend = beginDiagnosticBackendActivity({
+      owner,
+      noOutputTimeoutMs: 180_000,
+      assertCurrent: () => {},
+    });
+    const active = enqueueCommandInLane(
+      lane,
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    const deliver = vi.fn(async () => "delivered");
+    const queued =
+      mode === "queued"
+        ? enqueueCommandInLane(lane, deliver, { warnAfterMs: Number.MAX_SAFE_INTEGER })
+        : undefined;
+    if (mode === "queued") {
+      logMessageQueuedWithBacklogPolicy({ sessionId, sessionKey, source: "test" }, true);
+    } else {
+      // A sibling message may finish while this owner still holds the session.
+      // Exercise the production lifecycle transition, not a mutated state fixture.
+      createDiagnosticMessageLifecycle({
         sessionId,
-        "main",
-        "backend-allowance-test",
-      );
-      const admitted = await admission.admit("embedded");
-      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      operation.setPhase("running");
-      const entered = createDeferred();
-      const release = createDeferred();
-      const owner = createDiagnosticEmbeddedRunOwner({ sessionKey, sessionId, runId: sessionId });
-      const abort = vi.fn<() => void>();
-      let ownsLiveness = mode === "idle with runtime wait";
-      const handle = {
-        runId: sessionId,
-        diagnosticOwner: owner,
-        closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(owner),
-        queueMessage: async () => {},
-        isStreaming: () => true,
-        isCompacting: () => false,
-        ownsLiveness: () => ownsLiveness,
-        abort,
-      };
-      abort.mockImplementation(() => {
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-        operation.complete();
-        release.resolve();
-      });
-      await withGatewayToolCallerIdentity(
-        createAdmittedGatewayToolCallerIdentity({
-          admittedRunContext: admitted,
-          agentId: "main",
-          sessionKey,
-        }),
-        () => setActiveEmbeddedRun(sessionId, handle, sessionKey),
-      );
-      const backend = beginDiagnosticBackendActivity({
-        owner,
-        noOutputTimeoutMs: 180_000,
-        assertCurrent: () => {},
-      });
-      const active = enqueueCommandInLane(
-        lane,
-        async () => {
-          entered.resolve();
-          await release.promise;
-        },
-        { warnAfterMs: Number.MAX_SAFE_INTEGER },
-      );
-      const deliver = vi.fn(async () => "delivered");
-      const queued =
-        mode === "queued"
-          ? enqueueCommandInLane(lane, deliver, { warnAfterMs: Number.MAX_SAFE_INTEGER })
-          : undefined;
-      if (mode === "queued") {
-        logMessageQueuedWithBacklogPolicy({ sessionId, sessionKey, source: "test" }, true);
-      } else {
-        // A sibling message may finish while this owner still holds the session.
-        // Exercise the production lifecycle transition, not a mutated state fixture.
-        createDiagnosticMessageLifecycle({
+        sessionKey,
+        enabled: true,
+        channel: "slack",
+        source: "test-sibling",
+        trackSessionState: true,
+      }).markIdle("sibling_message_completed");
+    }
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      // The queued-work entry point must respect the same allowance as heartbeat recovery.
+      await expect(
+        recoverStuckDiagnosticSession({
           sessionId,
           sessionKey,
-          enabled: true,
-          channel: "slack",
-          source: "test-sibling",
-          trackSessionState: true,
-        }).markIdle("sibling_message_completed");
-      }
-      try {
-        await entered.promise;
-        await vi.advanceTimersByTimeAsync(120_000);
+          ageMs: 120_000,
+          queueDepth: mode === "queued" ? 1 : 0,
+          expectedState: mode === "queued" ? "processing" : "idle",
+          staleActiveProgressAbortMs: 60_000,
+        }),
+      ).resolves.toMatchObject({ status: "skipped" });
+      expect(abort).not.toHaveBeenCalled();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(getQueueSize(lane)).toBe(mode === "queued" ? 2 : 1);
 
-        // The queued-work entry point must respect the same allowance as heartbeat recovery.
-        await expect(
-          recoverStuckDiagnosticSession({
-            sessionId,
-            sessionKey,
-            ageMs: 120_000,
-            queueDepth: mode === "queued" ? 1 : 0,
-            expectedState: mode === "queued" ? "processing" : "idle",
-            staleActiveProgressAbortMs: 60_000,
-          }),
-        ).resolves.toMatchObject({ status: "skipped" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      if (ownsLiveness) {
+        // Native runtime waits retain authority even after the backend
+        // silence deadline expires.
         expect(abort).not.toHaveBeenCalled();
-        expect(deliver).not.toHaveBeenCalled();
-        expect(getQueueSize(lane)).toBe(mode === "queued" ? 2 : 1);
-
-        await vi.advanceTimersByTimeAsync(60_000);
-        if (ownsLiveness) {
-          // Native runtime waits retain authority even after the backend
-          // silence deadline expires.
-          expect(abort).not.toHaveBeenCalled();
-          ownsLiveness = false;
-          await vi.advanceTimersByTimeAsync(30_000);
-        }
-        // Assert before awaiting settlement so the baseline failure cannot hang.
-        expect(abort).toHaveBeenCalledOnce();
-        await active;
-        const next = queued ?? enqueueCommandInLane(lane, deliver);
-        await expect(next).resolves.toBe("delivered");
+        ownsLiveness = false;
         await vi.advanceTimersByTimeAsync(30_000);
-
-        expect(abort).toHaveBeenCalledOnce();
-        expect(deliver).toHaveBeenCalledOnce();
-        expect(getQueueSize(lane)).toBe(0);
-        expect(events.filter((event) => event.type === "session.recovery.requested")).toHaveLength(
-          1,
-        );
-        expect(
-          getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
-            .activeBackendLivenessDeadlineAtMs,
-        ).toBeUndefined();
-      } finally {
-        backend.close();
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-        admission.close();
-        operation.complete();
-        release.resolve();
-        await Promise.allSettled([active, queued]);
-        unsubscribe();
-        resetDiagnosticStateForTest();
-        vi.useRealTimers();
       }
-    },
-  );
+      // Assert before awaiting settlement so the baseline failure cannot hang.
+      expect(abort).toHaveBeenCalledOnce();
+      await active;
+      const next = queued ?? enqueueCommandInLane(lane, deliver);
+      await expect(next).resolves.toBe("delivered");
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(abort).toHaveBeenCalledOnce();
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(getQueueSize(lane)).toBe(0);
+      expect(events.filter((event) => event.type === "session.recovery.requested")).toHaveLength(1);
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+          .activeBackendLivenessDeadlineAtMs,
+      ).toBeUndefined();
+    } finally {
+      backend.close();
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      admission.close();
+      operation.complete();
+      release.resolve();
+      await Promise.allSettled([active, queued]);
+      unsubscribe();
+      resetDiagnosticStateForTest();
+      vi.useRealTimers();
+    }
+  });
 
   it("recovers repeated paid-call-shaped activity once without duplicate queued delivery", async () => {
     vi.useFakeTimers();
