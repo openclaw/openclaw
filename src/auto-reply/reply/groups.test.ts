@@ -146,6 +146,24 @@ describe("group runtime loading", () => {
     expect(alwaysOnIntro).not.toContain("most need no response");
   });
 
+  it("keeps message-tool-only required turns free of silence guidance when silent replies are disallowed", () => {
+    const toolOnlyContext = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "group", Provider: "discord" },
+      sourceReplyDeliveryMode: "message_tool_only",
+      silentReplyPolicy: "disallow",
+      silentToken: "NO_REPLY",
+    });
+
+    expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain(
+      "For required conversational requests, reply briefly even when another participant is addressed; do not speak on their behalf.",
+    );
+    expect(toolOnlyContext).not.toContain("mostly lurk");
+    expect(toolOnlyContext).not.toContain("reply only when directly addressed");
+    expect(toolOnlyContext).not.toContain("stay silent");
+    expect(toolOnlyContext).not.toContain("NO_REPLY");
+  });
+
   it("builds direct chat context without silent-token guidance", () => {
     expect(
       groups.buildSourceConversationContext({
