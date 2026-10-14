@@ -41,6 +41,10 @@ export function resolveTelegramIngressNonRetryableFailure(
       return { reason: "dispatch-dedupe-rollback-failed", message };
     }
     if (
+      typeof candidate === "object" &&
+      candidate !== null &&
+      "reason" in candidate &&
+      "retryable" in candidate &&
       readErrorName(candidate) === "SessionWorkStartError" &&
       candidate.reason === "archived" &&
       candidate.retryable === false
