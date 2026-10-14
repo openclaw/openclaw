@@ -188,6 +188,7 @@ async function prepareStartupConfig(
         return applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
           config: read.snapshot.sourceConfig,
           env,
+          manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
           pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
           historicalWebhookListeners: true,
           startup: true,

@@ -324,6 +324,22 @@ function selectFixtureProjects(owns: (config: string) => boolean) {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it("keeps the scheduled main inventory within its reserved compact capacity", () => {
+    const jobs = createNodeTestShardBundles({
+      includeProofTests: true,
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: true,
+      compactMode: "pull-request",
+      compactNodeJobCap: 76,
+      runnerBackend: "hybrid",
+    });
+    // Main's 77 Node rows reserve one for the separate worker-E2E owner.
+    expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
+    expect(jobs.length).toBeLessThanOrEqual(78);
+  });
+
   it("retries hybrid Gateway-first packing only when the completed plan exceeds its cap", () => {
     const entries = [
       ["ordinary-a", "hooks", 180],

@@ -425,9 +425,13 @@ describe("initSessionState guarded initialization", () => {
         },
         cfg: { session: { store: storePath } } as OpenClawConfig,
       }),
-    ).rejects.toThrow(
-      'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
-    );
+    ).rejects.toMatchObject({
+      name: "SessionWorkStartError",
+      reason: "archived",
+      retryable: false,
+      message:
+        'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
+    });
   });
 
   it.each(["/new"] as const)(

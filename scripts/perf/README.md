@@ -236,6 +236,11 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --revision <measured-commit-sha>
 ```
 
+Use `--row-mode sidebar --limit 200` for the sidebar's fact-packed wire response,
+or `--row-mode dashboard` for gallery rows. The default `compact` shape does not
+exercise sidebar fact packing; compare matching shapes when attributing allocation.
+The report records `rowMode` alongside the page limit.
+
 Supported scenarios:
 
 | Scenario               | One measured operation                                                                                     |

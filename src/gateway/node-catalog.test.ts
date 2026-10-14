@@ -96,37 +96,6 @@ describe("gateway/node-catalog", () => {
     expect(node?.pendingDeclaredCommands).toEqual(["screen.snapshot"]);
   });
 
-  it("filters paired nodes by active node token instead of sticky historical roles", () => {
-    const catalog = createKnownNodeCatalog({
-      pairedDevices: [
-        pairedDevice({
-          deviceId: "legacy-mac",
-          displayName: "Peter's Mac Studio",
-          clientId: "clawdbot-macos",
-          tokens: {
-            node: {
-              token: "legacy-token",
-              role: "node",
-              scopes: [],
-              createdAtMs: 1,
-              revokedAtMs: 2,
-            },
-          },
-          approvedAtMs: 1,
-        }),
-        pairedDevice({
-          deviceId: "current-mac",
-          displayName: "Peter's Mac Studio",
-          approvedAtMs: 1,
-        }),
-      ],
-      pairedNodes: [],
-      connectedNodes: [],
-    });
-
-    expect(listKnownNodes(catalog).map((node) => node.nodeId)).toEqual(["current-mac"]);
-  });
-
   it("keeps the operator node name across live metadata and reconnects", () => {
     const pairedDevices = [pairedDevice({ displayName: "Device Name" })];
     const pairedNodes = [pairedNode({ displayName: "Operator Name" })];

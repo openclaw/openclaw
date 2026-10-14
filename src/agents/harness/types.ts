@@ -478,7 +478,7 @@ export type AgentHarnessDescendantCancellationResult = {
 };
 
 /** Activation-only native readiness check; it does not authorize a model turn. */
-export type AgentHarnessSetupVerificationContext = {
+type AgentHarnessSetupVerificationContext = {
   config: OpenClawConfig;
   provider: string;
   modelId: string;

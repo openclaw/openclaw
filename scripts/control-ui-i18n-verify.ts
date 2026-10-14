@@ -293,9 +293,16 @@ async function verifyControlUiSourceCatalogShape() {
 
 export async function verifyControlUiPluginCatalogs(repoRoot = ROOT) {
   const summaries = [];
+  const sharedSource = flattenControlUiCatalog(loadControlUiSourceCatalog(), "en");
   const supportedLocales = new Set<string>(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => locale));
   for (const plugin of await loadControlUiPluginCatalogs(repoRoot)) {
     const sourceFlat = flattenControlUiCatalog(plugin.source, `${plugin.id}:en`);
+    for (const [key, text] of sourceFlat) {
+      const shared = sharedSource.get(key);
+      if (shared !== undefined && shared !== text) {
+        throw new Error(`${plugin.id}:${key} disagrees with the shared English catalog`);
+      }
+    }
     const localeFlats = new Map<string, Map<string, string>>();
     let unusedTranslations = 0;
     for (const [locale, translations] of Object.entries(plugin.translations)) {

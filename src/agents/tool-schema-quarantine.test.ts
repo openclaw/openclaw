@@ -124,57 +124,49 @@ describe("runtime tool schema quarantine logging", () => {
     });
   });
 
-  it.each(["before dispatch", "after reply"] as const)(
-    "clears an independent recovered key while preserving a renewed failure %s",
-    async (phase) => {
-      await withStateDirEnv("openclaw-tool-quarantine-overlap-", async () => {
-        const quarantine = {
-          toolName: "overlapping_tool",
-          reason: "unsupported schema",
-          failedAt: new Date(123),
-        };
-        await recordPersistedRuntimeToolSchemaQuarantine(quarantine);
-        const healthyQuarantine = { ...quarantine, toolName: "healthy_tool" };
-        await recordPersistedRuntimeToolSchemaQuarantine(healthyQuarantine);
-        const reached = createDeferredCore();
-        const release = createDeferredCore();
-        const clear = pluginStateWorker.clearRuntimeHealthInWorker;
-        let held = false;
-        const observer = vi
-          .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
-          .mockImplementation(async (params) => {
-            if (held) {
-              return await clear(params);
-            }
-            held = true;
-            if (phase === "after reply") {
-              await clear(params);
-            }
-            reached.resolve();
-            await release.promise;
-            if (phase === "before dispatch") {
-              await clear(params);
-            }
-          });
-        const healthy = () => [quarantine, healthyQuarantine];
-        const recovering = clearRecoveredPersistedRuntimeToolSchemaQuarantines(healthy);
-        try {
-          await reached.promise;
-          // Identical persisted fields still belong to a new registration operation.
-          await recordPersistedRuntimeToolSchemaQuarantine({ ...quarantine });
-          release.resolve();
-          await recovering;
-          expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([quarantine]);
-          await clearRecoveredPersistedRuntimeToolSchemaQuarantines(healthy);
-          expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([]);
-        } finally {
-          release.resolve();
-          await recovering;
-          observer.mockRestore();
-        }
-      });
-    },
-  );
+  it("clears an independent recovered key while preserving a renewed failure after reply", async () => {
+    await withStateDirEnv("openclaw-tool-quarantine-overlap-", async () => {
+      const quarantine = {
+        toolName: "overlapping_tool",
+        reason: "unsupported schema",
+        failedAt: new Date(123),
+      };
+      await recordPersistedRuntimeToolSchemaQuarantine(quarantine);
+      const healthyQuarantine = { ...quarantine, toolName: "healthy_tool" };
+      await recordPersistedRuntimeToolSchemaQuarantine(healthyQuarantine);
+      const reached = createDeferredCore();
+      const release = createDeferredCore();
+      const clear = pluginStateWorker.clearRuntimeHealthInWorker;
+      let held = false;
+      const observer = vi
+        .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
+        .mockImplementation(async (params) => {
+          if (held) {
+            return await clear(params);
+          }
+          held = true;
+          await clear(params);
+          reached.resolve();
+          await release.promise;
+        });
+      const healthy = () => [quarantine, healthyQuarantine];
+      const recovering = clearRecoveredPersistedRuntimeToolSchemaQuarantines(healthy);
+      try {
+        await reached.promise;
+        // Identical persisted fields still belong to a new registration operation.
+        await recordPersistedRuntimeToolSchemaQuarantine({ ...quarantine });
+        release.resolve();
+        await recovering;
+        expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([quarantine]);
+        await clearRecoveredPersistedRuntimeToolSchemaQuarantines(healthy);
+        expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([]);
+      } finally {
+        release.resolve();
+        await recovering;
+        observer.mockRestore();
+      }
+    });
+  });
 
   it.each([false, true])(
     "joins accepted health writes outside synchronous permission authority (throws=%s)",

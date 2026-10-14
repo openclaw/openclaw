@@ -520,6 +520,14 @@ preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
 
+Startup deletion-journal checks use at most eight concurrent reads, so releasing
+more than 128 agents from preparation readiness does not exhaust the shared
+state-read pool. If other readers saturate that pool, startup retries only the
+typed capacity rejection up to four attempts with cancellable backoff. Deletion
+tombstones, genuine read failures, and exhausted retries still leave the agent
+degraded. Gateway ownership and database identity are checked after waiting for
+admission and before consuming the read result.
+
 Configured ACP-only session stores follow the same deferred inspection and
 session preparation path, including IDs from `acp.defaultAgent`,
 `acp.allowedAgents`, and ACP runtime aliases. They do not require native auth or
