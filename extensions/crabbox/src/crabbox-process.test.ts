@@ -4,7 +4,10 @@ import { expect, it, vi } from "vitest";
 import { runCrabboxProcess } from "./crabbox-process.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn() }));
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runCommandWithTimeout: mocks.run }));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: mocks.run,
+}));
 
 it.each([
   { name: "default", binary: process.execPath, cwd: undefined, expected: os.homedir() },
