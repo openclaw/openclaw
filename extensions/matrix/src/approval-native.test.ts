@@ -66,7 +66,7 @@ describe("matrix approval capability", () => {
     expect(targets).toEqual([{ to: "user:@owner:example.org" }]);
   });
 
-  it("keeps plugin approval auth independent from exec approvers", () => {
+  it("keeps plugin approval auth independent from exec approvers", async () => {
     const cfg = buildConfig({
       dm: { allowFrom: ["@owner:example.org"] },
       execApprovals: {
@@ -77,7 +77,7 @@ describe("matrix approval capability", () => {
     });
 
     expect(
-      matrixApprovalCapability.authorizeActorAction?.({
+      await matrixApprovalCapability.authorizeActorActionAsync?.({
         cfg,
         accountId: "default",
         senderId: "@owner:example.org",
@@ -87,7 +87,7 @@ describe("matrix approval capability", () => {
     ).toEqual({ authorized: true });
 
     expect(
-      matrixApprovalCapability.authorizeActorAction?.({
+      await matrixApprovalCapability.authorizeActorActionAsync?.({
         cfg,
         accountId: "default",
         senderId: "@exec:example.org",
@@ -100,7 +100,7 @@ describe("matrix approval capability", () => {
     });
 
     expect(
-      matrixApprovalCapability.authorizeActorAction?.({
+      await matrixApprovalCapability.authorizeActorActionAsync?.({
         cfg,
         accountId: "default",
         senderId: "@exec:example.org",
@@ -110,7 +110,7 @@ describe("matrix approval capability", () => {
     ).toEqual({ authorized: true });
   });
 
-  it("requires exact Matrix identities for native approval actions", () => {
+  it("requires exact Matrix identities for native approval actions", async () => {
     const cfg = buildConfig({
       dm: { allowFrom: ["@\u212A:example.org"] },
       execApprovals: {
@@ -122,7 +122,7 @@ describe("matrix approval capability", () => {
 
     for (const approvalKind of ["plugin", "exec"] as const) {
       expect(
-        matrixApprovalCapability.authorizeActorAction?.({
+        await matrixApprovalCapability.authorizeActorActionAsync?.({
           cfg,
           accountId: "default",
           senderId: "@\u212A:example.org",
@@ -131,7 +131,7 @@ describe("matrix approval capability", () => {
         }),
       ).toEqual({ authorized: true });
       expect(
-        matrixApprovalCapability.authorizeActorAction?.({
+        await matrixApprovalCapability.authorizeActorActionAsync?.({
           cfg,
           accountId: "default",
           senderId: "@k:example.org",
@@ -145,7 +145,7 @@ describe("matrix approval capability", () => {
     }
   });
 
-  it("requires Matrix DM approvers before enabling plugin approval auth", () => {
+  it("requires Matrix DM approvers before enabling plugin approval auth", async () => {
     const cfg = buildConfig({
       dm: { allowFrom: [] },
       execApprovals: {
@@ -156,7 +156,7 @@ describe("matrix approval capability", () => {
     });
 
     expect(
-      matrixApprovalCapability.authorizeActorAction?.({
+      await matrixApprovalCapability.authorizeActorActionAsync?.({
         cfg,
         accountId: "default",
         senderId: "@exec:example.org",

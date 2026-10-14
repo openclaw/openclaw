@@ -206,6 +206,48 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-provider-key");
   });
 
+  it.each(["llama-cpp", "llmman"])(
+    "honors managed %s auth with a retained missing SecretRef at HTTP",
+    async (provider) => {
+      const ref = {
+        source: "env",
+        provider: "default",
+        id: "MISSING_MANAGED_EMBEDDING_KEY",
+      } as const;
+      vi.stubEnv(ref.id, undefined);
+      vi.stubEnv("LLMMAN_API_KEY", "synthetic-env-fallback");
+      const options: EmbeddingProviderCreateOptions = {
+        config: {
+          models: {
+            providers: {
+              [provider]: {
+                api: "openai-completions",
+                baseUrl,
+                apiKey: ref,
+                localService: { command: "/fixture/server" },
+                models: [],
+              },
+            },
+          },
+        },
+        provider,
+        model: "fixture-model",
+      };
+      const embed = async () => {
+        const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
+        return result.provider?.embed("hello");
+      };
+      if (provider === "llmman") {
+        await expect(embed()).rejects.toBeInstanceOf(UnresolvedSecretInputError);
+        expect(requests).toEqual([]);
+      } else {
+        await expect(embed()).resolves.toEqual(vector);
+        expect(requests[0]?.headers.authorization).toBe("Bearer llama-cpp-local");
+        expect(options.config.models?.providers?.[provider]?.apiKey).toEqual(ref);
+      }
+    },
+  );
+
   it.each([false, true])(
     "keeps metadata-only profile names literal with owned store = %s",
     async (ownedStore) => {

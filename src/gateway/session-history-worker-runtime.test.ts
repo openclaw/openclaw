@@ -2,6 +2,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import * as sqliteScope from "../config/sessions/session-accessor.sqlite-scope.js";
 import type {
   SessionHistoryWorkerRequest,
@@ -36,6 +40,10 @@ vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
       assertCurrent() {},
     }),
 }));
+// mock-isolation: Scheduler deadlines exclude the process-owned directory observer lifecycle.
+vi.mock("../infra/owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
+}));
 // mock-isolation: Cold restoration has its own owner tests; this fixture controls read callbacks.
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
   readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => {
@@ -64,6 +72,7 @@ function waitForReaderAdmission(count: number): Promise<void> {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   vi.spyOn(sqliteScope, "prepareSqliteTranscriptReadScope").mockImplementation(async (scope) => {
     if (!scope.agentId || !scope.storePath) {
       throw new Error("Queue fixture requires an explicit history target");
@@ -95,7 +104,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(["timeout", "cancel"] as const)(
   "bounds projection recovery and preserves caller %s",

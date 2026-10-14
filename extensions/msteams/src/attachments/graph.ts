@@ -3,11 +3,7 @@ import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
-import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
-  isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
-} from "openclaw/plugin-sdk/ssrf-policy";
+import { buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy } from "openclaw/plugin-sdk/ssrf-policy";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -21,10 +17,7 @@ import {
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import { downloadMSTeamsAttachments } from "./download.js";
-import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
-  applyAuthorizationHeaderForUrl,
-  encodeGraphShareId,
   GRAPH_ROOT,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
@@ -32,7 +25,6 @@ import {
   normalizeContentType,
   resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
-  safeFetchWithPolicy,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -278,9 +270,6 @@ export async function downloadMSTeamsGraphMedia(params: {
     return { media: [], messageUrl, tokenError: true };
   }
 
-  const fetchFn = params.fetchFn ?? fetch;
-  const sharePointMedia: MSTeamsInboundMedia[] = [];
-  const downloadedReferenceUrls = new Set<string>();
   let messageAttachments: MSTeamsAttachmentLike[] = [];
   let referenceAttachments: MSTeamsAttachmentLike[] = [];
   let messageStatus: number | undefined;
@@ -324,73 +313,13 @@ export async function downloadMSTeamsGraphMedia(params: {
 
   // The message response owns a pinned dispatcher. Release it before nested
   // SharePoint requests so one metadata connection never spans child downloads.
-  for (const att of referenceAttachments) {
-    const name = att.name ?? "file";
-    const shareUrl = att.contentUrl ?? "";
-    const sourceId = att.id?.trim();
-    const unavailableMedia: MSTeamsInboundMedia = {
-      kind: resolveMSTeamsMediaKind({
-        contentType: att.contentType ?? undefined,
-        fileName: name,
-      }),
-      ...(sourceId ? { sourceId } : {}),
-    };
-    if (!shareUrl) {
-      sharePointMedia.push(unavailableMedia);
-      continue;
-    }
-
-    // This pass owns reference attachments even when their download fails; the
-    // generic attachment pass must not emit a second unavailable fact.
-    downloadedReferenceUrls.add(shareUrl);
-    try {
-      const sharesUrl = `${GRAPH_ROOT}/shares/${encodeGraphShareId(shareUrl)}/driveItem/content`;
-      if (!isUrlAllowed(sharesUrl, policy.allowHosts)) {
-        params.logger?.debug?.("graph media sharepoint url not in allowHosts", {
-          messageUrl,
-          sharesUrl,
-        });
-        sharePointMedia.push(unavailableMedia);
-        continue;
-      }
-
-      const media = await downloadAndStoreMSTeamsRemoteMedia({
-        url: sharesUrl,
-        filePathHint: name,
-        maxBytes: params.maxBytes,
-        contentTypeHint: "application/octet-stream",
-        preserveFilenames: params.preserveFilenames,
-        fetchImpl: async (input, init) => {
-          const requestUrl = resolveRequestUrl(input);
-          const headers = ensureUserAgentHeader(init?.headers);
-          applyAuthorizationHeaderForUrl({
-            headers,
-            url: requestUrl,
-            authAllowHosts: policy.authAllowHosts,
-            bearerToken: accessToken,
-          });
-          return await safeFetchWithPolicy({
-            url: requestUrl,
-            policy,
-            fetchFn,
-            requestInit: {
-              ...init,
-              headers,
-            },
-            resolveFn: params.resolveFn,
-            timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
-          });
-        },
-      });
-      sharePointMedia.push(sourceId ? { ...media, sourceId } : media);
-    } catch (err) {
-      sharePointMedia.push(unavailableMedia);
-      params.logger?.warn?.("msteams SharePoint reference download failed", {
-        error: coerceErrorMessage(err),
-        name,
-      });
-    }
-  }
+  const sharePointMedia = await downloadMSTeamsAttachments({
+    ...params,
+    attachments: referenceAttachments,
+    graphReferenceToken: accessToken,
+    allowHosts: policy.allowHosts,
+    authAllowHosts: policy.authAllowHosts,
+  });
 
   const hosted = await downloadGraphHostedContent({
     accessToken,
@@ -403,16 +332,11 @@ export async function downloadMSTeamsGraphMedia(params: {
   });
 
   const normalizedAttachments = messageAttachments.map(normalizeGraphAttachment);
-  const filteredAttachments =
-    sharePointMedia.length > 0
-      ? normalizedAttachments.filter(
-          (att) =>
-            att.contentType !== "reference" ||
-            typeof att.contentUrl !== "string" ||
-            !att.contentUrl ||
-            !downloadedReferenceUrls.has(att.contentUrl),
-        )
-      : normalizedAttachments;
+  // References already produced a downloaded or unavailable fact above.
+  const referenceUrls = new Set(referenceAttachments.map((att) => att.contentUrl));
+  const filteredAttachments = normalizedAttachments.filter(
+    (att) => att.contentType !== "reference" || !referenceUrls.has(att.contentUrl),
+  );
   let attachmentMedia: MSTeamsInboundMedia[] = [];
   try {
     attachmentMedia = await downloadMSTeamsAttachments({

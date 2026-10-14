@@ -487,7 +487,7 @@ export type RunReplyAgentParams = ReplyAgentTurnContext & {
   shouldFollowup: boolean;
   hasQueuedFollowups?: boolean;
   isActive: boolean;
-  isRunActive?: () => boolean;
+  isRunActive?: () => boolean | Promise<boolean>;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;

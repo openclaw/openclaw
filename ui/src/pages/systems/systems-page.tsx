@@ -145,7 +145,7 @@ function SystemMeasurements(props: { row: SystemsInventoryRow; controller: Syste
   );
 }
 
-export type SystemsPageProps = { routeData?: SystemsRouteData; presented: boolean };
+type SystemsPageProps = { routeData?: SystemsRouteData; presented: boolean };
 type SystemsPageElement = SolidBridgeElement<SystemsPageProps>;
 
 function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
@@ -565,36 +565,15 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
   );
 }
 
-export const SystemsPage = defineSolidBridge<SystemsPageProps>(
-  "openclaw-systems-page",
-  SystemsPageContent,
-  {
-    properties: {
-      routeData: { default: undefined, attribute: false },
-      presented: { default: true, type: Boolean },
-    },
+defineSolidBridge<SystemsPageProps>("openclaw-systems-page", SystemsPageContent, {
+  properties: {
+    routeData: { default: undefined, attribute: false },
+    presented: { default: true, type: Boolean },
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-systems-page": SystemsPageElement;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-desktop-panel": HTMLAttributes<HTMLElementTagNameMap["openclaw-desktop-panel"]> & {
-        embedded?: boolean;
-        "prop:client"?: HTMLElementTagNameMap["openclaw-desktop-panel"]["client"];
-        "prop:available"?: boolean;
-        "prop:presented"?: boolean;
-        "prop:workspaceControls"?: boolean;
-        "prop:suppliedEnvironments"?: HTMLElementTagNameMap["openclaw-desktop-panel"]["suppliedEnvironments"];
-        "prop:requestedSource"?: string;
-        "prop:basePath"?: string;
-      };
-    }
   }
 }

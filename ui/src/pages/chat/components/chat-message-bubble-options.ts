@@ -21,6 +21,7 @@ export type GroupedMessageOptions = {
   presented?: boolean;
   transcriptVisible?: PresentationValue;
   boardProvider?: BoardProvider;
+  widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
   agentId?: string;
   duplicateCount?: number;
   showReasoning: boolean;
@@ -59,6 +60,7 @@ export type GroupedMessageOptions = {
   githubRepo?: MarkdownRenderOptions["githubRepo"];
   githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onPermissionRetry?: (message: string) => void;
   subagents?: ToolRenderOptions["subagents"];
   fileLinkSessionKey?: string;
   avatar?: () => JSX.Element;

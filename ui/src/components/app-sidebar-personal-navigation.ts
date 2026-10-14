@@ -1,16 +1,25 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { parseSidebarEntry } from "../app-navigation.ts";
-import type { ApplicationContext } from "../app/context.ts";
+import { parseSidebarEntry, type NavigationRouteId } from "../app-navigation.ts";
+import { pathForRoute } from "../app-route-paths.ts";
+import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type {
   SessionConnectionScope,
   SessionListSnapshot,
 } from "../lib/sessions/session-capability.ts";
+import { showToast } from "../lib/toast.ts";
+import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import {
+  setStoredSessionCatalogHidden,
+  type SidebarRecentSession,
+} from "./app-sidebar-session-types.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
@@ -21,7 +30,7 @@ type PersonalNavigationHost = {
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
   readonly sessionDataContext:
-    | Pick<ApplicationContext, "sessions" | "gateway" | "plugins">
+    | Pick<ApplicationContext, "sessions" | "gateway" | "plugins" | "connectionBootstrap">
     | undefined;
   readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
   getRouteSessionKey(): string;
@@ -30,17 +39,65 @@ type PersonalNavigationHost = {
   pluginNavigation(): Parameters<typeof buildReconciledSidebarZone>[0]["pluginNavigation"];
 };
 
+export function hidePersonalSidebarCatalog(
+  host: {
+    readonly sessionData: {
+      readonly sessionCatalogs: ReadonlyArray<{ id: string; label?: string | null }>;
+    };
+    readonly basePath: string;
+    readonly ownerDocument: Document;
+    readonly onNavigate:
+      | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
+      | undefined;
+  },
+  catalogId: string,
+): void {
+  const label =
+    host.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
+    catalogId;
+  setStoredSessionCatalogHidden(catalogId, true);
+  // Reuse the settings-search destination for the Sidebar preferences block so the
+  // toast opens the same place the rest of the app calls "Appearance > Sidebar".
+  const recovery = SETTINGS_ROUTE_TARGETS.appearanceSidebar;
+  const recoveryHref =
+    pathForRoute(recovery.routeId, host.basePath) + recovery.search + recovery.hash;
+  // The section disappears instantly and its only standing recovery lives on another
+  // page, so the outcome is announced where the action happened: undo here, plus a
+  // link that opens the re-enable block for after the toast is gone. Longer than the
+  // 6s default because that text is a recovery instruction, not an acknowledgement.
+  const message = host.ownerDocument.createDocumentFragment();
+  const recoveryLink = host.ownerDocument.createElement("a");
+  recoveryLink.className = "session-link";
+  recoveryLink.href = recoveryHref;
+  recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
+  recoveryLink.addEventListener("click", (event) => {
+    if (!shouldHandleNavigationClick(event)) {
+      return;
+    }
+    event.preventDefault();
+    host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
+  });
+  message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
+  showToast({
+    message,
+    actionLabel: t("common.undo"),
+    onAction: () => setStoredSessionCatalogHidden(catalogId, false),
+    durationMs: 12_000,
+  });
+}
+
 /** Descriptor snapshots last one connection; loaded rows always supersede them. */
 export class SidebarPinnedSessions implements ReactiveController {
   private source?: ApplicationContext["sessions"];
   private scope: SessionConnectionScope | null = null;
-  private readonly requested = new Set<string>();
+  private readonly requested = new Map<string, "pending" | "settled">();
   private readonly rows = new Map<string, GatewaySessionRow>();
 
   constructor(
     private readonly host: ReactiveControllerHost & {
       readonly isConnected: boolean;
       readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
+      readonly sessionData: Pick<SessionDataController, "requestSessionDataUpdate">;
     },
   ) {
     host.addController(this);
@@ -51,48 +108,88 @@ export class SidebarPinnedSessions implements ReactiveController {
   }
 
   hostUpdate(): void {
-    if (
-      this.scope &&
-      (!this.source?.isConnectionScopeCurrent(this.scope) ||
-        this.source !== this.host.sessionDataContext?.sessions)
-    ) {
-      this.clear();
-    }
+    this.synchronize();
   }
 
-  get(key: string): GatewaySessionRow | undefined {
+  private synchronize() {
     const source = this.host.sessionDataContext?.sessions;
     if (source !== this.source || !this.scope || !source?.isConnectionScopeCurrent(this.scope)) {
       this.clear();
       this.source = source;
       this.scope = source?.captureConnectionScope() ?? null;
     }
+    return source;
+  }
+
+  seed(rows: SidebarSnapshotModel["pinnedSessions"]): void {
+    this.synchronize();
+    if (!this.scope) {
+      return;
+    }
+    for (const row of rows) {
+      if (!this.rows.has(row.key) && this.requested.get(row.key) !== "settled") {
+        this.rows.set(row.key, {
+          key: row.key,
+          kind: "direct",
+          updatedAt: null,
+          agentId: row.agentId,
+          label: row.label,
+          icon: row.icon,
+          color: row.color,
+          pinned: row.pinned,
+          archived: row.archived,
+          boardFace: row.boardFace,
+        });
+      }
+    }
+  }
+
+  get(key: string): GatewaySessionRow | undefined {
+    const context = this.host.sessionDataContext;
+    const source = this.synchronize();
     const scope = this.scope;
-    if (!this.host.isConnected || !source || !scope) {
+    if (!this.host.isConnected || !source || !scope || !context) {
       return undefined;
     }
     if (!this.requested.has(key)) {
-      this.requested.add(key);
-      void source.describe({ key }).then(
-        (result) => {
-          if (
-            result.session &&
-            this.source === source &&
-            this.host.sessionDataContext?.sessions === source &&
-            this.scope === scope &&
-            source.isConnectionScopeCurrent(scope)
-          ) {
-            // A title/icon may be stale until the row loads or the connection changes.
-            this.rows.set(key, result.session);
-            if (this.host.isConnected) {
-              this.host.requestUpdate();
-            }
-          }
-        },
-        () => {
-          /* Missing or failed pins stay saved, invisible, and silent. */
-        },
-      );
+      this.requested.set(key, "pending");
+      const current = () =>
+        this.source === source &&
+        this.host.sessionDataContext === context &&
+        this.scope === scope &&
+        source.isConnectionScopeCurrent(scope);
+      const publish = (row?: GatewaySessionRow | null) => {
+        if (!current()) {
+          return;
+        }
+        this.requested.set(key, "settled");
+        if (row) {
+          this.rows.set(key, row);
+        } else if (!this.rows.delete(key)) {
+          return;
+        }
+        if (this.host.isConnected) {
+          this.host.sessionData.requestSessionDataUpdate();
+        }
+      };
+      const describe = async () => {
+        if (!current()) {
+          return;
+        }
+        if (!this.host.isConnected) {
+          this.requested.delete(key);
+          return;
+        }
+        await source.describe({ key }).then(
+          (result) => publish(result.session),
+          () => {
+            /* Missing or failed pins stay saved, invisible, and silent. */
+            publish();
+          },
+        );
+      };
+      // Cached pins can paint while the selected conversation takes the request budget.
+      void context.connectionBootstrap.run(describe, describe, { background: true });
     }
     return this.rows.get(key);
   }
@@ -106,7 +203,7 @@ export class SidebarPinnedSessions implements ReactiveController {
 }
 
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
-  const pins = host.sidebarEntries.flatMap((value) => {
+  const pins = (host.sidebarSnapshot ? [] : host.sidebarEntries).flatMap((value) => {
     const entry = parseSidebarEntry(value);
     if (entry?.type !== "session") {
       return [];

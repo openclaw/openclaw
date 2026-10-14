@@ -165,7 +165,7 @@ Options:
   --tag <tag>                         Release tag. An existing tag must resolve to the target SHA.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted helper/publisher source (P), not the candidate harness. Default: main.
-  --workflow-sha <sha>                Trusted helper/publisher SHA (P); reuses or mints its release-publish tag. Fresh qualification runs Q=C.
+  --workflow-sha <sha>                Trusted helper/publisher SHA (P), a trusted-main commit, not the candidate; reuses or mints its release-publish tag. Fresh qualification runs Q=C.
   --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
@@ -751,7 +751,18 @@ function runFromTrustedTooling(
       workflowSha !== trustedToolingSha &&
       !gitIsAncestor(workflowSha, "refs/remotes/origin/main", targetRoot)
     ) {
-      throw new Error(`--workflow-sha ${workflowSha} is not reachable from trusted ${workflowRef}`);
+      // P runs admission, protected-tag creation, and publication with release
+      // credentials, so it must be reviewed trusted-main code (RELEASING.md,
+      // "Frozen qualification identity"). The candidate is selected separately.
+      const candidateHead = run("git", ["rev-parse", "HEAD"], {
+        capture: true,
+        cwd: targetRoot,
+      }).trim();
+      throw new Error(
+        `--workflow-sha ${workflowSha} is not reachable from trusted ${workflowRef}.${
+          workflowSha === candidateHead ? " It is the checked-out release candidate." : ""
+        } --workflow-sha pins the release tooling that runs with release credentials, so it must be a commit on trusted ${workflowRef}; the candidate comes from the checkout or --target-sha. Pass a trusted ${workflowRef} commit (for example \`git rev-parse origin/${workflowRef}\`), or land the tooling repair on ${workflowRef} first.`,
+      );
     }
     trustedToolingSha = workflowSha;
   }
@@ -948,7 +959,7 @@ function gitIsAncestor(ancestor: string, target: string, cwd = process.cwd()) {
     return false;
   }
   throw new Error(
-    `could not validate changelog provenance ${ancestor}..${target}: ${
+    `could not check git ancestry ${ancestor}..${target}: ${
       result.stderr?.trim() || result.signal || result.status
     }`,
   );

@@ -332,6 +332,7 @@ export function createSlackCommandHandler(params: {
     const respond = responseBudget.respond;
     const respondEphemeral = (text: string) => respond({ text, response_type: "ephemeral" });
     let cfg = monitor.cfg;
+    let releaseSessionTarget: (() => void) | undefined;
     try {
       if (monitor.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();
@@ -466,7 +467,12 @@ export function createSlackCommandHandler(params: {
       });
       const routingTeamId = (eventScope?.teamId ?? ctx.teamId) || undefined;
       let resolvedSlashRoute: ResolvedAgentRoute | undefined;
-      let isCurrentSession = p.isSessionTargetCurrent;
+      const sessionTarget: {
+        isCurrent:
+          | typeof p.isSessionTargetCurrent
+          | Awaited<ReturnType<typeof captureSlackSessionTargetGuard>>["isCurrent"];
+        source?: Awaited<ReturnType<typeof captureSlackSessionTargetGuard>>["source"];
+      } = { isCurrent: p.isSessionTargetCurrent };
       const resolveSlashRoute = async () => {
         if (resolvedSlashRoute) {
           return resolvedSlashRoute;
@@ -474,11 +480,14 @@ export function createSlackCommandHandler(params: {
         if (p.threadTs) {
           if (p.sessionTarget) {
             resolvedSlashRoute = p.sessionTarget;
-            isCurrentSession = await captureSlackSessionTargetGuard(
+            const current = await captureSlackSessionTargetGuard(
               ctx,
               p.sessionTarget,
               p.isSessionTargetCurrent,
             );
+            sessionTarget.isCurrent = current.isCurrent;
+            sessionTarget.source = current.source;
+            releaseSessionTarget = current.release;
             return resolvedSlashRoute;
           }
           const routing = await resolveSlackSessionEventRoutingContext({
@@ -497,7 +506,9 @@ export function createSlackCommandHandler(params: {
             eventScope,
           });
           resolvedSlashRoute = routing.route;
-          isCurrentSession = routing.isCurrentSession;
+          sessionTarget.isCurrent = routing.isCurrentSession;
+          sessionTarget.source = routing.sessionSource;
+          releaseSessionTarget = routing.release;
           return resolvedSlashRoute;
         }
         const { resolveAgentRoute } = await loadSlashDispatchRuntime();
@@ -580,7 +591,7 @@ export function createSlackCommandHandler(params: {
               config: cfg,
               agentId: route.agentId,
               sessionKey: route.sessionKey,
-              assertCurrent: isCurrentSession,
+              assertCurrent: sessionTarget.source,
               commandText: prompt,
               commandId: `slack:${account.accountId}:${routeTarget.peerId}:${commandId}`,
               replyId: "argument-menu",
@@ -718,7 +729,7 @@ export function createSlackCommandHandler(params: {
           }
         : undefined;
       if (commandAuthorized) {
-        if (isCurrentSession?.() === false || p.onAdmitted?.() === false) {
+        if ((await sessionTarget.isCurrent?.()) === false || p.onAdmitted?.() === false) {
           await respondEphemeral("The selected run has already finished.");
           return false;
         }
@@ -796,7 +807,7 @@ export function createSlackCommandHandler(params: {
           },
         },
         replyOptions: {
-          isCommandTargetCurrent: isCurrentSession,
+          isCommandTargetCurrent: sessionTarget.isCurrent,
           skillFilter: channelConfig?.skills,
           ...pluginCommandReplyOptions,
           ...builtInDispatch,
@@ -808,6 +819,8 @@ export function createSlackCommandHandler(params: {
       if (!(err instanceof SlackResponseAlreadyReportedError) && responseBudget.remaining() !== 0) {
         await respondEphemeral("Sorry, something went wrong handling that command.");
       }
+    } finally {
+      releaseSessionTarget?.();
     }
     return false;
   };

@@ -10,6 +10,7 @@ import {
   Switch,
   untrack,
 } from "solid-js";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
@@ -20,9 +21,15 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import { StreamGroup, WorkGroupSummary } from "./chat-message-stream-view.tsx";
+import {
+  StreamGroup,
+  UnplacedSubagentWait,
+  WorkGroupSummary,
+} from "./chat-message-stream-view.tsx";
 import type { TranscriptLayoutProps } from "./chat-transcript-layout.ts";
+import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import {
   GuardedTranscriptItem,
@@ -49,6 +56,18 @@ function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
       </Match>
       <Match when={props.value.kind === "work" ? props.value : undefined}>
         {(view) => <WorkGroupSummary item={view().item} options={view().options} />}
+      </Match>
+      <Match when={props.value.kind === "frame" ? props.value : undefined}>
+        {(view) => <AgentRunFrame frame={view().frame} options={view().options} />}
+      </Match>
+      <Match when={props.value.kind === "wait" ? props.value : undefined}>
+        {(view) => (
+          <UnplacedSubagentWait
+            sessionKey={view().sessionKey}
+            wait={view().wait}
+            options={view().options}
+          />
+        )}
       </Match>
     </Switch>
   );
@@ -153,6 +172,7 @@ export class ChatTranscriptRenderer {
   private binding?: PresentationBinding;
   private commitQueued = false;
   private readonly layoutEffects = new Set<() => void>();
+  private readonly mediaDisconnect = new Set<() => void>();
   private readonly presentationChanged = () => this.publishPresentation?.();
 
   private isPresented(): boolean {
@@ -167,6 +187,18 @@ export class ChatTranscriptRenderer {
     this.publishPresentation?.();
   }
 
+  disconnect(isConnected: () => boolean): void {
+    for (const retire of this.mediaDisconnect) {
+      retire();
+    }
+    // Moving a retained pane disconnects and reconnects within one task.
+    queueMicrotask(() => {
+      if (!isConnected()) {
+        this.dispose();
+      }
+    });
+  }
+
   afterCommit(effect: AfterCommitEffect, onCancel?: () => void): () => void {
     if (!this.lifecycle) {
       onCancel?.();
@@ -175,7 +207,13 @@ export class ChatTranscriptRenderer {
     return this.lifecycle.afterCommit(effect, onCancel);
   }
 
-  queueAfterLayout(effect: () => void): void {
+  syncInitialPosition(): void {
+    if (this.element && this.accepted) {
+      this.element.style.visibility = this.accepted.initialPositionPending() ? "hidden" : "";
+    }
+  }
+
+  queueAfterCommit(effect: () => void): void {
     if (!this.lifecycle || this.layoutEffects.has(effect)) {
       return;
     }
@@ -183,9 +221,14 @@ export class ChatTranscriptRenderer {
     const release = () => {
       this.layoutEffects.delete(effect);
     };
-    this.lifecycle.afterLayout(() => {
-      release();
-      effect();
+    this.lifecycle.afterCommit(() => {
+      // Nested row islands finish their commits before initial geometry is read.
+      queueMicrotask(() => {
+        release();
+        if (this.isPresented()) {
+          effect();
+        }
+      });
     }, release);
   }
 
@@ -204,7 +247,7 @@ export class ChatTranscriptRenderer {
         this.committed = current;
         // Keep layout measurable, but do not paint the initial estimated range
         // before the session owner has placed it at the correct reading edge.
-        this.element.style.visibility = current.initialPositionPending ? "hidden" : "";
+        this.syncInitialPosition();
         this.element.toggleAttribute("data-measuring-rows", current.measureRows);
         current.layout.commitRange(
           this.element,
@@ -229,6 +272,7 @@ export class ChatTranscriptRenderer {
     if (!this.element) {
       const element = document.createElement("div");
       element.className = "chat-thread-inner chat-thread-inner--virtual";
+      element.style.visibility = next.initialPositionPending() ? "hidden" : "";
       this.element = element;
       // A session outlives the render computation that first introduces its DOM.
       this.disposeRoot = runWithOwner(null, () =>
@@ -252,10 +296,20 @@ export class ChatTranscriptRenderer {
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
           element.addEventListener("click", capture, true);
           onCleanup(() => element.removeEventListener("click", capture, true));
+          const content = () => (
+            <TranscriptMediaDisconnect value={this.mediaDisconnect}>
+              <SolidContentPresentation value={active}>
+                <TranscriptRows snapshot={snapshot()} />
+              </SolidContentPresentation>
+            </TranscriptMediaDisconnect>
+          );
+          // Keep the session root independent while retaining its application capabilities.
           return (
-            <SolidContentPresentation value={active}>
-              <TranscriptRows snapshot={snapshot()} />
-            </SolidContentPresentation>
+            <Show when={snapshot().applicationContext} fallback={content()} keyed>
+              {(application) => (
+                <ApplicationProvider value={application}>{content()}</ApplicationProvider>
+              )}
+            </Show>
           );
         }, element),
       );

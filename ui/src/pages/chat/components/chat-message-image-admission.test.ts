@@ -204,10 +204,13 @@ it.each(["assistant remount", "managed remount", "assistant reconnect"] as const
     const src = loaded.getAttribute("src");
     if (mode === "assistant reconnect") {
       root.setConnected(false);
+      flush();
       expect(loaded.parentNode).toBeNull();
       root.setConnected(true);
+      flush();
     } else {
       render(nothing, container);
+      await Promise.resolve();
       draw(images);
     }
     expect(container.querySelector(".chat-image-skeleton")).toBeNull();
@@ -244,6 +247,7 @@ it.each([
   const loaded = await loadAdmittedImage();
   const removeListener = vi.spyOn(loaded, "removeEventListener");
   render(nothing, container);
+  await Promise.resolve();
   expect(loaded.parentNode).toBeNull();
   expect(removeListener).toHaveBeenCalledWith("load", expect.any(Function));
   expect(removeListener).toHaveBeenCalledWith("error", expect.any(Function));

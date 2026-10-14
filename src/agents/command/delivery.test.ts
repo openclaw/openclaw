@@ -72,6 +72,32 @@ function createResult(overrides: Partial<RunResult> = {}): RunResult {
   return { ...overrides, meta: { durationMs: 1, ...overrides.meta } };
 }
 
+it.each([false, true])("reports a thinking clamp through local output (json=%s)", async (json) => {
+  const thinkingClamp =
+    "Thinking level clamped to off for ollama/llama3.2 (requested high; preference retained).";
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const delivered = await deliverAgentCommandResultForTest({
+    runtime,
+    opts: { deliver: false, json },
+    payloads: [{ text: "hello" }],
+    result: createResult({
+      meta: { durationMs: 1, requestShaping: { thinking: "off", thinkingClamp } },
+    }),
+  });
+
+  expect(delivered.meta.requestShaping).toEqual({ thinking: "off", thinkingClamp });
+  expect(delivered.payloads).toEqual([{ text: "hello", mediaUrl: null }]);
+  if (json) {
+    expect(runtime.log).not.toHaveBeenCalledWith(thinkingClamp);
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+      meta: { requestShaping: { thinking: "off", thinkingClamp } },
+    });
+  } else {
+    expect(runtime.log).toHaveBeenCalledWith(thinkingClamp);
+    expect(runtime.log).toHaveBeenCalledWith("hello");
+  }
+});
+
 type MessagingToolSentTarget = NonNullable<RunResult["messagingToolSentTargets"]>[number];
 
 type DeliveryFixture = Omit<Partial<DeliverParams>, "opts" | "payloads" | "result"> & {
@@ -552,6 +578,24 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(deliverArgs.queuePolicy).toBe("best_effort");
   });
 
+  it.each(["isCommentary", "isStatusNotice"] as const)(
+    "retains %s in native settlement evidence without changing JSON output",
+    async (flag) => {
+      const onDeliveryResult = vi.fn();
+      const delivered = await deliverAgentCommandResultForTest({
+        opts: { deliver: false, json: true },
+        payloads: [{ text: "Still checking", [flag]: true }],
+        onDeliveryResult,
+      });
+      const nativePayloads = onDeliveryResult.mock.lastCall?.[1];
+      expect(nativePayloads).toEqual([expect.objectContaining({ [flag]: true })]);
+      expect(delivered.payloads).toEqual([{ text: "Still checking", mediaUrl: null }]);
+      expect(
+        buildRestartRecoveryTerminalDeliveryEvidence({ ...delivered, payloads: nativePayloads }),
+      ).toMatchObject({ payloads: [{ visible: false }] });
+    },
+  );
+
   it.each([
     {
       name: "deterministic approval prompt",
@@ -588,9 +632,10 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(delivered.requesterContinuationSettled).toBe(true);
     expect(delivered).toHaveProperty(field, expected);
     expect(onDeliveryResult).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledWith(delivered);
+    expect(onDeliveryResult).toHaveBeenCalledWith(delivered, expect.any(Array));
     expect(buildRestartRecoveryTerminalDeliveryEvidence(delivered)).toEqual({
       captured: true,
+      requesterContinuationSettled: true,
       restartUnsafeSideEffectsDetected: true,
     });
   });
@@ -927,6 +972,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
       expect.objectContaining({
         deliveryStatus: expect.objectContaining({ status: "failed" }),
       }),
+      expect.any(Array),
     );
   });
 

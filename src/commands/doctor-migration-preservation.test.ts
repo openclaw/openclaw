@@ -163,8 +163,10 @@ it("binds semantic preservation to original backups across a partial migration a
     try {
       await maintenance!.run(async () => {
         const scope = getOpenClawDatabaseMaintenanceScope()!;
-        const capture = (runId: string) =>
-          captureUpdateRecoveryBaseline({
+        const capture = async (runId: string) => {
+          // Registry assertions reopen this handle; drain its WAL maintenance before raw capture.
+          await closeOpenClawStateDatabaseAsync();
+          return captureUpdateRecoveryBaseline({
             runId,
             installRoot: process.cwd(),
             env: state.env,
@@ -172,6 +174,7 @@ it("binds semantic preservation to original backups across a partial migration a
             assertCurrent: scope.assertAdmission,
             acquisition: { mode: "maintenance-owner" },
           });
+        };
         await backupDoctorMigrationDatabases({
           env: state.env,
           pendingDatabasePaths: [external],

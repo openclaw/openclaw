@@ -30,6 +30,7 @@ import {
   type TtsConfigResolutionContext,
   type TtsUserPrefs,
 } from "./tts-config.js";
+import { DEFAULT_MAX_TEXT_LENGTH } from "./tts-limits.js";
 import type { PreparedTtsPreferences } from "./tts-preferences.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
@@ -39,7 +40,6 @@ export { readTtsPrefs, type TtsUserPrefs } from "./tts-config.js";
 export const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
-const DEFAULT_MAX_TEXT_LENGTH = 4096;
 let machinePrefsPathResolver: () => string | undefined = () => undefined;
 
 export function setTtsMachinePrefsPathResolver(resolver?: () => string | undefined): void {
@@ -186,7 +186,16 @@ export function resolveTtsConfig(
   };
 }
 
-/** @deprecated Use resolveTtsPrefsPathAsync. Removed at the next Plugin SDK major. */
+/** Resolves a prepared preference path without reading the state database. */
+export function resolveTtsPrefsPath(
+  config: ResolvedTtsConfig,
+  preparedTtsPreferences: PreparedTtsPreferences,
+): string;
+/** @deprecated Use resolveTtsPrefsPathAsync or pass awaited prepareTtsPreferences(). Removal follows a stable deprecation period. */
+export function resolveTtsPrefsPath(
+  config: ResolvedTtsConfig,
+  preparedTtsPreferences?: PreparedTtsPreferences,
+): string;
 export function resolveTtsPrefsPath(
   config: ResolvedTtsConfig,
   preparedTtsPreferences?: PreparedTtsPreferences,
@@ -210,12 +219,22 @@ export async function resolveTtsPrefsPathAsync(
   config: ResolvedTtsConfig,
   preparedTtsPreferences?: PreparedTtsPreferences,
 ): Promise<string> {
-  const prepared =
+  return resolveTtsPrefsPath(
+    config,
+    await prepareTtsPreferencesForConfig(config, preparedTtsPreferences),
+  );
+}
+
+async function prepareTtsPreferencesForConfig(
+  config: ResolvedTtsConfig,
+  preparedTtsPreferences?: PreparedTtsPreferences,
+): Promise<PreparedTtsPreferences> {
+  return (
     preparedTtsPreferences ??
     (config.prefsPath?.trim() || process.env.OPENCLAW_TTS_PREFS?.trim()
       ? {}
-      : await (await import("./tts-preferences.js")).prepareTtsPreferences());
-  return resolveTtsPrefsPath(config, prepared);
+      : await (await import("./tts-preferences.js")).prepareTtsPreferences())
+  );
 }
 
 export function resolveTtsAutoMode(params: {
@@ -307,11 +326,31 @@ export function resolveTtsSettingsSnapshot(params: {
   };
 }
 
+/** Builds the hint from an awaited preference-path preparation without state-database reads. */
+export function buildTtsSystemPromptHint(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+  options: { messageToolOnly?: boolean; preparedTtsPreferences: PreparedTtsPreferences },
+): string | undefined;
+/** @deprecated Use buildTtsSystemPromptHintAsync or pass awaited prepareTtsPreferences(). Removal follows a stable deprecation period. */
+export function buildTtsSystemPromptHint(
+  cfg: OpenClawConfig,
+  agentId?: string,
+  options?: { messageToolOnly?: boolean; preparedTtsPreferences?: PreparedTtsPreferences },
+): string | undefined;
 export function buildTtsSystemPromptHint(
   cfg: OpenClawConfig,
   agentId?: string,
   options?: { messageToolOnly?: boolean; preparedTtsPreferences?: PreparedTtsPreferences },
 ): string | undefined {
+  if (!options?.preparedTtsPreferences) {
+    warnPluginSdkDeprecation({
+      family: "tts",
+      method: "buildTtsSystemPromptHint",
+      replacement:
+        "buildTtsSystemPromptHintAsync or await prepareTtsPreferences() and pass preparedTtsPreferences",
+    });
+  }
   const settings = resolveTtsSettingsSnapshot({
     cfg,
     agentId,
@@ -345,6 +384,19 @@ export function buildTtsSystemPromptHint(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/** Prepares machine preferences through their worker owner before rendering the hint. */
+export async function buildTtsSystemPromptHintAsync(
+  cfg: OpenClawConfig,
+  agentId?: string,
+  options?: { messageToolOnly?: boolean; preparedTtsPreferences?: PreparedTtsPreferences },
+): Promise<string | undefined> {
+  const preparedTtsPreferences = await prepareTtsPreferencesForConfig(
+    resolveTtsConfig(cfg, agentId),
+    options?.preparedTtsPreferences,
+  );
+  return buildTtsSystemPromptHint(cfg, agentId, { ...options, preparedTtsPreferences });
 }
 
 export function isTtsEnabled(

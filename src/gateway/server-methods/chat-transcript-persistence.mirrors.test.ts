@@ -8,6 +8,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -51,9 +52,10 @@ async function withFixture(
   run: (fixture: Awaited<ReturnType<typeof seed>>) => Promise<void>,
   incognito = false,
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) =>
-    run(await seed(env, incognito)),
-  );
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
+    await run(await seed(env, incognito));
+  });
 }
 
 async function seed(

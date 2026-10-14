@@ -198,18 +198,18 @@ describe("plugin management catalog lifecycle", () => {
     mode: "compat" | "allowlist";
     providerEnabled: boolean;
     selectedMode?: "compat" | "allowlist";
-    dependencyError?: true;
+    missingDependency?: true;
   }>([
     { mode: "compat", providerEnabled: true },
     {
       mode: "compat",
       selectedMode: "allowlist",
       providerEnabled: false,
-      dependencyError: true,
+      missingDependency: true,
     },
   ])(
-    "keeps provider policy in the selected $mode/$selectedMode discovery mode",
-    async ({ mode, providerEnabled, selectedMode, dependencyError }) => {
+    "uses selected $mode/$selectedMode discovery policy for enablement and diagnostics",
+    async ({ mode, providerEnabled, selectedMode, missingDependency }) => {
       const env = { OPENCLAW_STATE_DIR: "/__openclaw_management_selected_root__" };
       const readMode = vi
         .spyOn(bundledDiscoveryState, "readBundledDiscoveryModeMemoized")
@@ -225,7 +225,7 @@ describe("plugin management catalog lifecycle", () => {
           enabledByDefault: true,
           providers: ["fixture-provider"],
           channels: ["fixture-chat"],
-          ...(dependencyError
+          ...(missingDependency
             ? { packageBuild: { bundledDist: false }, dependencies: { "missing-runtime": "1.0.0" } }
             : {}),
         });
@@ -254,26 +254,17 @@ describe("plugin management catalog lifecycle", () => {
           env,
         });
 
-        expect(catalog.plugins.find((plugin) => plugin.id === "bundled-provider")).toMatchObject({
+        const providerEntry = catalog.plugins.find((plugin) => plugin.id === "bundled-provider");
+        expect(providerEntry).toMatchObject({
           enabled: providerEnabled,
-          state: dependencyError ? "error" : providerEnabled ? "enabled" : "disabled",
-          ...(dependencyError ? { error: expect.stringContaining("missing-runtime") } : {}),
+          state: providerEnabled ? "enabled" : "disabled",
         });
+        expect(providerEntry).not.toHaveProperty("error");
         expect(catalog.plugins.find((plugin) => plugin.id === "bundled-ordinary")).toMatchObject({
           enabled: false,
           state: "disabled",
         });
-        expect(catalog.diagnostics).toEqual(
-          dependencyError
-            ? [
-                expect.objectContaining({
-                  level: "error",
-                  pluginId: "bundled-provider",
-                  message: expect.stringContaining("missing-runtime"),
-                }),
-              ]
-            : [],
-        );
+        expect(catalog.diagnostics).toEqual([]);
       } finally {
         readMode.mockRestore();
       }

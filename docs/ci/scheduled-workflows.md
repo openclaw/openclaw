@@ -537,8 +537,13 @@ Auto response, Labeler, PR context checks, and ClawSweeper acquire concurrency
 slots only after job admission. Skipped events cannot replace useful pending
 work. Labeler uses separate groups for each PR and issue, with manual backfills
 serialized separately; PR context checks cancel superseded checks on the same PR.
-ClawSweeper retains its existing per-item cancellation rules and all label/comment
-intake, skipping only explicitly empty metadata edits. Security Review omits PR
+ClawSweeper retains its per-item cancellation rules for issue and PR events and all
+label/comment intake, skipping only explicitly empty metadata edits. Each event
+kind has its own lane: comments serialize per comment, and review activity runs
+never share a group. PR events and reviews leave check runs on the PR head, where
+GitHub counts a cancelled run as non-passing even after a newer run succeeds, so
+only a newer PR event on the same PR may supersede a PR event run, and nothing
+cancels a review run. Security Review omits PR
 prose-only edits while retaining base/permission changes, head changes, and
 approval revocations; its per-head review serialization remains non-canceling.
 
@@ -638,8 +643,6 @@ for the weekly burst separately from PR and main admission.
 ## ClawSweeper activity forwarding
 
 `.github/workflows/clawsweeper-dispatch.yml` is the target-side bridge from OpenClaw repository activity into ClawSweeper. It does not check out or execute untrusted pull request code. The workflow creates a GitHub App token from `CLAWSWEEPER_APP_PRIVATE_KEY`, then dispatches compact `repository_dispatch` payloads to `openclaw/clawsweeper`.
-
-The same workflow file also runs Barnacle's `auto-response` job. GitHub creates one run per subscribing workflow before job `if:` admission, and ClawSweeper's own comments and labels arrive as ordinary events, so one shared listener starts one run per event instead of two. The `auto-response` job keeps Barnacle's original event set (issue opened/edited/labeled, comment created, pull request opened/edited/synchronize/reopened/labeled/unlabeled), credentials, trusted base checkout, and its own per-item concurrency group. The file path stays fixed because ClawSweeper's direct queue intake verifies the OIDC `workflow_ref` of `clawsweeper-dispatch.yml`.
 
 Dispatch API calls retry rate-limit failures for up to five attempts with quadratic backoff. Other API errors stop immediately, and exhausted retries preserve the final API exit code. Dispatch callers warn and continue on failure rather than reporting a successful dispatch.
 

@@ -131,10 +131,10 @@ export async function backupDoctorSqliteDatabases(params: {
   if (
     sources.length > 0 &&
     sources.every((sourcePath) => {
-      const { dev, ino } = statSync(sourcePath);
+      const { dev, ino } = statSync(sourcePath, { bigint: true });
       return (
-        dev !== 0 &&
-        ino !== 0 &&
+        dev !== 0n &&
+        ino !== 0n &&
         params.verifiedSnapshots?.some((snapshot) => snapshot.dev === dev && snapshot.ino === ino)
       );
     })

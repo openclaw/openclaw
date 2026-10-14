@@ -12,7 +12,7 @@ import {
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { readCronCallerScope } from "./cron-caller-scope.js";
 import { respondRefusedCronAgent } from "./cron-job-access.js";
@@ -51,10 +51,12 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
   }
   const resolvedAgentId = requestedOwner?.agentId ?? callerScope?.agentId ?? agentId;
   if (sessionKey && isAgentHarnessSessionKey(sessionKey)) {
-    const loaded = loadGatewaySessionEntryReadOnly(
-      sessionKey,
-      resolvedAgentId ? { agentId: resolvedAgentId } : {},
-    );
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: context.getRuntimeConfig(),
+      key: sessionKey,
+      ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
+      assertActive: sessionMutationCommitGuard,
+    });
     const harnessSessionError = loaded.entry
       ? resolveAgentHarnessSessionStoreEntryError(loaded.canonicalKey, loaded.entry)
       : AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE;
@@ -92,7 +94,7 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "wake agentId contradicts the agent that owns sessionKey; pass a single canonical wake target",
+        "wake agentId contradicts the agent that owns sessionKey; pass a single wake target",
       ),
     );
     return;

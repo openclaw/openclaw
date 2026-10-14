@@ -1,8 +1,8 @@
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import {
-  buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
+  resolveEmbeddingProviderSsrFPolicy,
   formatEmbeddingTaskText,
   normalizeEmbeddingModelWithPrefixes,
   resolveEmbeddingEndpointUrl,
@@ -437,12 +437,25 @@ async function resolveGeminiEmbeddingClient(
     );
   }
 
-  const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
-  const headerOverrides = Object.assign(
-    {},
-    providerOwnsDestination ? providerConfig?.headers : undefined,
-    remote?.headers,
-  );
+  const ssrfPolicy = resolveEmbeddingProviderSsrFPolicy({
+    provider: "google",
+    api: providerConfig?.api ?? "google-generative-ai",
+    baseUrl,
+    allowPrivateNetwork: providerConfig?.request?.allowPrivateNetwork,
+  });
+  const headerOverrides: Record<string, string> = {};
+  for (const [path, source] of [
+    [
+      "models.providers.google.headers",
+      providerOwnsDestination ? providerConfig?.headers : undefined,
+    ],
+    ["memory.search.remote.headers", remote?.headers],
+  ] as const) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      headerOverrides[name] =
+        resolveMemorySecretInputString({ value: value ?? null, path: `${path}.${name}` }) ?? "";
+    }
+  }
   const headers: Record<string, string> = {
     ...headerOverrides,
     ...resolveGoogleApiClientHeaders({

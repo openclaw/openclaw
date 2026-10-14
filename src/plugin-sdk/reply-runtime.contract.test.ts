@@ -6,6 +6,7 @@ import {
   createReplyDispatcher,
   dispatchInboundMessage,
   type GetReplyOptions,
+  type PreparedAgentRunStart,
   type ReplyDispatcher,
 } from "./reply-runtime.js";
 
@@ -39,6 +40,13 @@ describe("reply runtime public progress contracts", () => {
     expectTypeOf<LegacyAgentRunStart>().toExtend<AgentRunStart>();
     expectTypeOf<AgentRunStart>().toExtend<LegacyAgentRunStart>();
     expectTypeOf<AgentRunStart>().returns.toEqualTypeOf<unknown>();
+  });
+
+  it("requires prepared transcript facts on the modern run-start contract", () => {
+    type Callback = NonNullable<GetReplyOptions["onPreparedAgentRunStart"]>;
+    expectTypeOf<Parameters<Callback>>().toEqualTypeOf<[PreparedAgentRunStart]>();
+    expectTypeOf<{ runId: string }>().not.toExtend<PreparedAgentRunStart>();
+    expectTypeOf<Callback>().returns.toEqualTypeOf<unknown>();
   });
 
   it("retains released synchronous visibility contracts beside awaited companions", () => {

@@ -1,14 +1,15 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import "../../../lib/toast.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import "../../../lib/toast-host.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { createComposerContainer } from "../chat-composer.test-support.ts";
+import { renderChat } from "../chat-view-render.test-support.ts";
 import { createChatProps } from "../chat-view.test-helpers.ts";
-import { renderChat } from "../chat-view.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import "./chat-comment-controller.ts";
 import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
@@ -196,11 +197,12 @@ describe("comment actions outside the transcript", () => {
     fixture.input()!.value = "Original comment!";
     fixture.save().click();
     await fixture.controller.updateComplete;
-    await fixture.toast.updateComplete;
     expect(fixture.input()?.value).toBe("Original comment!");
     expect(fixture.attachments()).toEqual([fixture.attachment, file]);
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBe(originalPayload);
-    expect(fixture.toast.textContent).toContain("Too large to send: selection-comment.txt");
+    await waitForSolid(() =>
+      expect(fixture.toast.textContent).toContain("Too large to send: selection-comment.txt"),
+    );
 
     fixture.input()!.value = "Replaced comment";
     fixture.save().click();

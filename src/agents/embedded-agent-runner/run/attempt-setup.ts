@@ -1,10 +1,12 @@
 import path from "node:path";
 import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { truncateDiagnosticContent } from "../../../infra/diagnostic-content.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorMessage,
@@ -13,6 +15,7 @@ import {
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
 } from "../../../infra/diagnostic-events.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -33,6 +36,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
+import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
@@ -346,8 +350,9 @@ export function installEmbeddedAttemptContextGuards(input: {
     ) => {
       // Compaction ownership does not waive host admission at the provider boundary.
       if (
-        !activeContextEngine?.info.ownsCompaction &&
-        attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true
+        activeSession[agentSessionDeferThresholdCompaction] ||
+        (!activeContextEngine?.info.ownsCompaction &&
+          attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true)
       ) {
         return;
       }
@@ -388,7 +393,7 @@ export function installEmbeddedAttemptContextGuards(input: {
 export type EmitDiagnosticRunCompleted = (
   outcome: "completed" | "aborted" | "blocked" | "error",
   err?: unknown,
-  extra?: { blockedBy?: string },
+  extra?: { blockedBy?: string; finalResponse?: string },
 ) => void;
 
 export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams) {
@@ -422,6 +427,21 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
     completed = true;
     const failed = err != null && outcome !== "blocked";
     const errorMessage = failed ? diagnosticErrorMessage(err) : undefined;
+    // Mirror the CLI run lifecycle: content is stored, gated, and bounded once
+    // at completion; the exporter re-checks the policy before span placement.
+    const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
+    const messageContent: { userPrompt?: string; finalResponse?: string } | undefined =
+      (contentPolicy.inputMessages && params.prompt) ||
+      (contentPolicy.outputMessages && extra?.finalResponse)
+        ? {
+            ...(contentPolicy.inputMessages && params.prompt
+              ? { userPrompt: truncateDiagnosticContent(params.prompt) }
+              : {}),
+            ...(contentPolicy.outputMessages && extra?.finalResponse
+              ? { finalResponse: truncateDiagnosticContent(extra.finalResponse) }
+              : {}),
+          }
+        : undefined;
     emitTrustedDiagnosticEventWithPrivateData(
       {
         type: "run.completed",
@@ -431,7 +451,12 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
         ...(extra?.blockedBy ? { blockedBy: extra.blockedBy } : {}),
         ...(failed ? { errorCategory: diagnosticErrorCategory(err) } : {}),
       },
-      errorMessage ? { errorMessage } : undefined,
+      errorMessage || messageContent
+        ? {
+            ...(errorMessage ? { errorMessage } : {}),
+            ...(messageContent ? { messageContent } : {}),
+          }
+        : undefined,
     );
   };
   return { diagnosticTrace, runTrace, emitCompleted };

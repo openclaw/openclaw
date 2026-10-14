@@ -15,16 +15,15 @@ import {
   sameSessionTranscriptTargetBinding,
 } from "../../config/sessions/transcript-target-binding.js";
 import {
+  assertSessionTranscriptInitialWriter,
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
   withSessionTranscriptWriteAssertion,
 } from "../../config/sessions/transcript-write-context.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { appendSessionManagerActor } from "./session-manager-actor-append.js";
 import {
@@ -78,9 +77,6 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       ...writeTarget,
       storePath: database?.path ?? resolveOpenClawAgentSqlitePath(options),
     };
-    if (database && "db" in database && database.db.isTransaction) {
-      throw new Error("Asynchronous session writes must own their transaction");
-    }
     const initialWriter = this.initialTranscriptWriter;
     const admission = resolveSessionTranscriptReadFence(captured);
     const questionAnswers = message?.validateTurn
@@ -104,7 +100,9 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       writeAdmission.assertCurrent();
       assertBinding();
       assertNavigation?.();
-      initialWriter?.assertActive();
+      if (initialWriter) {
+        assertSessionTranscriptInitialWriter(initialWriter, identity);
+      }
       assertOwned();
       questionAnswers?.assertCurrent();
     };
@@ -374,14 +372,14 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           const committed = initialization.value;
           try {
             if (committed.fence) {
-              if (!("db" in database)) {
+              if ("withMetadata" in database) {
                 initialWriter?.recordCommitted(committed.fence);
               }
               Object.assign(target, committed.fence);
               Object.assign(captured, committed.fence);
             }
           } finally {
-            if (committed.identity && !("db" in database)) {
+            if (committed.identity && "withMetadata" in database) {
               publishCommittedSessionIdentity(
                 captured.agentId,
                 database.identity.incarnation,
@@ -551,7 +549,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
     options?: PersistRecordOptions,
   ): Promise<PersistRecordResult> {
     // Raw callers retain their envelope; only nested immutable payloads are shared.
-    const canonical = { ...canonicalizeSessionEntry(entry, options) };
+    const canonical = { ...canonicalizeSessionEntry(entry) };
     return await withSessionManagerAppend(
       this,
       async (admission) => {
@@ -559,13 +557,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         if (!admission && compactionPersistence) {
           throw new Error("Compaction boundary validation failed");
         }
-        if (
-          !admission ||
-          (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
-            !("actor" in admission) &&
-            "db" in admission.database &&
-            !(canonical.type === "compaction" && compactionPersistence))
-        ) {
+        if (!admission) {
           return this.persistRecord(canonical, options);
         }
         const target = this.getSessionTarget();
@@ -579,12 +571,10 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         const message =
           canonical.type === "message"
             ? {
-                prepared: prepareTranscriptMessageAppendForWorker(
-                  copyCodeModeSourceAppendOptions(options, {
-                    message: canonical.message,
-                    config: options?.config,
-                  }),
-                ),
+                prepared: prepareTranscriptMessageAppendForWorker({
+                  message: canonical.message,
+                  config: options?.config,
+                }),
                 cwd: this.cwd,
                 validateTurn: false,
                 idempotencyLookup: options?.idempotencyLookup,

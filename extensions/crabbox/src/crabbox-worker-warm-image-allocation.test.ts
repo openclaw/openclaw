@@ -10,6 +10,7 @@ import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 import {
   CHECKPOINT_ID,
   PROFILE,
+  CLASSLESS_PROFILE,
   NODE_RUNTIME_IDENTITY,
   checkpointResult,
   tempDirs,
@@ -93,6 +94,54 @@ function fixture(
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it("reports cold preparation before warmup and snapshot reuse before fork, retaining the latest cold reason", async () => {
+    const { manager, projectContext, calls } = fixture();
+    const owner = manager();
+    const source = projectContext("cbx_status_source");
+    const statuses: unknown[] = [];
+    const reportStartStatus = (status: unknown) => {
+      statuses.push(status);
+      expect(calls.some((argv) => argv[1] === "warmup" || argv[2] === "fork")).toBe(false);
+    };
+    await owner.allocate({ ...source, prepareProject: true, reportStartStatus });
+    expect(statuses).toEqual([{ mode: "cold", reason: "no-snapshot-yet", phase: "preparing" }]);
+    await owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    calls.length = 0;
+    statuses.length = 0;
+    await owner.allocate({
+      ...projectContext("cbx_status_fork"),
+      prepareProject: true,
+      reportStartStatus,
+    });
+    expect(statuses).toEqual([{ mode: "snapshot" }]);
+    calls.length = 0;
+    statuses.length = 0;
+    const changed = projectContext("cbx_status_changed", "c".repeat(64));
+    await owner.allocate({ ...changed, prepareProject: true, reportStartStatus });
+    expect(statuses).toEqual([{ mode: "cold", reason: "setup-changed", phase: "preparing" }]);
+    expect(openWarmImageStore().entries()[0]?.value.latestColdReason).toBe("setup-changed");
+    calls.length = 0;
+    statuses.length = 0;
+    await manager().allocate({ ...changed, prepareProject: true, reportStartStatus });
+    expect(statuses).toEqual([{ mode: "cold", reason: "setup-changed", phase: "preparing" }]);
+  });
+
+  it.each([
+    [{ ...PROFILE, warmImage: false }, "warm-images-off"],
+    [{ ...CLASSLESS_PROFILE, target: "macos" }, "os-unsupported"],
+    [CLASSLESS_PROFILE, "class-unknown"],
+  ] as const)("reports a cold profile's actual limitation (%j)", async (profile, reason) => {
+    const { manager, context } = fixture();
+    const reportStartStatus = vi.fn();
+    await manager().allocate({
+      ...context("cbx_status_disabled"),
+      profile: resolveCrabboxProvisionProfile(profile, undefined).profile,
+      reportStartStatus,
+    });
+    expect(reportStartStatus).toHaveBeenCalledWith({ mode: "cold", reason, phase: "provisioning" });
+  });
+
   it("leaves unrelated expired generations for maintenance during allocation", async () => {
     const { manager, context, calls } = fixture();
     const owner = manager();

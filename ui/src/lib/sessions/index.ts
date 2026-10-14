@@ -616,6 +616,7 @@ export function createSessionCapability(
       primarySnapshotApplied,
       affectsPrimary: eventObservation.affectsPrimary,
       affectedLists: eventObservation.lists,
+      immediate: event.event === "sessions.changed" && eventReason === "create",
     });
     notifyEvent?.(event);
   });
@@ -694,7 +695,6 @@ export function createSessionCapability(
     deletionState: deletions.deletionState,
     reset: mutations.reset,
     groupsLoad: groups.load,
-    groupsGeneration: groups.generation,
     groupsStatus: groups.status,
     groupsInvalidate: groups.invalidate,
     groupsPut: groups.put,

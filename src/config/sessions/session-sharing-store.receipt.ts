@@ -197,6 +197,32 @@ export function readSessionCollaborationCandidate(
         requireReceipt(projection.participantCount === undefined);
       }
       requireReceipt(isDeepStrictEqual(projection, projected));
+      if (result.records !== undefined) {
+        requireReceipt(
+          result.value === "updated" &&
+            !result.projectionChanged &&
+            Array.isArray(result.records) &&
+            result.records.every(
+              (record) =>
+                isRecord(record) &&
+                participant({ identity: record.identity }) &&
+                typeof record.contributionCount === "number" &&
+                Number.isSafeInteger(record.contributionCount) &&
+                record.contributionCount >= 0 &&
+                [record.firstPromptedAt, record.lastPromptedAt].every(
+                  (timestamp) =>
+                    timestamp === null ||
+                    (typeof timestamp === "number" && Number.isFinite(timestamp)),
+                ),
+            ),
+        );
+        requireReceipt(
+          isRecord(result.actorVersion) &&
+            typeof result.actorVersion.epoch === "string" &&
+            typeof result.actorVersion.sequence === "number" &&
+            Number.isSafeInteger(result.actorVersion.sequence),
+        );
+      }
       if (result.projectionChanged) {
         requireReceipt(result.value === "inserted" || result.value === "updated");
         setFact(key, { kind: "participants", projection: projected });

@@ -8,8 +8,10 @@ import {
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { GatewayRequestFunction } from "../gateway/call.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -43,17 +45,24 @@ export async function runWithLocalStateOwner<T>(params: {
   params: Record<string, unknown> | ((signal: AbortSignal) => Promise<Record<string, unknown>>);
   target: string;
   recoveryCommand?: string;
+  /** Internal manifest-bound recovery; never routed to or borrowed from a running owner. */
+  databasePortRecovery?: DatabasePortRecoveryIntent;
   requiredCapabilities?: readonly string[];
   scopes?: readonly OperatorScope[];
   timeoutMs?: number;
   expectFinal?: boolean;
   requireLocalBackendSharedAuth?: boolean;
+  onGatewayResponse?: (request: GatewayRequestFunction, signal: AbortSignal) => Promise<void>;
+  onGatewaySignalAbort?: (request: GatewayRequestFunction) => Promise<void>;
   /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
   onForeignOwner?: "refuse" | ((scope: Omit<LocalMutationScope, "config">) => Promise<T>);
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
 }): Promise<T> {
   localOwnerAssertion.getStore()?.();
+  const databasePortRecovery = params.databasePortRecovery
+    ? Object.freeze({ ...params.databasePortRecovery })
+    : undefined;
   const selectedEnv = { ...process.env };
   const selectedStateDir = resolveStateDir(selectedEnv);
   const stateDir = resolveIdentityPathViaExistingAncestorSync(selectedStateDir);
@@ -123,7 +132,7 @@ export async function runWithLocalStateOwner<T>(params: {
       assertOwnerCurrent();
     };
     assertCurrent();
-    const { getRuntimeConfig } = await import("../config/config.js");
+    const { loadConfig } = await import("../config/config.js");
     assertCurrent();
     let config: OpenClawConfig | undefined;
     return await localOwnerAssertion.run(assertCurrent, () =>
@@ -132,7 +141,7 @@ export async function runWithLocalStateOwner<T>(params: {
         // Loading config can write state. Config-free owners must reach their own admission first.
         get config() {
           assertCurrent();
-          config ??= getRuntimeConfig();
+          config ??= loadConfig();
           assertCurrent();
           return config;
         },
@@ -188,6 +197,23 @@ export async function runWithLocalStateOwner<T>(params: {
         expectFinal: params.expectFinal,
         signal: controller.signal,
         scopes,
+        onSignalAbort: params.onGatewaySignalAbort,
+        onResponse: params.onGatewayResponse
+          ? async (request, connectionSignal) => {
+              const guardedRequest: GatewayRequestFunction = (method, requestParams, options) => {
+                assertTargetCurrent();
+                const current = readLockPayloadSync(paths.ownerLockPath, true);
+                if (!current || current.ownerId !== owner.ownerId || current.pid !== owner.pid) {
+                  refuse(new Error("Gateway owner changed during the operation"));
+                }
+                return request(method, requestParams, options);
+              };
+              await params.onGatewayResponse!(
+                guardedRequest,
+                AbortSignal.any([controller.signal, connectionSignal]),
+              );
+            }
+          : undefined,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         assertDispatchCurrent: () => {
@@ -221,18 +247,26 @@ export async function runWithLocalStateOwner<T>(params: {
     assertTargetCurrent();
     const hosted = captureGatewayStateOwner(databasePath);
     if (hosted) {
+      if (databasePortRecovery) {
+        return refuse(new Error("Database port recovery requires exclusive offline ownership"));
+      }
       return await runLocal(hosted.assertCurrent);
     }
-    const owner = await discover();
+    const owner = databasePortRecovery ? undefined : await discover();
     if (owner) {
       return await route(owner);
     }
     let lock;
     try {
       // A losing acquisition has not entered the domain or opened a writable database.
-      lock = await acquireGatewayLock({ env, role: "agent-embedded", allowInTests: true });
+      lock = await acquireGatewayLock({
+        env,
+        role: "agent-embedded",
+        allowInTests: true,
+        databasePortRecovery,
+      });
     } catch (error) {
-      if (isGatewayLifecycleContentionError(error)) {
+      if (!databasePortRecovery && isGatewayLifecycleContentionError(error)) {
         const winner = await discover();
         if (winner) {
           return await route(winner);

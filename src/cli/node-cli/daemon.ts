@@ -32,6 +32,10 @@ import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import {
+  assertExpectedRuntimePin,
+  resolveRestoreServiceCli,
+} from "../daemon-cli/install-restore-cli.js";
+import {
   runServiceRestart,
   runServiceStart,
   runServiceStop,
@@ -46,6 +50,7 @@ import {
   projectDaemonServiceForJson,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
+import { inspectServiceRuntimeIntent } from "../daemon-cli/status.runtime-intent.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { resolveNodeGatewayOptions } from "./gateway-options.js";
 
@@ -58,6 +63,8 @@ type NodeDaemonInstallOptions = Parameters<typeof resolveNodeGatewayOptions>[0] 
   authFromEnv?: boolean;
   runtime?: string;
   runtimePath?: string;
+  expectedRuntimePin?: string;
+  restoreServiceCli?: string;
   force?: boolean;
   json?: boolean;
 };
@@ -160,6 +167,20 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     fail(`Runtime pin inspection failed: ${formatErrorMessage(error)}`);
     return;
   }
+  let restoreServiceCli: Parameters<typeof buildNodeInstallPlan>[0]["serviceCli"];
+  let restoredRuntimePath: string | undefined;
+  try {
+    if (opts.expectedRuntimePin !== undefined) {
+      assertExpectedRuntimePin(opts.expectedRuntimePin, pinSnapshot, "Node");
+    }
+    if (opts.restoreServiceCli !== undefined) {
+      ({ serviceCli: restoreServiceCli, runtimePath: restoredRuntimePath } =
+        await resolveRestoreServiceCli(opts.restoreServiceCli, opts, installEnv));
+    }
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    return;
+  }
   let pinnedRuntimePath = opts.runtimePath ?? (opts.runtime ? undefined : pinSnapshot.pin?.path);
   const runtimeRaw = opts.runtime || resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
@@ -222,8 +243,9 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     gatewayAuthFromEnv: opts.authFromEnv,
     runtime: retainedRuntime?.runtime ?? runtimeRaw,
     runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
-    runtimePath: retainedRuntime?.path,
+    runtimePath: restoredRuntimePath ?? retainedRuntime?.path,
     pinnedRuntimePath,
+    serviceCli: restoreServiceCli,
     warn,
   });
 
@@ -241,11 +263,22 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         runtimePinUpdate: {
           expected: pinSnapshot,
           pin: pinnedRuntimePath ? { runtime: runtimeRaw, path: pinnedRuntimePath } : undefined,
+          ...(opts.expectedRuntimePin !== undefined
+            ? {
+                requireDefinitionMatch: true as const,
+                ...(!restoreServiceCli && pinSnapshot.definition !== undefined
+                  ? { requireRunning: true as const }
+                  : {}),
+              }
+            : {}),
         },
         env: installEnv,
         stdout,
         warn,
         ...installPlan,
+        ...(restoreServiceCli
+          ? { workingDirectory: existingManagedCommand?.workingDirectory }
+          : {}),
       });
     },
     // Failed installation must not carry a misleading linger warning (#107033).
@@ -287,8 +320,12 @@ export async function runNodeDaemonStatus(opts: NodeDaemonOutputOptions = {}) {
     defaultRuntime.exit(1);
     return;
   }
+  let inspectionKnown = true;
   const [command, runtime] = await Promise.all([
-    service.readCommand(process.env).catch(() => null),
+    service.readCommand(process.env).catch(() => {
+      inspectionKnown = false;
+      return null;
+    }),
     service.readRuntime(process.env).catch((err: unknown): GatewayServiceRuntime => ({
       status: "unknown",
       detail: formatErrorMessage(err),
@@ -296,9 +333,17 @@ export async function runNodeDaemonStatus(opts: NodeDaemonOutputOptions = {}) {
   ]);
 
   if (json) {
+    const runtimeIntent = await inspectServiceRuntimeIntent({
+      kind: "node",
+      service,
+      command,
+      env: process.env,
+      serviceEnv: { ...process.env, ...command?.environment },
+      inspectionKnown,
+    });
     defaultRuntime.writeJson({
       service: projectDaemonServiceForJson(
-        { ...buildDaemonServiceSnapshot(service, loaded), command, runtime },
+        { ...buildDaemonServiceSnapshot(service, loaded), command, runtime, ...runtimeIntent },
         { includeDefinitionPaths: true },
       ),
     });

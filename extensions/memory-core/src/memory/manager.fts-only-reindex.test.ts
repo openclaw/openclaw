@@ -8,6 +8,10 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -125,6 +129,7 @@ describe("memory manager FTS-only reindex", () => {
     }
     managers = [];
     await closeAllMemorySearchManagers();
+    clearRuntimeConfigSnapshot();
     restoreFtsOnlyStateDir();
   });
 
@@ -173,6 +178,7 @@ describe("memory manager FTS-only reindex", () => {
         entries: { main: {} },
       },
     } as OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg);
     const result = await getMemorySearchManager({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg,

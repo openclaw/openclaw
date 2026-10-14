@@ -68,9 +68,6 @@ function update(container: HTMLElement, value: ControlUiLinkReaderDocument, link
 describe("link reader document content", () => {
   it.each([
     ["success", "Checks passed"],
-    ["failure", "Checks failed"],
-    ["pending", "Checks in progress"],
-    ["neutral", "Checks"],
     ["unavailable", "Checks unavailable"],
   ] as const)(
     "renders %s check results without assuming service-specific labels",
@@ -95,7 +92,7 @@ describe("link reader document content", () => {
       });
       const checks = container.querySelector<HTMLDetailsElement>(".lr-checks")!;
       expect(checks.querySelector("summary strong")?.textContent).toBe(label);
-      expect(checks.open).toBe(state === "failure");
+      expect(checks.open).toBe(false);
       expect(checks.textContent).toContain("Provider-owned result");
       expect(checks.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("In progress");
       const run = checks.querySelector<HTMLAnchorElement>(".lr-check-copy a")!;

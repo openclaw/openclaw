@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
@@ -37,14 +36,3 @@ export type PluginBlobReadReply = { ok: true; sourceAdmitted: true } & (
   | { type: "pluginBlob.lookup"; value: PluginBlobEntry<unknown> | undefined }
   | { type: "pluginBlob.entries"; value: PluginBlobEntryInfo<unknown>[] }
 );
-
-export function isPluginBlobReadCommand(command: unknown): command is PluginBlobReadCommand {
-  return (
-    isRecord(command) &&
-    isRecord(command.input) &&
-    typeof command.input.pluginId === "string" &&
-    typeof command.input.namespace === "string" &&
-    (command.type === "pluginBlob.entries" ||
-      (command.type === "pluginBlob.lookup" && typeof command.input.key === "string"))
-  );
-}

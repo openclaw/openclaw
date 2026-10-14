@@ -30,10 +30,14 @@ type WorkspaceGuardedReadResult =
   | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
 
-function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): string {
+function workspaceFileIdentity(
+  stat: syncFs.Stats,
+  identity: FileIdentityStat,
+  canonicalPath: string,
+): string {
   // ctimeMs catches in-place edits that restore mtime (sync/restore/editor tooling);
   // matches the freshness pattern in assistant-avatar-cache.ts and plugin-registry-snapshot.ts.
-  return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  return `${canonicalPath}|${identity.dev}:${identity.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
 export function createLoadedWorkspaceBootstrapFile(
@@ -153,8 +157,8 @@ export async function readWorkspaceFileWithGuards(params: {
           return opened;
         }
 
-        const identity = workspaceFileIdentity(opened.stat, opened.path);
-        const sourceIdentity = [opened.path, opened.stat, identity] as const;
+        const identity = workspaceFileIdentity(opened.stat, opened.exactIdentity, opened.path);
+        const sourceIdentity = [opened.path, opened.exactIdentity, identity] as const;
         const cached =
           params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
         try {

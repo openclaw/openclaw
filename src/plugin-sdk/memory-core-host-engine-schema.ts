@@ -8,6 +8,7 @@ export {
   markInvalidImportedMemoryEmbeddings,
   rebuildMemoryChunkFts,
   ensureMemoryIndexSchema,
+  stageMemoryIndexSchemaExtension,
   ensureMemoryPathFtsTriggers,
   ensureMemoryRecallMetadataSchema,
   MEMORY_EMBEDDING_CACHE_TABLE,

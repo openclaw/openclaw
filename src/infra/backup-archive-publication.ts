@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { BigIntStats, Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -26,7 +26,7 @@ export type BackupArchivePublication = {
   requestedOutputPath: string;
   requestedParentPath: string;
   stagingDir: string;
-  stagingIdentity: Stats;
+  stagingIdentity: BigIntStats;
   tempArchivePath: string;
 };
 
@@ -52,11 +52,11 @@ async function assertTargetAbsent(targetPath: string): Promise<void> {
 
 async function removeDirectoryIfOwned(
   directoryPath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: BigIntStats,
 ): Promise<boolean> {
   // This is a cooperative same-user fence, not hostile local-user isolation;
   // SECURITY.md treats co-equal host mutation as inside the operator boundary.
-  const currentIdentity = await fs.lstat(directoryPath).catch(() => undefined);
+  const currentIdentity = await fs.lstat(directoryPath, { bigint: true }).catch(() => undefined);
   if (
     !currentIdentity ||
     !currentIdentity.isDirectory() ||
@@ -87,9 +87,9 @@ export async function createBackupArchivePublication(
   const stagingDir = await fs.mkdtemp(
     path.join(canonicalParentPath, `.openclaw-backup-publish-${randomUUID()}-`),
   );
-  let stagingIdentity: Stats | undefined;
+  let stagingIdentity: BigIntStats | undefined;
   try {
-    stagingIdentity = await fs.lstat(stagingDir);
+    stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
     await fs.chmod(stagingDir, 0o700);
     return {
       canonicalOutputPath,
@@ -144,7 +144,7 @@ async function removePendingBackupArchive(
   let identity = receipt.identity;
   if (!identity) {
     try {
-      identity = await fs.lstat(receipt.archivePath);
+      identity = await fs.lstat(receipt.archivePath, { bigint: true });
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === "ENOENT";
     }

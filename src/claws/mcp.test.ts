@@ -9,6 +9,7 @@ import {
   installClawMcpServers,
   planClawMcpServerRemoval,
   readClawMcpServerRefs,
+  upsertClawMcpServerRef,
 } from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
@@ -136,6 +137,26 @@ describe("installClawMcpServers", () => {
       code: "mcp_config_conflict",
       mcpServers: [],
     });
+  });
+
+  it("clears a pending error from both the returned and persisted completed refs", async () => {
+    const current = await fixture();
+    const options = {
+      env: current.env,
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers(configuredServers())),
+      nowMs: 42,
+    };
+    const refs = await installClawMcpServers(current.plan, options);
+    upsertClawMcpServerRef(
+      { ...refs[0]!, status: "pending", error: "Configuration response was lost." },
+      options,
+    );
+
+    const completed = await installClawMcpServers(current.plan, { ...options, nowMs: 43 });
+
+    expect(completed[0]).not.toHaveProperty("error");
+    expect(completed).toEqual(readClawMcpServerRefs(current.plan.agent.finalId, options));
+    expect(completed[0]?.status).toBe("complete");
   });
 
   it("reuses an exact pre-existing server as a referenced resource", async () => {

@@ -11,6 +11,7 @@
 .sidebar-rail {
   display: flex;
   flex-direction: column;
+  align-items: center;
   flex: 0 0 var(--shell-nav-rail-width, 52px);
   min-width: 0;
   min-height: 0;
@@ -77,7 +78,9 @@
 
 .sidebar-rail__button:hover,
 .sidebar-rail__button[aria-pressed="true"],
-.sidebar-rail__button[aria-current="page"] {
+.sidebar-rail__button[aria-current="page"],
+.sidebar-rail .nav-item:hover,
+.sidebar-rail .nav-item--active {
   background: var(--bg-hover);
   color: var(--text);
 }
@@ -87,9 +90,52 @@
   outline-offset: -2px;
 }
 
+.sidebar-rail__create {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  width: 36px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-rail__create .sidebar-new-session {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--accent-hover);
+}
+
+.sidebar-rail__create .sidebar-new-session:focus-visible {
+  outline-color: var(--accent-foreground);
+  outline-offset: -4px;
+}
+
+.sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .sidebar-rail__button svg {
   width: 20px;
   height: 20px;
+}
+
+/* Pinned pages reuse list nav links; in the rail they match the view buttons. */
+.sidebar-rail .nav-item .nav-item__icon {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+  opacity: 1;
+  color: inherit;
+}
+
+.sidebar-rail .nav-item .nav-item__icon svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2px;
 }
 
 .sidebar-rail .nav-item__text,
@@ -175,9 +221,55 @@
   user-select: none;
 }
 
+/* The entry, not its link, paints hover/current fills so the trailing pin sits
+   inside the same highlight. Inset shadows keep row heights unchanged. */
 .sidebar-pages__entry {
   display: flex;
   align-items: center;
+  border-radius: var(--radius-md);
+  transition:
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.sidebar-pages__entry:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.sidebar-pages__entry:has(.nav-item--active) {
+  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.sidebar-pages__entry:has(.sidebar-recent-session--active) {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.sidebar-pages__entry .nav-item {
+  background: transparent;
+  border-color: transparent;
+}
+
+.sidebar-pages__entry:hover
+  :is(
+    .nav-item:not(.nav-item--active),
+    .sidebar-recent-session:not(.sidebar-recent-session--active)
+  ) {
+  color: var(--text);
+}
+
+.sidebar-pages__entry:hover .nav-item__icon {
+  opacity: 1;
+}
+
+.sidebar-pages__entry
+  .sidebar-recent-session:is(:hover, .sidebar-recent-session--active):not(
+    .sidebar-recent-session--selected
+  ) {
+  --session-row-bg: var(--session-row-tint, transparent);
+  --session-row-border: transparent;
 }
 
 .sidebar-pages__entry > .sidebar-zone-entry {
@@ -205,8 +297,18 @@
 
 .sidebar-pages__entry:hover .sidebar-pages__pin,
 .sidebar-online__row:hover .sidebar-pages__pin,
-.sidebar-pages__pin:focus-visible {
+.sidebar-pages__pin:focus-visible,
+.sidebar-pages__pin--pinned {
   opacity: 1;
+}
+
+.sidebar-pages__pin:hover,
+.sidebar-pages__entry:hover .sidebar-pages__pin--pinned {
+  color: var(--text);
+}
+
+.sidebar-pages__pin--pinned svg {
+  fill: currentColor;
 }
 
 .sidebar-pages__heading {
@@ -215,10 +317,28 @@
   font-size: var(--font-size-sm);
 }
 
-html:is(.openclaw-native-desktop, .openclaw-native-macos)
+/* Match the 44px session toolbar centerline without changing drawer or native clearance. */
+.shell:not(.shell--mobile-nav) .sidebar-rail {
+  padding-top: 4px;
+}
+
+html.openclaw-native-macos,
+html.openclaw-native-desktop[data-native-platform="macos"] {
+  .shell:not(.shell--mobile-nav) .sidebar-rail {
+    padding-top: var(--openclaw-native-titlebar-height, 52px);
+  }
+}
+
+html.openclaw-native-web-chrome:not(.openclaw-native-macos):not([data-native-platform="macos"])
   .shell:not(.shell--mobile-nav)
   .sidebar-rail {
-  padding-top: var(--openclaw-native-titlebar-height, 52px);
+  padding-top: calc((var(--rail-header-height) - 36px) / 2);
+}
+
+/* Installed Mac apps inject !important padding; keep Settings' clearance, but
+   let the rail-era panel own its top row even under those older injections. */
+html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-shell {
+  padding-top: 0 !important;
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -243,8 +363,15 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
 }
 
 .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-controls-width: var(--shell-chrome-control-size);
   --shell-nav-width: var(--shell-nav-rail-width);
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+}
+
+/* Legacy Mac hosts retain the expand + search cluster. */
+html.openclaw-native-macos:not(.openclaw-native-web-chrome)
+  .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-controls-width: 68px;
 }
 
 .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
@@ -284,11 +411,29 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
   flex: 0 0 30px;
 }
 
-.sidebar--rail .sidebar-session-toolbar {
+.sidebar--rail .sidebar-panel-header {
+  display: flex;
+  align-items: center;
   min-height: 44px;
   margin: 0;
   padding: 4px 8px;
   gap: 6px;
+}
+
+.sidebar-session-toolbar__collapse {
+  margin-inline-start: auto;
+}
+
+/* A growing section toggle would cover the row's empty space, which must stay
+   non-interactive so native hosts can drag the window from it. */
+.sidebar-panel-header > .sidebar-session-group-toggle {
+  flex: 0 1 auto;
+}
+
+.sidebar--rail .sidebar-online {
+  padding: 0;
+  margin: 0;
+  border: 0;
 }
 
 .sidebar-session-owner-filter {
@@ -320,4 +465,23 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
 .sidebar--rail .sidebar-session-toolbar__button {
   width: 28px;
   height: 28px;
+}
+
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {
+  min-height: var(--rail-header-height);
+  margin-inline: calc(-1 * var(--sidebar-pad-x));
+  padding-left: max(
+    16px,
+    calc(var(--shell-native-titlebar-controls-inset) - var(--shell-nav-rail-width))
+  );
+}
+
+.shell--mobile-nav .sidebar-session-toolbar__collapse {
+  display: none;
+}
+
+html.openclaw-native-macos:not(.openclaw-native-web-chrome) {
+  .sidebar-session-toolbar__collapse {
+    display: none;
+  }
 }

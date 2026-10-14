@@ -1,7 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -22,13 +26,14 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
   async (restriction) => {
     const now = 1_000_000;
     using _ = vi.spyOn(Date, "now").mockReturnValue(now);
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = rolePolicyConfig();
       cfg.gateway!.roles!.definitions.admin = {
         sessions: { others: "write" },
         agents: "*",
         scopes: ["operator.admin"],
       };
+      setRuntimeConfigSnapshot(cfg);
       const [allowed, restricted] = ["allowed", "restricted"].map((name) =>
         ensureProfileForEmail(`${name}@publication-authority.test`),
       );
@@ -42,7 +47,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
             : "agent:main:publication",
       };
       const childKey = "agent:main:publication-child";
-      replaceSessionEntrySync(
+      await replaceSessionEntry(
         { agentId: query.agentId, sessionKey: query.key },
         {
           sessionId: "publication-session",
@@ -87,6 +92,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
         bootId: "publication-authority",
         cfg,
       });
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       // Repeat each identity on a second socket so both visible projections exercise cache hits.
       const peers = [allowed!, restricted!, allowed!, restricted!].map((profile, index) => {
         const send = vi.fn();
@@ -121,7 +127,6 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
         connection.clients.add(client);
         return { send, client };
       });
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const detach = connection.attachSessionRowProjection(projection);
       try {
         await projection.ensureMaterialized();
@@ -137,14 +142,24 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
               read.state.rowContext,
             );
             const presentations = vi.spyOn(projection, "present");
+            const message = {
+              role: "assistant",
+              content: [{ type: "text", text: '"🦞"\n\\\ud800'.repeat(256) }],
+            };
             connection.broadcast(
-              "sessions.changed",
+              "session.message",
               {
                 sessionKey: query.key,
                 agentId: query.agentId,
+                message,
                 session: { key: query.key, sessionId: "publication-session" },
               },
-              { prepareSessionProjection: prepareSessionEventProjection(projection, read) },
+              {
+                prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+                  ancestors: projection.ancestorRows(record, read),
+                  encodeMessage: true,
+                }),
+              },
             );
             for (const [index, { send }] of peers.entries()) {
               const visible = index % 2 === 0 || restriction === "child and swarm links";
@@ -152,7 +167,11 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
               if (!visible) {
                 continue;
               }
-              const row = JSON.parse(String(send.mock.calls[0]![0])).payload.session;
+              const frame = JSON.parse(String(send.mock.calls[0]![0]));
+              expect(frame.payload.message).toEqual(message);
+              expect(frame.seq).toBe(1);
+              expect(send.mock.calls[0]![1]).toEqual({ binary: false });
+              const row = frame.payload.session;
               expect(row).toMatchObject({
                 key: query.key,
                 sessionId: "publication-session",

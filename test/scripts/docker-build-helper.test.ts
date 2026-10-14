@@ -26,6 +26,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { mainLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { readSystemdServiceExecStart } from "../../src/daemon/systemd-service-files.js";
 import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
+import { isPidAlive } from "../../src/shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   fixtureReceiptClientSource,
@@ -620,20 +621,11 @@ function waitForProcessExit(child: ChildProcess): Promise<number | null> {
 // Keep this exact-PID observation tied to the test lifetime, without another deadline.
 async function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
   try {
-    while (isProcessRunning(pid)) {
+    while (isPidAlive(pid)) {
       await delay(10, undefined, { signal });
     }
   } catch (cause) {
     throw new Error(`process stayed alive: ${pid}`, { cause });
-  }
-}
-
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -648,7 +640,7 @@ async function stopUpgradeSurvivorSupervisor(supervisor: ChildProcess, pidPath: 
     // before the test learned the descendant PID.
     if (existsSync(pidPath)) {
       const pid = Number(readFileSync(pidPath, "utf8").trim());
-      if (Number.isSafeInteger(pid) && pid > 1 && isProcessRunning(pid)) {
+      if (Number.isSafeInteger(pid) && pid > 1 && isPidAlive(pid)) {
         try {
           process.kill(pid, "SIGKILL");
         } catch {}
@@ -1400,7 +1392,7 @@ docker_build_run e2e-build -t demo-image .
         expect(existsSync(join(workDir, "docker.term"))).toBe(true);
         expect(readFileSync(join(workDir, "docker-count"), "utf8").trim()).toBe("1");
         await waitForForeignProcessExit(buildPid, signal);
-        expect(isProcessRunning(buildPid)).toBe(false);
+        expect(isPidAlive(buildPid)).toBe(false);
       } finally {
         if (runner.exitCode === null && runner.signalCode === null) {
           runner.kill("SIGTERM");
@@ -3101,7 +3093,7 @@ openclaw_e2e_probe_tcp 127.0.0.1 18789 400`,
         if (lane === "published") {
           expect(systemctl("is-active", "openclaw-gateway.service").status).toBe(3);
           expect(records()).toHaveLength(1);
-          expect(isProcessRunning(records()[0]!.pid)).toBe(false);
+          expect(isPidAlive(records()[0]!.pid)).toBe(false);
           await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
           expect(systemctl("start", "openclaw-gateway.service").status).toBe(0);
           await withinTest(receipts.waitFor(startsPath, "ready", 2), signal);
@@ -3120,7 +3112,7 @@ openclaw_e2e_probe_tcp 127.0.0.1 18789 400`,
         ).json()) as { pid: number; managed: boolean };
         expect(replacement.managed).toBe(true);
         expect(replacement.pid).not.toBe(initial.pid);
-        expect(isProcessRunning(initial.pid)).toBe(false);
+        expect(isPidAlive(initial.pid)).toBe(false);
         expect(probeListener().status).toBe(0);
         expect(systemctl("stop", "openclaw-gateway.service").status).toBe(0);
         expect(probeListener().status).toBe(1);
@@ -3410,7 +3402,7 @@ printf '%s\n' "$status" >"$TMPDIR/status"
               "proc-stat-read",
               zombie ? "proc-stat-read" : "wait",
             ]);
-            expect(isProcessRunning(pid)).toBe(true);
+            expect(isPidAlive(pid)).toBe(true);
             if (!zombie) {
               expect(readFileSync(pidPath, "utf8")).toBe(`${pid}\n`);
             }
@@ -4676,13 +4668,13 @@ setInterval(() => {}, 1_000);
           );
           const descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
           expect(descendantPid).toBeGreaterThan(1);
-          expect(isProcessRunning(descendantPid)).toBe(true);
+          expect(isPidAlive(descendantPid)).toBe(true);
 
           supervisor.kill("SIGTERM");
           expect(await withinTest(exited, signal)).toBe(0);
           expect(readFileSync(statePath, "utf8")).toBe("ready-graceful");
           // The supervisor exits only after drainProcessGroup observes the group absent.
-          expect(isProcessRunning(descendantPid)).toBe(false);
+          expect(isPidAlive(descendantPid)).toBe(false);
         } finally {
           await stopUpgradeSurvivorSupervisor(supervisor, descendantPidPath);
         }
@@ -5278,7 +5270,7 @@ process.exit(73);
         runner.kill(childSignal);
         expect(await withinTest(exited, signal)).toBe(status);
         expectContainerCleanup(fixture, "openclaw-cron-cli-e2e-");
-        expect(isProcessRunning(Number(readFileSync(fixture.pidPath, "utf8")))).toBe(false);
+        expect(isPidAlive(Number(readFileSync(fixture.pidPath, "utf8")))).toBe(false);
       } finally {
         if (runner.exitCode === null && runner.signalCode === null) {
           runner.kill("SIGTERM");
@@ -5286,7 +5278,7 @@ process.exit(73);
         }
         if (existsSync(fixture.pidPath)) {
           const pid = Number(readFileSync(fixture.pidPath, "utf8"));
-          if (isProcessRunning(pid)) {
+          if (isPidAlive(pid)) {
             process.kill(pid, "SIGKILL");
             await waitForForeignProcessExit(pid, signal);
           }
@@ -5522,7 +5514,8 @@ done
 
   it("reports the installed doctor switch unit through the systemd manager", async () => {
     const home = tempDirs.make("openclaw-doctor-busctl-shim-");
-    const serviceName = "openclaw-gateway.service";
+    // Removal must not discover an operator's identically named system service.
+    const serviceName = `${basename(home)}.service`;
     const unitPath = join(home, ".config", "systemd", "user", serviceName);
     mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
     writeFileSync(
@@ -5546,7 +5539,11 @@ done
     ];
     const binDir = join(home, "bin");
     writeExecutables(binDir, {
-      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
+      // Native manager children do not inherit OpenClaw selectors.
+      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8").replace(
+        "process.env.OPENCLAW_SYSTEMD_UNIT",
+        JSON.stringify(serviceName),
+      ),
       "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
     });
     const loadedEnv = {

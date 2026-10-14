@@ -56,7 +56,7 @@ export function createWorkspaceCommand(
       // Keep the existing file-node no-alias policy; native Memory still owns file IO.
       for (const access of request.paths) {
         if ((await canonicalPathFromExistingAncestor(access.path)) !== access.path) {
-          throw new Error("Node workspace paths must use their canonical location");
+          throw new Error("Node workspace paths must use their resolved location");
         }
       }
       io.signal.throwIfAborted();

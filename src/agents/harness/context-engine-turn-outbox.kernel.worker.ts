@@ -1,15 +1,17 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   readClosedTranscriptTurnInDatabase,
   type ClosedTranscriptTurnReadResult,
 } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import type { TranscriptTurnBoundary } from "../../config/sessions/transcript-entry-anchor.js";
+import { requireNativeDatabaseFile } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { ensureContextEngineTurnOutboxSchema } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
@@ -283,6 +285,8 @@ export function recoverContextEngineTurnOutbox(params: {
       .where("engine_id", "=", params.engineId)
       .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
       .where("session_id", "=", params.sessionId)
+      // Blocked rows are terminal; their outcome was logged once when the turn was blocked.
+      .where(outboxPayloadRequiresAdvancement())
       .orderBy(outboxEnqueueSequence(), "asc"),
   ).rows;
   let pending = false;
@@ -294,9 +298,6 @@ export function recoverContextEngineTurnOutbox(params: {
       continue;
     }
     if (payload.state === "blocked") {
-      params.warn(
-        `[context-engine] durable turn advancement is blocked: ${row.advancement_key}: transcript range is ${payload.failure}`,
-      );
       continue;
     }
     if (payload.state === "admitted") {
@@ -440,9 +441,12 @@ type OutboxOutput =
 
 /** Runs one outbox command's kernel on the borrowed connection. */
 export function executeContextEngineTurnOutboxCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: OutboxCommand,
 ): OutboxOutput {
+  if (isPostgresSqlConnection(db)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   const database = { db };
   switch (command.type) {
     case "prepareRun":

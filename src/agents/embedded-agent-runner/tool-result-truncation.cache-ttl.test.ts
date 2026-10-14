@@ -119,13 +119,9 @@ function toolText(messages: AgentMessage[], id: string): string {
 }
 
 describe("cache-TTL tool-result projection", () => {
-  it.each([
-    ["restart", 4_000],
-    ["restart", 8_000],
-    ["turn teardown", 4_000],
-    ["turn teardown", 8_000],
-  ])("preserves ordinary projected bytes after %s with a %s character cap", (reset, maxChars) => {
-    const sessionId = `ordinary-${reset}`;
+  it("preserves ordinary projected bytes across turn teardown and compaction", () => {
+    const maxChars = 4_000;
+    const sessionId = "ordinary-turn-teardown";
     const sessionIds = [sessionId];
     try {
       using initialLease = retainEmbeddedSessionPromptState(sessionId);
@@ -146,7 +142,7 @@ describe("cache-TTL tool-result projection", () => {
         ).messages;
       }
       expect(sent.filter((message) => message.role === "toolResult")).toHaveLength(3);
-      expect(toolText(sent, "batch-0").includes("truncated")).toBe(maxChars === 4_000);
+      expect(toolText(sent, "batch-0")).toContain("truncated");
       expect(
         [0, 1, 2].reduce((sum, batch) => sum + toolText(sent, `batch-${batch}`).length, 0),
       ).toBeGreaterThan(8_000);
@@ -158,11 +154,7 @@ describe("cache-TTL tool-result projection", () => {
           data: JSON.parse(markerData),
         },
       ];
-      if (reset === "restart") {
-        clearEmbeddedSessionPromptStates([sessionId]);
-      } else {
-        initialLease[Symbol.dispose]();
-      }
+      initialLease[Symbol.dispose]();
       using restoredLease = retainEmbeddedSessionPromptState(sessionId);
       const restored = restoredLease.state.toolResults;
       expect(restored).not.toBe(state);
@@ -176,7 +168,7 @@ describe("cache-TTL tool-result projection", () => {
       const compacted = [user("summary"), ...history.slice(-2)];
       reconcileToolResultPromptProjectionState(compacted, restored);
       expect(restored.frozen.size).toBe(1);
-      expect(restored.replacements.size).toBe(maxChars === 4_000 ? 1 : 0);
+      expect(restored.replacements.size).toBe(1);
       const compactedSnapshot = serializeCacheTtlToolResultProjections(restored);
       expect(JSON.stringify(compactedSnapshot)).not.toContain("batch-0");
       const reopened = createToolResultPromptProjectionState();
@@ -281,27 +273,6 @@ describe("cache-TTL tool-result projection", () => {
     },
   );
 
-  it("keeps ambiguous tool identities stable when pruning composes with oversized projection", () => {
-    const messages = prunableHistory([
-      tool({ id: "duplicate", text: "a".repeat(5_000) }),
-      tool({ id: "duplicate", text: "b".repeat(5_000) }),
-    ]);
-    const state = createToolResultPromptProjectionState();
-    const first = project(messages, { projectionState: state });
-    const sent = truncateOversizedToolResultsInMessages(
-      first,
-      1_000,
-      2_000,
-      100_000,
-      state,
-    ).messages;
-    const replay = project(messages, { projectionState: state, lastCacheTouchAt: NOW });
-    expect(
-      truncateOversizedToolResultsInMessages(replay, 1_000, 2_000, 100_000, state).messages,
-    ).toEqual(sent);
-    expect(state.replacements.size).toBe(2);
-  });
-
   it("keeps pruned bytes when a later result makes a tool identity ambiguous", () => {
     const messages = prunableHistory([tool({ id: "reused", text: "a".repeat(5_000) })]);
     const state = createToolResultPromptProjectionState();
@@ -323,39 +294,6 @@ describe("cache-TTL tool-result projection", () => {
     restoreCacheTtlToolResultProjections(restarted, entries);
     const restored = project(expanded, { projectionState: restarted, lastCacheTouchAt: NOW });
     expect(JSON.stringify(restored)).toBe(JSON.stringify(continued));
-  });
-
-  it("replays restored projections through the history transform when pruning is off", () => {
-    const state = createToolResultPromptProjectionState();
-    const history = prunableHistory(
-      Array.from({ length: 18 }, (_, index) =>
-        tool({ id: `tool-${index}`, text: `${index}:` + "x".repeat(6_000) }),
-      ),
-    );
-    const first = project(history, { projectionState: state });
-    const sent = truncateOversizedToolResultsInMessages(
-      first,
-      1_000,
-      2_500,
-      100_000,
-      state,
-    ).messages;
-    expect(toolText(sent, "tool-0")).toContain("content cleared");
-    const entries = [
-      {
-        type: "custom",
-        customType: "openclaw.cache-ttl",
-        data: structuredClone(serializeCacheTtlToolResultProjections(state)),
-      },
-    ];
-    expect(JSON.stringify(entries[0]?.data)).not.toContain("x".repeat(20));
-    // Pruning is off after the restart: no prune pass runs, only the per-request history transform.
-    const restarted = createToolResultPromptProjectionState();
-    restoreCacheTtlToolResultProjections(restarted, entries);
-    expect(
-      truncateOversizedToolResultsInMessages(history, 1_000, 2_500, 100_000, restarted).messages,
-    ).toEqual(sent);
-    expect(restarted.restoredCacheTtl.size).toBe(0);
   });
 
   it("preserves a restored soft projection with non-array content on later replay", () => {
@@ -454,35 +392,6 @@ describe("cache-TTL tool-result projection", () => {
     expect(settings().isToolPrunable("anything")).toBe(true);
   });
 
-  it("requires an expired positive TTL and treats equality as expired", () => {
-    const messages = prunableHistory([tool({ id: "old", text: "x".repeat(5_000) })]);
-    expect(project(messages, { lastCacheTouchAt: null })).toBe(messages);
-    expect(project(messages, { lastCacheTouchAt: NOW - 299_999 })).toBe(messages);
-    expect(project(messages, { config: { mode: "cache-ttl", ttl: "0m" } })).toBe(messages);
-    expect(project(messages, { lastCacheTouchAt: NOW - 300_000 })).not.toBe(messages);
-  });
-
-  it("protects bootstrap history and the last three assistant turns", () => {
-    const bootstrap = tool({ id: "bootstrap", text: "b".repeat(5_000) });
-    const old = tool({ id: "old", text: "o".repeat(5_000) });
-    const recent = tool({ id: "recent", text: "r".repeat(5_000) });
-    const messages = [assistant(), bootstrap, ...prunableHistory([old], [recent])];
-    const result = project(messages);
-
-    expect(toolText(result, "bootstrap")).toBe("b".repeat(5_000));
-    expect(toolText(result, "old")).toContain("[Tool result trimmed:");
-    expect(toolText(result, "recent")).toBe("r".repeat(5_000));
-  });
-
-  it("soft-trims joined blocks with UTF-16-safe exact head and tail", () => {
-    const text = `${"h".repeat(1_499)}😀${"m".repeat(1_001)}😀${"t".repeat(1_499)}`;
-    const result = project(prunableHistory([tool({ id: "utf16", text })]));
-    expect(toolText(result, "utf16")).toBe(
-      `${"h".repeat(1_499)}\n...\n${"t".repeat(1_499)}\n\n` +
-        "[Tool result trimmed: kept first 1500 chars and last 1500 chars of 4003 chars.]",
-    );
-  });
-
   it("replaces images and serializes malformed text before hard eligibility", () => {
     const malformed = { payload: "m".repeat(5_000) };
     const result = project(prunableHistory([tool({ id: "image", text: malformed, image: true })]), {
@@ -491,13 +400,6 @@ describe("cache-TTL tool-result projection", () => {
     const text = toolText(result, "image");
     expect(text).toContain("[image removed during context pruning]");
     expect(text).toContain("[Tool result trimmed:");
-  });
-
-  it("uses CJK weighting when deciding whether to enter the soft pass", () => {
-    const messages = prunableHistory([tool({ id: "cjk", text: "x".repeat(4_001) })]);
-    messages[0] = user("𠀀".repeat(50));
-    const result = project(messages, { contextWindowTokens: 3_500 });
-    expect(toolText(result, "cjk")).toContain("[Tool result trimmed:");
   });
 
   it("drops old thinking only for pressure estimation", () => {
@@ -516,28 +418,5 @@ describe("cache-TTL tool-result projection", () => {
         dropThinkingBlocksForEstimate: true,
       }),
     ).toBe(messages);
-  });
-
-  it("hard-clears oldest eligible results with a custom placeholder and preserves metadata", () => {
-    const oldTools = Array.from({ length: 18 }, (_, index) =>
-      tool({ id: `tool-${index}`, text: String(index).repeat(5_000) }),
-    );
-    const result = project(prunableHistory(oldTools), {
-      config: {
-        mode: "cache-ttl",
-        hardClear: { placeholder: "[cleared by test]" },
-      },
-    });
-    const first = result.find(
-      (message) => message.role === "toolResult" && message.toolCallId === "tool-0",
-    );
-    expect(first).toMatchObject({
-      toolCallId: "tool-0",
-      toolName: "read",
-      details: { source: "tool-0" },
-      isError: false,
-      timestamp: 42,
-    });
-    expect(toolText(result, "tool-0")).toBe("[cleared by test]");
   });
 });

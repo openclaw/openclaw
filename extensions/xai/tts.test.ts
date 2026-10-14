@@ -268,7 +268,7 @@ describe("xai tts", () => {
             ...ttsRequest,
             baseUrl,
           }),
-        ).rejects.toThrow(`requires the canonical ${XAI_BASE_URL} base URL`);
+        ).rejects.toThrow(`requires the supported ${XAI_BASE_URL} base URL`);
         expect(FakeWebSocket.instances).toHaveLength(0);
       },
     );

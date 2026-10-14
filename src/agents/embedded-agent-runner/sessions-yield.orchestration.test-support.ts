@@ -29,6 +29,8 @@ describe("sessions_yield orchestration", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "sessions-yield.orchestration" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 

@@ -470,6 +470,38 @@ describe("llama.cpp managed setup", () => {
     ).resolves.toBeNull();
   });
 
+  it("does not offer installed OCR or vision models as a chat setup candidate", async () => {
+    const command = path.join(tempRoot, "llama-server");
+    const preset = path.join(tempRoot, "models.ini");
+    await Promise.all([
+      fs.writeFile(command, "binary"),
+      fs.writeFile(preset, "version = 1"),
+      fs.writeFile(modelPath, "GGUF"),
+    ]);
+    const cfg = config();
+    const provider = cfg.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    if (!provider) {
+      throw new Error("Missing fixture provider");
+    }
+    provider.localService = { command, args: ["--models-preset", preset] };
+    provider.params = {
+      ...provider.params,
+      mediaModels: { ocr: "ocr-model", vision: "vision-model" },
+    };
+    provider.models = ["ocr-model", "vision-model"].map((id) => ({
+      id,
+      name: id,
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 2048,
+      params: { modelPath },
+    }));
+    await expect(detectLlamaCppSetup({ config: cfg, env: {} })).resolves.toBeNull();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+  });
+
   it("does not offer the default download below the RAM floor", async () => {
     vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
     const ctx = authContext(true);
@@ -782,7 +814,8 @@ describe("llama.cpp managed setup", () => {
   it("writes one durable managed-server provider after preparation", async () => {
     const ctx = authContext(true);
 
-    await expect(runLlamaCppSetup(ctx)).resolves.toMatchObject({
+    const result = await runLlamaCppSetup(ctx);
+    expect(result).toMatchObject({
       profiles: [],
       defaultModel: `${LLAMA_CPP_PROVIDER_ID}/qwen3.5-9b-q4_k_m`,
       configPatch: {
@@ -802,6 +835,9 @@ describe("llama.cpp managed setup", () => {
         },
       },
     });
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).not.toHaveProperty(
+      "apiKey",
+    );
     expect(
       mocks.ensureModel.mock.calls.filter(([options]) => options.download === true),
     ).toHaveLength(2);
@@ -889,9 +925,9 @@ describe("llama.cpp managed setup", () => {
 
     expect(managed).toMatchObject({
       baseUrl: "http://127.0.0.1:19432/v1",
-      apiKey: "llama-cpp-local",
       localService: { command: path.join(tempRoot, "llama-server") },
     });
+    expect(managed).not.toHaveProperty("apiKey");
     expect(managed).not.toHaveProperty("auth");
     expect(managed).not.toHaveProperty("headers");
     expect(managed).not.toHaveProperty("params");

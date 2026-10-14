@@ -48,6 +48,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
     "/scripts/ios-screenshot-evidence.mjs",
     "/scripts/lib/direct-run.mjs",
     "/scripts/ci-static-step.sh",
+    "/scripts/ci-collect-checks.sh",
     ...(linux
       ? [
           "/scripts/lib/release-upgrade-baseline.mjs",
@@ -408,6 +409,7 @@ it.concurrent.for([
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
       "scripts/ci-static-step.sh": "workflow static-step script\n",
+      "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
     };
     const nodeSetupScripts = {
       "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(

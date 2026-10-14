@@ -1,5 +1,6 @@
 import { asNonNegativeFiniteNumber as readChatSendTimingNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
@@ -46,6 +47,7 @@ const CHAT_SEND_SERVER_TIMING_PHASES = [
 ] as const;
 type ChatSendServerTimingPhase = (typeof CHAT_SEND_SERVER_TIMING_PHASES)[number];
 const CHAT_SEND_SLOW_FIRST_ASSISTANT_MS = 1_500;
+const CHAT_SEND_TIMING_LIMIT = 40;
 
 export function recordChatSendTiming(
   host: ChatSendTimingHost,
@@ -135,7 +137,8 @@ export function registerChatSendTiming(
   runId: string,
   requestStartedAtMs: number,
 ) {
-  (host.chatSendTimingsByRun ??= new Map()).set(runId, {
+  const entries = (host.chatSendTimingsByRun ??= new Map());
+  entries.set(runId, {
     runId,
     sessionKey: item.sessionKey,
     agentId: item.agentId,
@@ -143,6 +146,8 @@ export function registerChatSendTiming(
     sendState: item.sendState,
     submittedAtMs: item.sendSubmittedAtMs ?? requestStartedAtMs,
   });
+  // Historical timing correlation is best effort, like the bounded diagnostic log.
+  pruneMapToMaxSize(entries, CHAT_SEND_TIMING_LIMIT);
 }
 
 export function updateChatSendAckTiming(
@@ -170,6 +175,7 @@ export function updateChatSendAckTiming(
     entries.delete(requestedRunId);
   }
   entries.set(ack.runId, next);
+  pruneMapToMaxSize(entries, CHAT_SEND_TIMING_LIMIT);
 }
 
 export function chatSendAckServerTimingEventFields(ack: ChatSendAck): Record<string, number> {

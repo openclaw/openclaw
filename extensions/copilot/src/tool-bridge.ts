@@ -22,7 +22,10 @@ import {
   resolveModelAuthModeAsync,
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import {
+  createAgentHarnessToolSurfaceRuntimeAsync,
+  type AgentHarnessToolSurfaceRuntime,
+} from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
@@ -31,7 +34,6 @@ import { isRawCopilotModelRun } from "./attempt-mode.js";
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingToolsAsync"];
 type OpenClawCodingToolsOptions = NonNullable<Parameters<CreateOpenClawCodingTools>[0]>;
-type AgentHarnessToolSurfaceRuntime = ReturnType<typeof createAgentHarnessToolSurfaceRuntime>;
 type CatalogExecuteParams = Parameters<
   NonNullable<AgentHarnessToolSurfaceRuntime["toolSearchCatalogExecutor"]>
 >[0];
@@ -129,7 +131,7 @@ export async function createCopilotToolBridge(
     return { codeModeEngaged: false, promptToolPolicy: EMPTY_PROMPT_TOOL_POLICY, sourceTools: [] };
   }
 
-  const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
+  const toolSurfaceRuntime = await createAgentHarnessToolSurfaceRuntimeAsync({
     abortSignal: attemptParams.abortSignal,
     agentId: input.agentId,
     config: attemptParams.config,
@@ -273,7 +275,7 @@ export async function createCopilotToolBridge(
 async function buildOpenClawCodingToolsOptions(
   input: CopilotToolBridgeInput,
   toolPlan: ReturnType<typeof resolveEmbeddedAttemptToolConstructionPlan>,
-  toolSurfaceRuntime?: ReturnType<typeof createAgentHarnessToolSurfaceRuntime>,
+  toolSurfaceRuntime?: AgentHarnessToolSurfaceRuntime,
 ): Promise<OpenClawCodingToolsOptions> {
   const a = input.attemptParams;
 

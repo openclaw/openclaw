@@ -33,12 +33,6 @@ import {
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
-import {
-  appendPreparedSessionTranscriptProjectionChunkInTransaction,
-  finalizePreparedSessionTranscriptProjectionInTransaction,
-  prepareSessionTranscriptProjection,
-  claimPreparedSessionTranscriptProjectionInTransaction,
-} from "./session-transcript-projection-rebuild.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
 
@@ -221,6 +215,28 @@ async function withRewriteFixture(
 }
 
 describe("SQLite exact transcript rewrite", () => {
+  it("preserves the generation when initially recording identical model prompt text", async () => {
+    await withRewriteFixture(({ snapshot, rewrite }) => {
+      const before = snapshot();
+      const message = {
+        ...rewriteEvents[1].message,
+        __openclaw: { modelPromptProjection: { version: 1, text: "question" } },
+      };
+      rewrite({ ...rewriteEvents[1], message });
+      const captured = snapshot();
+      expect(captured.generation).toBe(before.generation);
+      expect(captured.raw[1]?.event_json).toBe(JSON.stringify({ ...rewriteEvents[1], message }));
+      rewrite({
+        ...rewriteEvents[1],
+        message: {
+          ...message,
+          __openclaw: { modelPromptProjection: { version: 1, text: "changed" } },
+        },
+      });
+      expect(snapshot().generation).not.toBe(captured.generation);
+    });
+  });
+
   it.each([
     { name: "content", message: { content: "changed" } },
     { name: "provenance", message: { provenance: { kind: "internal_system" } } },
@@ -342,7 +358,6 @@ describe("SQLite exact transcript rewrite", () => {
       };
       rewrite({ ...rewriteEvents[1], message });
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
-      const before = prepareSessionTranscriptProjection(db, scope.sessionId)!;
       const work = trackSqliteStatementExecutions(db, ["fts"], (sql) =>
         /\bsession_transcript_fts\b/i.test(sql) ? "fts" : null,
       );
@@ -357,7 +372,6 @@ describe("SQLite exact transcript rewrite", () => {
         SessionTranscriptProjectionUnavailableError,
       );
       expect(searchSessionTranscripts({ ...scope, query: "question" }).hits).toEqual([]);
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, before, -1)).toBe(false);
       await waitForSessionTranscriptIndexReconcile(scope);
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
       expect(searchSessionTranscripts({ ...scope, query: "changed" }).hits).toMatchObject([
@@ -401,31 +415,6 @@ describe("SQLite exact transcript rewrite", () => {
       expect(snapshot()).toEqual(before);
       expect(readTranscriptStatsSync(scope)).toEqual(stats);
     }, events);
-  });
-
-  it("recovers a claimed projection on metadata rewrite and fences stale publication", async () => {
-    await withRewriteFixture(({ db, rewrite, snapshot, scope }) => {
-      const before = snapshot();
-      const plan = prepareSessionTranscriptProjection(db, scope.sessionId)!;
-      db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, -1)).toBe(true);
-      db.prepare("DELETE FROM session_transcript_active_events").run();
-      db.prepare("DELETE FROM session_transcript_fts_rows").run();
-      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(true);
-      rewrite({ ...rewriteEvents[1], message: { ...rewriteEvents[1].message, provenance: "new" } });
-      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
-      expect(snapshot().active).toEqual(before.active);
-      expect(snapshot().search).toEqual(before.search);
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, -2)).toBe(false);
-      expect(
-        appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
-          sessionId: scope.sessionId,
-          claimId: -1,
-          ftsRows: plan.ftsRows,
-        }),
-      ).toBe(false);
-      expect(finalizePreparedSessionTranscriptProjectionInTransaction(db, plan, -1)).toBe(false);
-    });
   });
 
   it.each([

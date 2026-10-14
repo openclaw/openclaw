@@ -41,7 +41,6 @@ type ToolReplySource = {
   format: (text: string) => string;
 };
 type ToolReplyCapture = {
-  active: boolean;
   observed: boolean;
   text?: string;
   source?: ToolReplySource;
@@ -58,15 +57,9 @@ export async function captureGroupThreadToolReply<T>(
   if (!currentScope()) {
     return { result: await run(), observed: false };
   }
-  const capture: ToolReplyCapture = { active: true, observed: false, source };
-  return toolReplies.run(capture, async () => {
-    try {
-      const result = await run();
-      return { result, observed: capture.observed, text: capture.text };
-    } finally {
-      capture.active = false;
-    }
-  });
+  const capture: ToolReplyCapture = { observed: false, source };
+  const result = await toolReplies.run(capture, run);
+  return { result, observed: capture.observed, text: capture.text };
 }
 
 /** Restore source attribution after modifying hooks; undefined preserves cancellation. */
@@ -77,11 +70,7 @@ export function finalizeGroupThreadToolReply(
 ): string | undefined {
   const capture = toolReplies.getStore();
   let content = text;
-  if (
-    capture?.active &&
-    currentScope() &&
-    (!capture.source || capture.source.matches(event, context))
-  ) {
+  if (capture && currentScope() && (!capture.source || capture.source.matches(event, context))) {
     if (content?.trim() && !isSilentReplyPayloadText(content)) {
       content = capture.source?.format(content) ?? content;
     }

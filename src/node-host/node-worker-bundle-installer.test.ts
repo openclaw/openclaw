@@ -693,10 +693,8 @@ describe("node worker bundle installer", () => {
       });
     }
 
-    await expect(
-      fs.access(path.join(bundlesRoot, fixture.input.build.bundleHash)),
-    ).resolves.toBeUndefined();
-    await expect(fs.access(path.join(bundlesRoot, "operator-owned"))).resolves.toBeUndefined();
+    await fs.access(path.join(bundlesRoot, fixture.input.build.bundleHash));
+    await fs.access(path.join(bundlesRoot, "operator-owned"));
     for (const hash of staleHashes) {
       await expect(fs.access(path.join(bundlesRoot, hash))).rejects.toThrow();
     }

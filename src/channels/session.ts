@@ -81,6 +81,6 @@ export async function recordInboundSession(
     ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,
     groupResolution,
     createIfMissing,
-    assertCommitAllowed: params.assertAuthority,
+    workerGuard: { assertMutationAllowed: params.assertAuthority },
   });
 }

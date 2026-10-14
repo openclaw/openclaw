@@ -47,6 +47,7 @@ import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 export type {
   AgentExecutorBinding,
@@ -80,6 +81,11 @@ export function buildWatchedSessionsHarnessContext(params: {
   toolNames: Iterable<string>;
   capabilityToolNames?: Iterable<string>;
 }): string | undefined {
+  warnPluginSdkDeprecation({
+    family: "watched-sessions-sync-harness-context",
+    method: "buildWatchedSessionsHarnessContext",
+    replacement: "await prepareWatchedSessionsHarnessContext() with a host-bound assertCurrent",
+  });
   const lines = buildWatchedSessionsPromptLines(
     prepareWatchedSessionsPrompt({ enabled: true, ...params }),
   );
@@ -285,7 +291,6 @@ export {
 } from "../agents/embedded-agent-tool-media.js";
 export {
   extractToolErrorMessage,
-  sanitizeToolArgs,
   sanitizeToolResult,
 } from "../agents/embedded-agent-tool-results.js";
 export {

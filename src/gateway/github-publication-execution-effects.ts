@@ -72,29 +72,3 @@ export function githubPublicationEffectFacts(
   }
   throw new Error("Unknown GitHub publication effect transition.");
 }
-
-/** Released synchronous adapters and worker transitions share the same effect reducer. */
-export function createGitHubPublicationExecutionEffects<Row>(params: {
-  write: (facts: GitHubPublicationMutableFacts, requireAction: boolean) => Row;
-  interruptedStatus: "requested" | "needs_confirmation";
-}) {
-  const apply = (transition: GitHubPublicationEffectTransition) => {
-    const { values, requireAction } = githubPublicationEffectFacts(
-      transition,
-      params.interruptedStatus,
-    );
-    return params.write(values, requireAction);
-  };
-  return {
-    updateHead: (headCommit: string): Row => apply({ operation: "updateHead", headCommit }),
-    complete: (result: SessionGitHubPublicationResult): Row =>
-      apply({ operation: "complete", result }),
-    recordEffect(
-      effect: "push" | "pull_request",
-      observed?: { headCommit?: string; url?: string },
-    ): void {
-      apply({ operation: "recordEffect", effect, observed });
-    },
-    interrupt: (): Row => apply({ operation: "interrupt" }),
-  };
-}

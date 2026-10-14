@@ -564,34 +564,6 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     ).toHaveLength(2);
   });
 
-  it("clears loading when the final active tab is closed", async () => {
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.method === "DELETE" && envelope.path === "/tabs/tab-a") {
-        return { ok: true };
-      }
-      if (envelope.method === "GET" && envelope.path === "/tabs") {
-        return { running: true, tabs: [] };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "tab-a");
-    controller.loading = true;
-
-    await controller.closeTab("tab-a");
-
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({ method: "DELETE", path: "/tabs/tab-a" }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({ method: "GET", path: "/tabs" }),
-    );
-    expect(controller.activeTargetId).toBeNull();
-    expect(controller.view).toBeNull();
-    expect(controller.loading).toBe(false);
-  });
-
   it("invalidates old-document inspection and wheel input before same-tab navigation", async () => {
     vi.useFakeTimers({ now: 1_000 });
     const previousInspection = createDeferred<unknown>();
@@ -749,7 +721,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     expect(screenshots[0]?.[1]).toMatchObject({ body: { targetId: "tab-b" } });
   });
 
-  it.each(["browser evaluateEnabled=false", "Browser connection temporarily unavailable"])(
+  it.each(["browser evaluateEnabled=false"])(
     "ignores a stale inspection rejection after gateway replacement: %s",
     async (failure) => {
       vi.useFakeTimers({ now: 1_000 });

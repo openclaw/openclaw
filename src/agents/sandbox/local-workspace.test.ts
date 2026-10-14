@@ -50,6 +50,7 @@ it.runIf(process.platform !== "win32")(
     sandbox.fsBridge = bridge;
     try {
       bindLocalSandboxWorkspace(sandbox, {
+        [Symbol.dispose]() {},
         workspaceDir: root,
         workspaceCwd: root,
         checkpoint,
@@ -135,6 +136,7 @@ it.runIf(process.platform !== "win32")(
     });
     sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
     bindLocalSandboxWorkspace(sandbox, {
+      [Symbol.dispose]() {},
       workspaceDir: root,
       workspaceCwd: root,
       provision: async (run) => await run(),

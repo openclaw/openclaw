@@ -1,9 +1,10 @@
 import { render } from "lit";
 import { afterEach, expect, it } from "vitest";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import {
   dismissConfirmedActionPopovers,
   isConfirmedActionPopoverFocused,
-  renderRewindButton,
+  RewindButton,
 } from "./chat-message-confirmation.ts";
 
 afterEach(() => {
@@ -15,14 +16,8 @@ it("tracks focused confirmation ownership through dismissal of another pane", ()
   const first = document.createElement("section");
   const second = document.createElement("section");
   document.body.append(first, second);
-  render(
-    renderRewindButton(() => {}),
-    first,
-  );
-  render(
-    renderRewindButton(() => {}),
-    second,
-  );
+  render(solidContent(RewindButton, { onRewind: () => {} }), first);
+  render(solidContent(RewindButton, { onRewind: () => {} }), second);
   first.querySelector<HTMLButtonElement>("button")!.click();
   expect(isConfirmedActionPopoverFocused(first)).toBe(true);
   expect(isConfirmedActionPopoverFocused(second)).toBe(false);

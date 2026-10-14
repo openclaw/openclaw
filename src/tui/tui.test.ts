@@ -786,7 +786,9 @@ function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
     },
     lockDir: path.join(stateDir, "gateway-locks"),
     readProcessStartTime: () => 123_456,
-    timeoutMs: 100,
+    // Live-owner inspection and uncontended acquisition never wait on this; it only
+    // bounds lock-file inspection, which loaded small hosts can push past 100ms.
+    timeoutMs: 5_000,
   };
 }
 
@@ -807,6 +809,9 @@ function createSignalProcess() {
   };
   return {
     processLike,
+    listenerCount(signal: SignalName) {
+      return listeners.get(signal)?.size ?? 0;
+    },
     emit(signal: SignalName) {
       for (const handler of listeners.get(signal) ?? []) {
         handler();
@@ -816,6 +821,57 @@ function createSignalProcess() {
 }
 
 describe("embedded TUI state ownership", () => {
+  it.each([
+    { outcome: "success", releaseFails: false },
+    { outcome: "early return", releaseFails: false },
+    { outcome: "error", releaseFails: false },
+    { outcome: "success", releaseFails: true },
+    { outcome: "early return", releaseFails: true },
+    { outcome: "error", releaseFails: true },
+  ])(
+    "removes signal handlers after $outcome (releaseFails=$releaseFails)",
+    async ({ outcome, releaseFails }) => {
+      const embeddedStateLock = await import("../infra/embedded-state-lock.js");
+      const release = vi.fn(async () => {
+        if (releaseFails) {
+          throw new Error("state lock release failed");
+        }
+      });
+      const acquire = vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockResolvedValue({
+        release,
+      });
+      const signals = createSignalProcess();
+      try {
+        const run = withEmbeddedTuiStateLock(
+          async () => {
+            expect(signals.listenerCount("SIGINT")).toBe(1);
+            expect(signals.listenerCount("SIGTERM")).toBe(1);
+            if (outcome === "error") {
+              throw new Error("local TUI failed");
+            }
+            if (outcome === "early return") {
+              return undefined;
+            }
+            return "complete";
+          },
+          { process: signals.processLike },
+        );
+        if (releaseFails || outcome === "error") {
+          await expect(run).rejects.toThrow(
+            releaseFails ? "state lock release failed" : "local TUI failed",
+          );
+        } else {
+          await expect(run).resolves.toBe(outcome === "success" ? "complete" : undefined);
+        }
+        expect(release).toHaveBeenCalledOnce();
+        expect(signals.listenerCount("SIGINT")).toBe(0);
+        expect(signals.listenerCount("SIGTERM")).toBe(0);
+      } finally {
+        acquire.mockRestore();
+      }
+    },
+  );
+
   it("refuses local startup while a live Gateway owns the state directory", async () => {
     await withTempDir("openclaw-tui-state-lock-", async (stateDir) => {
       const lockOptions = createGatewayLockOptions(stateDir);

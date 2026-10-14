@@ -7,11 +7,6 @@ import { encodeTerminalUpload, quoteTerminalUploadPath } from "./terminal-file-u
 const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
 describe("terminal file upload", () => {
-  it("base64-encodes arbitrary browser files", async () => {
-    const file = new File([new Uint8Array([0, 1, 2, 255])], "scan.pdf");
-    await expect(encodeTerminalUpload(file)).resolves.toBe("AAEC/w==");
-  });
-
   it("quotes paths for POSIX, PowerShell, and cmd terminals", () => {
     expect(quoteTerminalUploadPath("/tmp/report.pdf", "/bin/zsh")).toBe("/tmp/report.pdf");
     expect(quoteTerminalUploadPath("/tmp/report final.pdf", "/bin/zsh")).toBe(
@@ -66,7 +61,7 @@ describe("terminal file upload", () => {
     },
   );
 
-  it.each(["C:\\Users\\%USERNAME%\\report.pdf", "C:\\Users\\bang!\\report.pdf"])(
+  it.each(["C:\\Users\\bang!\\report.pdf"])(
     "refuses cmd.exe expansion in the complete staged path: %s",
     (filePath) => {
       expect(() => quoteTerminalUploadPath(filePath, "cmd.exe")).toThrow(

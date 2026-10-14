@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as facadeRuntime from "../plugin-sdk/facade-runtime.js";
@@ -50,6 +54,7 @@ const resolveSessionKeyFromResolveParams = (
     client?: ResolveParams["client"];
   },
 ) => {
+  setRuntimeConfigSnapshot(params.cfg);
   let projection = projections.get(params.cfg);
   if (!projection) {
     const store = selectedStore?.store ?? targetStore;
@@ -73,8 +78,6 @@ const resolveSessionKeyFromResolveParams = (
         ),
     });
     projections.set(params.cfg, projection);
-    const created = projection;
-    onTestFinished(() => created.dispose());
   }
   return resolveSessionKeyFromResolveParamsWithClient({
     client: params.client ?? null,
@@ -93,6 +96,12 @@ describe("resolveSessionKeyFromResolveParams", () => {
     storePath = path.join(tempDirs.make("sessions-resolve-"), "sessions.json");
     selectedStore = undefined;
     projections = new Map();
+    onTestFinished(() => {
+      for (const projection of projections.values()) {
+        projection.dispose();
+      }
+      clearRuntimeConfigSnapshot();
+    });
     hoisted.listAgentIdsMock.mockReset();
     targetStore = {};
     // Default: all agents are known (main is always present).

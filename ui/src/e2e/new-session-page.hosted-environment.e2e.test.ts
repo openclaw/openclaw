@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -82,19 +82,16 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "new");
       await page.locator(".new-session-page__message").waitFor();
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        app.runtime.context.theme.setMode("dark");
+      await evaluateControlUiContext(page, (application) => {
+        application.theme.setMode("dark");
       });
       await openEnvironmentPicker(page);
-      const surface = page.locator("wa-popover.new-session-page__where-popover");
+      const surface = page.locator(".oc-popover.new-session-page__where-popover");
       const option = surface.locator('[data-value="runtime:agentsapi"]');
       await option.waitFor();
       const frame = await takeControlUiScreenshotFrame(
         page,
-        surface.locator('wa-popup.popover > [part="popup"]'),
+        surface,
         [surface.getByRole("searchbox", { name: "Search environments" }), option],
         { animations: "disabled", viewport: { width: 1280, height: 900 } },
       );
@@ -165,15 +162,12 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "new");
       await page.locator(".new-session-page__message").waitFor();
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        app.runtime.context.theme.setMode("dark");
+      await evaluateControlUiContext(page, (application) => {
+        application.theme.setMode("dark");
       });
       await openEnvironmentPicker(page);
-      const picker = page.locator("wa-popover.new-session-page__where-popover");
-      const surface = picker.locator('wa-popup.popover > [part="popup"]');
+      const picker = page.locator(".oc-popover.new-session-page__where-popover");
+      const surface = picker;
       await picker.getByRole("searchbox").fill("Agents API");
       await picker.getByRole("status").waitFor();
       let frame = await takeControlUiScreenshotFrame(page, surface, [picker.getByRole("status")], {
@@ -231,11 +225,8 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "new");
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-hosted-runtime")).toBe("agentsapi");
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        app.runtime.context.theme.setMode("dark");
+      await evaluateControlUiContext(page, (application) => {
+        application.theme.setMode("dark");
       });
       expect(await page.locator("#new-session-project-trigger").count()).toBe(0);
       expect(await trigger.getAttribute("aria-label")).toContain(label);

@@ -3,6 +3,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   persistSessionTranscriptTurn,
@@ -29,10 +33,8 @@ import {
   readSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
-import {
-  readSessionTitleFieldsFromTranscript,
-  readSessionTitleFieldsFromTranscriptAsync,
-} from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.worker.js";
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
@@ -59,6 +61,7 @@ beforeEach(() => {
   tempDir = tempDirs.make("openclaw-transcript-titles-");
   storePath = path.join(tempDir, "sessions.json");
   setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
@@ -66,6 +69,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   tempDirs.cleanup();
   envSnapshot.restore();
 });

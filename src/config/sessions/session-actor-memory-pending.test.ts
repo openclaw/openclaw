@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createSessionActorMemoryPending } from "./session-actor-memory-pending.js";
-import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
+import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
 import type {
   PendingInputCustodyGrant,
   PendingInputMutation,
@@ -25,35 +25,19 @@ const message = {
 };
 
 function fixture() {
-  const state: SessionActorMemoryState = {
+  const initial = createSessionActorMemoryState({
+    database: { kind: "memory", handle: "memory-1", incarnation: "incarnation-1" },
+    sessionKey: scope.sessionKey,
+  });
+  const state: ReturnType<typeof createSessionActorMemoryState> = {
+    ...initial,
     hot: {
-      target: {
-        database: { kind: "memory", handle: "memory-1", incarnation: "incarnation-1" },
-        sessionKey: scope.sessionKey,
-      },
+      ...initial.hot,
       version: { epoch: "epoch-1", sequence: 0 },
       writeToken: "0",
       dependencySessionIds: [scope.sessionId],
       entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true },
-      hasBoard: false,
-      participants: [],
-      members: [],
-      pendingInputs: [],
-      completionKeys: [],
-      transcript: {
-        watermark: { generation: null, maxSeq: null },
-        version: { generation: null, rawSeq: null, updatedAt: null },
-        anchorsState: "resident",
-        anchors: [],
-        idempotency: [],
-        modelContext: { kind: "resident", entries: [] },
-      },
     },
-    events: [],
-    pendingInputs: new Map(),
-    completions: new Map(),
-    goalReceipts: new Map(),
-    historicalWindows: new Map(),
   };
   const grants: Array<{ stage: string; grant: PendingInputCustodyGrant }> = [];
   const pending = createSessionActorMemoryPending(state, {

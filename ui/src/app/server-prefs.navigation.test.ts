@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { resolveServerUiPrefWriteStatus } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import {
   readProfileAppearancePrefs,
@@ -18,7 +19,7 @@ import { loadSettings, patchSettings, settingsKeyForGateway } from "./settings.t
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 const scope = "ws://navigation";
-const pinsKey = "ui.sidebarEntries";
+const pinsKey = "ui.railShortcuts";
 const config = { ui: { prefs: { sidebarEntries: ["route:usage", "plugin:workboard/workboard"] } } };
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -112,13 +113,22 @@ describe("personal navigation preference boundary", () => {
       await committed.promise;
       expect(backend.profiles.a?.[pinsKey]).toEqual(["route:cron"]);
       if (replacement === "storage") {
-        localStorage.setItem(pendingKey, JSON.stringify(newer));
+        localStorage.setItem(
+          pendingKey,
+          JSON.stringify({
+            railShortcuts: newer.sidebarEntries,
+            railShortcutsBase: newer.sidebarEntriesBase,
+          }),
+        );
       } else {
         pushServerUiPrefs(a.writer, newer, hooks);
       }
       firstAck.resolve({ status: "ok" });
       await vi.dynamicImportSettled();
-      expect(pendingAtFirstAck).toEqual(newer);
+      expect(pendingAtFirstAck).toEqual({
+        railShortcuts: newer.sidebarEntries,
+        railShortcutsBase: newer.sidebarEntriesBase,
+      });
       expect(backend.profiles.a?.[pinsKey]).toEqual([]);
       expect(writes).toBe(2);
       expect(localStorage.getItem(pendingKey)).toBeNull();
@@ -166,13 +176,22 @@ describe("personal navigation preference boundary", () => {
           replacement !== "same-tab" ? first.sidebarEntriesBase : first.sidebarEntries,
       };
       if (replacement === "storage") {
-        localStorage.setItem(pendingKey, JSON.stringify(newer));
+        localStorage.setItem(
+          pendingKey,
+          JSON.stringify({
+            railShortcuts: newer.sidebarEntries,
+            railShortcutsBase: newer.sidebarEntriesBase,
+          }),
+        );
       } else {
         pushServerUiPrefs(a.writer, newer, hooks);
       }
       firstAck.resolve({ status: "ok" });
       await vi.dynamicImportSettled();
-      expect(pendingAtFirstAck).toEqual(newer);
+      expect(pendingAtFirstAck).toEqual({
+        railShortcuts: newer.sidebarEntries,
+        railShortcutsBase: newer.sidebarEntriesBase,
+      });
       expect(backend.profiles.a?.[pinsKey]).toEqual(
         replacement !== "same-tab"
           ? ["route:usage", "route:plugins", "route:cron"]
@@ -336,7 +355,7 @@ describe("personal navigation preference boundary", () => {
     expect(a.request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", expect.anything());
   });
 
-  it("re-drains repeated CAS conflicts using the original intent rather than overwriting remote edits", async () => {
+  it("retains repeated CAS conflicts for reconnect without overwriting remote edits", async () => {
     vi.useFakeTimers();
     const backend = server({ a: { [pinsKey]: ["route:usage"] } });
     const a = backend.connect("a");
@@ -359,6 +378,7 @@ describe("personal navigation preference boundary", () => {
       }
       return original(method, params);
     });
+    patchSettings({ sidebarEntries: ["route:usage", "route:plugins"] });
     pushServerUiPrefs(
       a.writer,
       { sidebarEntries: ["route:usage", "route:plugins"], sidebarEntriesBase: ["route:usage"] },
@@ -366,10 +386,24 @@ describe("personal navigation preference boundary", () => {
     );
     await started.promise;
     await vi.runAllTimersAsync();
+    expect(committed).not.toHaveBeenCalled();
+    expect(attempts).toBe(2);
+    expect(backend.profiles.a?.[pinsKey]).toEqual(["route:cron", "route:systems"]);
+    expect(resolveServerUiPrefWriteStatus("sidebarEntries", scope, "a")).toMatchObject({
+      status: "error",
+    });
+    expect(
+      JSON.parse(
+        localStorage.getItem("openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:a")!,
+      ).railShortcuts,
+    ).toEqual(["route:usage", "route:plugins"]);
+    flushServerUiPrefs(a.writer, { profileId: "a", canWrite: true, afterCommit: committed });
+    await vi.dynamicImportSettled();
     expect(committed).toHaveBeenCalledOnce();
     expect(attempts).toBe(3);
     expect(backend.profiles.a?.[pinsKey]).toEqual(["route:cron", "route:systems", "route:plugins"]);
     expect(loadSettings().sidebarEntries).toEqual(backend.profiles.a?.[pinsKey]);
+    expect(resolveServerUiPrefWriteStatus("sidebarEntries", scope, "a").status).toBe("saved");
     expect(
       localStorage.getItem("openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:a"),
     ).toBeNull();
@@ -505,7 +539,7 @@ describe("personal navigation preference boundary", () => {
     await a.refresh();
     localStorage.setItem(
       "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:b",
-      JSON.stringify({ sidebarEntries: ["route:cron"] }),
+      JSON.stringify({ railShortcuts: ["route:cron"] }),
     );
     applyServerUiPrefs(config, { scope, profileId: "b", onApplied: vi.fn() });
     expect(loadSettings()).toMatchObject({

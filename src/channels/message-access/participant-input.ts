@@ -59,16 +59,39 @@ export function bindChannelParticipantInput(params: {
   const publication = batch.length === 1 ? batch[0]?.childSessionPublication : undefined;
   if (publication?.audience === "public" && params.binding.inboundEventKind === "user_request") {
     const gateway = params.owner.resolveGatewayContext?.();
-    bindChildSessionPublication(params.context, params.binding.sessionKey, () => {
-      if (
-        !params.owner.isLive() ||
-        !gateway ||
-        params.owner.resolveGatewayContext?.() !== gateway
-      ) {
+    const ownerIsCurrent = () =>
+      params.owner.isLive() &&
+      Boolean(gateway) &&
+      params.owner.resolveGatewayContext?.() === gateway;
+    const assertOwnerCurrent = () => {
+      if (!ownerIsCurrent()) {
         throw new Error("Public ingress owner is no longer current.");
       }
-      publication.assertCurrent();
-    });
+    };
+    const prepare = publication.prepare;
+    bindChildSessionPublication(
+      params.context,
+      params.binding.sessionKey,
+      () => {
+        assertOwnerCurrent();
+        publication.assertCurrent();
+      },
+      prepare
+        ? async () => {
+            if (!ownerIsCurrent()) {
+              return null;
+            }
+            const assertCurrent = await prepare();
+            if (!ownerIsCurrent() || !assertCurrent) {
+              return null;
+            }
+            return () => {
+              assertOwnerCurrent();
+              assertCurrent();
+            };
+          }
+        : undefined,
+    );
   }
   const principal = batch.at(-1)?.verifiedPrincipal;
   const principalKey = principal && JSON.stringify(principal);

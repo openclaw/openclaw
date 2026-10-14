@@ -65,6 +65,10 @@ export function createSessionMcpRuntimeManagerInstall(
   const { store } = lifecycle;
   const reconcileReusableRetirement = (params: RuntimeEntryParams, runtime: SessionMcpRuntime) => {
     const { sessionId } = params;
+    const owner = sessionMcpRuntimeOwners.get(runtime);
+    if (owner && params.agentId) {
+      owner.agentId = params.agentId;
+    }
     const slot = store.runtimeSlots.get(runtime);
     if (slot) {
       slot.idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(store.configReload?.cfg ?? params.cfg);
@@ -242,6 +246,7 @@ export function createSessionMcpRuntimeManagerInstall(
       configReloadAtAdmission: params.configReloadAtAdmission,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       cfg: params.cfg,

@@ -13,6 +13,7 @@ export function createOpenAIServiceTierObservationWrapper(
     model: Parameters<StreamFn>[0],
     observation: Pick<ModelServiceTierObservation, "requestedTier" | "responseTier">,
   ) => boolean,
+  attribution: { runId: string; sessionId: string; accountRoute: string },
 ): StreamFn {
   return (model, context, options) => {
     if (model.api !== "openai-responses" || !supportsOpenAIResponsesFastMode(model)) {
@@ -32,12 +33,26 @@ export function createOpenAIServiceTierObservationWrapper(
         return;
       }
       const responseTier = observation.rejected ? undefined : observation.responseTier;
-      if (
-        recordObservation(model, { requestedTier, responseTier }) &&
-        requestedTier !== responseTier
-      ) {
+      recordObservation(model, { requestedTier, responseTier });
+      // Catalog changes are deduplicated; each fulfilled request still needs attribution.
+      if (requestedTier !== responseTier) {
         log.info(
           `OpenAI ${requestedTier} requested; ${responseTier ? `served as ${responseTier}` : "rejected"} for the selected account/model route.`,
+          {
+            ...attribution,
+            model: model.id,
+            provider: model.provider,
+            requestedTier,
+            wireRequestedTier: observation.requestedTier,
+            responseTier,
+            requestId: options?.requestId,
+            ...(!observation.rejected && {
+              responseId: observation.responseId,
+              responseModel: observation.responseModel,
+              inputTokens: observation.inputTokens,
+              cachedTokens: observation.cachedTokens,
+            }),
+          },
         );
       }
     });

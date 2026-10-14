@@ -14,7 +14,11 @@ import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { PreparedUserProfileIdentity } from "../../state/user-profiles.types.js";
+import type {
+  PreparedUserProfileIdentity,
+  UserProfileDisplay,
+  UserProfileIdentity,
+} from "../../state/user-profiles.types.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { GatewayClient } from "./client-types.js";
@@ -33,10 +37,32 @@ const state = vi.hoisted(() => ({
   rootCalls: 0,
   beforeRoot: undefined as (() => Promise<void>) | undefined,
 }));
+// mock-isolation: exercise profile revocation without opening shared profile storage.
 vi.mock("../../state/user-profile-list.js", () => ({
+  isUserProfileCatalogReady: () => true,
+  prepareUserProfileCatalog: async () => ({
+    hasMultipleSessionSharingIdentities: () => state.multipleProfiles,
+    readCurrentIdentity: (id: string) => ({
+      profileId: id === "alice-alias" ? state.canonical : id,
+      role: state.role,
+    }),
+    release: () => {},
+  }),
   hasMultipleSessionSharingIdentities: () => state.multipleProfiles,
+  hasMultipleResidentSessionSharingIdentities: () => state.multipleProfiles,
+  readUserProfileIdentity: (id: string): UserProfileIdentity => ({
+    profileId: id === "alice-alias" ? state.canonical : id,
+    role: state.role,
+    aliases: new Set([id]),
+  }),
   readResidentUserProfileId: (id: string) => (id === "alice-alias" ? state.canonical : id),
-  readUserProfileIdentity: (id: string) => ({ profileId: id, role: state.role }),
+  readResidentUserProfileIdentity: (id: string) => ({ profileId: id, role: state.role }),
+  getUserProfileDisplay: (id: string): UserProfileDisplay => ({
+    id,
+    displayName: null,
+    hasAvatar: false,
+    avatarRevision: "0",
+  }),
   prepareUserProfileIdentity: async (profileId: string): Promise<PreparedUserProfileIdentity> => {
     state.profileHolds += 1;
     let active = true;

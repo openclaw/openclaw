@@ -74,7 +74,6 @@ import {
   parseAgentCommandModelRef,
 } from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
-import { loadTranscriptResolveRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 export async function resolveEmbeddedModelSelection(params: {
@@ -607,20 +606,12 @@ export async function resolveEmbeddedModelSelection(params: {
     };
   }
 
-  const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
   assertOperatorModelAllowed(operatorAuthority, { provider, model });
   // Fallback tokens must not adopt entries from a store without a nonempty session key.
-  const hasKeyedSessionStore = Boolean(params.sessionStore && params.sessionKey);
-  const resolvedSessionFile = await resolveSessionTranscriptFile({
-    sessionKey: params.sessionKey ?? params.sessionId,
-    sessionStore:
-      hasKeyedSessionStore && !params.suppressVisibleSessionEffects
-        ? params.sessionStore
-        : undefined,
-    sessionEntry,
-  });
-  const sessionFile = resolvedSessionFile.sessionFile;
-  sessionEntry = resolvedSessionFile.sessionEntry;
+  const sessionFile = params.sessionKey ?? params.sessionId;
+  if (params.sessionKey && !params.suppressVisibleSessionEffects) {
+    sessionEntry ??= params.sessionStore?.[params.sessionKey];
+  }
 
   return {
     sessionEntry,

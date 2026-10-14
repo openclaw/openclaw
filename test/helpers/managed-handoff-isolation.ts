@@ -227,12 +227,12 @@ export function resolveManagedHandoffTestTempRoot(
   options: Parameters<SecureTempResolver>[0],
   witness: { id: string; phase: string; consumer: string },
 ) {
-  // Explicit application caches keep their selected path. Only the default OpenClaw
-  // scratch resolver is rebound; the normal product default and resolver stay unchanged.
+  // Explicit application caches keep their selected path. Rebind both the shared
+  // scratch default and the private per-user lease default to this fixture.
   if (
     options.preferredDir === undefined
       ? options.fallbackPrefix !== "openclaw"
-      : !sharedRoots.has(options.preferredDir)
+      : !forbiddenBindingRoots.has(comparisonPath(options.preferredDir))
   ) {
     return original(options);
   }

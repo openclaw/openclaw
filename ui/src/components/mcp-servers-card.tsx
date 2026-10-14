@@ -31,7 +31,7 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "./solid/settings-ui.tsx";
-import { WizardLoginController } from "./wizard-login-controller.ts";
+import { WizardLogin, WizardLoginController } from "./wizard-login-controller.tsx";
 
 registerMcpEnglish();
 
@@ -355,12 +355,16 @@ function McpServersCardContent(props: McpServersCardProps) {
           </Show>
         </SettingsSection>
       </div>
-      {login.renderSolid(revision, () => ({ doneMessage: t("mcpServers.authenticationSaved") }))}
+      <WizardLogin
+        controller={login}
+        revision={revision}
+        options={{ doneMessage: t("mcpServers.authenticationSaved") }}
+      />
     </>
   );
 }
 
-defineSolidBridge<McpServersCardProps>(
+export const McpServersCard = defineSolidBridge<McpServersCardProps>(
   "openclaw-mcp-servers-card",
   (props) => <McpServersCardContent {...props} />,
   {

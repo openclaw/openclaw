@@ -15,11 +15,14 @@ it("invalidates a scope registered by another isolate during an accepted write",
     descriptor: -1,
     descriptorOwner: 0,
     generationId: "receipt-test",
+    physicalIdentity: { key: "file:1:1", birthtime: "0" },
     generation: new SharedArrayBuffer(
       Int32Array.BYTES_PER_ELEMENT * Object.keys(SqliteDatabaseGenerationSlot).length,
     ),
     facts: new Map(),
     writeScopes: new Map(),
+    writeScopeRevision: 0,
+    references: new Map(),
   };
   const worker = { ...host, writeScopes: new Map(host.writeScopes) };
   const receipts = createSqliteDatabaseWriteReceipts({
@@ -32,7 +35,7 @@ it("invalidates a scope registered by another isolate during an accepted write",
     publish: (record) => {
       Atomics.store(
         new Int32Array(record.generation),
-        SqliteDatabaseGenerationSlot.writeScopeCount,
+        SqliteDatabaseGenerationSlot.writeScopeRevision,
         record.writeScopes.size,
       );
     },

@@ -5,44 +5,46 @@ import {
   resolveStateDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { MEMORY_INDEX_FTS_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
-  captureOpenClawAgentDatabaseExecution,
   openSqliteWorkerStore,
   openNodeSqliteDatabase,
   openOpenClawAgentSqliteWorkerStoreV2,
   runSqliteWorkerStoreWrite,
   type OpenClawAgentSqliteWorkerStore,
-  type OpenClawAgentDatabaseExecution,
   type SqliteWorkerStore,
   runQueuedStoreWrite,
   readOpenClawAgentDatabaseIdentity,
-  readSqliteDatabaseWriteTokenForPath,
-  supportsOpenClawAgentDatabaseExecution,
+  readSqliteDatabaseScopedWriteTokenForPath,
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import {
-  runMemoryDatabaseFacts,
-  runMemorySourceState,
+  runMemoryDatabaseAdmission,
+  runMemoryIndexRead,
   runMemoryVectorLoad,
 } from "./manager-cpu-worker-runtime.js";
-import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
+import type {
+  MemoryDatabaseAdmission,
+  MemoryDatabaseOpenOptions,
+} from "./manager-database-admission.js";
 import { closeMemoryDatabase, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
+import type { MemoryIndexReadCommand, MemoryIndexReadOperations } from "./manager-index-read.js";
 import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationOperations,
   MemoryPublicationResult,
   MemoryPublicationState,
 } from "./manager-publication-task.js";
+import { MEMORY_INDEX_WRITE_SCOPE } from "./manager-publication-task.js";
 import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
 import {
   initializePublishedMemory,
   publishMemoryEmbeddingCache,
   publishMemorySource,
   retryMemoryPublication,
+  withPublishedMemoryExecution,
 } from "./manager-publication.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import {
@@ -67,6 +69,7 @@ export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
+  private terminalSignal?: AbortSignal;
   private schemaAdmission?: Promise<void>;
   private factsToken?: string;
   private shadow?: {
@@ -77,47 +80,50 @@ export class MemoryIndexDatabase {
   private shadowClose?: Promise<void>;
   shadowReleased = false;
 
-  static async openPublished(params: {
-    agentId: string;
-    writeOptions: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0] & { path: string };
-    readOnly: boolean;
-    allowExtension: boolean;
-    maintenanceSource?: MemoryIndexDatabase;
-    schema: MemoryPublicationOperations["schema.admit"]["input"];
-  }): Promise<MemoryIndexDatabase> {
-    let admitted: Awaited<ReturnType<typeof initializePublishedMemory>> | undefined;
-    params.maintenanceSource?.assertPublishedFileCurrent();
+  static async openPublished(params: MemoryDatabaseOpenOptions): Promise<MemoryIndexDatabase> {
+    let initialized: Awaited<ReturnType<typeof initializePublishedMemory>> | undefined;
     if (!params.readOnly) {
-      admitted = await initializePublishedMemory(
+      initialized = await initializePublishedMemory(
         params.writeOptions,
         params.maintenanceSource ? undefined : params.schema,
         () => {
           const source = params.maintenanceSource;
-          if (source && (source.closed || !source.db.isOpen)) {
+          if (source && !source.isOpen) {
             throw new Error("Memory maintenance source connection changed");
           }
         },
       );
     }
-    params.maintenanceSource?.assertPublishedFileCurrent();
-    // Remaining synchronous manager reads use a query-only handle. Every
-    // schema or index mutation belongs to the retained publication worker.
-    const connection = openMemoryDatabaseReadOnlyAtPath(
-      params.writeOptions.path,
-      params.allowExtension,
-      params.agentId,
-    );
-    const database = new MemoryIndexDatabase(
-      connection.db,
-      connection.release,
-      params.readOnly,
-      params.writeOptions,
-      connection.hasIndex,
-    );
+    let database: MemoryIndexDatabase | undefined;
     try {
+      const admitted = initialized?.admitted;
+      const admission = params.readOnly
+        ? await runMemoryDatabaseAdmission({
+            databasePath: params.writeOptions.path,
+            agentId: params.agentId,
+          })
+        : (params.maintenanceSource?.admission ?? admitted?.value.admission);
+      if (!admission) {
+        throw new Error("Memory worker did not publish database admission");
+      }
+      database = new MemoryIndexDatabase(
+        undefined,
+        undefined,
+        params.readOnly,
+        params.writeOptions,
+        admission.hasIndex,
+        admission,
+      );
+      if (initialized) {
+        database.terminalSignal = initialized.worker.terminalSignal;
+        database.publicationWorker = Promise.resolve({
+          store: initialized.worker,
+          busyTimeoutMs: 5_000,
+        });
+      }
       database.fts.enabled = params.schema.ftsEnabled;
       if (params.maintenanceSource) {
-        database.installFacts(params.maintenanceSource.facts);
+        database.installFacts(params.maintenanceSource.facts, params.maintenanceSource.factsToken);
       }
       if (
         params.maintenanceSource &&
@@ -126,13 +132,9 @@ export class MemoryIndexDatabase {
         Object.assign(database.fts, params.maintenanceSource.fts);
       } else if (params.readOnly) {
         database.fts.available =
-          database.hasIndex &&
-          database.fts.enabled &&
-          memoryDatabaseTableExists(database.db, "main", MEMORY_INDEX_FTS_TABLE);
-        if (database.hasIndex) {
-          database.installFacts(
-            await runMemoryDatabaseFacts(params.writeOptions.path, params.agentId),
-          );
+          database.hasIndex && database.fts.enabled && admission.ftsAvailable;
+        if (admission.facts) {
+          database.installFacts(admission.facts);
         }
       } else if (admitted) {
         if (admitted.facts) {
@@ -147,7 +149,11 @@ export class MemoryIndexDatabase {
       return database;
     } catch (error) {
       // Failed worker cleanup retains its own borrow with the agent lifecycle.
-      database.release();
+      try {
+        await initialized?.worker.close();
+      } finally {
+        database?.release();
+      }
       throw error;
     }
   }
@@ -221,17 +227,52 @@ export class MemoryIndexDatabase {
   vectorDegradedWriteWarningShown = false;
   closed = false;
 
+  private nativeDb?: DatabaseSync;
+  private nativeRelease?: () => void;
+
   constructor(
-    readonly db: DatabaseSync,
-    readonly release: () => void = () => closeMemoryDatabase(db),
+    db?: DatabaseSync,
+    release?: () => void,
     readonly readOnly = false,
     readonly writeOptions?: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0],
     readonly hasIndex = true,
-  ) {}
+    readonly admission?: MemoryDatabaseAdmission,
+  ) {
+    this.nativeDb = db;
+    this.nativeRelease = release ?? (db ? () => closeMemoryDatabase(db) : undefined);
+  }
+
+  get isOpen(): boolean {
+    return !this.closed && !this.terminalSignal?.aborted && this.nativeDb?.isOpen !== false;
+  }
+
+  /** Released synchronous status compatibility; runtime callers use worker reads. */
+  get db(): DatabaseSync {
+    if (!this.isOpen) {
+      throw new Error("Memory database owner is closed");
+    }
+    if (!this.nativeDb) {
+      const target = this.writeOptions;
+      if (!target?.agentId || !target.path) {
+        throw new Error("Memory compatibility reader requires its captured target");
+      }
+      const connection = openMemoryDatabaseReadOnlyAtPath(target.path, false, target.agentId);
+      this.nativeDb = connection.db;
+      this.nativeRelease = connection.release;
+    }
+    return this.nativeDb;
+  }
+
+  release(): void {
+    this.nativeRelease?.();
+    this.closed = true;
+  }
 
   private writeToken(): string | undefined {
     const filename = this.shadow?.path ?? this.writeOptions?.path;
-    return filename ? readSqliteDatabaseWriteTokenForPath(filename) : undefined;
+    return filename
+      ? readSqliteDatabaseScopedWriteTokenForPath(filename, MEMORY_INDEX_WRITE_SCOPE)
+      : undefined;
   }
 
   private installFacts(facts: MemoryDatabaseFacts, token?: string): void {
@@ -248,8 +289,8 @@ export class MemoryIndexDatabase {
       return;
     }
     this.installFacts(
-      await this.executePublication({ type: "index.facts", input: undefined }, () => {
-        if (this.closed || !this.db.isOpen) {
+      await this.read({ type: "index.facts", input: undefined }, () => {
+        if (!this.isOpen) {
           throw new Error("Memory database owner closed before reading index facts");
         }
       }),
@@ -263,7 +304,7 @@ export class MemoryIndexDatabase {
     }
     await this.retryPublication(() =>
       this.executePublication({ type: "index.writeMetadata", input: meta }, () => {
-        if (this.closed || !this.db.isOpen) {
+        if (!this.isOpen) {
           throw new Error("Memory database owner closed before writing index metadata");
         }
       }),
@@ -295,7 +336,7 @@ export class MemoryIndexDatabase {
       // permit. It must queue until the actual Worker operation settles.
       reentrant: options.reentrant === true && !this.nativeWriterActive,
       fn: async () => {
-        if (!this.db.isOpen) {
+        if (!this.isOpen) {
           throw new Error("Memory reindex database owner is closed");
         }
         this.assertShadowPath();
@@ -327,6 +368,7 @@ export class MemoryIndexDatabase {
     return {
       vector: { enabled: this.vector.enabled, available: this.vector.available },
       fts: { enabled: this.fts.enabled, available: this.fts.available },
+      hasVectorTable: this.facts.hasVectorTable,
       ...(this.vector.available && this.vector.extensionPath
         ? { extensionPath: this.vector.extensionPath }
         : {}),
@@ -334,12 +376,14 @@ export class MemoryIndexDatabase {
   }
 
   private assertPublishedFileCurrent(): void {
-    if (this.closed || !this.db.isOpen || !this.writeOptions?.path) {
+    if (!this.isOpen || !this.writeOptions?.path) {
       throw new Error("Memory publication owner closed or changed");
     }
-    const source = readOpenClawAgentDatabaseIdentity({ db: this.db });
+    const source =
+      this.admission?.identity ??
+      (this.nativeDb ? readOpenClawAgentDatabaseIdentity({ db: this.nativeDb }) : undefined);
     const current = readMemoryShadowIdentity(this.writeOptions.path);
-    if (source.identity !== `${current.device}:${current.inode}`) {
+    if (source?.identity !== `${current.device}:${current.inode}`) {
       throw new Error("Memory publication source file changed");
     }
   }
@@ -357,7 +401,7 @@ export class MemoryIndexDatabase {
           {
             version: 2,
             assertCurrent: () => {
-              if (this.closed || !this.db.isOpen) {
+              if (!this.isOpen) {
                 throw new Error("Memory publication owner closed");
               }
             },
@@ -367,6 +411,7 @@ export class MemoryIndexDatabase {
             input: { kind: "agent" },
           },
         );
+        this.terminalSignal = store.terminalSignal;
         return { store, busyTimeoutMs: 5_000 };
       }
       const pragmas = this.shadow!.pragmas;
@@ -384,7 +429,7 @@ export class MemoryIndexDatabase {
         admission: {
           identity: `file:${this.shadow!.identity.device}:${this.shadow!.identity.inode}`,
           assertCurrent: () => {
-            if (this.closed || !this.db.isOpen) {
+            if (!this.isOpen) {
               throw new Error("Memory shadow owner closed before Worker open");
             }
             this.assertShadowPath();
@@ -416,7 +461,7 @@ export class MemoryIndexDatabase {
         store,
         operation,
         () => {
-          if (this.closed || !this.db.isOpen) {
+          if (!this.isOpen) {
             throw new Error("Memory shadow owner closed");
           }
           this.assertShadowPath();
@@ -497,21 +542,28 @@ export class MemoryIndexDatabase {
     return result?.value;
   }
 
-  read<Key extends "source.hash" | "source.chunks" | "cache.read" | "session.current">(
-    command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
+  async read<Command extends MemoryIndexReadCommand>(
+    command: Command,
     assertCurrent: () => void,
-  ): Promise<MemoryPublicationOperations[Key]["output"]> {
-    return this.executePublication(command, assertCurrent);
+  ): Promise<MemoryIndexReadOperations[Command["type"]]["output"]> {
+    if (this.isShadow) {
+      return this.executePublication(command, assertCurrent);
+    }
+    const target = this.writeOptions;
+    if (!target?.agentId || !target.path) {
+      throw new Error("Memory index reads require their captured database target");
+    }
+    assertCurrent();
+    return runMemoryIndexRead({ agentId: target.agentId, databasePath: target.path }, command);
   }
 
   admitSchema(input: MemoryPublicationOperations["schema.admit"]["input"]): Promise<void> {
-    this.schemaAdmission ??= this.runPublication(
-      (scope) => this.retryPublication(() => scope.execute({ type: "schema.admit", input })),
-      () => {
-        if (this.closed || !this.db.isOpen) {
+    this.schemaAdmission ??= this.retryPublication(() =>
+      this.executePublication({ type: "schema.admit", input }, () => {
+        if (!this.isOpen) {
           throw new Error("Memory database owner closed before schema admission");
         }
-      },
+      }),
     ).then((result) => {
       if (!result) {
         throw new Error("Memory schema admission did not complete");
@@ -528,30 +580,15 @@ export class MemoryIndexDatabase {
 
   async readSourceState(query: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">) {
     const assertCurrent = () => {
-      if (this.closed || !this.db.isOpen) {
+      if (!this.isOpen) {
         throw new Error("Memory source owner closed during source preparation");
       }
       this.assertShadowPath();
     };
-    assertCurrent();
     if (!this.hasIndex) {
       return [];
     }
-    let rows;
-    if (this.readOnly) {
-      const target = this.writeOptions;
-      if (!target?.agentId || !target.path) {
-        throw new Error("Memory source inspection requires its captured database target");
-      }
-      rows = await runMemorySourceState(
-        { agentId: target.agentId, databasePath: target.path },
-        query,
-      );
-    } else {
-      rows = await this.executePublication({ type: "source.state", input: query }, assertCurrent);
-    }
-    assertCurrent();
-    return rows;
+    return this.read({ type: "source.state", input: query }, assertCurrent);
   }
 
   async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
@@ -567,16 +604,14 @@ export class MemoryIndexDatabase {
   async mutateEmbeddingCache(
     mutation: MemoryEmbeddingCacheMutation,
     assertCurrent: () => void,
-    prepareRevision: () => number | undefined,
-    invalidate: () => void,
+    prepare: () => boolean,
   ): Promise<boolean | undefined> {
     const publish = (scope: PublicationScope) =>
       publishMemoryEmbeddingCache({
         scope,
         mutation,
-        prepareRevision,
-        invalidate,
-        retry: (run, prepare) => this.retryPublication(run, prepare),
+        prepare,
+        retry: (run, prepareRetry) => this.retryPublication(run, prepareRetry),
       });
     return mutation.kind === "clear" ||
       memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)
@@ -585,7 +620,7 @@ export class MemoryIndexDatabase {
   }
 
   async replaceSource(
-    replacement: MemorySourceIndexReplacement,
+    replacement: MemorySourceIndexReplacement | MemorySourceIndexReplacement[],
     assertCurrent: () => void,
     prepare: () => Promise<boolean>,
   ) {
@@ -606,18 +641,14 @@ export class MemoryIndexDatabase {
     input: Omit<MemoryPublicationOperations["source.delete"]["input"], "state">,
     assertCurrent: () => void,
   ) {
-    const run = () =>
-      this.runPublication(
-        (scope) =>
-          this.retryPublication(() =>
-            scope.execute({
-              type: "source.delete",
-              input: { ...input, state: this.publicationState() },
-            }),
-          ),
-        assertCurrent,
-      );
-    return this.withSourceMutation(run);
+    return this.withSourceMutation(() =>
+      this.retryPublication(() =>
+        this.executePublication(
+          { type: "source.delete", input: { ...input, state: this.publicationState() } },
+          assertCurrent,
+        ),
+      ),
+    );
   }
 
   refreshSourceState(
@@ -625,9 +656,8 @@ export class MemoryIndexDatabase {
     assertCurrent: () => void,
   ) {
     return this.withSourceMutation(() =>
-      this.runPublication(
-        (scope) => this.retryPublication(() => scope.execute({ type: "source.refresh", input })),
-        assertCurrent,
+      this.retryPublication(() =>
+        this.executePublication({ type: "source.refresh", input }, assertCurrent),
       ),
     );
   }
@@ -667,21 +697,20 @@ export class MemoryIndexDatabase {
     },
     assertCurrent: () => void,
   ) {
-    await this.runPublication(
-      (scope) =>
-        this.retryPublication(() =>
-          scope.execute({
-            type: "database.publish",
-            input: {
-              ...input,
-              state: {
-                ...this.publicationState(),
-                extensionPath: input.sourceHasVectors ? input.extensionPath : undefined,
-              },
+    await this.retryPublication(() =>
+      this.executePublication(
+        {
+          type: "database.publish",
+          input: {
+            ...input,
+            state: {
+              ...this.publicationState(),
+              extensionPath: input.sourceHasVectors ? input.extensionPath : undefined,
             },
-          }),
-        ),
-      assertCurrent,
+          },
+        },
+        assertCurrent,
+      ),
     );
   }
 
@@ -694,42 +723,15 @@ export class MemoryIndexDatabase {
   }
 
   async withPublicationGeneration(run: () => Promise<void>): Promise<void> {
-    let execution: OpenClawAgentDatabaseExecution | undefined;
-    if (
-      this.writeOptions &&
-      !this.readOnly &&
-      supportsOpenClawAgentDatabaseExecution(this.writeOptions)
-    ) {
-      const source = readOpenClawAgentDatabaseIdentity({ db: this.db });
-      if (this.closed || !this.db.isOpen || typeof source.identity !== "string") {
-        throw new Error("Memory publication requires its live file owner");
-      }
-      // Retain across fallback preparation; a no-op generation never opens a native worker.
-      execution = captureOpenClawAgentDatabaseExecution(this.writeOptions, {
-        expectedIdentity: {
-          kind: "file",
-          physicalIdentity: source.identity,
-          nativeLocation: source.filename,
-          birthtime: source.birthtime,
-        },
-      });
+    if (!this.isOpen) {
+      throw new Error("Memory publication requires its live file owner");
     }
-    const failures: unknown[] = [];
-    for (const settle of [run, () => execution?.release()]) {
-      try {
-        await settle();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, `${String(failures[0])}; Memory sync cleanup failed`, {
-        cause: failures[0],
-      });
-    }
+    await withPublishedMemoryExecution(
+      this.readOnly ? undefined : this.writeOptions,
+      this.admission?.identity ??
+        (this.nativeDb ? readOpenClawAgentDatabaseIdentity({ db: this.nativeDb }) : undefined),
+      run,
+    );
   }
 
   closeShadow(): Promise<void> {

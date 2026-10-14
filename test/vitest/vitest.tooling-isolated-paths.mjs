@@ -15,6 +15,7 @@ export const toolingIsolatedTestFiles = [
   "test/scripts/openclaw-e2e-instance.test.ts",
   "test/scripts/test-projects-build-admission.test.ts",
   "test/scripts/vitest-fork-shutdown.test.ts",
+  "test/scripts/vitest-runner-outcome.test.ts",
 ];
 
 const toolingIsolatedTestFileSet = new Set(toolingIsolatedTestFiles);

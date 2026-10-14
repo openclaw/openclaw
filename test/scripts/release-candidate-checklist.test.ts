@@ -979,6 +979,7 @@ describe("release candidate checklist", () => {
     "worktree removal failure",
     "pinned ancestor",
     "untrusted SHA",
+    "candidate SHA",
   ])("prepares and cleans trusted tooling dependencies: %s", (scenario) => {
     const manifest = { version: "2026.9.1", dependencies: { yaml: "2.8.1" } };
     const { root: targetRoot, git } = candidateGitFixture({
@@ -1020,7 +1021,10 @@ describe("release candidate checklist", () => {
         ? trustedToolingSha
         : scenario === "untrusted SHA"
           ? git("commit-tree", "HEAD^{tree}", "-m", "test: unrelated tooling")
-          : "";
+          : scenario === "candidate SHA"
+            ? (git("commit", "--allow-empty", "-m", "test: release candidate"),
+              git("rev-parse", "HEAD"))
+            : "";
     const installedModules = realpathSync("node_modules");
     if (scenario !== "missing node_modules") {
       symlinkSync(installedModules, join(targetRoot, "node_modules"), "junction");
@@ -1129,8 +1133,22 @@ describe("release candidate checklist", () => {
           },
         },
       );
-    if (scenario === "untrusted SHA") {
-      expect(execute).toThrow(`--workflow-sha ${workflowSha} is not reachable from trusted main`);
+    if (scenario === "untrusted SHA" || scenario === "candidate SHA") {
+      expect(execute).toThrow(`--workflow-sha ${workflowSha} is not reachable from trusted main.`);
+      // The vm context has its own Error realm, so read the rendered message.
+      const message = (() => {
+        try {
+          execute();
+        } catch (error) {
+          return String(error);
+        }
+        return "";
+      })();
+      expect(message).toContain("so it must be a commit on trusted main");
+      // Only the candidate itself gets the candidate-specific hint.
+      expect(message.includes("It is the checked-out release candidate.")).toBe(
+        scenario === "candidate SHA",
+      );
       expect(installs).not.toHaveBeenCalled();
       expect(git("worktree", "list", "--porcelain").match(/^worktree /gmu)).toHaveLength(1);
       return;

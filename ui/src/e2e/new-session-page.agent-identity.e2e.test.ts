@@ -234,7 +234,9 @@ suite.define(() => {
         }
         await pollLocatorText(hero).toBe("Pacino");
         await pollLocatorText(picker.locator(".agent-select__label")).toBe("Pacino");
-        const selectedAgent = picker.locator("wa-dropdown-item[data-agent-option][data-selected]");
+        const selectedAgent = picker.locator(
+          ".agent-select__option[data-agent-option][data-selected]",
+        );
         await pollLocatorText(selectedAgent).toContain("Pacino");
         await expect
           .poll(() => selectedAgent.evaluate((element) => document.activeElement === element))

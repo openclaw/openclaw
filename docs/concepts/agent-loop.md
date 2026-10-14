@@ -43,6 +43,14 @@ The wait result also carries the run's `terminalReply` and, when available,
 reply reached the external source conversation. A2A announcements consume that
 fact instead of using display-history mirrors as delivery evidence.
 
+When a provider rejects a malformed tool call before dispatch, the built-in
+runner can continue once from the current transcript after earlier tools have
+settled. Earlier failed tools do not block this continuation when every failure
+carries host evidence that execution never started and its result already
+precedes the rejected response in the current turn. Failures that may have caused
+side effects, unfinished tools, and asynchronous work still block it; the
+continuation does not replay the original task or increase the retry budget.
+
 ## Queueing and concurrency
 
 Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
@@ -53,6 +61,7 @@ Before streaming, an admitted run records its durable `activeWriterRunId` claim.
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
+- Embedded global, plugin, and project settings are prepared once per session and reused across turns. Config or plugin changes, workspace or agent-directory changes, and session reset refresh that snapshot. Direct edits to `settings.json` take effect in a new or reset session. Authentication and model runtimes remain outside this settings cache; model-specific compaction limits and attempt-local settings remain fresh for each turn.
 - Bootstrap/context files are resolved and injected into the system prompt.
 - The session transcript target and writer claim are prepared before streaming starts. Later rewrites, compaction, and truncation use the same in-transaction writer-claim fence.
 
@@ -82,7 +91,7 @@ These run inside the agent loop or gateway pipeline:
 
 | Hook                                                    | Runs                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `before_model_resolve`                                  | Pre-session (no `messages`), to deterministically override provider/model before resolution.                                                                                                                                                                                                                                                                                                                        |
+| `before_model_resolve`                                  | Pre-session (no `messages`), to override provider/model before resolution using fixed rules.                                                                                                                                                                                                                                                                                                                        |
 | `before_prompt_build`                                   | After session load (with `messages`), to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext`, or, on supported runtimes with a turn-scoped submitted tool surface, narrow it with `toolsAllow`. An empty `toolsAllow` submits no optional tools; omitted leaves the host-resolved surface unchanged. Unsupported runtimes reject restrictive values instead of ignoring them. |
 | `before_agent_reply`                                    | After inline actions, before the LLM call. Lets a plugin claim the turn and return a synthetic reply or silence it entirely.                                                                                                                                                                                                                                                                                        |
 | `agent_end`                                             | After completion, with the final message list and run metadata.                                                                                                                                                                                                                                                                                                                                                     |
@@ -127,6 +136,7 @@ complete schema still enforces constraints such as `oneOf` exclusivity.
 - Tool start/update/end events emit on the `tool` stream.
 - Tool results are sanitized for size and image payloads before logging/emitting.
 - Messaging tool sends are tracked to suppress duplicate assistant confirmations.
+- A confirmed final send, reply, thread reply, or poll to the current source conversation ends the run loop in both automatic and message-tool delivery modes. An added reaction with explicit `final: true` on the current source message also ends it. Progress actions (`final: false`), reactions elsewhere, removals, and unconfirmed actions do not.
 
 ## Reply shaping
 
@@ -134,6 +144,7 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 - The exact silent token `NO_REPLY` is filtered from outgoing payloads.
 - Messaging tool duplicates are removed from the final payload list.
+- A confirmed final messaging-tool reply to the current source remains completion evidence across provider retries. Progress-only, failed, partial, dry-run, and other-destination sends do not satisfy that requirement. A newly accepted steered input needs its own answer.
 - A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.
 
 The host decides whether an input requires a visible reply. Direct requests and accepted group/channel requests require an answer by default. Unaddressed group requests remain optional only when the operator explicitly allows the [silence policy](/concepts/messages#silent-replies); mentions and authorized commands still require a response. Ambient room events and internal helper turns remain optional. Model-authored `NO_REPLY` is empty output, not permission to waive a required response; required turns with no delivered reply still need an answer.
@@ -144,11 +155,23 @@ If a required-reply turn ends after a fully settled tool batch without a compose
 
 An optional turn that explicitly finishes with `NO_REPLY` does not need a finalization pass, even after a settled tool failure. The failure remains recorded; a rejected Skill Workshop review still fails without making extra model requests to compose a reply.
 
+Node worker turns use the same settled-tool recovery when the model returns an empty final. The worker makes one tool-free follow-up request. If that request also returns no answer, the turn reports a failure. A worker turn that starts background commands which are still running ends with an explicit status and their process session IDs; it does not claim their results are complete.
+
 A confirmed delivery prevents duplicate generation. Pending delivery or continuation work retains completion ownership without being marked delivered; rejected sends, unflushed deferred text, and missing delivery callbacks are not delivery proof. `NO_REPLY` does not retract text already delivered. Pending tools, accepted child runs, and yielded work keep their existing owners, and assistant errors and aborts are not intentional silence.
 
 Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
 
 ## Compaction and retries
+
+In Control UI chat, recovery stays beside the working indicator rather than
+creating a message for every failed attempt. Same-model retry status includes
+its attempt count and an absolute retry time for backoff display. Model fallback
+transitions remain available when reconnecting to an active run.
+
+Once recovery ends in failure, chat shows one run-owned failure notice. Useful
+partial text and media remain separate from that notice. Failed-attempt
+diagnostics stay in the raw transcript; display history collapses them by run
+identity, not by comparing error text.
 
 When an OpenAI Responses request hits its output limit while generating a tool
 call, the built-in harness finishes already admitted tools and retries from their
@@ -279,6 +302,11 @@ drain grace. Neither window resets on progress. These cleanup limits still
 apply when the execution budget is unlimited. See
 [Codex timeouts](/plugins/codex-harness-reference#timeouts).
 
+Harness cleanup flushes trajectory events accepted before foreground work ended,
+including during restart cancellation. It cannot accept new events after that
+lifetime ends, or flush through a closed host, revoked admission, replaced run,
+or replaced recorder.
+
 When a runtime reports a definitive timeout, the Gateway records its terminal
 status and error for the session sidebar immediately, without waiting for
 provider retry grace. Opening the failed session dismisses its sidebar attention
@@ -294,6 +322,12 @@ With diagnostics enabled, a built-in two-minute threshold classifies long `proce
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
 The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
+
+Pending Code Mode `exec` and `wait` calls remain active tool work until they
+settle, including `awaitResults: true` calls waiting for nested work. Nested tool
+completion does not retire the outer call. The normal blocked-tool recovery
+allowance and enforced run/tool deadlines still apply; after the outer call
+settles, an embedded run that stops making progress remains recoverable.
 
 Attention and recovery log lines read optional session context only when their
 log level is enabled. Transcript enrichment runs in the background read worker

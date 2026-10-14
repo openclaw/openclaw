@@ -5,17 +5,17 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
-import "../pages/chat/chat-pane.ts";
+import "../pages/chat/chat-pane.tsx";
 import "../styles/chat.ts";
 import "../styles/chat/composer.css";
 import "../styles/chat/composer-status.css";
 import { Icon } from "./solid/icon.tsx";
 
 type Props = { sessionKey: string; agentId: string; workContext: ChatWorkContext };
-export type OpenClawHomeSession = SolidBridgeElement<Props>;
+type OpenClawHomeSession = SolidBridgeElement<Props>;
 
 /** The real Home conversation; its surrounding dock owns placement and focus. */
-export const HomeSession = defineSolidBridge<Props>(
+defineSolidBridge<Props>(
   "openclaw-home-session",
   (props, host) => {
     const app = useApplication();

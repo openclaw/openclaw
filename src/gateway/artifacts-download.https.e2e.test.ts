@@ -8,6 +8,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
@@ -109,6 +110,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
               tls: { enabled: true, certPath, keyPath },
             },
           });
+          await captureRuntimeConfigAsyncReader()();
           await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
           await replaceTranscriptEvents(scope, events);
           server = await startClaimedGateway(claim, () =>

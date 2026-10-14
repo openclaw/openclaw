@@ -7,6 +7,7 @@ import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveAgentDir } from "../../agents/agent-scope-config.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -237,7 +238,8 @@ it.each([
       OPENCLAW_STATE_DIR: path.join(root, "state"),
     };
     await withEnvAsync(env, async () => {
-      const create = vi.spyOn(ModelRegistry, "create");
+      prepareSharedAuthStoreOwnershipForNative();
+      const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
       const fork = vi.spyOn(ModelRegistry.prototype, "fork");
       const setRuntimeKey = vi.spyOn(AuthStorage.prototype, "setRuntimeApiKey");
       const resolveModel = modelResolution.resolveModelAsync;

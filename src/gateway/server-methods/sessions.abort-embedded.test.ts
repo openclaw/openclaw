@@ -3,6 +3,7 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   clearActiveEmbeddedRun,
   clearEmbeddedAgentRunAbortabilityForRunId,
@@ -21,12 +22,19 @@ import {
   releaseSwarmRun,
   isSwarmRunActive,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
+import {
+  isReplyRunAbortableForSignal,
+  retainReplyOperationUntilComplete,
+} from "../../auto-reply/reply/reply-run-registry.state.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -45,6 +53,80 @@ const fixture = useChatAbortRegistryFixture();
 const parentKey = "agent:main:direct:embedded-parent";
 const parentId = "embedded-parent-session";
 const childKey = (id: string) => `agent:main:subagent:${id}`;
+
+it.for(["controller", "reply-only"] as const)(
+  "delete drain records cancellation before settling a retained %s reply",
+  async (owner, { signal }) => {
+    const runId = "delete-retained-reply";
+    await seedEmbeddedSession(runId);
+    const context = createDirectChatContext({ getRuntimeConfig });
+    const registration =
+      owner === "controller"
+        ? registerChatAbortController({
+            chatAbortControllers: context.chatAbortControllers,
+            runId,
+            sessionId: parentId,
+            sessionKey: parentKey,
+            agentId: "main",
+            timeoutMs: 30_000,
+            isAbortable: (entry) => isReplyRunAbortableForSignal(entry.controller.signal),
+          })
+        : undefined;
+    const operation = createReplyOperation({
+      sessionKey: parentKey,
+      sessionId: parentId,
+      agentId: "main",
+      resetTriggered: false,
+      upstreamAbortSignal: registration?.controller.signal,
+    });
+    retainReplyOperationUntilComplete(operation);
+    const aborted = createDeferredCore();
+    operation.abortSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
+    let drain: SessionLifecycleDrain | undefined;
+    const pending = prepareSessionLifecycleDrain({
+      action: "delete",
+      timeoutMs: null,
+      context,
+      storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+        agentId: "main",
+      }),
+      sessionKeys: [parentKey],
+      sessionKey: parentKey,
+      sessionId: parentId,
+      agentId: "main",
+      defaultAgentId: "main",
+      lifecycleIdentities: [parentKey, parentId],
+    }).then((result) => {
+      drain = result;
+      return result;
+    });
+    const settled = Promise.allSettled([pending]);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(aborted.promise, pending, "Delete skipped the reply owner"),
+        signal,
+      );
+      expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(drain).toBeUndefined();
+      if (registration) {
+        expect(context.broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({ runId, state: "aborted", stopReason: "delete" }),
+          expect.anything(),
+        );
+      }
+      operation.complete();
+      registration?.cleanup();
+      await withinTest(pending, signal);
+      expect(drain?.hasAuthoritativeWork()).toBe(false);
+    } finally {
+      operation.complete();
+      registration?.cleanup();
+      await settled;
+      drain?.release();
+    }
+  },
+);
 
 async function seedEmbeddedSession(runId: string, profileId?: string) {
   const target = { agentId: "main", sessionKey: parentKey };
@@ -230,6 +312,7 @@ it.each(["forbidden", "allowed"] as const)(
     client.connect.scopes = ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const runId = "shared-embedded-run";
     const target = await seedEmbeddedSession(runId, owner.authenticatedUserProfile!.profileId);
     const before = sessions.loadSessionEntry(target);
@@ -288,6 +371,7 @@ it.each(["before signal", "after signal"] as const)(
     client.connect.scopes = ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const runId = "revoked-embedded-run";
     const target = await seedEmbeddedSession(runId, client.authenticatedUserProfile!.profileId);
     const before = sessions.loadSessionEntry(target);
@@ -368,6 +452,7 @@ it.each(["matched", "old-incarnation", "foreign-key"] as const)(
     client.connect.scopes = ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     await sessions.upsertSessionEntryCore(
       { agentId: "main", sessionKey: parentKey },
       {
@@ -422,6 +507,7 @@ it.each(["matched", "old-incarnation", "foreign-key", "missing-row"] as const)(
     client.connect.scopes = ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     if (target !== "missing-row") {
       await sessions.upsertSessionEntryCore(
         { agentId: "main", sessionKey: parentKey },
@@ -487,6 +573,7 @@ it.each([false, true])(
       : ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     await sessions.upsertSessionEntryCore(
       { agentId: "main", sessionKey: parentKey },
       {
@@ -569,10 +656,13 @@ async function seedChild(id: string, turn: string, queued = true, requester = pa
     agentId: "main",
     sessionKey: childKey(id),
     defaultSessionId: id,
+    lifecycleRevision: `${id}-original`,
   });
   await registerSubagentRun({
     runId: id,
     childSessionKey: childKey(id),
+    childAgentId: "main",
+    sessionEntry: sessions.loadSessionEntry({ agentId: "main", sessionKey: childKey(id) }),
     requesterSessionKey: requester,
     requesterAgentId: "main",
     requesterDisplayKey: requester,

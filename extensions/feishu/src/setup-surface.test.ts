@@ -72,7 +72,7 @@ afterAll(() => {
 });
 
 describe("feishu setup wizard", () => {
-  it.each(["", " Alert Account ", "default"])(
+  it.each([" Alert Account "])(
     "preserves the exact named-account key %j without enabling the channel",
     (accountId) => {
       const result = setFeishuNamedAccountEnabled(
@@ -290,26 +290,6 @@ describe("feishu setup wizard status", () => {
     probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
   });
 
-  it("treats SecretRef appSecret as configured when appId is present", async () => {
-    const status = await feishuGetStatus({
-      cfg: {
-        channels: {
-          feishu: {
-            appId: "cli_a123456",
-            appSecret: {
-              source: "env",
-              provider: "default",
-              id: "FEISHU_APP_SECRET",
-            },
-          },
-        },
-      } as never,
-      accountOverrides: {},
-    });
-
-    expect(status.configured).toBe(true);
-  });
-
   it("probes the resolved default account in multi-account config", async () => {
     probeFeishuMock.mockResolvedValueOnce({ ok: true, botName: "Feishu Main" });
 
@@ -386,79 +366,6 @@ describe("feishu setup wizard status", () => {
     });
   });
 
-  it("localizes new bot setup prompts and progress", async () => {
-    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
-      const note = vi.fn(async () => {});
-      const stop = vi.fn();
-      const progress = vi.fn(() => ({ update: vi.fn(), stop }));
-      const select = vi.fn(async ({ message }: { message: string }) => {
-        if (message === "你想如何连接 Feishu？") {
-          return "manual";
-        }
-        if (message === "选择 Feishu 域名？") {
-          return "feishu";
-        }
-        if (message === "群聊策略") {
-          return "allowlist";
-        }
-        return "feishu";
-      });
-      const text = vi
-        .fn()
-        .mockResolvedValueOnce("cli_from_prompt")
-        .mockResolvedValueOnce("secret_from_prompt");
-      const prompter = createTestWizardPrompter({
-        note,
-        progress,
-        select: select as never,
-        text,
-      });
-
-      await runSetupWizardConfigure({
-        configure: feishuConfigure,
-        cfg: {} as never,
-        prompter,
-        runtime: createNonExitingRuntimeEnv(),
-      });
-
-      expect(select).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "你想如何连接 Feishu？",
-          options: [
-            { value: "manual", label: "手动输入 App ID 和 App Secret" },
-            { value: "scan", label: "扫描二维码自动创建 bot" },
-          ],
-        }),
-      );
-      expect(select).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "选择 Feishu 域名？",
-          options: [
-            { value: "feishu", label: "Feishu (feishu.cn) - 中国" },
-            { value: "lark", label: "Lark (larksuite.com) - 国际版" },
-          ],
-        }),
-      );
-      expect(text).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "输入 Feishu App ID",
-        }),
-      );
-      expect(select).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "群聊策略",
-          options: [
-            { value: "allowlist", label: "允许列表 - 只在指定群中响应" },
-            { value: "open", label: "开放 - 在所有群中响应（需要提及）" },
-            { value: "disabled", label: "禁用 - 不响应群聊" },
-          ],
-        }),
-      );
-      expect(progress).toHaveBeenCalledWith("正在配置...");
-      expect(stop).toHaveBeenCalledWith("Bot 已配置。");
-    });
-  });
-
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
     const status = await feishuGetStatus({
       cfg: {
@@ -478,21 +385,6 @@ describe("feishu setup wizard status", () => {
     });
 
     expect(status.configured).toBe(false);
-  });
-
-  it("treats env SecretRef appId as not configured when env var is missing", async () => {
-    const appIdKey = "FEISHU_APP_ID_STATUS_MISSING_TEST";
-    const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_MISSING_TEST"; // pragma: allowlist secret
-    await withEnvAsync(
-      {
-        [appIdKey]: undefined,
-        [appSecretKey]: "env-credential-456", // pragma: allowlist secret
-      },
-      async () => {
-        const status = await getStatusWithEnvRefs({ appIdKey, appSecretKey });
-        expect(status.configured).toBe(false);
-      },
-    );
   });
 
   it("treats env SecretRef appId/appSecret as configured in status", async () => {

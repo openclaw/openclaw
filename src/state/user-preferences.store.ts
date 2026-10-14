@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
@@ -10,9 +9,10 @@ import {
   USER_PREFS_PROFILE_KEY_LIMIT,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema.js";
+import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
 import { isOwnedBackgroundPreference } from "./user-background.store.js";
 import { publishUserPreferencesChange } from "./user-preferences-publication.js";
 import type {
@@ -35,7 +35,11 @@ export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdat
   );
 }
 
-export function deleteUserPreference(database: DatabaseSync, profileId: string, key: string): void {
+export function deleteUserPreference(
+  database: EngineConnection,
+  profileId: string,
+  key: string,
+): void {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
   if (!tableExists(database, "user_preferences")) {
     return;
@@ -51,7 +55,7 @@ export function deleteUserPreference(database: DatabaseSync, profileId: string, 
 }
 
 export function selectUserPreferenceValues(
-  database: DatabaseSync,
+  database: EngineConnection,
   profileIds: readonly string[],
   key: string,
 ): Map<string, unknown> {
@@ -71,7 +75,7 @@ export function selectUserPreferenceValues(
   );
 }
 
-function readPreferenceKeys(database: DatabaseSync, profileId: string): Set<string> {
+function readPreferenceKeys(database: EngineConnection, profileId: string): Set<string> {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
   return new Set(
     executeSqliteQuerySync(
@@ -83,7 +87,7 @@ function readPreferenceKeys(database: DatabaseSync, profileId: string): Set<stri
 
 /** Moves one retired profile's preferences without overwriting the merge target's choices. */
 export function mergeUserPreferences(
-  database: DatabaseSync,
+  database: EngineConnection,
   sourceProfileId: string,
   targetProfileId: string,
 ): void {
@@ -133,7 +137,7 @@ export function mergeUserPreferences(
 }
 
 export function readUserPreferences(
-  sqlite: DatabaseSync,
+  sqlite: EngineConnection,
   profileId: string,
   keys?: readonly string[],
 ): Record<string, unknown> {
@@ -158,7 +162,7 @@ export function readUserPreferences(
 }
 
 export function writeUserPreferences(
-  sqlite: DatabaseSync,
+  sqlite: EngineConnection,
   profileId: string,
   update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {

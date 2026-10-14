@@ -84,11 +84,18 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       mark("checkout");
       const config = context?.getRuntimeConfig?.();
-      if ((params.refreshCheckout === true || immutable) && config) {
+      if ((params.refreshCheckout === true || immutable) && context?.getRuntimeConfig) {
         try {
-          await refreshGatewayUpdateStatus(config);
+          await refreshGatewayUpdateStatus(context.getRuntimeConfig);
         } catch (err) {
           warn("checkout refresh", err);
+          if (params.refreshCheckout === true) {
+            respond(false, undefined, {
+              code: "UNAVAILABLE",
+              message: "Could not check the latest update. Try again.",
+            });
+            return;
+          }
         }
       }
       mark("reconciliation");

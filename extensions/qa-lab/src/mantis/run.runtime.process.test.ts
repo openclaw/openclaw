@@ -196,31 +196,6 @@ describe("mantis before/after process runtime", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "leaves only an empty unique directory after Git rejects worktree add",
-    async () => {
-      await initializeGitRepo(repoRoot);
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "invalid-ref");
-
-      await expect(
-        runMantisBeforeAfter({
-          baseline: "refs/heads/missing-mantis-ref",
-          candidate: "HEAD",
-          outputDir: ".artifacts/qa-e2e/mantis/invalid-ref",
-          repoRoot,
-          skipBuild: true,
-          skipInstall: true,
-        }),
-      ).rejects.toThrow("baseline worktree-add failed");
-
-      const preparedEntries = await fs.readdir(`${outputDir}.worktrees`);
-      expect(preparedEntries).toEqual([expect.stringMatching(/^baseline-/u)]);
-      await expect(
-        fs.readdir(path.join(`${outputDir}.worktrees`, preparedEntries[0] as string)),
-      ).resolves.toEqual([]);
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
     "keeps an owner-bound cwd when its registered path is replaced after identity verification",
     async () => {
       await initializeGitRepo(repoRoot);

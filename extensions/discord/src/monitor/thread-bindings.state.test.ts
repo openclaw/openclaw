@@ -7,7 +7,7 @@ import type {
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
   openOpenClawStateDatabase,
@@ -18,6 +18,10 @@ import { discordPlugin } from "../channel.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { registerThreadBindingCompatibilityTests } from "./thread-bindings.compatibility.test-support.js";
 import { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.manager.js";
+import {
+  setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingMaxAgeBySessionKey,
+} from "./thread-bindings.session-updates.js";
 import { ensureBindingsLoaded, ensureBindingsLoadedAsync } from "./thread-bindings.state.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
@@ -39,7 +43,7 @@ const stores = vi.hoisted(() => ({
   syncRegister: vi.fn<SyncStore["register"]>(),
   syncDelete: vi.fn<SyncStore["delete"]>(),
   syncUpdate: vi.fn<NonNullable<SyncStore["update"]>>(),
-  openKeyedStore: vi.fn<(options: OpenKeyedStoreOptions) => AsyncStore>(),
+  openKeyedStoreV2: vi.fn<(options: OpenKeyedStoreOptions) => AsyncStore>(),
   openSyncKeyedStore: vi.fn<(options: OpenKeyedStoreOptions) => SyncStore>(),
 }));
 
@@ -140,7 +144,7 @@ describe("Discord thread binding restoration", () => {
     stores.syncUpdate.mockReturnValue(false);
     stores.register.mockResolvedValue();
     stores.delete.mockResolvedValue(true);
-    stores.openKeyedStore.mockImplementation(() => ({
+    stores.openKeyedStoreV2.mockImplementation(() => ({
       entries: stores.entries,
       register: stores.register,
       delete: stores.delete,
@@ -317,8 +321,10 @@ describe("Discord thread binding restoration", () => {
 
   it("keeps activity in memory after a real native read-only failure", async () => {
     await withOpenClawTestState({ label: "discord-binding-native-readonly" }, async () => {
-      stores.openKeyedStore.mockImplementation((options) => {
-        return createPluginStateKeyedStoreForTests<ThreadBindingRecord>("discord", options);
+      stores.openKeyedStoreV2.mockImplementation((options) => {
+        return createPluginStateKeyedStoreV2ForTests<ThreadBindingRecord>("discord", options, {
+          assertCurrent() {},
+        });
       });
       let observed = false;
       stores.openSyncKeyedStore.mockImplementation((options) => {
@@ -375,7 +381,7 @@ describe("Discord thread binding restoration", () => {
     });
   });
 
-  it("keeps generic synchronous lifecycle setters synchronous", async () => {
+  it("keeps exported synchronous lifecycle setters synchronous", async () => {
     stores.entries.mockResolvedValueOnce([persistedBinding()]);
     const manager = await persistentManager();
     let saved = persistedBinding().value;
@@ -383,15 +389,14 @@ describe("Discord thread binding restoration", () => {
       saved = update(saved) ?? saved;
       return true;
     });
-    const support = discordPlugin.conversationBindings!;
-    const idle = support.setIdleTimeoutBySessionKey!({
+    const idle = setThreadBindingIdleTimeoutBySessionKey({
       targetSessionKey: saved.targetSessionKey,
       accountId: "work",
       idleTimeoutMs: 500,
     });
     expect(Array.isArray(idle)).toBe(true);
     expect(saved.idleTimeoutMs).toBe(500);
-    const age = support.setMaxAgeBySessionKey!({
+    const age = setThreadBindingMaxAgeBySessionKey({
       targetSessionKey: saved.targetSessionKey,
       accountId: "work",
       maxAgeMs: 1000,

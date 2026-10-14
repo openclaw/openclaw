@@ -1,11 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.reset.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
@@ -27,12 +29,14 @@ export type InitSessionStateParams = {
   commandAuthorized: boolean;
   ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
+  recordedSessionActivity?: InternalGetReplyOptions["recordedSessionActivity"];
   pinExpectedExistingSession?: boolean;
   newlyCreatedSessionId?: string;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
   bindSessionCreation?: SessionEventExecution["bindSessionCreation"];
+  onSessionCreated?: InternalGetReplyOptions["onSessionCreated"];
 };
 
 export type InitSessionStateAttemptContext = {
@@ -46,6 +50,23 @@ export type InitSessionStateAttemptContext = {
   sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
+
+export function assertReplySessionInitializationAllowed(
+  sessionKey: string,
+  entry: Parameters<typeof resolveSessionWorkStartBlock>[1],
+  options: {
+    allowRestartTombstoneReplacement: boolean;
+    providerReviewAcknowledgment: InitSessionStateParams["providerReviewAcknowledgment"];
+  },
+) {
+  const error = resolveSessionWorkStartBlock(sessionKey, entry, {
+    ...options,
+    allowPendingWorkspace: captureAgentWorkspaceReadiness(sessionKey) ? true : undefined,
+  });
+  if (error) {
+    throw error;
+  }
+}
 
 export async function resolveInitSessionStateAttemptContext(
   params: Pick<InitSessionStateParams, "cfg" | "ctx">,
@@ -177,12 +198,15 @@ export function resolveReplySessionInitializationOptions(
   return {
     providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
     replyOperation: opts?.replyOperation,
+    recordedSessionActivity: opts?.recordedSessionActivity,
     ...(opts?.expectedExistingSessionId
       ? { expectedExistingSessionId: opts.expectedExistingSessionId }
       : {}),
     pinExpectedExistingSession: opts?.pinExpectedExistingSession === true,
     newlyCreatedSessionId: opts?.newlyCreatedSessionId,
-    bindSessionCreation: opts?.internalEventExecution?.bindSessionCreation,
+    bindSessionCreation:
+      opts?.internalEventExecution?.bindSessionCreation ?? opts?.bindSessionCreation,
+    onSessionCreated: opts?.onSessionCreated,
     requestedSessionId: opts?.requestedSessionId,
     resumeRequestedSession: opts?.resumeRequestedSession,
     signal: opts?.abortSignal,

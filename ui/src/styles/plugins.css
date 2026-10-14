@@ -29,7 +29,7 @@
   padding-block: var(--space-2);
 }
 
-.plugins-hub-header .hub-tabs--sub wa-tab.hub-tab::part(base) {
+.plugins-hub-header .hub-tabs--sub .hub-tab {
   padding-block: var(--space-2);
 }
 
@@ -511,10 +511,6 @@
 .plugins-toolbar--fields > .btn {
   box-sizing: border-box;
   height: var(--settings-control-height);
-}
-
-.plugins-toolbar--fields > .settings-segmented {
-  --wa-form-control-height: calc(var(--settings-control-height) - 6px);
 }
 
 .plugins-toolbar__hint {

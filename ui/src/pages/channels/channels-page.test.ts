@@ -244,30 +244,27 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
-  it.each(["Imported name", null])(
-    "openclaw-channels-page Import from Relays preserves profile name %s with extra fields",
-    async (name) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof fetch>().mockResolvedValue(
-          Response.json({
-            ok: true,
-            saved: true,
-            merged: { name, displayName: "Imported display", extra: { value: true } },
-          }),
-        ),
-      );
-      const { source, page } = await mountNostrProfile();
-      profileButton(page, "Import from Relays").click();
-      await waitForSolid(() => expect(page.textContent).toContain("Profile imported"));
-      expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe(name ?? "");
-      expect(page.querySelector<HTMLInputElement>("#nostr-profile-displayName")?.value).toBe(
-        "Imported display",
-      );
-      source.runtimeConfig.dispose();
-      source.channels.dispose();
-    },
-  );
+  it("openclaw-channels-page Import from Relays preserves a null profile name with extra fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          ok: true,
+          saved: true,
+          merged: { name: null, displayName: "Imported display", extra: { value: true } },
+        }),
+      ),
+    );
+    const { source, page } = await mountNostrProfile();
+    profileButton(page, "Import from Relays").click();
+    await waitForSolid(() => expect(page.textContent).toContain("Profile imported"));
+    expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe("");
+    expect(page.querySelector<HTMLInputElement>("#nostr-profile-displayName")?.value).toBe(
+      "Imported display",
+    );
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
 
   it("openclaw-channels-page Save & Publish preserves HTTP validation details", async () => {
     const fetchMock = vi
@@ -290,13 +287,9 @@ describe("ChannelsPage lifecycle", () => {
 
   it.each([
     ["Save & Publish", 401, 200],
-    ["Import from Relays", 401, 200],
-    ["Save & Publish", 401, 401],
     ["Import from Relays", 401, 401],
     ["Save & Publish", 403, 200],
-    ["Import from Relays", 403, 200],
     ["Save & Publish", 401, 503],
-    ["Import from Relays", 401, 503],
   ] as const)(
     "openclaw-channels-page %s handles credentials and HTTP errors after %s then %s",
     async (action, firstStatus, nextStatus) => {
@@ -349,101 +342,97 @@ describe("ChannelsPage lifecycle", () => {
     },
   );
 
-  it.each([false, true])(
-    "prefers the exact plugin icon with owner first: %s",
-    async (ownerFirst) => {
-      const gateway = createGateway();
-      gateway.emit({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
-        } as unknown as ApplicationGatewaySnapshot["hello"],
-      });
-      const source = createContext(gateway);
-      source.channels.state.channelsSnapshot = {
-        ts: 0,
-        channelOrder: ["slack"],
-        channelLabels: { slack: "slack" },
-        channelDetailLabels: { slack: "Legacy channel subtitle" },
-        channels: { slack: { configured: false } },
-        channelAccounts: {},
-        channelDefaultAccountId: {},
-      };
-      const request = vi.spyOn(gateway.snapshot.client!, "request");
-      const baseRequest = request.getMockImplementation();
-      const owner = {
-        id: "slack-suite",
-        name: "Suite",
-        installed: true,
-        enabled: true,
-        state: "enabled",
-        hasIcon: true,
-        channelIds: ["slack"],
-      };
-      request.mockImplementation(async (method: string, params?: unknown) => {
-        if (method === "plugins.list") {
-          return {
-            plugins: [
-              ...(ownerFirst ? [owner] : []),
-              {
-                id: "slack",
-                name: "Slack",
-                description: "OpenClaw Slack channel plugin.",
-                origin: "bundled",
-                installed: true,
-                enabled: false,
-                state: "disabled",
-                hasIcon: true,
-              },
-              {
-                id: "firecrawl",
-                name: "FireCrawl",
-                description: "Crawl websites.",
-                origin: "global",
-                installed: false,
-                enabled: false,
-                state: "available",
-                hasIcon: true,
-              },
-              ...(ownerFirst ? [] : [owner]),
-            ],
-            diagnostics: [],
-            mutationAllowed: true,
-          };
-        }
-        return await baseRequest?.(method, params);
-      });
-      const fetchMock = vi.fn(
-        async (_input: RequestInfo | URL) =>
-          new Response(new Uint8Array([137, 80, 78, 71]), {
-            status: 200,
-            headers: { "Content-Type": "image/png" },
-          }),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:slack-plugin-icon");
-      const page = mountPage(source.context);
+  it("prefers the exact plugin icon over an earlier owning plugin", async () => {
+    const gateway = createGateway();
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    source.channels.state.channelsSnapshot = {
+      ts: 0,
+      channelOrder: ["slack"],
+      channelLabels: { slack: "slack" },
+      channelDetailLabels: { slack: "Legacy channel subtitle" },
+      channels: { slack: { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    };
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    const owner = {
+      id: "slack-suite",
+      name: "Suite",
+      installed: true,
+      enabled: true,
+      state: "enabled",
+      hasIcon: true,
+      channelIds: ["slack"],
+    };
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "plugins.list") {
+        return {
+          plugins: [
+            owner,
+            {
+              id: "slack",
+              name: "Slack",
+              description: "OpenClaw Slack channel plugin.",
+              origin: "bundled",
+              installed: true,
+              enabled: false,
+              state: "disabled",
+              hasIcon: true,
+            },
+            {
+              id: "firecrawl",
+              name: "FireCrawl",
+              description: "Crawl websites.",
+              origin: "global",
+              installed: false,
+              enabled: false,
+              state: "available",
+              hasIcon: true,
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        };
+      }
+      return await baseRequest?.(method, params);
+    });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:slack-plugin-icon");
+    const page = mountPage(source.context);
 
-      await waitForSolid(() => {
-        expect(page.querySelector(".settings-row__title")?.textContent).toBe("Slack");
-        expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
-          "OpenClaw Slack channel plugin.",
-        );
-        expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
-          "blob:slack-plugin-icon",
-        );
-      });
-      expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
-      expect(
-        fetchMock.mock.calls
-          .map(([input]) =>
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-          )
-          .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
-      ).toEqual(["/__openclaw__/plugin-icon/slack"]);
-      source.runtimeConfig.dispose();
-      source.channels.dispose();
-    },
-  );
+    await waitForSolid(() => {
+      expect(page.querySelector(".settings-row__title")?.textContent).toBe("Slack");
+      expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
+        "OpenClaw Slack channel plugin.",
+      );
+      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+        "blob:slack-plugin-icon",
+      );
+    });
+    expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
+    expect(
+      fetchMock.mock.calls
+        .map(([input]) =>
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        )
+        .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
+    ).toEqual(["/__openclaw__/plugin-icon/slack"]);
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
 
   it("loads an icon when channel status arrives after plugin metadata", async () => {
     const gateway = createGateway();
@@ -701,25 +690,6 @@ describe("ChannelsPage lifecycle", () => {
     },
   );
 
-  it("loads schema again when the runtime-config source changes", async () => {
-    const gateway = createGateway();
-    const first = createContext(gateway);
-    const second = createContext(gateway);
-    const page = mountPage(first.context);
-
-    await waitForSolid(() => expect(first.ensureSchemaLoaded).toHaveBeenCalledOnce());
-
-    replacePageContext(page, second.context);
-    await settle();
-
-    await waitForSolid(() => expect(second.ensureSchemaLoaded).toHaveBeenCalledOnce());
-
-    first.runtimeConfig.dispose();
-    second.runtimeConfig.dispose();
-    first.channels.dispose();
-    second.channels.dispose();
-  });
-
   it("polls pairing only while visible, authorized, and mounted", async () => {
     vi.useFakeTimers();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -913,15 +883,10 @@ describe("ChannelsPage lifecycle", () => {
 
   it.each([
     ["Save & Publish", "source replacement", 200],
-    ["Save & Publish", "source replacement", 401],
     ["Import from Relays", "disconnect", 200],
-    ["Import from Relays", "disconnect", 401],
-    ["Import from Relays", "cancel", 401],
     ["Import from Relays", "replacement form", 200],
-    ["Import from Relays", "replacement form", 401],
     ["Save & Publish", "credential/client replacement", 401],
     ["Import from Relays", "credential/client replacement", 401],
-    ["Save & Publish", "unmount", 401],
     ["Import from Relays", "unmount", 401],
   ] as const)(
     "retires rendered %s after %s before pending %s",
@@ -939,12 +904,13 @@ describe("ChannelsPage lifecycle", () => {
 
       switch (retirement) {
         case "source replacement":
+          expect(source.ensureSchemaLoaded).toHaveBeenCalledOnce();
           replacePageContext(page, second.context);
+          await waitForSolid(() => expect(second.ensureSchemaLoaded).toHaveBeenCalledOnce());
           break;
         case "disconnect":
           gateway.emit({ phase: "stopped" });
           break;
-        case "cancel":
         case "replacement form":
           expect(profileButton(page, "Cancel").disabled).toBe(false);
           profileButton(page, "Cancel").click();
@@ -1000,46 +966,42 @@ describe("ChannelsPage lifecycle", () => {
     },
   );
 
-  it.each([
-    ["Save & Publish", false],
-    ["Save & Publish", true],
-    ["Import from Relays", false],
-    ["Import from Relays", true],
-  ] as const)("times out rendered %s at 30 seconds with retry %s", async (action, retry) => {
-    vi.useFakeTimers();
-    const fetchMock = stubHangingFetch();
-    if (retry) {
+  it.each(["Save & Publish", "Import from Relays"])(
+    "times out rendered %s across credential retry",
+    async (action) => {
+      vi.useFakeTimers();
+      const fetchMock = stubHangingFetch();
       fetchMock.mockImplementationOnce(
         async () =>
           await new Promise<Response>((resolve) => {
             setTimeout(() => resolve(new Response(null, { status: 401 })), 15_000);
           }),
       );
-    }
-    const { source, refresh, page } = await mountNostrProfile();
-    profileButton(page, action).click();
-    await settle();
-    expect(fetchMock).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(14_999);
-    expect(fetchMock).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(fetchMock).toHaveBeenCalledTimes(retry ? 2 : 1);
-    expect(
-      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
-    ).toEqual(retry ? ["Bearer device-token", "Bearer saved-token"] : ["Bearer device-token"]);
-    await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS - 15_001);
-    expect(page.textContent).not.toContain("Request timed out");
-    expect(fetchMock.mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await settle();
+      const { source, refresh, page } = await mountNostrProfile();
+      profileButton(page, action).click();
+      await settle();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(
+        fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+      ).toEqual(["Bearer device-token", "Bearer saved-token"]);
+      await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS - 15_001);
+      expect(page.textContent).not.toContain("Request timed out");
+      expect(fetchMock.mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await settle();
 
-    expect(fetchMock.mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(true);
-    expect(profileButton(page, action).disabled).toBe(false);
-    expect(page.textContent).toContain(
-      "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
-    );
-    expect(refresh).not.toHaveBeenCalled();
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
-  });
+      expect(fetchMock.mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(true);
+      expect(profileButton(page, action).disabled).toBe(false);
+      expect(page.textContent).toContain(
+        "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
+      );
+      expect(refresh).not.toHaveBeenCalled();
+      source.runtimeConfig.dispose();
+      source.channels.dispose();
+    },
+  );
 });

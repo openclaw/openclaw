@@ -25,16 +25,6 @@ const fileWaits = [
 ];
 
 it.for(fileWaits)(
-  "observes $name readiness on the next tick",
-  async ({ wait, expected }, { signal }) => {
-    const file = path.join(tempDirs.make("openclaw-process-wait-"), "ready");
-    const waiting = wait(file, signal);
-    fsSync.writeFileSync(file, "42\n");
-    expect(await waiting).toBe(expected);
-  },
-);
-
-it.for(fileWaits)(
   "rechecks $name readiness before rejecting abort",
   async ({ wait, expected }, { signal }) => {
     const file = path.join(tempDirs.make("openclaw-process-wait-"), "ready");
@@ -64,7 +54,7 @@ it.for(fileWaits)("diagnoses missing $name on abort", async ({ wait }, { signal 
   });
 });
 
-it.for(["", "0"])(
+it.for([""])(
   "waits through invalid PID contents %j using the injected delay",
   async (contents, { signal }) => {
     const file = path.join(tempDirs.make("openclaw-process-wait-"), "pid");

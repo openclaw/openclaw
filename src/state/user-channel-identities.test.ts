@@ -28,11 +28,13 @@ import {
 import { readUserProfileAliasRevision } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
   prepareUserProfileCatalog,
 } from "./user-profile-list.js";
 import {
   linkCanonicalUserProfileEmail,
+  mergeCanonicalUserProfiles,
+  setCanonicalUserProfileDisplayName,
   setCanonicalUserProfileRole,
 } from "./user-profile-writes.js";
 import {
@@ -46,7 +48,6 @@ import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  resolveUserProfileId,
 } from "./user-profiles.js";
 import type { UserChannelIdentity } from "./user-profiles.types.js";
 
@@ -101,6 +102,7 @@ it.each(["email binding", "stale role reply"] as const)(
               return reply;
             })
         : undefined;
+    let releaseCatalog = () => {};
     try {
       if (change === "email binding") {
         const target = ensureProfileForEmail("target@example.test", options);
@@ -120,7 +122,8 @@ it.each(["email binding", "stale role reply"] as const)(
         });
       }
       expect(prepared?.isCurrent()).toBe(true);
-      expect(resolveUserProfileId(source.id, options)).toBe(source.id);
+      releaseCatalog = (await prepareUserProfileCatalog(options)).release;
+      expect(readResidentUserProfileIdentity(source.id, options)?.profileId).toBe(source.id);
       expect(admin?.isCurrent()).toBe(false);
       expect(rolePolicy?.isCurrent()).toBe(false);
       expect(channel?.isCurrent()).toBe(false);
@@ -129,6 +132,7 @@ it.each(["email binding", "stale role reply"] as const)(
         true,
       );
     } finally {
+      releaseCatalog();
       read?.mockRestore();
     }
   },
@@ -147,6 +151,49 @@ it("does not create state or identity tables while resolving absent links", asyn
   expect(await listCanonicalUserChannelIdentities("absent", options)).toEqual([]);
   expect(tableExists(db, "user_profiles")).toBe(false);
   expect(tableExists(db, "user_profile_identities")).toBe(false);
+});
+
+it("serves profile authority from committed catalog facts without another worker read", async () => {
+  const options = stateOptions();
+  const source = ensureProfileForEmail("source@example.test", options);
+  const target = ensureProfileForEmail("target@example.test", options);
+  await setCanonicalUserProfileRole(source.id, "admin", options);
+  const catalog = await prepareUserProfileCatalog(options);
+  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  try {
+    const original = await prepareUserProfileRoleAuthority(source.id, options);
+    expect(original).toMatchObject({ profileId: source.id, role: "admin" });
+    expect(original?.isCurrent()).toBe(true);
+    expect(reads).not.toHaveBeenCalled();
+
+    await setCanonicalUserProfileRole(source.id, "member", options);
+    await setCanonicalUserProfileDisplayName(source.id, "Current name", options);
+    expect(original?.isCurrent()).toBe(false);
+    reads.mockClear();
+    const current = await prepareUserProfileRoleAuthority(source.id, options);
+    expect(current).toMatchObject({
+      profileId: source.id,
+      role: "member",
+      display: { id: source.id, displayName: "Current name" },
+    });
+    expect(current?.isCurrent()).toBe(true);
+    expect(reads).not.toHaveBeenCalled();
+
+    await mergeCanonicalUserProfiles(source.id, target.id, options);
+    expect(current?.isCurrent()).toBe(false);
+    reads.mockClear();
+    const merged = await prepareUserProfileRoleAuthority(source.id, options);
+    expect(merged).toMatchObject({
+      profileId: target.id,
+      aliases: [target.id, source.id],
+      display: { id: target.id },
+    });
+    expect(merged?.isCurrent()).toBe(true);
+    expect(reads).not.toHaveBeenCalled();
+  } finally {
+    reads.mockRestore();
+    catalog.release();
+  }
 });
 
 it("revokes the exact prepared binding before worker commit acknowledgement", async () => {
@@ -299,7 +346,7 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
         expect(rollbackGranted).toBe(true);
         expect(resolveUserChannelIdentity(identity, options)?.role).toBe("admin");
         queries.mockClear();
-        expect(readUserProfileIdentity(ada.id, options)?.role).toBe("admin");
+        expect(readResidentUserProfileIdentity(ada.id, options)?.role).toBe("admin");
         expect(getUserProfileDisplay(ada.id, options)).toEqual(beforeRollback);
         expect(queries).not.toHaveBeenCalled();
         const afterRollback = await prepareUserProfileRoleAuthority(ada.id, options);

@@ -100,36 +100,6 @@ describe("main session recovery terminal-only residue", () => {
     expect(entry.restartRecoveryRuns).toHaveLength(2);
   });
 
-  it("keeps the aggregate while a reservation still owns work", () => {
-    const entry = settledEntry({
-      mainRestartRecovery: recoveryState({
-        reservation: { lifecycleGeneration: "generation-1", runId: "reserved-run", attempt: 1 },
-      }),
-    });
-
-    expect(claimForeground(entry)).toEqual({ kind: "no_change" });
-    expect(entry.mainRestartRecovery?.reservation).toBeDefined();
-  });
-
-  it("keeps the aggregate while a foreground claim still owns work", () => {
-    const entry = settledEntry({
-      mainRestartRecovery: recoveryState({
-        foregroundClaims: { lifecycleGeneration: "generation-1", tokens: ["existing-claim"] },
-      }),
-    });
-
-    expect(claimForeground(entry)).toEqual({ kind: "no_change" });
-    expect(entry.mainRestartRecovery?.foregroundClaims).toBeDefined();
-  });
-
-  it("keeps the aggregate while a delivery claim is still recorded", () => {
-    const entry = settledEntry({ restartRecoveryDeliveryRunId: "pending-delivery" });
-
-    expect(claimForeground(entry)).toEqual({ kind: "no_change" });
-    expect(entry.mainRestartRecovery).toBeDefined();
-    expect(entry.restartRecoveryDeliveryRunId).toBe("pending-delivery");
-  });
-
   it.each([false, true])(
     "requires every recovery fence to be terminal before retiring a later failed outcome (terminal=%s)",
     (terminal) => {

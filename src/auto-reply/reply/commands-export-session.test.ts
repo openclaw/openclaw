@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mts";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import { buildCommandTextFromArgs, findCommandByNativeName } from "../commands-registry.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -32,9 +33,9 @@ const hoisted = await vi.hoisted(async () => {
       }),
     ),
     migrateSessionEntriesMock: vi.fn((_entries: unknown[]) => undefined),
-    readAcpSessionMetaForEntryMock: vi.fn<
-      (params: { sessionKey: string; entry?: { sessionId?: string } }) => unknown
-    >(() => undefined),
+    readAcpSessionMetaForEntryAsyncMock: vi.fn<
+      (params: { sessionKey: string; entry?: { sessionId?: string } }) => Promise<unknown>
+    >(async () => undefined),
     loadTranscriptEventsMock: vi.fn(async (): Promise<unknown[]> => []),
     exportHtmlTemplateContents: new Map<string, string>(),
     sessionTranscriptEvents: [] as unknown[],
@@ -42,8 +43,9 @@ const hoisted = await vi.hoisted(async () => {
 });
 const generatedVendorAssets = generateExportHtmlVendorAssets();
 
+// mock-isolation: Export fixtures supply ACP metadata without opening a real session database.
 vi.mock("../../acp/runtime/session-meta-readonly.js", () => ({
-  readAcpSessionMetaForEntry: hoisted.readAcpSessionMetaForEntryMock,
+  readAcpSessionMetaForEntryAsync: hoisted.readAcpSessionMetaForEntryAsyncMock,
 }));
 
 vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
@@ -60,6 +62,12 @@ vi.mock("../../config/sessions/session-accessor.js", () => {
     loadTranscriptEvents: hoisted.loadTranscriptEventsMock,
   };
 });
+
+// mock-isolation: Export orchestration reads fixture-owned session rows without opening a store.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (scope: { storePath?: string; sessionKey: string }) =>
+    (hoisted.loadSessionStoreMock(scope.storePath) as Record<string, unknown>)[scope.sessionKey],
+}));
 
 vi.mock("./commands-system-prompt.js", () => ({
   resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
@@ -215,7 +223,7 @@ describe("buildExportSessionReply", () => {
       absolutePath: "/tmp/workspace/openclaw-session.html",
       displayPath: "openclaw-session.html",
     });
-    hoisted.readAcpSessionMetaForEntryMock.mockReturnValue(undefined);
+    hoisted.readAcpSessionMetaForEntryAsyncMock.mockResolvedValue(undefined);
     hoisted.loadTranscriptEventsMock.mockImplementation(
       async () => hoisted.sessionTranscriptEvents,
     );
@@ -225,6 +233,21 @@ describe("buildExportSessionReply", () => {
     }
     hoisted.sessionTranscriptEvents = [];
   });
+
+  it.each(["monthly report.html", "reports/monthly  report.html"])(
+    "preserves the complete structured export path %j",
+    async (outputPath) => {
+      const command = expectDefined(findCommandByNativeName("export-session"), "export command");
+      const params = makeParams();
+      params.command.commandBodyNormalized = buildCommandTextFromArgs(command, {
+        values: { path: outputPath },
+      });
+
+      await buildExportSessionReply(params);
+
+      expect(hoisted.writeSessionExportFileMock.mock.calls[0]?.[0].requestedPath).toBe(outputPath);
+    },
+  );
 
   it("preserves an explicitly empty branch selected by a terminal leaf control", async () => {
     const entries = [
@@ -402,7 +425,7 @@ describe("buildExportSessionReply", () => {
   });
 
   it("warns when persisted ACP metadata is stored outside the session entry", async () => {
-    hoisted.readAcpSessionMetaForEntryMock.mockReturnValue({
+    hoisted.readAcpSessionMetaForEntryAsyncMock.mockResolvedValue({
       backend: "acpx",
       mode: "persistent",
       agent: "claude",
@@ -414,7 +437,8 @@ describe("buildExportSessionReply", () => {
 
     const reply = await buildExportSessionReply(makeParams());
 
-    expect(hoisted.readAcpSessionMetaForEntryMock).toHaveBeenCalledWith({
+    expect(hoisted.readAcpSessionMetaForEntryAsyncMock).toHaveBeenCalledWith({
+      cfg: {},
       sessionKey: "agent:target:session",
       entry: {
         sessionId: "session-1",
@@ -426,7 +450,7 @@ describe("buildExportSessionReply", () => {
   });
 
   it("continues exporting when persisted ACP metadata cannot be read", async () => {
-    hoisted.readAcpSessionMetaForEntryMock.mockImplementation(() => {
+    hoisted.readAcpSessionMetaForEntryAsyncMock.mockImplementation(async () => {
       throw new Error("state database unavailable");
     });
     hoisted.sessionTranscriptEvents = userTranscript();

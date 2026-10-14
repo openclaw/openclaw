@@ -12,18 +12,19 @@ available, and use of your own account/tokens, then asks before launching
 [triage](/cli/triage). Only an affirmative Yes proceeds. Enter, `n`, cancellation,
 or no answer within 30 seconds skips the launch and preserves diagnostics and
 a manual recovery command. Use `openclaw triage --agent codex` to choose another
-agent. With `--yes`, `--json`, or no interactive terminal, eligible failures can
-start one owned automatic repair; other failures retain diagnostics and handoff
-commands. See [automatic recovery](/cli/triage#automatic-failure-handoff). The original update failure and exit status remain authoritative;
+agent. With `--yes`, `--json`, or no interactive terminal, updates save diagnostics
+and never start a repair agent. The output prints the explicit opt-in command
+`openclaw triage --run --update-result <path>`. Managed handoffs and foreground
+Gateway startup failures also collect diagnostics only. See
+[unattended failure diagnostics](/cli/triage#automatic-failure-handoff). The original update failure and exit status remain authoritative;
 diagnostics do not turn a failed update into a successful one.
 
 If the update health check emits a complete lint report but does not exit before
 its deadline, the failure identifies that completion separately from process
 termination. An exited child whose output pipes remain open is reported
 separately. Without a complete lint report, a deadline does not establish that
-the checks finished. When automatic repair cannot find a usable inference route
-before starting a repair turn, it is recorded as skipped; the original update
-check remains the reported failure.
+the checks finished. Diagnostic collection does not require inference;
+the original update check remains the reported failure.
 
 In the Control UI, a failed attempt opens **Ask OpenClaw** with its recorded
 details and asks it to investigate before retrying. A lost connection or
@@ -136,6 +137,14 @@ them. Preserve those facts when reporting the problem; task definitions and raw
 native output are excluded.
 
 ## Node and global install permissions
+
+If package recovery reports `nlink=2` (or another value above 1), let updater
+workers finish, then run `openclaw doctor --fix` from the affected installation.
+Doctor can reclaim an abandoned updater runtime, including one retained in an
+npm prefix's `lib/` directory, and release its extra journal link. Then retry
+the update. Do not weaken recovery permissions or delete the activation journal;
+if Doctor reports a live owner or cannot identify the runtime, follow that
+diagnostic before retrying.
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
 version satisfying both the candidate's full engine range and the updater's

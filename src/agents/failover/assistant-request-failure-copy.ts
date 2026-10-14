@@ -90,6 +90,13 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   unknown: "",
 } satisfies Record<FailoverReason, string>;
 
+/** Plain storage copy for length-limited surfaces such as session rows. */
+export function renderStorageFailureSummary(
+  storageFailure: GatewayStorageFailure | undefined,
+): string | undefined {
+  return storageFailure ? STORAGE_FAILURE_COPY[storageFailure] : undefined;
+}
+
 /** Render classified facts without exposing raw provider response text. */
 export function renderAssistantRequestFailureCopy(
   facts: AssistantRequestFailureCopyFacts,

@@ -2,10 +2,7 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
-import {
-  markPrewarmedChatSnapshotReady,
-  prewarmChatSnapshot,
-} from "../pages/chat/session-snapshot-prewarm.ts";
+import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
 import {
   clearBootRecords,
   retirePendingBootRecord,
@@ -103,9 +100,6 @@ export function subscribeWarmBootConnection(
     },
   );
   const stopConnection = gateway.subscribe((snapshot) => {
-    if (snapshot.phase === "connected") {
-      markPrewarmedChatSnapshotReady();
-    }
     if (gateway.connectionRevision !== bootConnectionRevision) {
       pendingBootProfileId = undefined;
       admittedOwner = undefined;

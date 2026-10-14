@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
@@ -74,8 +75,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
 }));
 
+// mock-isolation: Exercise directive persistence independently of sandbox backends and storage.
 vi.mock("../../agents/sandbox.js", () => ({
-  resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
+  resolveSandboxRuntimeStatusAsync: vi.fn(async () => ({ sandboxed: false })),
 }));
 
 vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
@@ -108,7 +110,7 @@ describe("mixed inline directives", () => {
     unsubscribeLifecycle = onSessionLifecycleEvent((event) => lifecycleEvents.push(event));
     vi.clearAllMocks();
     vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
-    vi.mocked(persistStickyModelSelectionBestEffort).mockReturnValue("requested");
+    vi.mocked(persistStickyModelSelectionBestEffort).mockReset().mockReturnValue("requested");
     persistenceMocks.persist.mockImplementation(async ({ entry }) => ({
       status: "current",
       entry: { ...entry },
@@ -313,6 +315,7 @@ describe("mixed inline directives", () => {
   });
 
   it("forwards automatic provenance for a source-less auth pin", async () => {
+    await prepareSharedAuthStoreOwnership();
     const sessionEntry = createSessionEntry({
       providerOverride: "openai",
       modelOverride: "gpt-5.6-sol",
@@ -406,6 +409,7 @@ describe("mixed inline directives", () => {
   ])(
     "resets to $provider/$model with compatible auth only",
     async ({ prefix, provider, model, keepProfile }) => {
+      await prepareSharedAuthStoreOwnership();
       const authPin = {
         authProfileOverride: "openai:work",
         authProfileOverrideSource: "user" as const,

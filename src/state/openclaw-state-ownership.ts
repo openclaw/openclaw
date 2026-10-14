@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   assertStateDatabaseAccessAllowed,
@@ -9,6 +8,7 @@ import {
 } from "../infra/gateway-state-owner.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -23,6 +23,7 @@ import {
   OpenClawStateExternalOwnershipError,
   OpenClawStateOwnershipMetadataError,
 } from "../infra/sqlite-lifecycle-errors.js";
+import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import {
   prepareSqliteReadOnlyLocationSyncInProcess,
   readSourceJournalMode,
@@ -84,7 +85,7 @@ const ownershipAdmission: SqliteDatabaseAdmissionKey<OpenClawExternalStateOwners
 
 /** The ownership writer publishes at its outer commit; lease loss remains a live authority check. */
 export function publishOpenClawStateOwnership(
-  database: DatabaseSync,
+  database: EngineConnection,
   ownership: OpenClawExternalStateOwnership,
 ): void {
   publishSqliteDatabaseAdmission(database, ownershipAdmission, { ...ownership });
@@ -148,7 +149,7 @@ function parseExternalOwnership(
 
 /** Inspect the reserved ownership row without entering the shared-state lifecycle. */
 export function inspectOpenClawStateOwnershipFromDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   configMachineStateTableReady = false,
 ): OpenClawExternalStateOwnership | null {
@@ -299,6 +300,7 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     preserveSourceArtifacts: true,
     signal: options.signal,
   });
+  let readSucceeded = false;
   try {
     options.signal?.throwIfAborted();
     assertStateDatabaseAccessAllowed(databasePath);
@@ -311,14 +313,19 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
       databasePath,
       env,
     );
+    readSucceeded = true;
   } finally {
-    await prepared.cleanupAsync();
+    await prepared.cleanupAsync().catch((error: unknown) => {
+      if (!readSucceeded || !deferSqliteSnapshotCleanupAfterRead(error, prepared.cleanupRoot)) {
+        throw error;
+      }
+    });
   }
 }
 
 /** Fence shared-state writes once an external manager has claimed ownership. */
 export function assertOpenClawStateWriteAllowed(options: {
-  database: DatabaseSync;
+  database: EngineConnection;
   databasePath: string;
   env?: NodeJS.ProcessEnv;
   // Only the shared-state lifecycle owner may carry this positive schema fact.

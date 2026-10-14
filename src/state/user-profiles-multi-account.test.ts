@@ -21,6 +21,7 @@ import {
 } from "./user-profile-github-identity.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+import { getUserProfileDisplay, prepareUserProfileCatalog } from "./user-profile-list.js";
 import {
   readUserProfileDirectory,
   resolveCanonicalCachedGitHubIdentity,
@@ -28,15 +29,15 @@ import {
 import { linkEmail, setAvatar, syncGitHubIdentity } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
-import {
-  ensureProfileForEmail,
-  ensureProfileForTailscaleIdentity,
-  getUserProfileDisplay,
-} from "./user-profiles.js";
+import { ensureProfileForEmail, ensureProfileForTailscaleIdentity } from "./user-profiles.js";
 import { userProfileOperations } from "./user-profiles.worker.js";
 
+const catalogReleases: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
+    for (const release of catalogReleases.splice(0)) {
+      release();
+    }
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
@@ -275,6 +276,7 @@ describe("multi-account people", () => {
     linkEmail(secondary.email, person.id, options);
     expect(beforeMerge.isCurrent()).toBe(false);
     closeOpenClawStateDatabaseForTest();
+    catalogReleases.push((await prepareUserProfileCatalog(options)).release);
     for (const account of [secondary, primary, secondary]) {
       expect(syncEmailGitHubProfile(account, options)).toMatchObject({
         id: person.id,

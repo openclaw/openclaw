@@ -21,8 +21,9 @@ describe("chat transcript controller", () => {
   });
   afterEach(resetTranscriptTestDom);
 
-  function commitLayout() {
+  async function commitLayout() {
     flush();
+    await Promise.resolve();
     flushFrames();
     flush();
   }
@@ -66,11 +67,11 @@ describe("chat transcript controller", () => {
       expect(transcript.scrollToEnd({ source: "auto" })).toBe(false);
       update.resolve(true);
       await update.promise;
-      commitLayout();
+      await commitLayout();
       expect(container.querySelector('[data-entry-id="original"]')).toBeNull();
 
       renderRows([original, tail]);
-      commitLayout();
+      await commitLayout();
       expect(
         container
           .querySelector('[data-entry-id="original"]')
@@ -146,7 +147,7 @@ describe("chat transcript controller", () => {
         }
         update.resolve(true);
         await update.promise;
-        commitLayout();
+        await commitLayout();
         expect(bubbles[0]?.classList.contains("chat-bubble--reply-target")).toBe(
           ["none", "idle at end"].includes(interruption),
         );

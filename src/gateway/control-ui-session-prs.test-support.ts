@@ -17,8 +17,9 @@ import { resolveControlUiSessionPrTarget } from "./control-ui-session-pr-read.js
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 type GitContext = { owner: string; repo: string; branch: string };
 
@@ -86,34 +87,52 @@ export async function loadTestSessionPullRequests(
     throw new Error(requested.error.message);
   }
   const readTarget = await prepareTestSessionPrTarget({ ...params, agentId: requested.agentId });
-  const target = readTarget();
+  const target = await readTarget();
   if (!target) {
     return { pullRequests: [], rateLimited: false };
   }
-  return withControlUiSessionPrSource(target.readSource, (assertSourceCurrent, sourceIdentity) =>
-    loadControlUiSessionPullRequests(params, {
-      ...deps,
-      read: {
-        target,
-        sourceIdentity,
-        assertCurrent: () => {
-          assertSourceCurrent();
-          if (readTarget()?.identity !== target.identity) {
-            throw new Error("Session changed while preparing pull requests. Retry the request.");
-          }
-        },
-      },
-    }),
-  );
+  const facts = await prepareSessionMutationFacts({
+    cfg: getRuntimeConfig(),
+    sessionKey: params.sessionKey,
+    agentId: requested.agentId,
+  });
+  try {
+    const original = facts.readCurrent(getRuntimeConfig()).target.entry;
+    return await withControlUiSessionPrSource(
+      target.readSource,
+      (assertSourceCurrent, sourceIdentity) =>
+        loadControlUiSessionPullRequests(params, {
+          ...deps,
+          read: {
+            target,
+            sourceIdentity,
+            assertCurrent: () => {
+              assertSourceCurrent();
+              const current = facts.readCurrent(getRuntimeConfig()).target.entry;
+              if (
+                current.sessionId !== original.sessionId ||
+                current.lifecycleRevision !== original.lifecycleRevision
+              ) {
+                throw new Error("Session pull-request target changed");
+              }
+            },
+          },
+        }),
+    );
+  } finally {
+    facts.release();
+  }
 }
 
 async function prepareTestSessionPrTarget(params: { sessionKey: string; agentId?: string }) {
-  const initial = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const initial = await loadGatewaySessionEntryReadOnlyAsync(params.sessionKey, {
+    agentId: params.agentId,
+  });
   const prepared = initial.entry?.repositoryWorkspaceId
     ? await getSessionRepositoryWorkspaceStore().prepare(initial.entry.repositoryWorkspaceId)
     : undefined;
-  return () => {
-    const selected = loadGatewaySessionEntryReadOnly(params.sessionKey, {
+  return async () => {
+    const selected = await loadGatewaySessionEntryReadOnlyAsync(params.sessionKey, {
       agentId: params.agentId,
     });
     const repository = prepared?.current();

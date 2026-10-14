@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -13,7 +12,7 @@ import {
   flushSync,
 } from "../../../lib/session-pull-requests.test-support.ts";
 import type { ChatCiAutomationElement } from "./chat-ci-automation-control.ts";
-import { renderChatPullRequests } from "./chat-pull-requests.ts";
+import "./chat-ci-automation-control.ts";
 
 const sessionKey = "agent:main:dashboard:ci-test";
 const pr = {
@@ -39,7 +38,7 @@ function inventory(jobs: CronJob[]) {
 const roots = new Set<HTMLElement>();
 afterEach(() => {
   for (const root of roots) {
-    render(nothing, root);
+    root.replaceChildren();
     root.remove();
   }
   roots.clear();
@@ -78,25 +77,19 @@ async function setup() {
   const root = document.createElement("div");
   document.body.append(root);
   roots.add(root);
+  const disclosure = document.createElement("details");
+  disclosure.className = "chat-pr__checks";
+  disclosure.append(document.createElement("openclaw-chat-ci-automation"));
+  const element = disclosure.querySelector<ChatCiAutomationElement>("openclaw-chat-ci-automation")!;
+  Object.assign(element, { pullRequest: pr, gateway: harness.gateway, sessionKey });
+  root.append(disclosure);
   const paint = async (sessionId: string) => {
-    render(
-      renderChatPullRequests({
-        pullRequests: [pr],
-        gateway: harness.gateway,
-        sessionKey,
-        sessionId,
-        status: "ready",
-        onDismiss: () => {},
-      }),
-      root,
-    );
-    const element = root.querySelector<ChatCiAutomationElement>("openclaw-chat-ci-automation")!;
+    element.sessionId = sessionId;
     await element.updateComplete;
     return element;
   };
-  const element = await paint("first");
+  await paint("first");
   const open = async () => {
-    const disclosure = root.querySelector<HTMLDetailsElement>(".chat-pr__checks")!;
     disclosure.open = true;
     disclosure.dispatchEvent(new Event("toggle"));
     await element.updateComplete;

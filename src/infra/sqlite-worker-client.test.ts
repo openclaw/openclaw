@@ -5,17 +5,27 @@ import {
   createSqliteWorkerClient,
   runSqliteWorkerClientOperation,
 } from "./sqlite-worker-client.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 
 type Operations = { write: { input: string; output: string } };
 const closedError = { code: "closed", message: "SQLite worker store is closed" };
 
 function createActor(): Actor {
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  custody.post();
   return {
     nativeStopped: Promise.resolve(),
     markNativeStopped() {},
     id: 1,
     key: "client-fixture",
     databasePath: "/fixture/state.sqlite",
+    stateAccess: {
+      canonicalPath: "/fixture/state.sqlite",
+      assertAccessAllowed() {},
+      assertReadAllowed() {},
+    },
     pathReferences: new Map([["/fixture/state.sqlite", 1]]),
     moduleUrl: "file:///fixture/sqlite-backend.js",
     inputHash: "client-fixture",
@@ -24,7 +34,7 @@ function createActor(): Actor {
     },
     references: 1,
     opened: Promise.resolve(),
-    openDispatch: { dispatched: true },
+    openDispatch: { custody },
     initialized: true,
     backendClosed: false,
   };
@@ -86,7 +96,11 @@ it("attributes queued commands without changing wire bytes or exposing private c
     ["stateLease.renew", "stateLease.renew"],
     ["capture.recordEventWithPayload", "capture"],
     ["workerInference.complete", "workerInference"],
-    ["session.entry.read", "sessions"],
+    ["session.entry.read", "session.entry.read"],
+    ["session.actor.acceptInput", "session.actor.acceptInput"],
+    ["session.actor.completeTurn", "session.actor.completeTurn"],
+    ["session.lifecycle.project", "session.lifecycle.project"],
+    ["session.actor.private-customer-123", "sessions"],
     ["pluginState.get", "plugin_state"],
     ["audit.private-customer-123", "audit"],
     ["private-customer-123.execute", "execute"],

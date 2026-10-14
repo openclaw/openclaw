@@ -14,7 +14,7 @@ import {
   captureDeliveryQueueStateContext,
   pruneExpiredDeliveryQueueTombstones,
 } from "../infra/delivery-queue-sqlite.js";
-import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import { startDevicePairSetupMaintenance } from "../infra/device-bootstrap.js";
 import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
@@ -31,7 +31,6 @@ import {
   isGatewayWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
 import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
 import {
@@ -140,6 +139,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: scheduler.now() + (immediate ? 0 : everyMs),
       everyMs,
+      phase: "maintenance",
       run,
     });
   };
@@ -238,14 +238,21 @@ export function startGatewayMaintenanceTimers(params: {
     params.nodeSendToAllSubscribed("tick", payload);
   });
 
-  // Automatic refresh warms the cache; explicit status and Doctor requests own live probes.
+  // Warm once; an unobserved Gateway needs no periodic snapshot. Health requests
+  // refresh stale snapshots, and connected clients still receive passive updates.
+  let initialHealthRefresh = true;
   schedulePeriodic(
     "health",
     HEALTH_REFRESH_INTERVAL_MS,
-    () =>
-      params
+    () => {
+      if (!initialHealthRefresh && params.clients.size === 0) {
+        return undefined;
+      }
+      initialHealthRefresh = false;
+      return params
         .refreshGatewayHealthSnapshot({ probe: false })
-        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`)),
+        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
+    },
     true,
   );
 
@@ -282,6 +289,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: mediaScheduler.now(),
       everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
+      phase: "maintenance",
       run,
     });
   };
@@ -294,35 +302,12 @@ export function startGatewayMaintenanceTimers(params: {
       );
     }
   });
-  schedulePeriodic(
-    "device-pair-setup",
-    60_000,
-    () =>
-      pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() }).catch((error: unknown) => {
-        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
-      }),
-    true,
-  );
-
-  // Plugin-state expiry belongs to Gateway maintenance, not background-run tracking.
-  schedulePeriodic(
-    "plugin-state",
-    60_000,
-    async () => {
-      // Accepted writes retain their job scope until the scheduler joins their cleanup.
-      const signal = getAsyncWorkSignal();
-      try {
-        const { sweepExpiredPluginStateEntriesInWorker } =
-          await import("../plugin-state/plugin-state-worker-client.js");
-        await sweepExpiredPluginStateEntriesInWorker({
-          assertActive: () => signal?.throwIfAborted(),
-        });
-      } catch (error) {
-        params.logHealth.error(`plugin state cleanup failed: ${formatError(error)}`);
-      }
+  startDevicePairSetupMaintenance({
+    scheduler,
+    onError: (error) => {
+      params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
     },
-    true,
-  );
+  });
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
@@ -414,20 +399,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
-      if (entry.projectSessionTerminalPersistence) {
-        const lifecycleGeneration = entry.lifecycleGeneration?.trim();
-        const sessionKey = entry.sessionKey.trim();
-        const sessionId = entry.sessionId.trim();
-        if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
-          params.restartRecoveryCandidates.set(runId, {
-            runId,
-            lifecycleGeneration,
-            sessionKey,
-            sessionId,
-            observedAt: entry.projectSessionTerminalObservedAt,
-          });
-        }
-      } else if (entry.projectSessionActive !== false) {
+      if (!entry.projectSessionTerminalPersistence && entry.projectSessionActive !== false) {
         const aborted = abortChatRunById(params, {
           runId,
           sessionKey: entry.sessionKey,

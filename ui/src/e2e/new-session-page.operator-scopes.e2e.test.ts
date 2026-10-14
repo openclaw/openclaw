@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -58,7 +59,7 @@ suite.define(() => {
       ["chat.metadata", "chat.startup", "projects.list", "sessions.create", "sessions.dispatch"],
     );
     try {
-      const sidebarCreate = page.locator(".sidebar-session-toolbar .sidebar-new-session");
+      const sidebarCreate = page.locator(".sidebar-rail .sidebar-new-session");
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
 
@@ -89,12 +90,12 @@ suite.define(() => {
       const effort = page.locator('[data-chat-thinking-select="true"]');
 
       await expect
-        .poll(() => page.locator(".sidebar-session-toolbar .sidebar-new-session").isEnabled())
+        .poll(() => page.locator(".sidebar-rail .sidebar-new-session").isEnabled())
         .toBe(true);
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await expect.poll(() => incognito.isDisabled()).toBe(true);
       await page.locator("#new-session-where-trigger").click();
-      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const where = page.locator(".oc-popover.new-session-page__where-popover");
       await where.getByRole("button", { name: /Writer runner/u }).waitFor();
       expect(await where.locator('[data-value="cloud:aws"]').count()).toBe(0);
       expect(await where.locator('[data-action="connect-machine"]').count()).toBe(0);
@@ -180,24 +181,6 @@ suite.define(() => {
     }
   });
 
-  it("shows paired devices, cloud profiles, and Connect to admins", async () => {
-    const { context, page } = await openDraft([
-      "operator.read",
-      "operator.write",
-      "operator.admin",
-    ]);
-    try {
-      await page.locator("#new-session-where-trigger").click();
-      const where = page.locator("wa-popover.new-session-page__where-popover");
-      await where.locator('[data-value="device:writer-runner"]').waitFor();
-      await where.locator('[data-value="cloud:aws"]').waitFor();
-      await where.locator('[data-action="connect-machine"]').waitFor();
-      await where.locator('[data-action="manage-cloud-workers"]').waitFor();
-    } finally {
-      await context.close();
-    }
-  });
-
   it("lets read-scoped operators search projects without exposing clone actions", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
@@ -224,7 +207,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
       await page.locator("#new-session-project-trigger").click();
-      const place = page.locator("wa-popover.new-session-page__project-popover");
+      const place = page.locator(".oc-popover.new-session-page__project-popover");
       await place.getByRole("searchbox").fill("openclaw");
       await gateway.waitForRequest("projects.searchRemote");
 
@@ -499,7 +482,7 @@ suite.define(() => {
     );
     try {
       await expect
-        .poll(() => page.locator(".sidebar-session-toolbar .sidebar-new-session").isDisabled())
+        .poll(() => page.locator(".sidebar-rail .sidebar-new-session").isDisabled())
         .toBe(true);
       const submit = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => submit.isDisabled()).toBe(true);
@@ -521,12 +504,7 @@ suite.define(() => {
       await gateway.closeLatest(1001, "new-session scope proof");
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
-          }),
+          evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase),
         )
         .toBe("reconnecting");
 

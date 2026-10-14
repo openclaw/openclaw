@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -64,17 +65,28 @@ export function resolveModelExtraParamSources(params: {
 /** Returns whether embedded OpenClaw would apply authored provider request parameters. */
 export function hasAuthoredProviderRequestParams(
   params: Parameters<typeof resolveModelExtraParamSources>[0],
+  options?: { nativeContextManagement?: boolean },
 ): boolean {
   const sources = resolveModelExtraParamSources(params);
+  // These are host compaction controls, never credentials, privacy policy, or custom payload.
+  // Native context management owns its trigger and cannot reproduce these tuning values.
+  const usesHostCompaction = (key: string, value: unknown) =>
+    options?.nativeContextManagement === true &&
+    ((key === "responsesServerCompaction" && typeof value === "boolean") ||
+      (key === "responsesCompactThreshold" &&
+        ((typeof value === "number" && Number.isFinite(value) && value > 0) ||
+          (typeof value === "string" && parseStrictPositiveInteger(value) !== undefined))));
   if (
-    [sources.defaultParams, sources.agentParams].some(
-      (source) => source !== undefined && Object.keys(source).length > 0,
+    [sources.defaultParams, sources.agentParams].some((source) =>
+      Object.entries(source ?? {}).some(([key, value]) => !usesHostCompaction(key, value)),
     )
   ) {
     return true;
   }
   return [sources.modelParams, sources.agentModelParams].some((modelParams) =>
-    Object.entries(modelParams ?? {}).some(([key, value]) => !isAgentRuntimeModelParam(key, value)),
+    Object.entries(modelParams ?? {}).some(
+      ([key, value]) => !usesHostCompaction(key, value) && !isAgentRuntimeModelParam(key, value),
+    ),
   );
 }
 

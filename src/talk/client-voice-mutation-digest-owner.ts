@@ -416,7 +416,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
   }
 
   private startAttempt(key: string, intent: MutationDigestIntent<TContext>): void {
-    runInDetachedAsyncContext(() => {
+    void runInDetachedAsyncContext(async () => {
       const settlement = intent.queuedSettlement;
       delete intent.queuedSettlement;
       const attempt = new AbortController();
@@ -428,60 +428,49 @@ export class ClientVoiceMutationDigestOwner<TContext> {
       timeout.unref?.();
       // Abort is cooperative, not a wall-clock completion guarantee. An adapter
       // that ignores it keeps this exact slot so repeated retries cannot fan out.
-      let completion: Promise<boolean>;
       try {
         const run = () => this.options.attempt({ ...intent, signal: attempt.signal });
-        completion = settlement ? settlement.run(run) : run();
+        const complete = await (settlement ? settlement.run(run) : run());
+        if (complete) {
+          this.deleteIntent(key, intent);
+        } else {
+          // A live consult is a defer; its completion event owns the next retry.
+          this.clearFailureState(intent);
+        }
       } catch (error) {
-        completion = Promise.reject(error instanceof Error ? error : new Error(String(error)));
-      }
-      void completion
-        .then((complete) => {
-          if (complete) {
-            this.deleteIntent(key, intent);
-          } else {
-            // A live consult is a legitimate defer, not a delivery failure. Its
-            // run-completion event owns the next retry and must not inherit expiry.
-            this.clearFailureState(intent);
-          }
-        })
-        .catch((error: unknown) => {
-          if (this.activeAttempts.get(key) !== attempt) {
-            return;
-          }
-          if (hasSqliteWorkerOutcomeUnknown(error)) {
-            this.blockRetry(key, intent);
-            this.options.warn(
-              "voice mutation digest settlement is unknown; delivery was not replayed",
-            );
-            return;
-          }
-          if (this.options.deliveryState?.(intent.context) === "uncertain") {
-            this.blockRetry(key, intent);
-            this.options.warn(
-              "voice mutation digest may have been delivered; delivery was not replayed",
-            );
-            return;
-          }
-          intent.failedAttempts += 1;
-          const message = error instanceof Error ? error.message : String(error);
-          if (intent.failedAttempts >= this.policy.maxAttemptFailures) {
-            this.stopAfterFailure(
-              key,
-              intent,
-              `after ${intent.failedAttempts} failed attempts: ${message}`,
-            );
-            return;
-          }
-          this.options.warn(message);
-          this.retainAfterFailure(key, intent);
-        })
-        .finally(() => {
-          settlement?.release();
-          clearTimeout(timeout);
-          if (this.activeAttempts.get(key) !== attempt) {
-            return;
-          }
+        if (this.activeAttempts.get(key) !== attempt) {
+          return;
+        }
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          this.blockRetry(key, intent);
+          this.options.warn(
+            "voice mutation digest settlement is unknown; delivery was not replayed",
+          );
+          return;
+        }
+        if (this.options.deliveryState?.(intent.context) === "uncertain") {
+          this.blockRetry(key, intent);
+          this.options.warn(
+            "voice mutation digest may have been delivered; delivery was not replayed",
+          );
+          return;
+        }
+        intent.failedAttempts += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        if (intent.failedAttempts >= this.policy.maxAttemptFailures) {
+          this.stopAfterFailure(
+            key,
+            intent,
+            `after ${intent.failedAttempts} failed attempts: ${message}`,
+          );
+          return;
+        }
+        this.options.warn(message);
+        this.retainAfterFailure(key, intent);
+      } finally {
+        settlement?.release();
+        clearTimeout(timeout);
+        if (this.activeAttempts.get(key) === attempt) {
           this.activeAttempts.delete(key);
           if (intent.expireAfterActive && this.intents.get(key) === intent) {
             this.stopAfterFailure(
@@ -489,14 +478,12 @@ export class ClientVoiceMutationDigestOwner<TContext> {
               intent,
               `after retry retention expired (${intent.failedAttempts} failed attempts)`,
             );
-            this.pump();
-            return;
-          }
-          if (this.retryAfterActiveKeys.delete(key) && this.intents.has(key)) {
+          } else if (this.retryAfterActiveKeys.delete(key) && this.intents.has(key)) {
             this.pendingKeys.add(key);
           }
           this.pump();
-        });
+        }
+      }
     });
   }
 }

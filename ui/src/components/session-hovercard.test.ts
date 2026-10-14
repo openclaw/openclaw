@@ -826,6 +826,7 @@ describe("session hovercard", () => {
       participantTrigger?.dispatchEvent(touchDown);
       participantTrigger?.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
       participantTrigger?.click();
+      await participantsTooltip?.updateComplete;
       expect(participantsTooltip?.hasAttribute("open")).toBe(true);
       expect(participantTrigger?.textContent).toContain("4 others");
       expect(
@@ -871,6 +872,7 @@ describe("session hovercard", () => {
     trigger.dispatchEvent(pointer);
     trigger.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
     trigger.click();
+    await tooltip.updateComplete;
     expect(tooltip.hasAttribute("open")).toBe(true);
     const name = container.querySelector<HTMLAnchorElement>(
       ".session-hovercard__attribution-name",

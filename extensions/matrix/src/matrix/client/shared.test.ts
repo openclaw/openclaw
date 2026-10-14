@@ -1,7 +1,12 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMatrixMonitorTaskRunner } from "../monitor/task-runner.js";
-import { authFor, createMockClient } from "./shared.test-support.js";
+import {
+  authFor,
+  createMockClient,
+  prepareMockMatrixClientStorage,
+} from "./shared.test-support.js";
 import type { MatrixAuth } from "./types.js";
 
 const resolveMatrixAuthMock = vi.hoisted(() => vi.fn());
@@ -15,8 +20,10 @@ vi.mock("./config.js", () => ({
   resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 
+// mock-isolation: Keep disk and SDK initialization outside these generation lifecycle fixtures.
 vi.mock("./create-client.js", () => ({
   createMatrixClient: createMatrixClientMock,
+  prepareMatrixClientStorage: prepareMockMatrixClientStorage,
 }));
 
 let acquireSharedMatrixClient: typeof import("./shared.js").acquireSharedMatrixClient;
@@ -121,6 +128,86 @@ describe("shared Matrix client generations", () => {
 
     await secondLease.release();
     expect(secondClient.stopAndPersist).toHaveBeenCalledTimes(1);
+  });
+
+  it("converges concurrent creation and rejects incompatible policy before another SDK client", async () => {
+    const auth = authFor("main");
+    const client = createMockClient("main");
+    const creation = createDeferred<typeof client>();
+    const creationEntered = createDeferred<void>();
+    createMatrixClientMock.mockImplementationOnce(() => {
+      creationEntered.resolve();
+      return creation.promise;
+    });
+    const first = acquireStoppedClient(auth, "monitor");
+    const concurrent = acquireStoppedClient(auth);
+    await creationEntered.promise;
+    const incompatible = acquireStoppedClient({ ...auth, allowPrivateNetwork: true });
+    const refused = expect(incompatible).rejects.toMatchObject({
+      code: "MATRIX_ACCOUNT_RESTARTING",
+      retryable: true,
+    });
+    creation.resolve(client);
+    const [monitor, action] = await Promise.all([first, concurrent]);
+    await refused;
+    expect(action.client).toBe(monitor.client);
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    await action.release();
+    await monitor.release();
+  });
+
+  it("joins explicit retirement for a changed transport without creating a second client early", async () => {
+    const auth = authFor("main");
+    const oldClient = createMockClient("old");
+    const nextClient = createMockClient("next");
+    const stopEntered = createDeferred<void>();
+    const stopFinished = createDeferred<void>();
+    oldClient.stopWithoutPersist.mockImplementation(async () => {
+      stopEntered.resolve();
+      await stopFinished.promise;
+    });
+    createMatrixClientMock.mockResolvedValueOnce(oldClient).mockResolvedValueOnce(nextClient);
+    const monitor = await acquireStoppedClient(auth, "monitor");
+    const retirement = monitor.release({ mode: "discard" });
+    await stopEntered.promise;
+    const caller = new AbortController();
+    const cancelled = acquireSharedMatrixClient({
+      auth: { ...auth, allowPrivateNetwork: true },
+      startClient: false,
+      abortSignal: caller.signal,
+    });
+    caller.abort();
+    await expectMatrixStartupAbort(cancelled);
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    const successor = acquireStoppedClient({ ...auth, allowPrivateNetwork: true });
+    stopFinished.resolve();
+    await retirement;
+    const replacement = await successor;
+    expect(replacement.client).toBe(nextClient);
+    await replacement.release();
+  });
+
+  it("shares one client generation across duplicate module identities", async () => {
+    const moduleA = await importFreshModule<typeof import("./shared.js")>(
+      import.meta.url,
+      "./shared.js?scope=duplicate-a",
+    );
+    const moduleB = await importFreshModule<typeof import("./shared.js")>(
+      import.meta.url,
+      "./shared.js?scope=duplicate-b",
+    );
+    const auth = authFor("main");
+    const client = createMockClient("shared");
+    createMatrixClientMock.mockResolvedValue(client);
+
+    const first = await moduleA.acquireSharedMatrixClient({ auth, startClient: false });
+    const second = await moduleB.acquireSharedMatrixClient({ auth, startClient: false });
+
+    expect(first.client).toBe(client);
+    expect(second.client).toBe(client);
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    await Promise.all([first.release(), second.release()]);
+    expect(client.stopAndPersist).toHaveBeenCalledOnce();
   });
 
   it("runs registered monitor cleanup during forced account retirement", async () => {

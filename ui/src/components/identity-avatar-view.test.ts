@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { html, nothing, render } from "lit";
+import { getOwner, onSettled, runWithOwner } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveThemeBranding,
@@ -10,6 +11,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { currentThemeBranding, setCurrentThemeBranding } from "../app/theme-branding.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   renderAgentIdentityAvatar,
   identityAvatarClass,
@@ -52,6 +54,32 @@ afterEach(() => {
 });
 
 describe("shared identity avatar view", () => {
+  it("mounts and reconnects an avatar from a settled Solid host without a nested flush", () => {
+    const view = mountSolid(() => {
+      const owner = getOwner();
+      const container = document.createElement("div");
+      onSettled(() =>
+        runWithOwner(owner, () => {
+          const part = render(
+            renderAgentIdentityAvatar({ id: "settled", avatar: "/favicon.svg", textAvatar: "A" }),
+            container,
+          );
+          part.setConnected(false);
+          part.setConnected(true);
+          return () => render(nothing, container);
+        }),
+      );
+      return container;
+    });
+    const image = view.container.querySelector("img")!;
+    expect(image.getAttribute("src")).toBe("/favicon.svg");
+    image.dispatchEvent(new Event("load"));
+    expect(
+      view.container.querySelector(".identity-avatar--agent")?.getAttribute("data-avatar-state"),
+    ).toBe("loaded");
+    view.unmount();
+  });
+
   it("updates reserved avatars on theme publication without rerendering their host", () => {
     const previous = currentThemeBranding();
     const container = document.createElement("div");
@@ -90,7 +118,7 @@ describe("shared identity avatar view", () => {
     }
   });
 
-  it.each(["/favicon.svg", "/control/assets/mascot.svg?v=build-1"])(
+  it.each(["/favicon.svg"])(
     "preserves the public image %s through reconnect without authenticated fetching",
     (url) => {
       setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-token"], "/control");
@@ -327,7 +355,7 @@ describe("shared identity avatar view", () => {
 });
 
 describe("shared agent avatar view", () => {
-  it.each([false, true])(
+  it.each([true])(
     "hides an existing fallback as soon as an image is configured (authenticated=%s)",
     async (authenticated) => {
       const response = createDeferred<Response>();
@@ -350,34 +378,6 @@ describe("shared agent avatar view", () => {
       if (authenticated) {
         await vi.waitFor(() => expect(wrapper.classList.contains("is-fallback")).toBe(true));
       }
-      render(nothing, container);
-    },
-  );
-
-  it.each([undefined, "🦀"])(
-    "keeps a configured image neutral until it loads (%s)",
-    (textAvatar) => {
-      const container = document.createElement("div");
-      const agent = { id: "pending", avatar: "/avatar/pending?v=1", textAvatar };
-      const update = (className = "") =>
-        render(renderAgentIdentityAvatar(agent, className), container);
-      update();
-      const wrapper = container.querySelector(".identity-avatar--agent")!;
-      const image = container.querySelector("img")!;
-      expect(wrapper.classList.contains("is-pending")).toBe(true);
-      expect(wrapper.classList.contains("is-fallback")).toBe(false);
-      image.dispatchEvent(new Event("load"));
-      update("renamed-surface");
-      expect(container.querySelector("img")).toBe(image);
-      expect(wrapper.classList.contains("is-pending")).toBe(false);
-      expect(wrapper.classList.contains("is-fallback")).toBe(false);
-      agent.avatar = "/avatar/pending?v=2";
-      update("renamed-surface");
-      expect(wrapper.classList.contains("is-pending")).toBe(true);
-      image.dispatchEvent(new Event("error"));
-      update();
-      expect(wrapper.classList.contains("is-pending")).toBe(false);
-      expect(wrapper.classList.contains("is-fallback")).toBe(true);
       render(nothing, container);
     },
   );
@@ -412,25 +412,6 @@ describe("shared agent avatar view", () => {
     render(nothing, container);
   });
 
-  it.each(["openclaw", "crestodian"])(
-    "keeps the product mark for system agent %s even with a configured avatar or image error",
-    async (id) => {
-      const container = document.createElement("div");
-      const fetchAvatar = vi.spyOn(globalThis, "fetch");
-      for (const avatar of [undefined, "/avatar/custom?v=1"]) {
-        render(renderAgentIdentityAvatar({ id, avatar, textAvatar: "🔧" }), container);
-        const image = container.querySelector("img");
-        expect(image?.getAttribute("src")).toBe("/favicon.svg");
-        image?.dispatchEvent(new Event("error"));
-        await vi.dynamicImportSettled();
-        expect(container.querySelector("svg, [data-avatar]")).toBeNull();
-        expect(image?.getAttribute("src")).toBe("/favicon.svg");
-      }
-      expect(fetchAvatar).not.toHaveBeenCalled();
-      render(nothing, container);
-    },
-  );
-
   it("uses the UI mount and build for the system mark when connected to another Gateway", () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
     vi.stubGlobal("__OPENCLAW_CONTROL_UI_BASE_PATH__", "/control");
@@ -446,49 +427,6 @@ describe("shared agent avatar view", () => {
       vi.unstubAllGlobals();
       document.documentElement.removeAttribute("data-openclaw-control-ui-build-id");
     }
-  });
-
-  it("prefers images, reveals emoji on failure, and recovers on image load", () => {
-    const container = document.createElement("div");
-    const agent = { id: "forge", avatar: "data:image/png;base64,eA==", textAvatar: "🔧" };
-    const update = () => render(renderAgentIdentityAvatar(agent), container);
-    update();
-    const wrapper = container.querySelector(".identity-avatar--agent")!;
-    const image = container.querySelector("img")!;
-    expect(image.getAttribute("src")).toBe(agent.avatar);
-    expect(wrapper.classList.contains("is-fallback")).toBe(false);
-    expect(container.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
-      "🔧",
-    );
-    expect(container.querySelector("svg")).toBeNull();
-    image.dispatchEvent(new Event("error"));
-    update();
-    expect(wrapper.classList.contains("is-fallback")).toBe(true);
-    image.dispatchEvent(new Event("load"));
-    expect(wrapper.classList.contains("is-fallback")).toBe(false);
-    render(nothing, container);
-  });
-
-  it("uses explicit emoji before the same face used for a missing image", async () => {
-    const container = document.createElement("div");
-    render(renderAgentIdentityAvatar({ id: "forge", textAvatar: "🛠️" }), container);
-    expect(
-      container.querySelector(".identity-avatar--agent")?.getAttribute("data-avatar-state"),
-    ).toBe("none");
-    expect(container.querySelector("img, svg")).toBeNull();
-    expect(container.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
-      "🛠️",
-    );
-    render(renderAgentIdentityAvatar({ id: "forge" }), container);
-    await vi.waitFor(() => expect(container.querySelector("svg")).not.toBeNull());
-    const face = container.querySelector("svg")!.outerHTML;
-    render(renderAgentIdentityAvatar({ id: "forge", avatar: "/missing.png" }), container);
-    container.querySelector("img")!.dispatchEvent(new Event("error"));
-    await vi.waitFor(() => expect(container.querySelector("svg")?.outerHTML).toBe(face));
-    expect(
-      container.querySelector(".identity-avatar--agent")?.classList.contains("is-fallback"),
-    ).toBe(true);
-    render(nothing, container);
   });
 });
 

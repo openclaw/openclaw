@@ -108,7 +108,7 @@ export function buildApiKeyCredential(
   };
 }
 
-/** @deprecated Use upsertApiKeyProfileAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use upsertApiKeyProfileAsync. Retained until an announced stable removal window. */
 export function upsertApiKeyProfile(params: {
   provider: string;
   input: SecretInput;

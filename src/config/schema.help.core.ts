@@ -1,6 +1,7 @@
 import { META_FIELD_HELP } from "./schema.meta.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
+import { DATABASE_FIELD_HELP } from "./zod-schema.database.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
 import { STORAGE_FIELD_HELP } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
@@ -70,7 +71,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "logging.consoleStyle":
     'Console output format style: "pretty" or "json". Use json for machine parsing pipelines and pretty for human-first terminal workflows.',
   "logging.redactPatterns":
-    "Custom regex strings replace the default string list for log/transcript output and add to safety-boundary UI/tool/diagnostic rules. Built-in form-body, structured-auth, and AWS bare-key protections always apply. Use this to mask deployment-specific tokens and identifiers.",
+    "Custom regex strings replace the default string list for logs and diagnostics. Built-in form-body, structured-auth, and AWS bare-key protections always apply. Tool arguments, results, and session transcripts are not redacted. Use this to mask deployment-specific tokens and identifiers in diagnostic output.",
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel":
@@ -85,6 +86,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
+  ...DATABASE_FIELD_HELP,
   ...STORAGE_FIELD_HELP,
   ...DESKTOP_FIELD_HELP,
   gateway:

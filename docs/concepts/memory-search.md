@@ -124,7 +124,7 @@ If only one path is available, the other runs alone. Keyword boosts stay bounded
 without clipping distinct lexical scores to the same maximum, so relevance
 continues to influence ranking when dated notes decay.
 
-The builtin engine then applies deterministic ranking:
+The builtin engine then applies fixed ranking rules:
 
 ```text
 hybrid relevance × recency decay × importance multiplier
@@ -157,7 +157,9 @@ Hybrid ranking also scores retrieved keyword candidates from their stored
 embeddings when they fall outside the top vector candidates. This keeps a
 strong keyword answer eligible when many similar notes fill the vector window.
 
-## Deterministic trigger recall
+<a id="deterministic-trigger-recall" />
+
+## Rule-based trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound
 message with short trigger phrases stored on indexed entries. Strong matches
@@ -200,7 +202,7 @@ vectors. Verify the provider's model, then rebuild with
 
 ## Improving search quality
 
-Two deterministic ranking passes are enabled by default for hybrid search.
+Two rule-based ranking passes are enabled by default for hybrid search.
 
 ### Recency decay
 

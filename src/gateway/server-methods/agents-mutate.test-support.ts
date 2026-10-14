@@ -120,6 +120,7 @@ export function deletionJournal(
     sessionsDir: "/journal/sessions",
     createdAt: 1,
     cleanupCompleted: false,
+    phase: "retiring",
     deleteFiles: true,
     databasePaths: [],
     cleanupPaths: [],
@@ -138,7 +139,7 @@ export function registerAgentCreationCommitTests(fixture: {
   applyAgentConfig: Mock;
   rootWrite: Mock;
   writeConfigFile: Mock;
-  hasDeletedAgentDatabases: Mock<() => boolean>;
+  captureDeletedAgentDatabaseFences: Mock<() => [string, string][]>;
   reviveAgentDatabases: Mock<(agentIds: readonly string[]) => Promise<void>>;
   logGatewayWarn: Mock;
 }) {
@@ -168,7 +169,9 @@ export function registerAgentCreationCommitTests(fixture: {
   });
 
   it("reports committed creation when deleted database reader revival fails", async () => {
-    fixture.hasDeletedAgentDatabases.mockReturnValue(true);
+    fixture.captureDeletedAgentDatabaseFences.mockReturnValue([
+      ["/agents/test-agent/openclaw-agent.sqlite", "test-agent"],
+    ]);
     fixture.reviveAgentDatabases.mockRejectedValueOnce(new Error("worker acknowledgement failed"));
     const { respond, promise } = fixture.create({ name: "Test Agent" });
 
@@ -280,6 +283,21 @@ export function expectRespondOk(
   return payload;
 }
 
+export function expectPendingDeletion(
+  respond: ReturnType<typeof vi.fn>,
+  expected: Record<string, unknown>,
+) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    expect.objectContaining(expected),
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("deletion cleanup is still pending"),
+    }),
+  );
+  return expectRecordFields(mockCallArg(respond, 0, 1), expected);
+}
+
 export function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: string) {
   expect(mockCallArg(respond)).toBe(false);
   expect(mockCallArg(respond, 0, 1)).toBeUndefined();
@@ -300,4 +318,22 @@ export function expectStringContaining(value: unknown, text: string) {
 export function expectStringNotContaining(value: unknown, text: string) {
   expect(typeof value).toBe("string");
   expect(value as string).not.toContain(text);
+}
+
+export function createTrashAssertions(
+  movePathToTrash: Mock<(pathname?: string) => Promise<string>>,
+) {
+  return {
+    expectTrashedWithinParent: (pathname: string, declaredPath = pathname): void => {
+      expect(movePathToTrash).toHaveBeenCalledWith(
+        pathname,
+        expect.objectContaining({
+          allowedRoots: expect.arrayContaining([path.dirname(declaredPath)]),
+        }),
+      );
+    },
+    expectNotTrashed: (pathname: string): void => {
+      expect(movePathToTrash.mock.calls.map(([target]) => target)).not.toContain(pathname);
+    },
+  };
 }

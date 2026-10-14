@@ -1,12 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sleepWithAbort } from "@openclaw/retry";
 import type {
   SessionsAssignOwnerResult,
   SessionsPatchResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
@@ -68,7 +67,6 @@ import {
 } from "./sessions-tool-schema.js";
 
 const GROUP_NAME_MAX_LENGTH = 512;
-const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
 const log = createSubsystemLogger("agents/sessions");
 
 type SessionsToolOptions = {
@@ -526,7 +524,11 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (patch.archived === true && isRequesterSession && key !== "global") {
         if (key !== resolveAgentMainSessionKey({ cfg, agentId })) {
           const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-          const currentEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
+          const currentEntry = await readSessionEntryReadOnlyInWorker({
+            agentId,
+            sessionKey: key,
+            storePath,
+          });
           const released = getSessionWorkAdmissionRelease({
             scope: storePath,
             identities: [key, currentEntry?.sessionId],
@@ -571,20 +573,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                   archived: true,
                   ...expectedSessionIdentity,
                 };
-                let unobservedRunRetries = 0;
-
                 while (true) {
-                  const latestEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
-                  if (latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId) {
-                    return;
-                  }
-
                   const competingRelease = getSessionWorkAdmissionRelease({
                     scope: storePath,
                     identities: archiveIdentities,
                   });
                   if (competingRelease) {
-                    unobservedRunRetries = 0;
                     await competingRelease;
                     continue;
                   }
@@ -595,10 +589,8 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                       : callGateway("sessions.patch", archivePatch));
                     return;
                   } catch (error) {
-                    // A new turn can enter after the idle check. Wait for that
-                    // admitted owner, or retry a transient gateway disconnect,
-                    // instead of losing an archive that was already scheduled.
-                    const message = formatErrorMessage(error);
+                    // A tracked competing turn can delay archival. Untracked
+                    // races and transport failures are best effort: warn below.
                     const retryableGatewayFailure =
                       error instanceof GatewayTransportError ||
                       isTransientNetworkError(error) ||
@@ -609,27 +601,14 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                     if (!retryableGatewayFailure) {
                       throw error;
                     }
-                    log.warn(`retrying deferred self-archive for ${key}: ${message}`);
                     const retryAfterRelease = getSessionWorkAdmissionRelease({
                       scope: storePath,
                       identities: archiveIdentities,
                     });
-                    if (retryAfterRelease) {
-                      unobservedRunRetries = 0;
-                      await retryAfterRelease;
-                    } else {
-                      // Projected work can outlive local admission tracking.
-                      // Cap the interval, not the archive, so it cannot spin or
-                      // abandon a session whose remote turn is still running.
-                      const retryDelayMs = Math.min(
-                        25 * 2 ** Math.min(unobservedRunRetries, 8),
-                        SELF_ARCHIVE_MAX_RETRY_DELAY_MS,
-                      );
-                      // A pending self-archive must not keep a shutting-down
-                      // gateway alive solely to retry its own transport.
-                      await sleepWithAbort(retryDelayMs, undefined, { ref: false });
-                      unobservedRunRetries = Math.min(unobservedRunRetries + 1, 8);
+                    if (!retryAfterRelease) {
+                      throw error;
                     }
+                    await retryAfterRelease;
                   }
                 }
               }),

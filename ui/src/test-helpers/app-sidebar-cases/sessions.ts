@@ -16,6 +16,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import "./session-pagination.ts";
 import "./session-navigation.ts";
 
@@ -73,7 +74,7 @@ describe("AppSidebar session pagination", () => {
     newestRow.createdAt = 2_000;
 
     sessions.publishList({ result: refreshed.result, agentId: refreshed.agentId });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     expect(
       Array.from(
@@ -101,29 +102,29 @@ describe("AppSidebar session pagination", () => {
     expect(button("Collapse")).toBeNull();
 
     button("Show more")?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(rows()).toHaveLength(20);
     expect(button("Collapse")).toBeNull();
 
     button("Show more")?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(rows()).toHaveLength(30);
     expect(button("Collapse")).toBeNull();
 
     button("Show more")?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(rows()).toHaveLength(40);
     expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
     button("Show more")?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(rows()).toHaveLength(41);
     expect(button("Show more")).toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
     button("Collapse")?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(rows()).toHaveLength(10);
     expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
@@ -348,9 +349,8 @@ describe("AppSidebar session source lifecycle", () => {
       new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
     );
     await sidebar.updateComplete;
-    sidebar
-      .querySelector(".sidebar-rail-pin-menu")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "remove" } } }));
+    const menu = sidebar.querySelector(".sidebar-rail-pin-menu")!;
+    menu.querySelector<HTMLElement>('[data-value="remove"]')!.click();
     await sidebar.updateComplete;
     expect(pinnedEntry()).toBeNull();
     expect(sidebar.sidebarEntries).toEqual([]);

@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -9,6 +10,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -33,23 +35,32 @@ const overlay = { senderIsOwner: true, disableTools: false, traceAuthorized: fal
 async function createPolicyOperation(
   name: string,
   options: {
-    incognito?: boolean;
     mainAlias?: boolean;
     store?: string;
     policyStorePath?: string;
   } = {},
 ) {
-  const { incognito, mainAlias } = options;
-  const policyKey = incognito
-    ? `agent:main:dashboard:incognito-${name}`
-    : `agent:main:${name}-policy`;
+  const { mainAlias } = options;
+  const policyKey = `agent:main:${name}-policy`;
+  const config: OpenClawConfig = {
+    ...(mainAlias || options.store
+      ? {
+          session: {
+            ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
+            ...(options.store ? { store: options.store } : {}),
+          },
+        }
+      : {}),
+    agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
+    tools: { sandbox: { tools: { deny: ["exec"] } } },
+  };
+  setRuntimeConfigSnapshot(config);
   const policyEntry = await upsertSessionEntryCore(
     { agentId: "main", sessionKey: policyKey, storePath: options.policyStorePath },
     {
       sessionId: name,
       updatedAt: 1,
       sandboxMode: "off",
-      ...(incognito ? { incognito: true } : {}),
     },
   );
   if (!policyEntry) {
@@ -62,18 +73,7 @@ async function createPolicyOperation(
     sessionKey: `agent:main:${name}`,
     runtimePolicySessionKey: mainAlias ? "agent:main:main" : policyKey,
     senderIsOwner: true,
-    config: {
-      ...(mainAlias || options.store
-        ? {
-            session: {
-              ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
-              ...(options.store ? { store: options.store } : {}),
-            },
-          }
-        : {}),
-      agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
-      tools: { sandbox: { tools: { deny: ["exec"] } } },
-    },
+    config,
   });
   const operation = createTestReplyOperation({ sessionKey: run.run.sessionKey, sessionId: name });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
@@ -115,6 +115,7 @@ it.each(["worker", "compatibility"] as const)(
   "retains supplied %s source policy alongside an overlay through final native admission",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const source = await createPolicyOperation("source");
       const target = await createPolicyOperation("target");
       const assertSourcePolicy = (fingerprint: string | undefined) => {
@@ -188,18 +189,18 @@ it.each(["worker", "compatibility"] as const)(
 );
 
 it.each([
-  { storage: "file", change: "session", admission: "compatibility" },
-  { storage: "file", change: "revision", admission: "compatibility" },
-  { storage: "file", change: "metadata", admission: "compatibility" },
-  { storage: "incognito", change: "session", admission: "compatibility" },
-  { storage: "file", change: "alias", admission: "worker" },
-  { storage: "file", change: "other-store", admission: "worker" },
-  { storage: "file", change: "missing-store", admission: "worker" },
-  { storage: "file", change: "other-store-move", admission: "worker" },
+  { change: "session", admission: "compatibility" },
+  { change: "revision", admission: "compatibility" },
+  { change: "metadata", admission: "compatibility" },
+  { change: "alias", admission: "worker" },
+  { change: "other-store", admission: "worker" },
+  { change: "missing-store", admission: "worker" },
+  { change: "other-store-move", admission: "worker" },
 ] as const)(
-  "retains $storage policy lineage in $admission admission after $change",
-  async ({ storage, change, admission }) => {
+  "retains file policy lineage in $admission admission after $change",
+  async ({ change, admission }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const multipleStores = change.startsWith("other-store") || change === "missing-store";
       const store = state.statePath(
         "configured",
@@ -226,8 +227,7 @@ it.each([
       const { operation, fingerprint, policyKey, policyEntry } = await createPolicyOperation(
         "retained-policy",
         {
-          incognito: storage === "incognito",
-          mainAlias: storage === "file",
+          mainAlias: true,
           ...(multipleStores
             ? {
                 store,

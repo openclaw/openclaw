@@ -212,7 +212,9 @@ describe("Sessions query clearing", () => {
         document.body.append(overlay);
       }
       if (owner === "popover") {
-        container.querySelector("wa-popover")!.setAttribute("open", "");
+        overlay = document.createElement("wa-popover");
+        overlay.setAttribute("open", "");
+        document.body.append(overlay);
       }
       if (owner === "modal") {
         overlay = document.createElement("dialog");
@@ -235,7 +237,7 @@ describe("Sessions query clearing", () => {
       expect(input.value).toBe("keep me");
       expect(event.defaultPrevented).toBe(owner === "prevented");
     } finally {
-      container.querySelector("wa-popover")?.removeAttribute("open");
+      overlay?.removeAttribute("open");
       overlay?.remove();
       container.remove();
     }

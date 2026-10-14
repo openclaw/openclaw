@@ -3,7 +3,8 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as ttsRuntime from "../../tts/tts.js";
 import { getCoreTtsToolResultMediaUrls } from "./tts-tool-result-provenance.js";
 import { createTtsTool } from "./tts-tool.js";
@@ -21,6 +22,7 @@ function latestTextToSpeechArgs(): Record<string, unknown> {
 describe("createTtsTool", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    setRuntimeConfigSnapshot({});
     textToSpeechSpy = vi.spyOn(ttsRuntime, "textToSpeech");
     textToSpeechSpy.mockResolvedValue({
       success: true,
@@ -28,6 +30,10 @@ describe("createTtsTool", () => {
       provider: "test",
       voiceCompatible: true,
     });
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("stores audio delivery in details.media and preserves the spoken text in content", async () => {

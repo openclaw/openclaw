@@ -287,7 +287,7 @@ final class TalkModeManager {
     private var incrementalSpeechBuffer = IncrementalSpeechBuffer()
     private var incrementalSpeechContext: IncrementalSpeechContext?
     private var incrementalSpeechPrefetch: IncrementalSpeechPrefetchState?
-    private var incrementalSpeechPrefetchMonitorTask: Task<Void, Never>?
+    private var incrementalSpeechPrefetchContext: IncrementalSpeechContext?
 
     #if DEBUG
     @ObservationIgnored private var testStartEntryHandler: (@MainActor () async -> Void)?
@@ -605,7 +605,7 @@ final class TalkModeManager {
         let micOk = if self.allowSimulatorCapture {
             true
         } else {
-            await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "TalkMode")
+            await VoicePermissionSupport.requestMicrophonePermission()
         }
         GatewayDiagnostics.log(
             "talk.timeline microphone permission ok=\(micOk) "
@@ -643,7 +643,7 @@ final class TalkModeManager {
         let speechOk = if self.allowSimulatorCapture {
             true
         } else {
-            await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "TalkMode")
+            await VoicePermissionSupport.requestSpeechPermission()
         }
         guard speechOk else {
             self.logger.warning("start blocked: speech permission denied")
@@ -1142,7 +1142,7 @@ final class TalkModeManager {
     {
         guard !self.allowSimulatorCapture else { return }
 
-        let micOk = await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "TalkMode")
+        let micOk = await VoicePermissionSupport.requestMicrophonePermission()
         try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
         guard micOk else {
             self.setStatus(
@@ -1154,7 +1154,7 @@ final class TalkModeManager {
             ])
         }
 
-        let speechOk = await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "TalkMode")
+        let speechOk = await VoicePermissionSupport.requestSpeechPermission()
         try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
         guard speechOk else {
             let status = VoicePermissionSupport.speechPermissionMessage(
@@ -1374,7 +1374,9 @@ final class TalkModeManager {
                 self?.updateMicLevel(level, recognitionGeneration: recognitionGeneration)
             }
         }
-        let tapBlock = Self.makeAudioTapAppendCallback(request: request, diagnostics: tapDiagnostics)
+        let tapBlock = SpeechRecognitionAudioTap.make(request: request) { buffer in
+            tapDiagnostics.onBuffer(buffer)
+        }
         input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
         self.inputTapInstalled = true
 
@@ -1568,16 +1570,6 @@ final class TalkModeManager {
         self.captureMode = .idle
         self.lastTranscript = ""
         self.lastHeard = nil
-    }
-
-    private nonisolated static func makeAudioTapAppendCallback(
-        request: SFSpeechAudioBufferRecognitionRequest,
-        diagnostics: AudioTapDiagnostics) -> AVAudioNodeTapBlock
-    {
-        { buffer, _ in
-            request.append(buffer)
-            diagnostics.onBuffer(buffer)
-        }
     }
 
     private func handleTranscript(
@@ -3130,6 +3122,8 @@ final class TalkModeManager {
         self.incrementalSpeechUsed = true
         if self.incrementalSpeechTask == nil {
             self.startIncrementalSpeechTask()
+        } else if let context = self.incrementalSpeechPrefetchContext {
+            self.prefetchUpcomingIncrementalSegment(context: context)
         }
     }
 
@@ -3161,14 +3155,15 @@ final class TalkModeManager {
                     for: segment,
                     context: context)
                 guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
-                self.startIncrementalPrefetchMonitor(context: context)
+                self.incrementalSpeechPrefetchContext = context
+                self.prefetchUpcomingIncrementalSegment(context: context)
                 await self.speakIncrementalSegment(
                     segment,
                     context: context,
                     prefetchedAudio: prefetchedAudio,
                     speechGeneration: speechGeneration)
                 guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
-                self.cancelIncrementalPrefetchMonitor()
+                self.incrementalSpeechPrefetchContext = nil
             }
         }
         self.incrementalSpeechTask = task
@@ -3176,44 +3171,25 @@ final class TalkModeManager {
     }
 
     private func cancelIncrementalPrefetch() {
-        self.cancelIncrementalPrefetchMonitor()
+        self.incrementalSpeechPrefetchContext = nil
         self.incrementalSpeechPrefetch?.task.cancel()
         self.incrementalSpeechPrefetch = nil
     }
 
-    private func cancelIncrementalPrefetchMonitor() {
-        self.incrementalSpeechPrefetchMonitorTask?.cancel()
-        self.incrementalSpeechPrefetchMonitorTask = nil
-    }
-
-    private func startIncrementalPrefetchMonitor(context: IncrementalSpeechContext) {
-        self.cancelIncrementalPrefetchMonitor()
-        self.incrementalSpeechPrefetchMonitorTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                if self.ensureIncrementalPrefetchForUpcomingSegment(context: context) {
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 40_000_000)
-            }
-        }
-    }
-
-    private func ensureIncrementalPrefetchForUpcomingSegment(context: IncrementalSpeechContext) -> Bool {
+    private func prefetchUpcomingIncrementalSegment(context: IncrementalSpeechContext) {
         guard context.canUseElevenLabs else {
             self.cancelIncrementalPrefetch()
-            return false
+            return
         }
-        guard let nextSegment = incrementalSpeechQueue.first else { return false }
+        guard let nextSegment = incrementalSpeechQueue.first else { return }
         if let existing = incrementalSpeechPrefetch {
             if existing.segment == nextSegment, existing.context == context {
-                return true
+                return
             }
             existing.task.cancel()
             self.incrementalSpeechPrefetch = nil
         }
         self.startIncrementalPrefetch(segment: nextSegment, context: context)
-        return self.incrementalSpeechPrefetch != nil
     }
 
     private func startIncrementalPrefetch(segment: String, context: IncrementalSpeechContext) {
@@ -3228,7 +3204,7 @@ final class TalkModeManager {
             outputFormat: prefetchOutputFormat,
             language: context.language)
         let id = UUID()
-        let task = Task { [weak self] in
+        let task = Task<[Data]?, Never> { [weak self] in
             let stream = ElevenLabsTTSClient(apiKey: apiKey).streamSynthesize(voiceId: voiceId, request: request)
             var chunks: [Data] = []
             do {
@@ -3236,11 +3212,12 @@ final class TalkModeManager {
                     try Task.checkCancellation()
                     chunks.append(chunk)
                 }
-                self?.completeIncrementalPrefetch(id: id, chunks: chunks)
+                return chunks
             } catch is CancellationError {
-                self?.clearIncrementalPrefetch(id: id)
+                return nil
             } catch {
-                self?.failIncrementalPrefetch(id: id, error: error)
+                self?.logger.debug("incremental prefetch failed: \(error.localizedDescription, privacy: .public)")
+                return nil
             }
         }
         self.incrementalSpeechPrefetch = IncrementalSpeechPrefetchState(
@@ -3248,33 +3225,14 @@ final class TalkModeManager {
             segment: segment,
             context: context,
             outputFormat: prefetchOutputFormat,
-            chunks: nil,
             task: task)
-    }
-
-    private func completeIncrementalPrefetch(id: UUID, chunks: [Data]) {
-        guard var prefetch = incrementalSpeechPrefetch, prefetch.id == id else { return }
-        prefetch.chunks = chunks
-        self.incrementalSpeechPrefetch = prefetch
-    }
-
-    private func clearIncrementalPrefetch(id: UUID) {
-        guard let prefetch = incrementalSpeechPrefetch, prefetch.id == id else { return }
-        prefetch.task.cancel()
-        self.incrementalSpeechPrefetch = nil
-    }
-
-    private func failIncrementalPrefetch(id: UUID, error: any Error) {
-        guard self.incrementalSpeechPrefetch?.id == id else { return }
-        self.logger.debug("incremental prefetch failed: \(error.localizedDescription, privacy: .public)")
-        self.clearIncrementalPrefetch(id: id)
     }
 
     private func consumeIncrementalPrefetchedAudioIfAvailable(
         for segment: String,
         context: IncrementalSpeechContext) async -> IncrementalPrefetchedAudio?
     {
-        guard var prefetch = incrementalSpeechPrefetch else {
+        guard let prefetch = incrementalSpeechPrefetch else {
             return nil
         }
         guard prefetch.context == context else {
@@ -3285,17 +3243,11 @@ final class TalkModeManager {
         guard prefetch.segment == segment else {
             return nil
         }
-        if prefetch.chunks?.isEmpty ?? true {
-            await prefetch.task.value
-            guard !Task.isCancelled else { return nil }
-            guard let completed = incrementalSpeechPrefetch else { return nil }
-            guard completed.context == context, completed.segment == segment else { return nil }
-            prefetch = completed
-        }
-        guard let chunks = prefetch.chunks, !chunks.isEmpty else { return nil }
-        let prefetched = IncrementalPrefetchedAudio(chunks: chunks, outputFormat: prefetch.outputFormat)
+        let chunks = await prefetch.task.value
+        guard !Task.isCancelled, self.incrementalSpeechPrefetch?.id == prefetch.id else { return nil }
         self.incrementalSpeechPrefetch = nil
-        return prefetched
+        guard let chunks, !chunks.isEmpty else { return nil }
+        return IncrementalPrefetchedAudio(chunks: chunks, outputFormat: prefetch.outputFormat)
     }
 
     private func finishIncrementalSpeech() async {
@@ -4640,8 +4592,7 @@ private struct IncrementalSpeechPrefetchState {
     let segment: String
     let context: IncrementalSpeechContext
     let outputFormat: String?
-    var chunks: [Data]?
-    let task: Task<Void, Never>
+    let task: Task<[Data]?, Never>
 }
 
 private struct IncrementalPrefetchedAudio {

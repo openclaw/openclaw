@@ -397,7 +397,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const page = await createPage();
     await page.emulateMedia({ colorScheme: "dark" });
     const workspaceModules = new Set([
-      "/src/components/app-sidebar.ts",
+      "/src/components/app-sidebar.tsx",
       "/src/components/browser/browser-panel.ts",
       "/src/components/assistant-panel-content.ts",
       "/src/pages/debug/debug-overlay-content.ts",

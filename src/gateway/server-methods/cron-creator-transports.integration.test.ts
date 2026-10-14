@@ -19,7 +19,6 @@ import {
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -50,6 +49,7 @@ import {
   resolveGatewayChatCronCreatorAuthorityAdmission,
   resolveGatewayCronCreatorAuthorityAdmission,
 } from "./cron-creator-authority-admission.js";
+import { deviceHandlers } from "./devices.js";
 import {
   SESSION,
   CREATOR,
@@ -94,6 +94,9 @@ describe("original caller through Cron creator transports", () => {
         }
         return [];
       }, config);
+      fixture.context.invalidateClientsForDevice = (deviceId, options) => {
+        invalidateGatewayDeviceRevocation(fixture.context, deviceId, options?.role);
+      };
       const profile = ensureProfileForEmail("automation-recovery@example.test");
       const accessController = new AbortController();
       const accessGrant = { pluginId: "recovery-proof-access", grantId: "original-proof-grant" };
@@ -228,14 +231,29 @@ describe("original caller through Cron creator transports", () => {
                         );
                         expect(await fixture.read()).toEqual(before);
                         if (revocation === "device token rotation") {
-                          expect(
-                            (
-                              await rotateDeviceToken({
-                                deviceId: "recovery-proof-device",
-                                role: "operator",
-                              })
-                            ).ok,
-                          ).toBe(true);
+                          const respond = vi.fn();
+                          await expectDefined(
+                            deviceHandlers["device.token.rotate"],
+                            "rotation",
+                          )({
+                            req: { type: "req", id: "rotate", method: "device.token.rotate" },
+                            params: {
+                              deviceId: "recovery-proof-device",
+                              role: "operator",
+                            },
+                            client: recovery.client,
+                            isWebchatConnect: () => true,
+                            context: fixture.context,
+                            respond,
+                          });
+                          expect(respond).toHaveBeenCalledWith(
+                            true,
+                            expect.objectContaining({
+                              deviceId: "recovery-proof-device",
+                              role: "operator",
+                            }),
+                            undefined,
+                          );
                         } else if (revocation === "role downgrade") {
                           setUserProfileRole(profile.id, "revoked-role");
                         } else if (revocation === "access grant revocation") {

@@ -11,14 +11,12 @@ import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  SubagentRegistryVersionConflictError,
-} from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import type { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
+import type { PrepareRequesterWakeChildSession } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -127,9 +125,6 @@ function createRequesterWakeReceiptHolds(
               if (phase) {
                 executions.push(phase);
               }
-              if (typeof result === "object" && result !== null && "conflictRunIds" in result) {
-                return result;
-              }
               if (hold && phase) {
                 observed.add(phase);
                 hold.entered.resolve(members);
@@ -141,7 +136,7 @@ function createRequesterWakeReceiptHolds(
         workerOptions,
       ).catch((error: unknown) => {
         const phase = capturedMutation?.phase;
-        if (phase && !(error instanceof SubagentRegistryVersionConflictError)) {
+        if (phase) {
           holds[phase].entered.reject(error);
         }
         throw error;
@@ -200,6 +195,7 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
 
 export function registerRequesterWakeReceiptBoundaryTests({
   requesterSessionKey,
+  prepareChildSession,
   spawnVisibleChild,
   emitCompleted,
   flushOwnedWork,
@@ -215,6 +211,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
   onReceiptsHeld,
 }: {
   requesterSessionKey: string;
+  prepareChildSession: PrepareRequesterWakeChildSession;
   spawnVisibleChild: (params: {
     runId: string;
     childSessionKey: string;
@@ -543,10 +540,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
       const runId = "quiet-delete-wake";
       const childSessionKey = "agent:main:subagent:quiet-delete-wake";
       const gateway = createGatewayContext();
+      const sessionEntry = await prepareChildSession(childSessionKey, "sess-quiet-delete-wake");
       await registry.registerSubagentRun(
         createSubagentRunParams({
           runId,
           childSessionKey,
+          sessionEntry,
           requesterAgentId: "main",
           cleanup: "delete",
           expectsCompletionMessage: false,

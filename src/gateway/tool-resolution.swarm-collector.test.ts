@@ -6,6 +6,7 @@ import {
   getSubagentRunByRunId,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { useMcpCollectorRegistry } from "./mcp-http.collector-registry.test-support.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
@@ -51,13 +52,15 @@ async function resolveLoopbackTools(
     isGrantCurrent?: () => boolean;
   },
 ) {
+  const cfg = buildConfig(options?.tools);
+  setRuntimeConfigSnapshot(cfg);
   const admittedRunId =
     options?.admittedRunId === undefined
       ? admittedRunIdBySessionKey[sessionKey]
       : (options.admittedRunId ?? undefined);
   return (
     await resolveGatewayScopedTools({
-      cfg: buildConfig(options?.tools),
+      cfg,
       sessionKey,
       surface: "loopback",
       runId: admittedRunId,
@@ -68,9 +71,11 @@ async function resolveLoopbackTools(
 
 /** Mirrors the only non-loopback caller, `tools-invoke-shared.ts`. */
 async function resolveHttpToolNames(sessionKey: string, tools?: OpenClawConfig["tools"]) {
+  const cfg = buildConfig(tools);
+  setRuntimeConfigSnapshot(cfg);
   return (
     await resolveGatewayScopedTools({
-      cfg: buildConfig(tools),
+      cfg,
       sessionKey,
       senderIsOwner: true,
       allowGatewaySubagentBinding: true,
@@ -80,8 +85,10 @@ async function resolveHttpToolNames(sessionKey: string, tools?: OpenClawConfig["
 }
 
 function resolveLoopbackGrantToolNames(toolsAllow: string[], admittedRunId: string | null = runId) {
+  const cfg = buildConfig();
+  setRuntimeConfigSnapshot(cfg);
   return resolveMcpLoopbackScopedTools({
-    cfg: buildConfig(),
+    cfg,
     context: {
       sessionKey: collectorSessionKey,
       senderIsOwner: false,
@@ -91,6 +98,7 @@ function resolveLoopbackGrantToolNames(toolsAllow: string[], admittedRunId: stri
   }).then((scoped) => scoped.tools.map((tool) => (tool as { name: string }).name));
 }
 
+beforeEach(() => setRuntimeConfigSnapshot(buildConfig()));
 useMcpCollectorRegistry({ runId, childSessionKey: collectorSessionKey, outputSchema: schema });
 
 beforeEach(async () => {

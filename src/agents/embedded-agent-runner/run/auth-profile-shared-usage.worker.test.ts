@@ -19,10 +19,10 @@ import {
   loadPersistedAuthProfileStore,
 } from "../../auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../auth-profiles/runtime-snapshots.js";
+import { writeAuthProfileJsonCell } from "../../auth-profiles/sqlite-json-write.js";
 import {
   readAuthProfileJsonCellText,
   SHARED_AUTH_STORE_STATE_KEY,
-  writeAuthProfileJsonCell,
 } from "../../auth-profiles/sqlite-json.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "../../auth-profiles/store-runtime.js";
 import { AuthProfileStoreUnreadableError } from "../../auth-profiles/store-unreadable-error.js";

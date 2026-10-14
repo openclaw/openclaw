@@ -407,9 +407,6 @@ export async function applyInlineDirectiveOverrides(params: {
             configuredDefaultUpdate: applied.configuredDefaultUpdate,
             ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
           }),
-          applied.thinkingRemap
-            ? `Thinking level set to ${applied.thinkingRemap.to} (${applied.thinkingRemap.from} not supported for ${applied.thinkingRemap.provider}/${applied.thinkingRemap.model}).`
-            : undefined,
           applied.runtimeChange?.kind === "clear"
             ? "Runtime reset to configured policy."
             : applied.runtimeChange?.kind === "set"

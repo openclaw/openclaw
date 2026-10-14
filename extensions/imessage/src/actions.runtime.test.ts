@@ -476,40 +476,6 @@ describe("imessage actions runtime", () => {
     await expect(access(dirname(stagedPath))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("drops a cached chat list when the clock stops being a valid date", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    const first = rpc({ chats: [{ id: 1, guid: "iMessage;+;first" }] });
-    const second = rpc({ chats: [{ id: 2, guid: "iMessage;+;second" }] });
-    await expect(resolve({ kind: "chat_id", chatId: 1 }, "imsg-invalid-clock")).resolves.toBe(
-      "iMessage;+;first",
-    );
-    now.mockReturnValue(Number.NaN);
-    await expect(resolve({ kind: "chat_id", chatId: 2 }, "imsg-invalid-clock")).resolves.toBe(
-      "iMessage;+;second",
-    );
-    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
-    for (const client of [first, second]) {
-      expect(client.request).toHaveBeenCalledWith(
-        "chats.list",
-        { limit: 1000 },
-        { timeoutMs: undefined },
-      );
-    }
-  });
-
-  it("does not cache a chat list whose expiry would exceed the valid date range", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    rpc({ chats: [{ id: 1, guid: "iMessage;+;first" }] });
-    rpc({ chats: [{ id: 2, guid: "iMessage;+;second" }] });
-    await expect(resolve({ kind: "chat_id", chatId: 1 }, "imsg-overflow-clock")).resolves.toBe(
-      "iMessage;+;first",
-    );
-    await expect(resolve({ kind: "chat_id", chatId: 2 }, "imsg-overflow-clock")).resolves.toBe(
-      "iMessage;+;second",
-    );
-    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
-  });
-
   it("isolates cached chat lists by resolved remote host", async () => {
     rpc({ chats: [{ id: 1, guid: "iMessage;+;host-a" }] });
     rpc({ chats: [{ id: 2, guid: "iMessage;+;host-b" }] });

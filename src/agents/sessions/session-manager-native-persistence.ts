@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
+  assertSessionTranscriptInitialWriter,
   getOwnedSessionTranscriptInitialWriter,
   getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
@@ -16,7 +17,6 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
@@ -27,6 +27,7 @@ import {
   type PersistRecordOptions,
   type PersistRecordResult,
 } from "./session-manager-persistence-entry.js";
+import { cloneTranscriptView } from "./session-manager-snapshot.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
 /** Released synchronous SDK methods keep their native transaction and publication contract. */
@@ -74,7 +75,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     if (!initialWriter) {
       return;
     }
-    initialWriter.assertActive();
+    assertSessionTranscriptInitialWriter(initialWriter, scope);
     if (!initialWriter.committedFence && inheritedWriter !== initialWriter) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
@@ -97,7 +98,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     );
   }
 
-  /** @deprecated Await persistAsync. Removal: next Plugin SDK major. */
+  /** @deprecated Await persistAsync. Removal: a later stable release after the deprecation period. */
   public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
     prepareSessionManagerSync("persist", this.persistenceTarget, this);
     return this.persistRecord(entry, options);
@@ -126,7 +127,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
       if (!isCurrentView()) {
         return;
       }
-      const previous = this.captureTranscriptView(true);
+      const previous = cloneTranscriptView(this.captureTranscriptView());
       stageSqliteTransactionState(database, {
         stage: () => {},
         commit: () => {},
@@ -261,7 +262,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
             ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),
           };
     }
-    const appendOptions = copyCodeModeSourceAppendOptions(options, {
+    const appendOptions = {
       cwd: this.cwd,
       eventId: entry.id,
       ...(options?.beforeFreshMessageCommit
@@ -274,7 +275,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
-    } satisfies Parameters<typeof appendTranscriptMessageSnapshotSync>[1]);
+    } satisfies Parameters<typeof appendTranscriptMessageSnapshotSync>[1];
     const loadedVersion = this.transcriptVersion;
     const outcome = appendTranscriptMessageSnapshotSync(
       scope,

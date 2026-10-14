@@ -719,7 +719,12 @@ describe("beforeDeliver in reply dispatcher", () => {
       try {
         const deliver = vi.fn(async (payload: ReplyPayload) => {
           if (admitDirect) {
-            await createDirectPendingFinalCustody(payload)?.onPlatformSendDispatch();
+            const custody = await createDirectPendingFinalCustody(payload);
+            try {
+              await custody?.onPlatformSendDispatch();
+            } finally {
+              custody?.release();
+            }
           }
           if (deferred) {
             return { finalization: Promise.reject(failure) };

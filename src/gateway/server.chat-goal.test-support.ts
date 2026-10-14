@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import * as sessionIdentity from "../config/sessions/session-accessor.sqlite-identity.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
@@ -94,7 +95,20 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       });
     try {
       const response = await fixture.send(request);
-      expect(rejected).toBe(true);
+      const failureDiagnostic = rejected
+        ? undefined
+        : redactSensitiveText(
+            JSON.stringify({
+              publicationCount: notification.mock.calls.length,
+              responses: response.mock.calls.map(([ok, result, error]) => ({
+                ok,
+                status: isRecord(result) ? result.status : undefined,
+                error: error && { code: error.code, message: error.message },
+              })),
+            }),
+            { mode: "tools" },
+          ).slice(0, 4_000);
+      expect(rejected, failureDiagnostic).toBe(true);
       expect(response.mock.calls[0]?.[0]).toBe(false);
       fixture.assertNoModelRun();
       expect(loadSessionEntry(fixture.scope())).toMatchObject({

@@ -14,6 +14,10 @@ import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import {
@@ -82,7 +86,9 @@ function savedMedia(fileName: string, size: number, contentType = "image/png") {
 function configWithDefaults(
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
 ): OpenClawConfig {
-  return { agents: { defaults } };
+  const config = { agents: { defaults } };
+  setRuntimeConfigSnapshot(config, config);
+  return config;
 }
 
 const GENERATION_PROVIDER_ENV_VARS = [
@@ -480,6 +486,7 @@ describe("createImageGenerateTool", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    clearRuntimeConfigSnapshot();
   });
 
   it("returns null when no image-generation model can be inferred", () => {
@@ -926,7 +933,10 @@ describe("createImageGenerateTool", () => {
   defineMediaGenerationCancellationTests({
     kind: "image",
     tasks: taskRuntimeMocks,
-    createTool: (options) => requireImageGenerateTool(createImageGenerateTool(options)),
+    createTool: (options) => {
+      setRuntimeConfigSnapshot(options.config ?? {}, options.config);
+      return requireImageGenerateTool(createImageGenerateTool(options));
+    },
     requesterOrigin: { channel: "discord", to: "dm:123" },
     references: ["https://example.test/first.png", "https://example.test/second.png"],
     referenceSignal: "caller",
@@ -959,7 +969,10 @@ describe("createImageGenerateTool", () => {
     kind: "image",
     tasks: taskRuntimeMocks,
     listTasks: mediaActivityMocks.listOperations,
-    createTool: (options) => requireImageGenerateTool(createImageGenerateTool(options)),
+    createTool: (options) => {
+      setRuntimeConfigSnapshot(options.config ?? {}, options.config);
+      return requireImageGenerateTool(createImageGenerateTool(options));
+    },
     agentDir: "/tmp/agent",
     setupProviders: () => {
       stubImageGenerationProviders();

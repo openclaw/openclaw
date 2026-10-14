@@ -834,6 +834,13 @@ extension GatewaySettingsStore {
         guard let data = try? encoder.encode(normalized),
               let json = String(data: data, encoding: .utf8)
         else { return false }
+        if let stored = GenericPasswordKeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount),
+            stored.utf8.elementsEqual(json.utf8)
+        {
+            return true
+        }
         guard GenericPasswordKeychainStore.saveString(
             json,
             service: self.gatewayService,

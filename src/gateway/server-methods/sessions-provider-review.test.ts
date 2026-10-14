@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   handoff: vi.fn(),
   resolveTarget: vi.fn(),
   resolveAuthorization: vi.fn(),
+  releaseAuthorization: vi.fn(),
 }));
 vi.mock("../../config/sessions/provider-review-store.js", () => ({
   readSessionProviderReview: mocks.read,
@@ -28,10 +29,14 @@ vi.mock("../session-sharing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-sharing.js")>();
   return {
     ...actual,
-    resolveSessionSharingTarget: mocks.resolveTarget,
-    resolveSessionMutationAuthorization: mocks.resolveAuthorization,
+    resolveSessionSharingTargetAsync: async (...args: unknown[]) => mocks.resolveTarget(...args),
   };
 });
+// mock-isolation: Provider-review tests control authorization changes while the review is awaited.
+vi.mock("../session-sharing-authorization-async.js", () => ({
+  resolveSessionMutationAuthorizationAsync: (...args: unknown[]) =>
+    mocks.resolveAuthorization(...args),
+}));
 
 const sessionKey = "agent:main:provider-review";
 const sessionId = "session-a";
@@ -114,6 +119,7 @@ beforeEach(() => {
       assertCurrent,
       assertAdmittedInputCurrent: assertCurrent,
       assertTargetCurrent: assertCurrent,
+      release: mocks.releaseAuthorization,
     },
     error: null,
   });
@@ -131,6 +137,7 @@ describe("registered provider review continuation", () => {
     const options = request();
     await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
     expect(mocks.handoff).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseAuthorization).toHaveBeenCalledTimes(1);
     const [chatOptions, acknowledgment] = mocks.handoff.mock.calls[0] as [
       GatewayRequestHandlerOptions,
       ProviderReviewAcknowledgment,

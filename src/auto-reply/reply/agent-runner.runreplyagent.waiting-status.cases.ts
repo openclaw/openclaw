@@ -15,6 +15,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { MediaGenerationTaskHandle } from "../../agents/tools/media-generate-background-completion.js";
 import { createMediaGenerationTaskLifecycle } from "../../agents/tools/media-generate-background-shared.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -45,6 +46,7 @@ export async function mockAcceptedWaitingStatusRun(
     await resetSubagentRegistryForTests({ persist: false });
     await testState.cleanup();
   });
+  await captureRuntimeConfigAsyncReader()();
   runner.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
     assert(params.preparedRunAdmission);
     assert(params.sessionKey);

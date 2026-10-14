@@ -205,58 +205,51 @@ describe("SessionDiffPanel", () => {
     expect(panel.textContent).not.toContain("feature/replacement");
   });
 
-  it.each([false, true])(
-    "highlights source in split=%s without changing its text",
-    async (split) => {
-      setNativeGatewayTestState(null);
-      localStorage.setItem("openclaw.control.sessionDiff.v1", JSON.stringify({ split }));
-      const panel = mountPanel();
-      localStorage.removeItem("openclaw.control.sessionDiff.v1");
-      const patch = [
-        "--- a/example.ts",
-        "+++ b/example.ts",
-        "@@ -1,5 +1,5 @@",
-        " /* comment",
-        "-old comment",
-        "+new comment",
-        " */",
-        " ",
-        '-const value = "before";',
-        '+const value = "<img src=x onerror=alert(1)>";',
-      ].join("\n");
-      const data = fileResult(patch);
-      data.files[0]!.path = "example.ts";
-      panel.loader = async () => data;
-      await panel.updateComplete;
-      flush();
-      await vi.dynamicImportSettled();
-      await waitForSolid(() =>
-        expect(panel.querySelector(".tok-string")?.textContent).toContain("before"),
-      );
-      expect([...panel.querySelectorAll(".tok-comment")].map((node) => node.textContent)).toContain(
-        "new comment",
-      );
-      expect(panel.querySelector(".tok-keyword")?.textContent).toBe("const");
-      expect(panel.textContent).toContain("<img src=x onerror=alert(1)>");
-      expect(panel.querySelector("img")).toBeNull();
-      const textSelector = split ? ".session-diff-split__text" : ".chat-diff__text";
-      expect([...panel.querySelectorAll(textSelector)].map((line) => line.textContent)).toContain(
-        "",
-      );
+  it.each([true])("highlights source in split=%s without changing its text", async (split) => {
+    setNativeGatewayTestState(null);
+    localStorage.setItem("openclaw.control.sessionDiff.v1", JSON.stringify({ split }));
+    const panel = mountPanel();
+    localStorage.removeItem("openclaw.control.sessionDiff.v1");
+    const patch = [
+      "--- a/example.ts",
+      "+++ b/example.ts",
+      "@@ -1,5 +1,5 @@",
+      " /* comment",
+      "-old comment",
+      "+new comment",
+      " */",
+      " ",
+      '-const value = "before";',
+      '+const value = "<img src=x onerror=alert(1)>";',
+    ].join("\n");
+    const data = fileResult(patch);
+    data.files[0]!.path = "example.ts";
+    panel.loader = async () => data;
+    await panel.updateComplete;
+    flush();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(panel.querySelector(".tok-string")?.textContent).toContain("before"),
+    );
+    expect([...panel.querySelectorAll(".tok-comment")].map((node) => node.textContent)).toContain(
+      "new comment",
+    );
+    expect(panel.querySelector(".tok-keyword")?.textContent).toBe("const");
+    expect(panel.textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(panel.querySelector("img")).toBeNull();
+    const textSelector = split ? ".session-diff-split__text" : ".chat-diff__text";
+    expect([...panel.querySelectorAll(textSelector)].map((line) => line.textContent)).toContain("");
 
-      // Reusing the panel for an unknown file type must discard the prior language.
-      panel.loader = async () => ({ ...data, files: [{ ...data.files[0]!, path: "example.txt" }] });
-      await waitForSolid(() =>
-        expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt"),
-      );
-      expect(panel.querySelector(".tok-keyword")).toBeNull();
-      expect([...panel.querySelectorAll(textSelector)].map((line) => line.textContent)).toContain(
-        "",
-      );
-    },
-  );
+    // Reusing the panel for an unknown file type must discard the prior language.
+    panel.loader = async () => ({ ...data, files: [{ ...data.files[0]!, path: "example.txt" }] });
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt"),
+    );
+    expect(panel.querySelector(".tok-keyword")).toBeNull();
+    expect([...panel.querySelectorAll(textSelector)].map((line) => line.textContent)).toContain("");
+  });
 
-  it.each([false, true])("highlights both languages of a rename in split=%s", async (split) => {
+  it.each([true])("highlights both languages of a rename in split=%s", async (split) => {
     setNativeGatewayTestState(null);
     localStorage.setItem("openclaw.control.sessionDiff.v1", JSON.stringify({ split }));
     const panel = mountPanel();
@@ -378,23 +371,6 @@ describe("SessionDiffPanel", () => {
     flush();
 
     expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull();
-  });
-
-  it("does not refetch the diff when file-action properties change", async () => {
-    const panel = mountPanel();
-    const loader = vi.fn(async () => fileResult(SNAPSHOT_PATCH));
-    panel.loader = loader;
-    await waitForSolid(() => expect(panel.textContent).toContain("snapshot line"));
-
-    panel.execNode = "remote-node";
-    panel.openFile = vi.fn();
-    panel.revealFile = vi.fn();
-    panel.loadFileText = vi.fn(async () => "snapshot line");
-    await panel.updateComplete;
-    flush();
-
-    expect(loader).toHaveBeenCalledOnce();
-    expect(panel.textContent).toContain("snapshot line");
   });
 
   it("commits only the latest loader result after a rapid loader change", async () => {

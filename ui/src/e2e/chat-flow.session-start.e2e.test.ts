@@ -20,7 +20,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const newSessionButton = page.locator(
-        "openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session",
+        "openclaw-app-sidebar .sidebar-rail .sidebar-new-session",
       );
       await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
       await newSessionButton.click();
@@ -227,14 +227,11 @@ suite.define(() => {
       });
       await expect
         .poll(() =>
-          page.locator("openclaw-chat-pane").evaluate((pane) => {
-            const state = (
-              pane as HTMLElement & { state?: { chatModelCatalog?: Array<{ id?: string }> } }
-            ).state;
-            return state?.chatModelCatalog?.map((model) => model.id);
-          }),
+          page
+            .locator("[data-chat-model-select] .chat-controls__inline-select-label")
+            .textContent(),
         )
-        .toEqual(["hydrated-model"]);
+        .toContain("Hydrated Model");
       expect(await gateway.getRequests("agents.list")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);

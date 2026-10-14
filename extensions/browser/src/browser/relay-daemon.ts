@@ -1,6 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { readExtensionRelayToken } from "./extension-relay/relay-auth.js";
@@ -55,7 +55,7 @@ export async function runExtensionRelayDaemon(params: {
 
   let handle: ExtensionRelayHandle;
   try {
-    const config = getRuntimeConfig();
+    const config = await captureRuntimeConfigAsyncReader()();
     const resolved = resolveBrowserConfig(config.browser, config);
     const profiles = Object.keys(resolved.profiles).filter((name) => {
       const profile = resolveProfile(resolved, name);

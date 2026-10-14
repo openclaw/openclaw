@@ -53,6 +53,22 @@ Archive `create`, `list`, `verify`, and `restore`, external `record`, plus SQLit
 `create`, `list`, `verify`, and `restore`, accept `--json` for one machine-readable
 result on stdout.
 
+## PostgreSQL stores
+
+`openclaw backup create` routes each managed database through its physical engine,
+including activated plugins' declared backup resources. If any selected store
+uses PostgreSQL, stop the Gateway through its service owner first. A running
+Gateway causes a refusal: “stop through the service owner, then rerun.” Backup
+never stops it automatically. The requirement also applies to `create --to`.
+
+A PostgreSQL capture contains the original anchor, a sanitized SQLite export
+image, and a format-2 manifest with the profile, engine, store UUID, versions,
+active fragments, allocation facts, sizes, and hashes. The manifest contains no
+DSN. Keep these artifacts together; copying only the anchor does not back up rows.
+Existing format-1 SQLite snapshots remain readable. See
+[Database engines](/reference/database-engines#anchors-and-backups) for matched
+restore and update-recovery behavior.
+
 ## Notes
 
 - The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported. New archives also record the current-layout SQLite snapshots captured at creation; standalone verification rejects missing or mismatched inventory entries. Legacy archives without this inventory remain readable, but verification reports `sqliteInventoryVerified: false` because complete database coverage cannot be established. An empty inventory means no current-layout databases were captured (for example, a config-only export), not a full database recovery point.
@@ -270,6 +286,12 @@ not create captures, change retention, or change ordinary backup sanitization.
 
 Use `openclaw backup sqlite` when you need a portable artifact for one OpenClaw-owned SQLite database instead of a broad state archive.
 
+This command remains SQLite-only. A PostgreSQL anchor is refused with guidance to
+use `openclaw backup create`. Generic local snapshot providers use the matched
+format-2 PostgreSQL capture when supported; they require the Gateway stopped
+through its service owner and refuse while it is running. They do not turn an
+anchor into an empty SQLite snapshot.
+
 Snapshot creation accepts exactly one named source. Agent sources always use
 the current configuration's resolved `<agentDir>/openclaw-agent.sqlite`, even
 when `agentDir` is outside the state directory:
@@ -305,7 +327,9 @@ openclaw backup sqlite verify <snapshot-directory>
 openclaw backup sqlite restore <snapshot-directory> --target <new-database-path>
 ```
 
-Verification checks the strict manifest shape, artifact size and SHA-256, SQLite integrity, foreign keys, schema version, database role and owner, and OpenClaw-owned index definitions.
+Verification checks the strict manifest shape, artifact size and SHA-256, SQLite integrity, foreign keys, schema version, and database role and owner.
+
+Snapshots from supported older schema versions can be verified and restored without migration. Newer-than-supported schemas and mismatched version metadata are refused. Restore preserves the snapshot bytes, and the running version performs any required migration when it opens the restored database. Snapshot creation still requires the current schema and validates OpenClaw-owned table and index definitions before compaction.
 
 Verification validates a private content-pinned copy so pathname races cannot swap the bytes SQLite inspects. By default, that temporary copy is created beside the snapshot repository and removed before the command returns. The staging root and its ancestor chain must prevent other users from replacing it. POSIX roots must be current-user-owned and not group/world writable; sticky ancestors such as `/tmp` are accepted for user-owned children. macOS ACL grants that expose or make staging replaceable are rejected. Windows roots and ancestors must be owned by the current user or a trusted OS principal, with ACLs that deny untrusted staging access. For a read-only mount or network share, pass `--scratch <existing-private-directory>` on storage with equivalent encryption and destination controls.
 
@@ -317,7 +341,17 @@ Snapshot repositories are local directories. Scheduling, upload, retention, incr
 
 ## Versioned Git backups
 
-`openclaw backup git` stores consistently ordered, per-table JSONL dumps in a plain Git repository owned by the operator. One repository can hold the shared database and every per-agent database:
+`openclaw backup git create --all` also includes PostgreSQL stores discovered
+through activated plugins' declared backup resources, including Workboard.
+`--global` and `--agent <id>` keep their existing source selection. For a
+PostgreSQL source, Git backup routing captures the same sanitized export image,
+anchor, and format-2 manifest. Stop the Gateway through
+its service owner before capture or restore; a running Gateway is refused, never
+stopped automatically. A matched PostgreSQL restore verifies the artifacts and
+loads a fresh owned namespace before publishing its anchor. Existing SQLite Git
+backups retain their format and restore behavior.
+
+For SQLite sources, `openclaw backup git` stores consistently ordered, per-table JSONL dumps in a plain Git repository owned by the operator. One repository can hold the shared database and every per-agent database:
 
 ```text
 global/manifest.json
@@ -328,8 +362,8 @@ agents/<agentId>/schema.sql
 agents/<agentId>/tables/<table>.jsonl
 ```
 
-Initialize the repository, then create a snapshot of the shared database and
-all configured agent databases:
+Initialize the repository, then capture the shared database, all configured
+agent databases, and declared PostgreSQL plugin stores:
 
 ```bash
 openclaw backup git init --repository ~/Backups/openclaw-git --remote <private-git-url>
@@ -341,12 +375,35 @@ world-writable. OpenClaw checks this when initializing or adopting a repository
 and before every create. On POSIX systems, repair unsafe permissions with
 `chmod 700 <repository>` after confirming its ownership.
 
-The repository must be dedicated to OpenClaw backups. An existing `global/` or
-`agents/<agentId>/` scope is backup-owned only when it is empty or contains a
-valid schema-version-1 `manifest.json`. OpenClaw refuses to replace any other
-scope. With `--all`, it validates every existing entry under `agents/` before
-removing stale backup-owned agent scopes, so an unowned entry aborts the cleanup
-before anything is deleted.
+Use a dedicated repository for OpenClaw backups. Within `global/` and
+`agents/<agentId>/`, OpenClaw manages only `manifest.json`, `schema.sql`, and the
+`tables/<table>.jsonl` files declared by that scope's valid schema-version-1
+manifest. Refresh and stale-agent cleanup replace or remove those artifacts,
+not whole directories. Unrelated documents and filesystem metadata such as
+`.DS_Store` remain untouched, including inside a backup scope or its `tables/`
+directory. Directories are removed only when empty.
+
+OpenClaw checks all selected scopes before refreshing or pruning. An existing
+file that would collide with a new backup artifact without belonging to the
+previous manifest causes a refusal; so does a non-regular artifact or a symbolic
+link in a managed directory path. Preserve or move the conflicting path before
+retrying. These checks also protect committed or staged files whose working copy
+is missing. Unrelated entries do not block backups merely by being present.
+Finish or abort any ongoing Git merge, rebase, cherry-pick, or revert before
+creating a backup; backup commits must not conclude an operator's Git operation.
+
+Verification and restore, including of older refs, read only the manifest,
+schema, and declared table files. Extra files are ignored and never become
+database content. Missing or non-regular declared artifacts still fail, as do
+invalid database identities, table hashes, row counts, or SQLite integrity.
+Restores validate the recorded supported schema version and preserve it;
+they do not migrate historical data during verification.
+Agent index definitions are rebuilt canonically in private staging when needed;
+this does not change table data or the recorded schema version. Newer unsupported
+versions and mismatched ownership/version markers still fail. Run `openclaw
+doctor --fix` when adopting an older restored database for the current runtime.
+Historical global tables retain their recorded DDL; current indexes and columns
+are applied only by normal schema migration, not by Git backup verification.
 
 With `--all`, only agents removed from the configuration have their scopes
 pruned. If a configured agent's database is missing or cannot pass snapshot
@@ -358,8 +415,10 @@ selected database cannot be copied, and a run with no copyable databases fails.
 
 You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Explicit agent selections, `--all`, and scheduled backups resolve each database from its configured `agentDir`; historical artifact verification and restore use the artifact's recorded agent id without requiring that agent to remain in the current configuration. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries use a fixed order, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
 
-Git staging is restricted to the backup-owned `global` and `agents` paths;
-unrelated files elsewhere in an adopted repository are never staged.
+Git commits include only refreshed or pruned backup artifacts. Unrelated
+untracked files and operator-staged changes remain outside the backup commit,
+even inside a backup scope. Already-committed unrelated files remain in Git;
+backup creation does not scrub their history or remove them from later trees.
 
 `--push` pushes the current branch to `origin`. A push failure after a successful local commit is a warning and does not discard or mark the local backup as failed.
 
@@ -618,11 +677,13 @@ agent moves or is removed from configuration. Distinct databases belonging to
 the same agent are captured separately. `--no-include-workspace` preserves this
 database coverage.
 
-SQLite files under activated plugins' declared `backupResources` with
-`disposition: "include"` also receive managed snapshots. Other filenames under
-the state directory or an agent directory alone do not establish SQLite ownership.
+Database files under activated plugins' declared `backupResources` with
+`disposition: "include"` also receive managed snapshots. Workboard declares its
+existing store this way, so its PostgreSQL anchor selects a matched PostgreSQL
+capture instead of an anchor-only copy. Other filenames under the state directory
+or an agent directory alone do not establish database ownership.
 
-Managed databases are captured with SQLite's online backup API and compacted
+Managed SQLite databases are captured with SQLite's online backup API and compacted
 offline with `VACUUM`. Committed write-ahead log (WAL) changes are included,
 deleted-page remnants are removed, and sidecars are omitted. Shared and agent
 databases also receive their existing transient-state sanitization and must match

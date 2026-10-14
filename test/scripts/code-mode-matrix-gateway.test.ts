@@ -239,7 +239,7 @@ describe("Gateway matrix transcript evidence", () => {
         exitCode: isError ? 1 : 0,
         aggregated: isError ? "synthetic process failure" : "synthetic process complete",
       };
-      const name = surface === "tool-search" ? "tool_call" : "exec";
+      const name = surface === "tool-search" ? "dispatch_action" : "exec";
       const invocation = {
         message: {
           role: "assistant",
@@ -938,7 +938,7 @@ describe("Gateway config read evidence", () => {
 
 const PROCESS = { marker: "MATRIX_PROCESS_R1_DONE", status: "completed", exitCode: 0 };
 
-function processEvidence() {
+function processEvidence(recovery = false) {
   const events: unknown[] = [];
   function action(name: string, input: Record<string, unknown>, result: Record<string, unknown>) {
     const id = `process-${events.length}`;
@@ -953,20 +953,31 @@ function processEvidence() {
     { command: "node ./process-probe.mjs", background: true },
     { status: "running", sessionId: "helper-1" },
   );
-  action(
-    "process",
-    { action: "list" },
-    { status: "completed", sessions: [{ sessionId: "helper-1", status: "running" }] },
-  );
-  action(
-    "process",
-    { action: "log", sessionId: "helper-1" },
-    { status: "running", output: PROCESS.marker },
-  );
+  if (recovery) {
+    events.push(
+      ...waitEvents(
+        "wrong-wait",
+        "helper-1",
+        { status: "failed", error: "Invalid outer wait" },
+        true,
+      ),
+    );
+  } else {
+    action(
+      "process",
+      { action: "list" },
+      { status: "completed", sessions: [{ sessionId: "helper-1", status: "running" }] },
+    );
+    action(
+      "process",
+      { action: "log", sessionId: "helper-1" },
+      { status: "running", output: PROCESS.marker },
+    );
+  }
   action(
     "process",
     { action: "poll", sessionId: "helper-1" },
-    { status: "completed", exitCode: 0, aggregated: PROCESS.marker },
+    { status: "completed", sessionId: "helper-1", exitCode: 0, aggregated: PROCESS.marker },
   );
   return collectGatewayMatrixTrace(events);
 }
@@ -1021,6 +1032,100 @@ describe("process lifecycle evidence", () => {
     const checks = evaluate("process-contracts", PROCESS, trace);
     expect(checks.singleHelperLaunch).toBe(true);
     expect(checks.onlyHelperReads).toBe(false);
+  });
+});
+
+describe("wrong-wait process recovery evidence", () => {
+  it("requires a failed wait followed by a new exec polling the original helper", () => {
+    const fixture = gatewayFixtures.createGatewayMatrixFixture("process-wait-recovery", 1);
+    expect(fixture.expected).toEqual(PROCESS);
+    expect(fixture.instructions).toContain("exactly one sole outer wait call");
+    expect(fixture.instructions).not.toContain("poll");
+    expect(
+      gatewayFixtures.createGatewayMatrixFixture("process-contracts", 1).instructions,
+    ).toBeUndefined();
+    expect(
+      createGatewayMatrixWorkload("process-wait-recovery", 1, "off", 120).settings.allowedTools,
+    ).toEqual(["exec", "process"]);
+    expect(
+      Object.values(evaluate("process-wait-recovery", PROCESS, processEvidence(true))).every(
+        Boolean,
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["missing-wait", "wrongWaitObserved"],
+    ["wrong-wait-id", "wrongWaitObserved"],
+    ["second-wait", "wrongWaitObserved"],
+    ["other-call-with-wait", "wrongWaitObserved"],
+    ["successful-wait", "wrongWaitObserved"],
+    ["waiting-launch", "completedLaunchWithRunningProcess"],
+    ["same-turn-poll", "recoveryAfterFailedWait"],
+    ["premature-poll", "recoveryAfterFailedWait"],
+    ["different-session", "onlyHelperReads"],
+    ["second-launch", "singleHelperLaunch"],
+    ["no-completion", "observedCompletion"],
+    ["missing-marker", "observedMarker"],
+    ["unsettled-poll-cell", "completedRecoveryPoll"],
+  ] as const)("rejects %s despite the correct final claim", (violation, failedCheck) => {
+    const trace = processEvidence(true);
+    const launch = expectDefined(
+      trace.activities.find((item) => item.name === "exec"),
+      "launch",
+    );
+    const poll = expectDefined(
+      trace.activities.find((item) => item.name === "process"),
+      "poll",
+    );
+    const pollCall = expectDefined(
+      trace.calls.find((call) => call.id === poll.parentId),
+      "poll cell",
+    );
+    const wait = expectDefined(
+      trace.calls.find((call) => call.name === "wait"),
+      "wrong wait",
+    );
+    const waitResult = expectDefined(
+      trace.outcomes.find((item) => item.id === wait.id),
+      "wait result",
+    );
+    if (violation === "missing-wait") {
+      trace.calls = trace.calls.filter((call) => call !== wait);
+      trace.outcomes = trace.outcomes.filter((outcome) => outcome !== waitResult);
+    } else if (violation === "wrong-wait-id") {
+      wait.args.runId = "another-process";
+    } else if (violation === "second-wait") {
+      trace.calls.push({ ...wait, id: "extra-wait" });
+    } else if (violation === "other-call-with-wait") {
+      trace.calls.push({ ...wait, id: "extra-exec", name: "exec", args: { code: "return 1;" } });
+    } else if (violation === "successful-wait") {
+      waitResult.isError = false;
+      waitResult.details = { status: "completed" };
+    } else if (violation === "waiting-launch") {
+      expectDefined(
+        trace.outcomes.find((item) => item.id === launch.parentId),
+        "launch result",
+      ).details.status = "waiting";
+    } else if (violation === "same-turn-poll") {
+      pollCall.eventIndex = wait.eventIndex;
+    } else if (violation === "premature-poll") {
+      pollCall.eventIndex = 0;
+    } else if (violation === "different-session") {
+      poll.input.sessionId = "another-process";
+    } else if (violation === "second-launch") {
+      trace.activities.push({ ...launch, result: { status: "running", sessionId: "helper-2" } });
+    } else if (violation === "no-completion") {
+      poll.result = { status: "running", sessionId: "helper-1", aggregated: PROCESS.marker };
+    } else if (violation === "missing-marker") {
+      poll.result.aggregated = "";
+    } else {
+      trace.outcomes = trace.outcomes.filter((outcome) => outcome.id !== pollCall.id);
+    }
+    const checks = evaluate("process-wait-recovery", PROCESS, trace);
+    expect(checks.answer).toBe(true);
+    expect(checks[failedCheck]).toBe(false);
+    expect(Object.values(checks).every(Boolean)).toBe(false);
   });
 });
 

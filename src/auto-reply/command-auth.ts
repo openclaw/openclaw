@@ -18,6 +18,7 @@ import {
   resolveUpdateChannelOperatorAdminIdentityAuthority,
   type ResolvedChannelOperatorIdentity,
 } from "../gateway/channel-operator-authority.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
@@ -533,9 +534,15 @@ function resolveCommandAuthorizationState(
   };
 }
 
+/** @deprecated Await resolveCommandAuthorizationAsync for worker-owned channel allowlist preparation. */
 export function resolveCommandAuthorization(
   params: CommandAuthorizationParams,
 ): CommandAuthorization {
+  warnPluginSdkDeprecation({
+    family: "command-authorization-sync",
+    method: "resolveCommandAuthorization",
+    replacement: "resolveCommandAuthorizationAsync",
+  });
   return resolveCommandAuthorizationState(params).authorization;
 }
 

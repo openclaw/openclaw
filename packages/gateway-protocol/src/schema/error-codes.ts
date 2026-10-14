@@ -28,6 +28,10 @@ export {
   type GitHubPublicationSelectionRejectedErrorDetails,
   type SessionWorkspaceRecoveryRequiredErrorDetails,
   type TaskWorktreeSourceRequiredErrorDetails,
+  type ClawHubRiskAcknowledgementRequiredErrorDetails,
+  type ClawReviewRequiredErrorDetails,
+  readClawHubRiskAcknowledgementRequiredError,
+  readClawReviewRequiredError,
   readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
@@ -104,6 +108,16 @@ export const TaskWorktreeSourceRequiredErrorDetailsSchema = closedObject({
   cwd: NonEmptyString,
 });
 
+export const ClawHubRiskAcknowledgementRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED),
+  warning: NonEmptyString,
+});
+
+export const ClawReviewRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED),
+  kind: Type.Union([Type.Literal("plugin"), Type.Literal("skill")]),
+});
+
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
@@ -118,6 +132,8 @@ export const GatewayErrorDetailsSchema = Type.Union([
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   TaskWorktreeSourceRequiredErrorDetailsSchema,
+  ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  ClawReviewRequiredErrorDetailsSchema,
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
 ]);
 

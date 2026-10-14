@@ -1,36 +1,33 @@
-import { isDeepStrictEqual } from "node:util";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function canonicalValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(canonicalValue);
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .map(([key, entry]) => [key, canonicalValue(entry)]),
+function canonicalValue(value: object): string {
+  // Compare persisted JSON facts with omitted undefined fields and stable key order.
+  return JSON.stringify(value, (_key, entry: unknown) =>
+    entry !== null && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(
+          Object.entries(entry).toSorted(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0,
+          ),
+        )
+      : entry,
   );
 }
 
 export function sameWorkboardCardState(left: WorkboardCard, right: WorkboardCard): boolean {
   const { updatedAt: _leftUpdatedAt, ...leftState } = left;
   const { updatedAt: _rightUpdatedAt, ...rightState } = right;
-  return isDeepStrictEqual(canonicalValue(leftState), canonicalValue(rightState));
+  return canonicalValue(leftState) === canonicalValue(rightState);
 }
 
 export function sameWorkboardWorkspace(left: WorkboardCard, right: WorkboardCard): boolean {
-  return isDeepStrictEqual(
+  return (
     canonicalValue([
       left.metadata?.automation?.workspace,
       left.metadata?.automation?.workspaceAccess,
-    ]),
+    ]) ===
     canonicalValue([
       right.metadata?.automation?.workspace,
       right.metadata?.automation?.workspaceAccess,
-    ]),
+    ])
   );
 }

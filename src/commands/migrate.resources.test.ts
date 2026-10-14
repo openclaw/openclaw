@@ -33,7 +33,7 @@ describe("migration command resources", () => {
     async (surface) => {
       const fixture = createMigrationResourceFixture();
       fixture.state.resumeApply.resolve();
-      const loadConfig = vi.spyOn(config, "getRuntimeConfig");
+      const loadConfig = vi.spyOn(config, "loadConfig");
       const discover = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
         pid: process.pid,
         port: 18789,

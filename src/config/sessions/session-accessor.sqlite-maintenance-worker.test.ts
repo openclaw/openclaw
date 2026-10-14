@@ -3,7 +3,7 @@ import path from "node:path";
 import type { DatabaseSync, StatementSync as NativeStatement } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -19,13 +19,16 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
-import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type {
@@ -196,27 +199,44 @@ it.each(["cold", "warm-cap", "removal"] as const)(
   },
 );
 
-it.each([
-  "registry",
-  "recovery-cycle",
-  "recovery-run",
-  "provider",
-  "work-key",
-  "work-id",
-  "lifecycle-key",
-  "lifecycle-id",
-  "ancestor",
-] as const)("preserves %s protection through automatic worker planning", async (protection) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+describe("automatic worker planning protections", () => {
+  let state: OpenClawTestState;
+
+  beforeAll(async () => {
+    state = await createOpenClawTestState({ scenario: "minimal" });
+  });
+
+  afterEach(async () => {
+    await drainSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+  });
+
+  afterAll(async () => {
+    await state.cleanup();
+  });
+
+  it.each([
+    "registry",
+    "recovery-cycle",
+    "recovery-run",
+    "provider",
+    "work-key",
+    "work-id",
+    "lifecycle-key",
+    "lifecycle-id",
+    "ancestor",
+  ] as const)("preserves %s protection through automatic worker planning", async (protection) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
-    const active = { sessionKey: "agent:main:maintenance-protection-active", storePath };
+    const active = {
+      sessionKey: `agent:main:maintenance-protection-active-${protection}`,
+      storePath,
+    };
     const protectedKey = protection.startsWith("recovery")
-      ? "agent:main:hook:maintenance-protected"
-      : "agent:main:subagent:maintenance-protected";
-    const protectedId = "maintenance-protected-id";
-    const aliasKey = "agent:main:subagent:maintenance-protected-alias";
-    const sibling = "agent:main:subagent:maintenance-unprotected";
-    replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
+      ? `agent:main:hook:maintenance-protected-${protection}`
+      : `agent:main:subagent:maintenance-protected-${protection}`;
+    const protectedId = `maintenance-protected-id-${protection}`;
+    const aliasKey = `agent:main:subagent:maintenance-protected-alias-${protection}`;
+    const sibling = `agent:main:subagent:maintenance-unprotected-${protection}`;
+    replaceSessionEntrySync(active, { sessionId: `active-${protection}`, updatedAt: Date.now() });
     replaceSessionEntrySync(
       { sessionKey: protectedKey, storePath },
       {
@@ -247,7 +267,7 @@ it.each([
     replaceSessionEntrySync(
       { sessionKey: sibling, storePath },
       {
-        sessionId: "unprotected",
+        sessionId: `unprotected-${protection}`,
         updatedAt: 1,
         ...(protection === "recovery-cycle"
           ? {
@@ -604,7 +624,6 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
     try {
       const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
-        forceInProcess: false,
         plan: {
           kind: "maintenance-plan",
           databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
@@ -703,7 +722,6 @@ it("publishes only committed removal keys after Worker finalization", async () =
     try {
       const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
-        forceInProcess: false,
         plan,
       });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
@@ -762,7 +780,6 @@ it("preserves committed statistics and Worker reuse after a retired predicate", 
         }
       },
       diagnostics: first,
-      forceInProcess: false,
       onWorkerResult: () => {
         current = false;
       },
@@ -778,48 +795,10 @@ it("preserves committed statistics and Worker reuse after a retired predicate", 
     await expect(
       reclamationRun.runSqliteSessionReclamation({
         diagnostics: second,
-        forceInProcess: false,
         plan: reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions),
       }),
     ).resolves.toEqual({ kind: "maintenance-statistics", value: true });
     expect(second.workerThreadId).toBe(first.workerThreadId);
-  });
-});
-
-it("replans incognito preservation discovery after rollback without a Worker", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const active = { sessionKey: "agent:main:dashboard:incognito-age-active" };
-    const victim = { sessionKey: "agent:main:dashboard:incognito-age-victim" };
-    const policy = resolveMaintenanceConfigFromInput({
-      mode: "enforce",
-      maxEntries: 100,
-      pruneAfter: "1s",
-      archiveDashboardAfter: "1s",
-    });
-    replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
-    replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: 1 });
-    const results: Array<{ kind: string; workerThreadId: number | undefined }> = [];
-    const reclaim = reclamationRun.runSqliteSessionReclamation;
-    vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
-      const result = await reclaim(params);
-      results.push({ kind: result.kind, workerThreadId: params.diagnostics?.workerThreadId });
-      return result;
-    });
-    const spawn = vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker");
-    const completed = observeSessionMaintenanceCompletion(
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-      { accept: (result) => result.archived === 1 },
-    );
-    await patchSessionEntryCore(active, () => ({ label: "in process" }), {
-      maintenanceConfig: policy,
-    });
-    await completed;
-    expect(results.filter(({ kind }) => kind !== "maintenance-age")).toEqual([
-      { kind: "maintenance-preservation-required", workerThreadId: undefined },
-      { kind: "maintenance-plan", workerThreadId: undefined },
-    ]);
-    expect(spawn).not.toHaveBeenCalled();
-    expect(loadSessionEntry(victim)).toMatchObject({ archivedAt: expect.any(Number) });
   });
 });
 

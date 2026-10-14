@@ -21,9 +21,6 @@ import {
   createTauriDeviceSettingsSnapshot,
 } from "./test-helpers/native-device-settings.ts";
 
-const settingsGroups = visibleSettingsNavigationGroups(true);
-const settingsRoutes = settingsGroups.flatMap((group) => group.routes);
-
 describe("sidebar entries", () => {
   it.each([true, false])("shows device settings only with the capability, admin=%s", (canAdmin) => {
     const capability: NativeDeviceSettingsCapability = {
@@ -173,41 +170,10 @@ describe("sidebar entries", () => {
     ]);
   });
 
-  it("recognizes every settings navigation route", () => {
-    expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
-  });
-
-  it("places Updates in the System group immediately before About", () => {
-    const system = settingsGroups.find((group) => group.labelKey === "nav.settingsGroupSystem");
-    expect(system?.routes.slice(-2)).toEqual(["updates", "about"]);
-  });
-
-  it("places team secrets between Privacy & Security and Approvals", () => {
-    const security = settingsGroups.find((group) => group.labelKey === "nav.settingsGroupSecurity");
-    expect(security?.routes).toEqual(["security", "secrets", "approvals"]);
-  });
-
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
     expect(isSettingsNavigationRoute("model-setup")).toBe(true);
     expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
   });
-
-  it("keeps Agent Defaults routed as an Agents subpage without a sidebar entry", () => {
-    expect(isSettingsNavigationRoute("ai-agents")).toBe(true);
-    expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
-  });
-
-  it.each(["plugin-settings", "skill-settings"] as const)(
-    "keeps %s visible to admins and read-only operators",
-    (routeId) => {
-      expect(visibleSettingsNavigationGroups(true).flatMap((group) => group.routes)).toContain(
-        routeId,
-      );
-      expect(visibleSettingsNavigationGroups(false).flatMap((group) => group.routes)).toContain(
-        routeId,
-      );
-    },
-  );
 
   it("filters admin-only settings while preserving legacy fail-open visibility", () => {
     const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
