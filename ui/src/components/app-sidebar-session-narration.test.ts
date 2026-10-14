@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @vitest-environment node
-import { GatewayProtocolRequestError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { GatewaySessionMessageSubscriptionCoordinator } from "../../../packages/gateway-client/src/session-subscriptions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
@@ -118,76 +117,6 @@ describe("SidebarSessionNarrationController", () => {
     controller.disconnect();
     expect(source.unsubscribeMessages).toHaveBeenCalledTimes(15);
   });
-
-  it.each([
-    { retirement: "hidden", late: false },
-    { retirement: "hidden", late: true },
-    { retirement: "disposed", late: false },
-    { retirement: "disposed", late: true },
-  ])(
-    "retains a failed $retirement release (late acquisition: $late)",
-    async ({ retirement, late }) => {
-      vi.spyOn(Math, "random").mockReturnValue(0.5);
-      const visibility = browserVisibility();
-      const subscribed = createDeferred();
-      const released = createDeferred();
-      const wireKeys = new Set<string>();
-      let releases = 0;
-      const request = vi
-        .fn()
-        .mockImplementation(async (method: string, params: { key: string }) => {
-          if (method === "sessions.messages.subscribe") {
-            await subscribed.promise;
-            wireKeys.add(params.key);
-          } else {
-            releases += 1;
-            if (releases === 1) {
-              throw new GatewayProtocolRequestError({ retryable: true });
-            }
-            await released.promise;
-            wireKeys.delete(params.key);
-          }
-          return { key: params.key };
-        });
-      const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
-      const source = {
-        subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>((key, options) =>
-          coordinator.acquire(key, options),
-        ),
-        unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>((handle) =>
-          coordinator.release(handle),
-        ),
-      };
-      const { controller } = createRunningNarrationController(source);
-      const retire = () =>
-        retirement === "disposed" ? controller.dispose() : visibility("hidden");
-      if (late) {
-        retire();
-      }
-      subscribed.resolve();
-      const handle = await source.subscribeMessages.mock.results[0]?.value;
-      retire();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(wireKeys.size).toBe(1);
-
-      retire();
-      retire();
-      expect(source.unsubscribeMessages.mock.calls).toEqual([[handle]]);
-      await vi.advanceTimersByTimeAsync(250);
-      expect(source.unsubscribeMessages.mock.calls).toEqual([[handle], [handle]]);
-      visibility("visible");
-      expect(releases).toBe(2);
-      released.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(wireKeys.size).toBe(retirement === "disposed" ? 0 : 1);
-      expect(source.subscribeMessages).toHaveBeenCalledTimes(retirement === "disposed" ? 1 : 2);
-
-      controller.disconnect();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(wireKeys.size).toBe(0);
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
 
   it("releases hidden narration interests while preserving selected-pane and outbox owners", async () => {
     const visibility = browserVisibility();

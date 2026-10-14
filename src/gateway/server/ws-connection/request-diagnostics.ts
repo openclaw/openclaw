@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { WORKER_PROTOCOL_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
@@ -20,6 +21,7 @@ import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 type RpcEvent = Extract<DiagnosticEventInput, { type: "gateway.rpc" }>;
 type ResponseOutcome = Extract<RpcEvent, { phase: "response" }>["outcome"];
 type DispatchOutcome = Extract<RpcEvent, { phase: "dispatch" }>["outcome"];
+type ModelsListAttribution = Extract<RpcEvent, { phase: "received" }>["modelsList"];
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
 let activeHandlers = 0;
 let exclusiveHandler: GatewayRpcDiagnostics | undefined;
@@ -39,9 +41,15 @@ export class GatewayRpcDiagnostics {
     private readonly method: string,
     private readonly startedAt = performance.now(),
     queueWaitMs?: number,
+    modelsList?: ModelsListAttribution,
   ) {
     this.queueWaitMs = queueWaitMs;
-    this.emit({ type: "gateway.rpc", method, phase: "received" });
+    this.emit({
+      type: "gateway.rpc",
+      method,
+      phase: "received",
+      ...(modelsList && { modelsList }),
+    });
   }
 
   private emit(event: RpcEvent): void {
@@ -177,6 +185,11 @@ export function createGatewayRpcDiagnostics(
   method: string,
   getMethodRegistry: (() => GatewayMethodRegistry) | undefined,
   extraHandlers: GatewayRequestHandlers,
+  catalogRequest?: {
+    clientKind: NonNullable<ModelsListAttribution>["clientKind"];
+    source: NonNullable<ModelsListAttribution>["source"];
+    params: unknown;
+  },
 ): GatewayRpcDiagnostics | undefined {
   if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("gateway.rpc")) {
     return undefined;
@@ -188,5 +201,31 @@ export function createGatewayRpcDiagnostics(
     Object.hasOwn(extraHandlers, method)
       ? method
       : "other";
-  return new GatewayRpcDiagnostics(label);
+  let modelsList: ModelsListAttribution;
+  if (method === "models.list" && catalogRequest) {
+    // Only the frame has been validated here; reduce method params to bounded shape facts.
+    const params = asOptionalRecord(catalogRequest.params);
+    const view = params?.view;
+    modelsList = {
+      clientKind: catalogRequest.clientKind,
+      source: catalogRequest.source,
+      view:
+        view === undefined || view === "default"
+          ? "default"
+          : view === "configured" || view === "provider-config" || view === "all"
+            ? view
+            : "other",
+      scope:
+        params?.sessionKey !== undefined
+          ? "session"
+          : params?.authProfileId !== undefined
+            ? "auth-profile"
+            : params?.agentId !== undefined
+              ? "agent"
+              : "global",
+      refresh: params?.refresh === true,
+      preparedOnly: params?.preparedOnly === true,
+    };
+  }
+  return new GatewayRpcDiagnostics(label, undefined, undefined, modelsList);
 }

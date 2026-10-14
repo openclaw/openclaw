@@ -493,6 +493,7 @@ export async function readUpdateDatabaseGenerationsIsolated(
     timeoutMs?: number;
     signal?: AbortSignal;
     acquisition?: UpdateRecoveryCaptureAcquisition;
+    retryAdvice?: boolean;
   } = {},
 ): Promise<UpdateDatabaseGenerations> {
   const scope = getOpenClawDatabaseMaintenanceScope();
@@ -513,6 +514,8 @@ export async function readUpdateDatabaseGenerationsIsolated(
       await runUpdateStateInspectionWorker({
         ...worker,
         root,
+        retryAdvice: options.retryAdvice,
+        sources: paths,
         ...(maintenanceOwner ? { ioBudget: "deadline" as const } : {}),
         input: {
           mode: "database-generations",

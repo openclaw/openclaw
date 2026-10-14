@@ -100,7 +100,7 @@ export async function readSessionTranscriptHydrationRequest(
       ...request.limits,
       readOnly: true,
       resolvedScope: request.resolvedScope,
-      onRead: (projection, rows) => {
+      onRead: (projection, rows, messagePresence) => {
         if (!projection.hasUnindexedPrefix) {
           residentRows = rows;
         }
@@ -116,6 +116,7 @@ export async function readSessionTranscriptHydrationRequest(
             undefined,
             projection,
             request.preparedEntry,
+            messagePresence,
           );
         }
       },

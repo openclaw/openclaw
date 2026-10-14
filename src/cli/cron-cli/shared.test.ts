@@ -17,11 +17,26 @@ import {
   getCronChannelOptions,
   handleCronCliError,
   parseAt,
+  parseCronCommandEnv,
   parseCronStringList,
   parsePositiveCronDurationMs,
   printCronList,
   printCronShow,
 } from "./shared.js";
+
+describe("parseCronCommandEnv", () => {
+  it("serializes prototype-named overrides with last-value precedence", () => {
+    const env = parseCronCommandEnv([
+      "__proto__=first",
+      "NORMAL_KEY=control",
+      "__proto__=kept=tail",
+      "constructor=ordinary",
+    ]);
+    expect(JSON.stringify(env)).toBe(
+      '{"__proto__":"kept=tail","NORMAL_KEY":"control","constructor":"ordinary"}',
+    );
+  });
+});
 
 const hoisted = vi.hoisted(() => ({
   listChannelPluginsMock: vi.fn(),

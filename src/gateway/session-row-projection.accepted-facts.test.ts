@@ -990,6 +990,8 @@ it.each(["delete", "dispose", "store replacement"] as const)(
       { replacement: change === "store replacement" },
     );
     if (change === "dispose") {
+      // Restoring spies does not clear their recorded fixture arguments or results.
+      vi.clearAllMocks();
       await nextTurn();
       queryObjects(WeakRef);
       expect(control?.deref()).toBeUndefined();

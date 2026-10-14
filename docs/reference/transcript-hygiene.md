@@ -261,11 +261,19 @@ inter-session user turns that only have provenance metadata.
 - SDK Responses replay uses the storage privacy shape and a fixed field order:
   summaries are empty, cleartext reasoning content is omitted, and completed
   ciphertext remains unchanged across live continuation and transcript reload.
+  A provider's empty `content: []` reasoning container is preserved across
+  transcript reload so reopening a session does not change its cached prefix;
+  an absent container stays absent.
   Native ChatGPT Responses retains its upstream Codex payload semantics.
 - SDK Responses streams canonicalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
-  the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
-  and previously approved history remain unchanged.
+  the same terminal response item's signature bytes, even if `output_item.done`
+  carried different ciphertext. Async tool prefixes wait for terminal reasoning
+  settlement before persistence. If the stream errors, aborts, or ends without a
+  terminal response, already-completed async calls are still delivered, using the
+  `output_item.done` reasoning snapshot when no terminal snapshot was received.
+  Encrypted reasoning bytes, executable tool arguments, and previously approved
+  history remain unchanged.
 - Successful SDK Responses completions omit absent error fields. The session
   owner attaches run metadata to fresh assistant history before persistence, so
   the next tool step and transcript reload retain the same run envelope.

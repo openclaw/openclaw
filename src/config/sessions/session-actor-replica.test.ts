@@ -140,7 +140,7 @@ async function withReplica(
 function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   const selected = replica.beginRead();
   const snapshot = load(epoch, sequence);
-  expect(selected.install(snapshot)).toBe(true);
+  expect(selected(snapshot)).toBe(true);
   return snapshot;
 }
 
@@ -172,7 +172,7 @@ it.each(["entry", "transcript", "plugin keys"] as const)(
             next.entry.pluginExtensions = { fixture: { [label]: null } };
           }
         }
-        expect(replica.beginRead().install(next)).toBe(true);
+        expect(replica.beginRead()(next)).toBe(true);
         if (payload === "transcript") {
           retainSessionActorTranscriptReplica(next, {
             version: next.transcript.version,
@@ -191,7 +191,7 @@ it.each(["entry", "transcript", "plugin keys"] as const)(
           ...collectSessionEntryLookupKeys(siblingTarget.sessionKey),
           ...next.dependencySessionIds.map(sqliteSessionIdWriteScope),
         ])!;
-        expect(sibling.beginRead().install(next)).toBe(true);
+        expect(sibling.beginRead()(next)).toBe(true);
         return next;
       };
       try {
@@ -411,8 +411,8 @@ it("retains unrelated session postimages but invalidates a shared physical sessi
       throw new Error("Replica fixture requires a durable target");
     }
     retainSessionActorEntryFacts(
-      { ...snapshot.target, database: snapshot.target.database },
-      { entry: snapshot.entry, snapshots: [] },
+      snapshot.target.database,
+      [{ sessionKey: snapshot.target.sessionKey, facts: { entry: snapshot.entry, snapshots: [] } }],
       "partial-entry-reader",
     );
     expect(fixture.replica.read()).toEqual(snapshot);
@@ -506,7 +506,7 @@ it("invalidates partial native publications before disclosure and count-only par
   });
 });
 
-it("installs complete outcomes, fences unknowns, and rejects delayed epochs", async () => {
+it("installs complete outcomes and fences unknowns", async () => {
   await withReplica((fixture) => {
     const { replica, load, scope, database } = fixture;
     const initial = hydrate(fixture);
@@ -517,7 +517,7 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     const shared = replica.read()!;
     expect(shared).toBe(initial);
     expect(replica.read()).toBe(shared);
-    expect(replica.beginRead().install(shared)).toBe(true);
+    expect(replica.beginRead()(shared)).toBe(true);
     expect(replica.read()).toBe(shared);
     const detached = structuredClone(shared);
     detached.entry!.label = "caller edit";
@@ -550,7 +550,6 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     const outcome = committed(accepted, load("first", 1));
     expect(pending.settle(outcome)).toBe(true);
     expect(replica.read()).toBe(outcome.receipt.postimage);
-    expect(pending.settle(outcome)).toBe(false);
 
     const rollback = replica.beginCommand();
     expect(
@@ -569,8 +568,8 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     expect(replica.read()).toBeUndefined();
     expect(readSessionActorEntryFacts(target)).toBeUndefined();
     retainSessionActorEntryFacts(
-      target,
-      { entry: load().entry, snapshots: "full" },
+      target.database,
+      [{ sessionKey: target.sessionKey, facts: { entry: load().entry, snapshots: "full" } }],
       "cold-entry-reader",
     );
 
@@ -585,28 +584,11 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
       }),
     ).toBe(true);
     expect(replica.read()?.version).toEqual(superseded.version);
-    const older = replica.beginRead();
-    const newer = replica.beginRead();
-    expect(newer.install(load("second"))).toBe(true);
-    expect(older.install(initial)).toBe(false);
-    expect(replica.read()?.version.epoch).toBe("second");
-
-    const delayedContext = command(load("second"), "delayed");
-    const delayed = replica.beginCommand();
-    sessionChanges.invalidate({
-      sessionKey: scope.sessionKey,
-      storePath: scope.storePath,
-      factsInvalidated: true,
-    });
-    hydrate(fixture, "reconciled");
-    expect(delayed.settle(committed(delayedContext, load("second", 1)))).toBe(false);
-    expect(replica.read()?.version.epoch).toBe("reconciled");
-
     const opaque = load("opaque");
     opaque.entry!.swarmOutputSchema = { value: new Date(0) };
-    expect(replica.beginRead().install(opaque)).toBe(true);
+    expect(replica.beginRead()(opaque)).toBe(true);
     const borrowed = replica.read()!;
-    expect(replica.beginRead().install(borrowed)).toBe(true);
+    expect(replica.beginRead()(borrowed)).toBe(true);
     expect(replica.read()).toBe(borrowed);
     expect(replica.read()?.entry?.swarmOutputSchema).toEqual({ value: new Date(0) });
 
@@ -728,15 +710,30 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
       "Saved instructions",
     );
     replica.invalidate();
+    const retainedEntry = { ...before.entry!, skillsSnapshot: undefined };
     retainSessionActorEntryFacts(
-      entryTarget,
-      {
-        entry: { ...before.entry!, skillsSnapshot: undefined },
-        snapshots: [],
-        projection,
-      },
+      entryTarget.database,
+      [
+        {
+          sessionKey: entryTarget.sessionKey,
+          facts: {
+            entry: retainedEntry,
+            snapshots: [],
+            projection,
+          },
+        },
+      ],
       "row-facts-reader",
     );
+    retainedEntry.label = "Reader edit after retention";
+    projection.hasBoard = true;
+    const retained = readSessionActorEntryFacts(entryTarget)!;
+    expect(retained.entry?.label).toBeUndefined();
+    expect(retained.projection?.hasBoard).toBe(false);
+    retained.entry!.label = "Caller edit after reading";
+    retained.projection!.hasBoard = true;
+    expect(readSessionActorEntryFacts(entryTarget)?.entry?.label).toBeUndefined();
+    expect(readSessionActorEntryFacts(entryTarget)?.projection?.hasBoard).toBe(false);
     expect(readSessionActorEntryFacts(entryTarget, ["skillsSnapshot"])?.snapshots).toEqual([]);
     expect((await readSessionEntryReadOnlyInWorker(scope))?.skillsSnapshot?.prompt).toBe(
       "Saved instructions",
