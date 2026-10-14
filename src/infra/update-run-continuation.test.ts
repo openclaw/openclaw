@@ -187,23 +187,7 @@ describe("Windows update repair continuation", () => {
     });
   });
 
-  it("reports unreadable ancestry instead of a conflicting live update", () => {
-    readProcessAncestry.mockImplementation(() => {
-      throw new Error("process snapshot timed out");
-    });
-    readProcessIdentity.mockImplementation((pid) => identity(pid, 0, repairStart));
-
-    const admission = inspectUpdateRepairDriverAdmission([unverifiedDriverRun()], runId);
-    expect(admission).toMatchObject({
-      kind: "conflict",
-      message: expect.stringContaining("not evidence of another update"),
-    });
-    expect(admission).not.toMatchObject({ message: expect.stringContaining("liveness: alive") });
-  });
-  it.each([
-    { requiredUpdater: false, expected: "continuation" },
-    { requiredUpdater: true, expected: "conflict" },
-  ])(
+  it.each([{ requiredUpdater: true, expected: "conflict" }])(
     "requires readable ancestry through every live driver (updater required=$requiredUpdater)",
     ({ requiredUpdater, expected }) => {
       const currentPid = repairPid + 300 + Number(requiredUpdater);

@@ -1,8 +1,10 @@
 import { basename } from "node:path";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { createRuntimeProcessEntrypoints } from "./runtime-process-manifest.js";
 
 const workerScriptNames = new Set([
-  ...Object.values(runtimeProcessEntrypoints).map((entry) => basename(entry.distWorkerPath)),
+  ...Object.values(createRuntimeProcessEntrypoints(import.meta.url)).map((entry) =>
+    basename(entry.distWorkerPath),
+  ),
   // Pools with source/standalone-plugin entrypoints outside the process manifest.
   "catalog-page.worker.js",
   "code-mode.worker.js",

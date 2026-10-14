@@ -3,10 +3,11 @@
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { ConfigForm } from "../../components/config-form.render.tsx";
+import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { memorySettingsSchema } from "./memory-schema.ts";
-import { Memory } from "./memory.tsx";
+import { buildMemoryAddonRows, Memory, type MemoryCatalogState } from "./memory.tsx";
 
 /** The view is the only public surface, so its props type comes from its signature. */
 type MemoryViewProps = Parameters<typeof Memory>[0];
@@ -63,6 +64,70 @@ function renderInto(props: MemoryViewProps): HTMLElement {
   flush();
   return container;
 }
+
+describe("memory add-on rows", () => {
+  it("translates declared labels on each read without changing row order", async () => {
+    const rows = () =>
+      buildMemoryAddonRows(
+        { kind: "loading" },
+        {
+          busy: new Set(),
+          errors: new Map(),
+          notices: new Map(),
+          refreshWarnings: new Map(),
+        },
+      ).map(({ id, label }) => ({ id, label }));
+    const english = [
+      { id: "active-memory", label: "Active memory" },
+      { id: "memory-wiki", label: "Memory wiki" },
+    ];
+    try {
+      await i18n.setLocale("en");
+      expect(rows()).toEqual(english);
+      await i18n.setLocale("fr");
+      expect(rows()).toEqual([
+        { id: "active-memory", label: "Mémoire active" },
+        { id: "memory-wiki", label: "Wiki de mémoire" },
+      ]);
+      await i18n.setLocale("en");
+      expect(rows()).toEqual(english);
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
+  it.each([
+    [{ kind: "loading" }, "loading"],
+    [{ kind: "unavailable" }, "unknown"],
+    [{ kind: "ready", plugins: [], mutationAllowed: false }, "unknown"],
+  ] satisfies [MemoryCatalogState, string][])(
+    "keeps bundled add-ons visible and ordered with a %j catalog",
+    (catalog, expectedState) => {
+      const rows = buildMemoryAddonRows(catalog, {
+        busy: new Set(),
+        errors: new Map(),
+        notices: new Map(),
+        refreshWarnings: new Map(),
+      });
+      expect(
+        rows.map(({ id, label, description, state }) => ({ id, label, description, state })),
+      ).toEqual([
+        {
+          id: "active-memory",
+          label: "Active memory",
+          description: "active-memory",
+          state: expectedState,
+        },
+        {
+          id: "memory-wiki",
+          label: "Memory wiki",
+          description: "memory-wiki",
+          state: expectedState,
+        },
+      ]);
+    },
+  );
+});
 
 describe("Memory", () => {
   it("retains engine and add-on controls when their owner publishes new state", () => {

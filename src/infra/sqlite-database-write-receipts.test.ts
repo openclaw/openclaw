@@ -31,7 +31,6 @@ it("invalidates a scope registered by another isolate during an accepted write",
     readRevision: () => 0,
     writer: () => worker,
     suspended: () => false,
-    exchange: () => {},
     publish: (record) => {
       Atomics.store(
         new Int32Array(record.generation),

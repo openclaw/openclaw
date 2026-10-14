@@ -1,5 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -11,6 +13,63 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("recovers a retired final when its session message was missed", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const runId = "missed-terminal-publication";
+      const answer = "Review complete. The verified fix is ready.";
+      const user = {
+        role: "user",
+        content: [{ type: "text", text: "Finalize the review." }],
+        __openclaw: { id: "finalize-user", seq: 1, idempotencyKey: runId + ":user" },
+      };
+      const gateway = await installMockGateway(page, {
+        historyMessages: [user],
+        inFlightRun: { runId, startedAt: 1_000, text: "" },
+        sessionInfo: { activeRunIds: [runId], hasActiveRun: true, key: "agent:main:main" },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByText("Finalize the review.", { exact: true }).waitFor();
+      const initialReads = (await gateway.getRequests("chat.history")).length;
+      // Persistence succeeded, but this client missed the session.message publication.
+      await gateway.setHistoryMessages([
+        user,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: answer }],
+          stopReason: "stop",
+          __openclaw: { id: "finalize-answer", seq: 2, runId },
+        },
+      ]);
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey: "agent:main:main",
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: answer }],
+          openclawDisplayContent: [],
+        },
+      });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+      try {
+        await page.locator(".chat-text").getByText(answer, { exact: true }).waitFor();
+      } finally {
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".chat-pane-cache__pane--active"),
+            [page.getByText("Finalize the review.", { exact: true })],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(suite.artifactDir, "retired-final-recovery.png"), frame.png);
+        }
+      }
+      expect((await gateway.getRequests("chat.history")).length).toBe(initialReads + 1);
+      expect(await page.locator(".chat-text").getByText(answer, { exact: true }).count()).toBe(1);
+    });
+  });
+
   it("keeps a saved terminal answer once when its fallback notice arrives", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const runId = "fallback-terminal-run";

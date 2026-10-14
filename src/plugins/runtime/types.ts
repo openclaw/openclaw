@@ -276,8 +276,16 @@ export type CreatePluginRuntimeOptions = {
   allowGatewaySubagentBinding?: boolean;
 };
 
+/** Private host bindings retained by the path-loaded runtime, not exposed to plugins. */
+export type PluginRuntimeBase = Pick<
+  PluginRuntime,
+  "capabilities" | "config" | "state" | "system"
+> & {
+  getConfig: () => OpenClawConfig;
+};
+
 /** Checked contract for both the path-loaded factory and its implementation. */
 export type PluginRuntimeFactory = (
   options?: CreatePluginRuntimeOptions,
-  base?: Pick<PluginRuntime, "capabilities" | "config" | "state" | "system">,
+  base?: PluginRuntimeBase,
 ) => PluginRuntime;

@@ -6,6 +6,15 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { BrandIcon, Icon } from "./icon.tsx";
 import "../../styles/community-invite-card.css";
 
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface ImgHTMLAttributes<T> extends HTMLAttributes<T> {
+      // Pinterest documents this nonstandard per-image saving opt-out.
+      nopin?: "nopin";
+    }
+  }
+}
+
 const communityLinks = [
   {
     platform: "Reddit",
@@ -36,6 +45,8 @@ export function SidebarCommunityInvite(props: { onDismiss: () => void; mode: "li
             class="invite__art"
             src={inferControlUiPublicAssetPath(`community-art/community-invite-${props.mode}.webp`)}
             alt=""
+            nopin="nopin"
+            data-pin-nopin="true"
             width="1024"
             height="512"
             loading="lazy"

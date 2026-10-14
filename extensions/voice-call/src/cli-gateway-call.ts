@@ -1,4 +1,3 @@
-// Voice Call plugin module implements cli gateway calls.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   callGatewayFromCli,

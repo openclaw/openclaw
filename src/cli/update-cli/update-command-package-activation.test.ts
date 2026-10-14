@@ -15,6 +15,7 @@ import {
 import * as packageTarget from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as updateGlobal from "../../infra/update-global.js";
+import { assertManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -77,6 +78,60 @@ function preparePreview(
 }
 
 describe.skipIf(process.platform === "win32")("package activation admission", () => {
+  it.each(["prepared", "publishing", "publication-complete", "damaged candidate"] as const)(
+    "admits only a verified completed publication with the original lease (%s)",
+    async (phase) => {
+      const f = await createInterruptedPackagePublication(
+        fixtureRoot,
+        phase === "damaged candidate" ? "publication-complete" : phase,
+      );
+      preparePreview(f);
+      if (phase === "damaged candidate") {
+        fs.appendFileSync(path.join(f.packageRoot, "dist/index.js"), "// changed live content\n");
+      }
+      const retained = () => [
+        snapshot(f.packageRoot),
+        snapshot(f.anchor),
+        fs.readFileSync(resolvePackageActivationJournalPath(f.anchor)),
+      ];
+      const before = retained();
+      if (phase !== "publication-complete") {
+        await expect(prepareUpdateCommand({ json: true })).rejects.toThrow(
+          phase === "damaged candidate"
+            ? "inventoried dist files changed"
+            : "openclaw update repair",
+        );
+        expect(retained()).toEqual(before);
+        return;
+      }
+      const previous = fs.readFileSync(path.join(f.anchor, "previous/dist/index.js"));
+      const candidate = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
+      const previewBefore = snapshot(fixtureRoot);
+      await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+      expect(snapshot(fixtureRoot)).toEqual(previewBefore);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dryRun: true,
+          notes: expect.arrayContaining([
+            expect.stringMatching(/Would settle.*update can proceed/),
+          ]),
+        }),
+      );
+
+      await expect(prepareUpdateCommand({ json: true })).resolves.toMatchObject({
+        discoveredRoot: f.packageRoot,
+      });
+
+      assertManagedUpdateLeaseDatabaseIdentity(f.record.descriptor.authority);
+      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+      expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(candidate);
+      expect(
+        fs.readFileSync(
+          `${f.anchor}.superseded-${f.record.descriptor.operationId}/previous/dist/index.js`,
+        ),
+      ).toEqual(previous);
+    },
+  );
   it.each(
     (["missing", "replaced"] as const).flatMap((lease) =>
       (["candidate", "previous", "damaged candidate"] as const).map((live) => ({ lease, live })),

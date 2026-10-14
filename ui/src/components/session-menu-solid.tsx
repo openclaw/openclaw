@@ -1,6 +1,7 @@
 import { createSignal, For, merge, onSettled, Show } from "solid-js";
 import { t } from "../i18n/index.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
+import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { activateMenuShortcut } from "./menu-shortcuts.ts";
@@ -18,7 +19,6 @@ import {
 import { useSessionMenuControllers } from "./session-menu-controllers.ts";
 import { SessionMenuItem } from "./session-menu-item.tsx";
 import { SessionMenuShortcut, useSessionMenuView } from "./session-menu-view.tsx";
-import type { SessionCreatedActor } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
 
 /** Only resolved local worktree destinations are offered by the menu host. */

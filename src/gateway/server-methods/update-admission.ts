@@ -22,6 +22,7 @@ import {
   type UPDATE_PREFLIGHT_DETAILS,
 } from "../../infra/update-preflight-details.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
+import { getUpdateRunAsync as getUpdateRun } from "../../infra/update-run-reader.js";
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
 import {
   recordUpdateRunDiagnosticsAsync as recordUpdateRunDiagnostics,
@@ -258,8 +259,13 @@ export async function recordHandoffFailure(
     undefined,
     "managed-service",
   );
+  const completed = await getUpdateRun(runId).catch(() => undefined);
   const reason =
-    error instanceof UpdatePreMutationError ? error.reason : "managed-service-handoff-failed";
+    completed?.status === "failed" && completed.reason
+      ? completed.reason
+      : error instanceof UpdatePreMutationError
+        ? error.reason
+        : "managed-service-handoff-failed";
   const failureFacts = [
     ...(error instanceof UpdatePreMutationError ? error.failureFacts : [cause]).slice(0, 4),
     ...classified.failureFacts,

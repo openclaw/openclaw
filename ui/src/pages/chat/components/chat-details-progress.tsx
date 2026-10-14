@@ -1,13 +1,9 @@
 import { Show, createEffect } from "solid-js";
-import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
+import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
 type Props = { props?: ChatDetailsProps; presented: boolean; menuRef?: (menu: MenuHandle) => void };
@@ -89,31 +85,6 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
         }
       },
     );
-    const card = () => {
-      t("chat.sessionDetails.title");
-      const current = props.props;
-      const session = current?.selectedSession;
-      return renderSessionProgressCard(
-        current?.progressCard,
-        "details",
-        current?.onDismissProgressCard,
-        session?.status,
-        session?.startedAt,
-        session?.endedAt,
-        current?.runActive,
-        current?.collapseTaskProgress,
-        {
-          presented: props.presented,
-          gatewayScope: current?.gatewayScope,
-          sessionIdentity: current?.progressCardIdentity,
-          cardLifetime: current?.progressCardLifetime,
-          manualOnly: true,
-        },
-        current?.progressCardRefresh,
-        undefined,
-        menu,
-      );
-    };
     return (
       <Show
         when={props.props?.progressCard}
@@ -125,7 +96,25 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
           )
         }
       >
-        <LitContent render={() => card()} />
+        <SessionProgressCard
+          card={props.props?.progressCard}
+          placement="details"
+          onDismiss={props.props?.onDismissProgressCard}
+          sessionStatus={props.props?.selectedSession?.status}
+          startedAt={props.props?.selectedSession?.startedAt}
+          endedAt={props.props?.selectedSession?.endedAt}
+          hasActiveRun={props.props?.runActive}
+          collapseComposerByDefault={props.props?.collapseTaskProgress}
+          composerDisclosureContext={{
+            presented: props.presented,
+            gatewayScope: props.props?.gatewayScope,
+            sessionIdentity: props.props?.progressCardIdentity,
+            cardLifetime: props.props?.progressCardLifetime,
+            manualOnly: true,
+          }}
+          refreshAction={props.props?.progressCardRefresh}
+          headingMenu={menu}
+        />
       </Show>
     );
   },

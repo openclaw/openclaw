@@ -681,6 +681,13 @@ describe("CI changed Node test plan", () => {
       expected: ["src/gateway/server.agents.config-readiness.test.ts"],
     })),
     {
+      changedPath: "src/gateway/config-reload.ts",
+      expected: [
+        "src/gateway/server.config-patch.test.ts",
+        "src/gateway/server.agents.config-readiness.test.ts",
+      ],
+    },
+    {
       changedPath: "src/auto-reply/reply/abort.test.ts",
       expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
     },
@@ -722,6 +729,7 @@ describe("CI changed Node test plan", () => {
         const reasons: string[] = [];
         const shards = createChangedNodeTestShards([changedPath], {
           runnerBackend: "github",
+          selectionMode: changedPath === "src/gateway/config-reload.ts" ? "aggressive" : "full",
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),

@@ -446,4 +446,18 @@ describe("transcribeOpenAiAudio", () => {
       }),
     ).rejects.toThrow("Audio transcription response missing text");
   });
+
+  it("returns an empty transcript for audio without detected speech", async () => {
+    const { fetchFn } = createRequestCaptureJsonFetch({ text: " " });
+
+    await expect(
+      openaiMediaUnderstandingProvider.transcribeAudio!({
+        buffer: Buffer.from("audio-bytes"),
+        fileName: "voice.wav",
+        apiKey: "test-key",
+        timeoutMs: 1234,
+        fetchFn,
+      }),
+    ).resolves.toEqual({ text: "", model: "gpt-4o-transcribe" });
+  });
 });

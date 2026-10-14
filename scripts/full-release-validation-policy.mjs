@@ -420,6 +420,31 @@ export function classifyReleaseGhTransportError(error) {
   return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "ambiguous";
 }
 
+// GitHub can persistently 5xx one page size of an attempt-jobs listing (for example a
+// rerun attempt carrying forward hundreds of jobs) while smaller pages of the same
+// listing succeed. Each size reads the complete paginated listing, so results never
+// mix page sizes; only the final size spends its caller's full transient-retry budget.
+const RELEASE_JOB_LISTING_PAGE_SIZES = [100, 50, 30];
+const GH_SERVER_ERROR_PATTERN = /\(HTTP 5[0-9][0-9]\)|^HTTP\/\d+(?:\.\d+)? 5[0-9][0-9]\b/mu;
+
+export function isReleaseGhServerError(error) {
+  return GH_SERVER_ERROR_PATTERN.test(releaseGhTransportErrorText(error));
+}
+
+export async function readReleaseJobListing(readListing) {
+  for (const [index, perPage] of RELEASE_JOB_LISTING_PAGE_SIZES.entries()) {
+    const smallerPageFallback = index < RELEASE_JOB_LISTING_PAGE_SIZES.length - 1;
+    try {
+      return await readListing(perPage, { smallerPageFallback });
+    } catch (error) {
+      if (!smallerPageFallback || !isReleaseGhServerError(error)) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("release job listing page sizes exhausted");
+}
+
 export function isReleaseGhArtifactMissingError(error) {
   if (classifyReleaseGhTransportError(error) !== "ambiguous") {
     return false;

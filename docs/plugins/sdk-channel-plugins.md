@@ -412,6 +412,15 @@ when initialization must finish before the child runs.
       while retaining terminal errors and host-marked command results.
       It classifies the reply lane; it does not check content, sendability, or authority.
 
+      `isHostNoticePayload(payload)` from the same subpath identifies host errors,
+      status notices, and metadata-only host diagnostics. Agent-to-agent channels
+      can exclude these in `messaging.transformReplyPayload` while still preserving
+      run failures through `replyOptions.onAgentRunTerminalOutcome` and their native
+      task status. This callback stays bound to the originating request when its
+      turn runs as a queued followup; collected turns notify every source's terminal
+      observer. Human-facing channels should continue to
+      deliver useful host notices.
+
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.

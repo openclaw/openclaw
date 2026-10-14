@@ -222,7 +222,7 @@ if (!isMainThread) {
 }
 
 describe("session cost usage worker I/O", () => {
-  it("reuses discovered and receipt-covered usage inputs across append, rewrite, and rollup replacement", async () => {
+  it("reuses discovered inputs and rollups across append, rewrite, and rollup replacement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const probe = await observeUsageWorkerReads(state.stateDir, []);
       await probe.run(async () => {
@@ -301,11 +301,7 @@ describe("session cost usage worker I/O", () => {
         await expectDiscovered(discovered, [{ totalTokens: 3 }], "fresh");
         await probe.clear();
         await refresh();
-        expect(
-          (await probe.read()).filter(
-            (entry) => entry.kind === "transcript-stats" || entry.kind === "cache",
-          ),
-        ).toEqual([]);
+        expect((await probe.read()).filter((entry) => entry.kind === "cache")).toEqual([]);
         const generation = runOpenClawAgentWriteTransaction(
           (owner) => {
             const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
@@ -358,7 +354,7 @@ describe("session cost usage worker I/O", () => {
         await expectDiscovered(discovered, [{ totalTokens: 19 }], "fresh");
 
         // Another in-process writer replaces the derived row. Its receipt must
-        // invalidate the retained rollup, while unchanged transcript stats survive.
+        // invalidate the retained rollup before refresh rebuilds it from canonical stats.
         runOpenClawAgentWriteTransaction(
           (owner) =>
             writeSessionCostUsageRollupInDatabase(owner.db, {

@@ -245,8 +245,10 @@ in a fresh process using the updated package and its dependencies. This also
 applies to updates driven by 2026.9.4. If an optional read fails, the updater
 prints `candidate-config-read-failed` with the reader's error or exit reason and
 leaves the service definition unchanged. The reader's stderr is not echoed.
-Reads follow the restored package after a rollback. Inspect the reported problem
-with the updated CLI after the update.
+Reads follow the restored package after a rollback. After the update finishes,
+inspect the reported problem with the updated CLI, then run
+`openclaw gateway install --force` with the same `--profile` or `--dev` option as
+the update to refresh the service definition.
 Node and Bun readers run only one child per read. An attempted nested reader
 stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;
@@ -719,6 +721,12 @@ its original recovery owner; the independent helper cannot authorize publication
 or rollback for it. Do not rewrite identities or delete recovery artifacts.
 
 ### Unfinished publication and rollback
+
+`openclaw update` automatically settles a `publication-complete` operation when
+the live candidate passes the same verification as repair, even when the update
+lease is unchanged. A dry run previews settlement without changing recovery
+artifacts. With an unchanged lease, other unfinished phases still require explicit
+repair.
 
 For an external-helper operation stuck at `prepared`, `publishing`, or
 `publication-complete` whose live package already serves the candidate, run

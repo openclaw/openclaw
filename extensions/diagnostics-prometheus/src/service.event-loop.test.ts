@@ -16,6 +16,48 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus runtime metrics", () => {
+  it("exports cumulative worker traffic without recounting repeated memory samples", () => {
+    const metrics = createMetricsHarness();
+    try {
+      const sample = {
+        ...baseEvent(),
+        type: "diagnostic.memory.sample" as const,
+        memory: {
+          rssBytes: 1000,
+          heapTotalBytes: 500,
+          heapUsedBytes: 300,
+          externalBytes: 200,
+          arrayBuffersBytes: 100,
+          workerMessages: [
+            {
+              kind: "sqlite_reply" as const,
+              direction: "from_worker" as const,
+              messages: 4,
+              payloadBytes: 1234,
+              unmeasuredMessages: 2,
+            },
+          ],
+        },
+      };
+      metrics.record(sample, untrusted);
+      expect(metrics.render()).not.toContain("openclaw_worker_messages_total");
+      metrics.record(sample, trusted);
+      metrics.record(sample, trusted);
+      const rendered = metrics.render();
+      for (const [metric, value] of [
+        ["messages_total", 4],
+        ["message_payload_bytes_total", 1234],
+        ["message_unmeasured_total", 2],
+      ] as const) {
+        expect(rendered).toContain(
+          `openclaw_worker_${metric}{direction="from_worker",kind="sqlite_reply"} ${value}\n`,
+        );
+      }
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("exports isolate and native memory plus bounded successful spawn counts", () => {
     const metrics = createMetricsHarness();
     try {

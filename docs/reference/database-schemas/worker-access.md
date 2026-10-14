@@ -22,6 +22,13 @@ maintenance and unbound SDK managers retain their existing storage admission.
 Slow direct-reservation warnings label session-manager, actor-command, and selected
 history-read callers. The `openclaw.agent-database.reservation` diagnostic channel
 publishes holder timing without paths, session identities, or message content.
+Worker reservations also report bounded operation labels and the number of explicit
+outer SQLite transactions observed in their worker replies. This counts begun
+transactions, including rollbacks and read snapshots, rather than host admission
+requests, nested savepoints, or implicit autocommit. An absent count means no broker
+counter was received, not zero transactions; reclamation-worker close uses its own
+caller label. A reservation includes worker queueing, preparation, and result
+delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
 Use the existing read-only worker scope for descriptive reads and the store's
@@ -452,7 +459,10 @@ preserving the supplied mtime. A cache miss uses one existing writer command to
 read a bounded tail and store its result, including an empty result. Unavailable
 or cold projections remain incomplete and are not marked as successfully backfilled.
 Usage-cost refresh reads a stale rollup body and its monthly partitions in one
-worker snapshot; discovery still reads only metadata. Its transcript statistics
+worker snapshot; discovery still reads only metadata. Transcript statistics use
+the existing batched read directly, without registering per-session write scopes
+for a stats cache. Large inventories would otherwise repeatedly transfer a growing
+scope map while churning the bounded cache. The transcript statistics
 batch carries the rewrite generation and hot/cold state alongside the bounds,
 so the subsequent scan reuses those facts without another watermark read. A
 rewrite during a background scan converges on the next receipt-driven refresh.
@@ -1805,6 +1815,10 @@ phase, and before/after version, and install before command acknowledgement.
 Worker transport already detaches these internal postimages. Settlement and
 replica installation share them without another deep freeze or copy; internal
 borrowers treat snapshots and receipts as read-only and copy before editing.
+Replica residency uses an approximate heap budget based on string lengths and
+object/slot overhead, without serializing postimages or transcript bodies just
+to count bytes. The 128-snapshot and 8 MiB LRU limits retain one oversized
+snapshot so its next reader can still reuse it.
 If a receipt supersedes an in-flight read, that read uses the current replica.
 An empty replica permits one worker-read retry. A replacement before disclosure
 is reacquired once and authorized again; revoked authority still refuses the read.
@@ -4819,13 +4833,15 @@ candidates invalidate the retained selection. Conflicting selections return
 for fresh planning; unrelated writes invalidate age hints without cancelling the
 plan. Each actor retains at most two preparations, allowing a revoked
 predecessor to finish cleanup alongside the coalesced planner. Cleanup of the exact
-operation and native close release those readers. Planning preserves age facts and
-the preservation-required rollback before retrying with current protection facts.
-Automatic maintenance prepares subagent protection through its existing
+operation and native close release those readers. No-op plans carry their current
+age and count facts through settlement. Automatic maintenance prepares protection
+once before candidate selection, without a preliminary scan under writer admission.
+It prepares subagent protection through its existing
 read worker outside agent writer admission. The retained provider capture checks
 live ownership and publication changes through commit, then releases its custody
 after settlement. Cold protection never reloads the subagent registry on the
-Gateway main thread; no-op planning still avoids that preparation entirely.
+Gateway main thread. Exhaustive protected-only results suppress further passes
+until eligibility, policy, or the existing age deadline changes.
 Committed registry publications update the retained capture before the final host
 maintenance grant, without another candidate read or worker-side registry digest.
 Protection published after that grant is ordered after the admitted maintenance
