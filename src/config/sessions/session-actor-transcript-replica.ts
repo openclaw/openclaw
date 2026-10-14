@@ -143,9 +143,11 @@ export function seedSessionActorTranscriptContext(
   if (!prepared.residentRows && current.context) {
     return current;
   }
+  // Own one detached window; row views share it, and worker/cohort facts stay with the read.
+  const snapshot = structuredClone(prepared.snapshot);
   const rows = prepared.residentRows?.map((row, index) => ({
     ...row,
-    event: structuredClone(prepared.snapshot.events[index]),
+    event: snapshot.events[index],
   }));
   let complete: SessionActorTranscriptRow[] | undefined;
   if (rows && !prepared.snapshot.truncated && prepared.snapshot.boundaryCount === 0) {
@@ -178,7 +180,7 @@ export function seedSessionActorTranscriptContext(
         }
       : {
           limits: { ...limits },
-          exact: structuredClone(prepared),
+          exact: { kind: "bounded", snapshot },
           admission: admission && { ...admission },
         },
   };

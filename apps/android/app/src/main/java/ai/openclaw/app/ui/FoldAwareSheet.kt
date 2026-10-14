@@ -200,7 +200,6 @@ private data class SheetHostElement(
   override fun create() = SheetHostNode(state, direction)
 
   override fun update(node: SheetHostNode) {
-    check(node.state === state)
     node.direction = direction
   }
 

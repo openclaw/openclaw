@@ -34,6 +34,7 @@ Symptom-first checks for a Telegram bot that is not behaving.
 
     - Authorize your sender identity (pairing and/or numeric `allowFrom`); command authorization still applies even when group policy is `open`.
     - `setMyCommands failed` with `BOT_COMMANDS_TOO_MUCH` means the native menu has too many entries; reduce plugin/skill/custom commands or disable native menus.
+    - If logs say a session is archived, restore that session before sending a native command such as `/status`. Native commands do not restore archived sessions; their archive rejection is recorded as a failed inbound event rather than retried.
     - `deleteMyCommands` / `setMyCommands` startup calls and `sendChatAction` typing calls are bounded and retry once through Telegram's transport fallback on request timeout. Persistent network/fetch errors usually mean DNS/HTTPS to `api.telegram.org` is unreachable.
 
   </Accordion>

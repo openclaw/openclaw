@@ -646,8 +646,12 @@ describe("prepared reply dispatch runtime", () => {
       await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
       expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
       const lease = await acquireAgentRunPreparedModelRuntime(input);
-      expect(lease.snapshot).toMatchObject({ agentId: "default", agentDir: input.agentDir });
-      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
+      expect(lease.snapshot).toMatchObject({
+        agentId: "default",
+        agentDir: input.agentDir,
+        workspaceDir: "/tmp/unused-workspace",
+      });
+      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
       await lease[Symbol.asyncDispose]();
     } finally {
       finishAuthRefreshGate.resolve();

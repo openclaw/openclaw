@@ -147,10 +147,13 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       return;
     }
     const agentId = parseAgentSessionKey(key)?.agentId ?? resolveChatAgentId(state);
-    let refreshFailed = false;
+    let failedListRevision: number | undefined;
     const binding: NonNullable<ChatPaneSessionObservation["parentSessionObservation"]> = {
       retryFailedRead: () => {
-        if (refreshFailed) {
+        if (
+          failedListRevision !== undefined &&
+          sessions.canonicalListRevision > failedListRevision
+        ) {
           refresh();
         }
       },
@@ -168,7 +171,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       if (reading || !current()) {
         return;
       }
-      refreshFailed = false;
+      failedListRevision = undefined;
       reading = (async () => {
         const observation = binding.observation;
         if (observation?.isCurrent()) {
@@ -180,8 +183,8 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         }
       })()
         .catch(() => {
-          // A later history/connection publication can recover without a retry loop.
-          refreshFailed = true;
+          // Unrelated metadata publications must not retry a failed descriptor.
+          failedListRevision = sessions.canonicalListRevision;
         })
         .finally(() => {
           reading = null;

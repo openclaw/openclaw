@@ -565,7 +565,6 @@ extensions/minimax/video-generation-provider.ts	3
 extensions/moonshot/index.ts	2
 extensions/moonshot/native-video.ts	2
 extensions/moonshot/provider-policy-api.ts	1
-extensions/moonshot/src/kimi-web-search-provider.runtime.ts	2
 extensions/msteams/doctor-contract-api.ts	1
 extensions/msteams/src/attachments/graph.ts	1
 extensions/msteams/src/attachments/shared.ts	1
@@ -2329,7 +2328,7 @@ src/plugins/capability-provider-runtime.ts	8
 src/plugins/captured-registration.ts	1
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
-src/plugins/clawhub.ts	4
+src/plugins/clawhub.ts	3
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/config-normalization-shared.ts	1

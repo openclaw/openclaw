@@ -103,6 +103,7 @@ it("installs native commits before reply, retains known commits after reply fail
       name: "Error",
       message: "synthetic reply failure after native commit",
     });
+    expect(f.reply()).toEqual({ kind: "committed", failure: committed.failure });
     expect(committed.receipt).toMatchObject({
       beforeVersion: initial.version,
       afterVersion: { epoch: initial.version.epoch, sequence: 1 },

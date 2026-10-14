@@ -371,6 +371,7 @@ export async function createHarness(
     })),
     getPreparedCandidates: vi.fn(() => []),
     bindPreparedWorkspace: vi.fn(async (request) => ({
+      assertCurrent: request.assertCurrent,
       gatewayNamespace: "dispatch-fixture",
       environmentId: request.environmentId,
       preparationKey: request.preparationKey,

@@ -160,13 +160,13 @@ const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
   /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/locales\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/(?:locales|\.i18n)\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 // A plugin can declare its browser entry in any package directory. Keep this
 // path-only planner conservative; source discovery selects actual UI owners.
 const CONTROL_UI_I18N_PRODUCTION_SOURCE_RE =
   /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|extensions\/[^/]+\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
-  /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
+  /^(?:ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))|extensions\/[^/]+\/(?:.*\/)?i18n\/\.i18n\/[^/]+\.(?:meta\.json|tm\.jsonl))$/;
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
 
 class ControlUiGeneratedArtifactsMixedError extends Error {}
@@ -455,9 +455,20 @@ export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchNa
   if (generatedPaths.length === 0) {
     return;
   }
-  const sourcePaths = changedPaths.filter(
-    (filePath) => !CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath),
-  );
+  // Only the trusted locale publisher may pair generated memory with authored
+  // plugin bundles/manifests. Its native builder can repair a manifest even
+  // when that plugin's memory is unchanged; ordinary source PRs remain isolated.
+  const sourcePaths = changedPaths.filter((filePath) => {
+    if (CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath)) {
+      return false;
+    }
+    return (
+      branchName !== "automation/control-ui-locale-refresh" ||
+      !/^extensions\/[^/]+\/(?:openclaw\.plugin\.json|(?:.*\/)?i18n\/locales\/translated\.json)$/.test(
+        filePath,
+      )
+    );
+  });
   if (sourcePaths.length === 0) {
     return;
   }
@@ -689,7 +700,7 @@ export function resolveAllowedGeneratedMixBranch(
   if (env.GITHUB_ACTIONS === "true" && env.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX !== "true") {
     return "";
   }
-  if (RELEASE_BRANCH_RE.test(branchName)) {
+  if (RELEASE_BRANCH_RE.test(branchName) || branchName === "automation/control-ui-locale-refresh") {
     return branchName;
   }
   if (

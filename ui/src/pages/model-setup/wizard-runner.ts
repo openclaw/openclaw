@@ -189,7 +189,9 @@ export class ModelSetupWizardRunner {
       ModelSetupWizardStartMethod,
       "openclaw.setup.activate.start" | "mcp.authLogin"
     > = "openclaw.setup.auth.start",
-    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> = {},
+    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> & {
+      selectModel?: true;
+    } = {},
     modelTarget?: "utility",
   ): Promise<ModelSetupWizardCompletion | null> {
     return this.startSession(authChoice, startMethod, {
@@ -219,7 +221,7 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     startMethod: ModelSetupWizardStartMethod,
     params:
-      | { authChoice: string; modelTarget?: "utility" }
+      | { authChoice: string; modelTarget?: "utility"; selectModel?: true }
       | SystemAgentSetupActivateParams
       | { serverName: string },
     activationTargetId?: string,

@@ -1,5 +1,5 @@
 // SQLite query-plan tests pin hot OpenClaw state indexes used by perf proof.
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { StatementSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
@@ -7,6 +7,8 @@ import { deleteOrphanedTranscriptIndexRowsInTransaction } from "../config/sessio
 import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -27,7 +29,7 @@ function createTempStateDir(): string {
 }
 
 function explainQueryPlan(
-  db: DatabaseSync,
+  db: EngineConnection,
   sql: string,
   params: readonly (number | string | null)[] = [],
 ): string {
@@ -40,7 +42,7 @@ function explainQueryPlan(
 }
 
 function expectPlanUsesIndex(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   indexName: string;
   params?: readonly (number | string | null)[];
   sql: string;
@@ -49,7 +51,7 @@ function expectPlanUsesIndex(params: {
 }
 
 function expectPlanIncludes(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   expected: string;
   params?: readonly (number | string | null)[];
   sql: string;
@@ -87,8 +89,10 @@ describe("sqlite hot query plans", () => {
       );
     });
     try {
-      expect(needsSessionWatchCursorProvenanceMigration(db, 4)).toBe(false);
-      expect(migrateSessionWatchCursorProvenance(db)).toEqual({
+      expect(needsSessionWatchCursorProvenanceMigration(requireNativeSqliteDatabase(db), 4)).toBe(
+        false,
+      );
+      expect(migrateSessionWatchCursorProvenance(requireNativeSqliteDatabase(db))).toEqual({
         addedColumn: false,
         migratedAmbientWatches: 0,
         removedLegacySentinels: 0,
@@ -206,8 +210,10 @@ describe("sqlite hot query plans", () => {
       env: { OPENCLAW_STATE_DIR: createTempStateDir() },
     });
     const { db } = database;
+    const sqlite = requireNativeSqliteDatabase(db);
     const unboundedColumns = deriveDeliveryQueueRetentionColumns("", "{}");
-    db.prepare(`
+    sqlite
+      .prepare(`
       INSERT INTO delivery_queue_entries
         (queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at,
          retention_id_prefix, retention_max_age_ms, retention_max_entries)
@@ -219,8 +225,10 @@ describe("sqlite hot query plans", () => {
         ('a', 'null', 'failed', '{}', 1, 1, NULL, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries),
         ('a', 'pending', 'pending', '{}', 1, 1, 0, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries),
         ('pending-only', 'pending', 'pending', '{}', 1, 1, NULL, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries);
-    `).run(unboundedColumns);
-    db.prepare(`
+    `)
+      .run(unboundedColumns);
+    sqlite
+      .prepare(`
       WITH RECURSIVE history(n) AS (
         VALUES(1) UNION ALL SELECT n + 1 FROM history WHERE n < 200
       )
@@ -230,14 +238,15 @@ describe("sqlite hot query plans", () => {
       SELECT 'history-' || (n % 10), CAST(n AS TEXT), 'completed', '{}', 1, 1, 0,
         @retention_id_prefix, @retention_max_age_ms, @retention_max_entries
         FROM history;
-    `).run(unboundedColumns);
+    `)
+      .run(unboundedColumns);
 
     for (const analyzed of [false, true]) {
       if (analyzed) {
         db.exec("ANALYZE");
       }
       let countSql = "";
-      const reads = trackSqliteStatementExecutions(db, ["countFailed"], (sql) => {
+      const reads = trackSqliteStatementExecutions(sqlite, ["countFailed"], (sql) => {
         countSql = sql;
         return "countFailed";
       });

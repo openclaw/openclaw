@@ -10,6 +10,7 @@ import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
+import { assertEnvironmentRecipeSecretsMapped } from "./environment-recipe.js";
 import {
   createWorkerPreparationIdentity,
   type WorkerProviderPreparedIntent,
@@ -194,12 +195,17 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         "Worker preparation must have exactly one project source",
       );
     }
+    const supportsProjectPreparation = provider.supportsProjectPreparation?.(
+      profile,
+      machineClass,
+      os,
+    );
     if (
       (projectPath ||
         createOptions.repository ||
         createOptions.projectRepository ||
-        createOptions.emptyWorkspace) &&
-      provider.supportsProjectPreparation?.(profile, machineClass, os)
+        (createOptions.emptyWorkspace && supportsProjectPreparation)) &&
+      (supportsProjectPreparation || provider.runSetupCommand)
     ) {
       if (!options.projectNamespace) {
         throw serviceError("invalid_state", "Worker project preparation namespace is unavailable");
@@ -259,12 +265,12 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       signal?.throwIfAborted();
       if (project !== undefined) {
         const target = provider.resolvePreparationTarget?.(profile, machineClass, os);
-        const recipe =
-          target && project
-            ? "source" in project
-              ? repositoryAdmission?.recipe
-              : await readWorkerProjectEnvironmentRecipe(project, signal)
-            : undefined;
+        const recipe = project
+          ? "source" in project
+            ? repositoryAdmission?.recipe
+            : await readWorkerProjectEnvironmentRecipe(project, signal)
+          : undefined;
+        assertEnvironmentRecipeSecretsMapped(recipe, profile.setupSecrets);
         const setupRecipe = recipe?.identity;
         signal?.throwIfAborted();
         // An executable recipe does not authorize itself. Non-admin callers retain
@@ -294,7 +300,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           profileSnapshot = project
             ? { ...profileSnapshot, project: { ...project, preparation } }
             : { ...profileSnapshot, runtimePreparation: { source: "empty", ...preparation } };
-        } else if (project) {
+        } else if (project && supportsProjectPreparation) {
           profileSnapshot = { ...profileSnapshot, project };
         }
       }

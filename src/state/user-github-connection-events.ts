@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   publishSqliteCommittedState,
   stageSqliteCommittedPublication,
@@ -6,6 +6,7 @@ import {
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSet } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { readTrackedStateDatabaseIdentity } from "./openclaw-state-db-handle.js";
 import type { UserGitHubConnectionCommit } from "./user-github-connections.types.js";
 
 type ConnectionAuthorityChange = { databasePath: string; changedOwners: readonly string[] };
@@ -65,10 +66,15 @@ export function publishUserGitHubConnectionCommit(
 }
 
 export function stageUserGitHubConnectionCommit(
-  db: DatabaseSync,
+  db: EngineConnection,
   receipt: UserGitHubConnectionCommit,
 ): void {
-  if (!stageSqliteCommittedPublication(db, committedPublication(db.location() ?? "", receipt))) {
+  if (
+    !stageSqliteCommittedPublication(
+      db,
+      committedPublication(readTrackedStateDatabaseIdentity(db)?.canonicalPath ?? "", receipt),
+    )
+  ) {
     throw new Error("Personal GitHub connection publication requires its write transaction");
   }
 }

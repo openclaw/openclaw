@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { sessionUpstreamReadOperations } from "../sessions/session-upstream-links.kernel.js";
 import {
@@ -65,6 +65,8 @@ const loaders = {
   sessionUpstream: async () => sessionUpstreamReadOperations,
   diagnostic: () =>
     import("../infra/sqlite-audit-record.kernel.js").then((m) => m.diagnosticReadOperations),
+  restartLifecycle: () =>
+    import("../infra/restart-handoff.read.worker.js").then((m) => m.restartHandoffReadOperations),
   restartSentinel: () =>
     import("../infra/restart-sentinel.read.worker.js").then((m) => m.restartSentinelReadOperations),
 };
@@ -73,4 +75,6 @@ type Operations = WorkerOperationsFromLoaders<typeof loaders>;
 export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
 export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
 
-export const stateReadRegistry = createWorkerOperationRegistry<Operations, DatabaseSync>(loaders);
+export const stateReadRegistry = createWorkerOperationRegistry<Operations, EngineConnection>(
+  loaders,
+);
