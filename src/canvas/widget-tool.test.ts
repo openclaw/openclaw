@@ -206,6 +206,23 @@ describe("show_widget", () => {
     );
   });
 
+  it("composes inline registered widgets on the prompt action channel", async () => {
+    const composeDocument = vi.fn(({ source }: { source: string }) => `<main>${source}</main>`);
+    registerDiagramContentKind("diagram", composeDocument);
+    const stateDir = await createStateDir();
+    const tool = createShowWidgetTool({ stateDir, sessionId: "inline-registered" });
+
+    await tool.execute("inline", {
+      title: "Diagram",
+      widget_code: "diagram:ready",
+      kind: "diagram",
+    });
+
+    expect(composeDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "diagram:ready", promptGranted: true }),
+    );
+  });
+
   it("uses board-only delivery when inline hosting is disabled", async () => {
     registerDiagramContentKind();
     const stateDir = await createStateDir();
