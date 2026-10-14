@@ -23,7 +23,6 @@ import {
   readClawHubCatalogPreview,
   type ClawHubClawCatalogPreview,
 } from "./clawhub-preview-content.js";
-export type { ClawHubClawCatalogPreview } from "./clawhub-preview-content.js";
 import {
   CLAWHUB_TIMEOUT_MS,
   ClawHubSourceError,
@@ -33,6 +32,7 @@ import {
 } from "./clawhub-source-artifact.js";
 import { isExactSemVer } from "./schema-portability.js";
 
+export type { ClawHubClawCatalogPreview } from "./clawhub-preview-content.js";
 export { ClawHubSourceError };
 
 const CATALOG_PAGE_SIZE = 100;
