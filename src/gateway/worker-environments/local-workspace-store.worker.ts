@@ -31,8 +31,6 @@ export const localWorkspaceOperations = {
     }
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases);
-        assertWorktreeRegistryPredicates(db, input.predicates);
         const { result: row, receipt } = localWorkspacePublication.capture(db, () =>
           mutateLocalWorkspaceProjection(db, input.id, input.mutation),
         );

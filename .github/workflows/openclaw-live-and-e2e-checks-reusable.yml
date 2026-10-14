@@ -1271,10 +1271,11 @@ jobs:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       OPENCLAW_LIVE_CACHE_TEST: "1"
       OPENCLAW_LIVE_TEST: "1"
     steps:
@@ -1330,6 +1331,19 @@ jobs:
         run: |
           set -euo pipefail
           timeout --foreground --kill-after=30s 8m pnpm test:live:cache
+
+      - name: Verify live prompt prefix reuse
+        run: |
+          set -euo pipefail
+          timeout --foreground --kill-after=30s 8m node --import ./scripts/tsx.mjs scripts/e2e/anthropic-cache-live.mts
+
+      - name: Verify live agent prompt prefix reuse
+        env:
+          OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL: claude-sonnet-5
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
+        run: |
+          set -euo pipefail
+          timeout --foreground --kill-after=30s 8m pnpm test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern 'release prompt-prefix gate'
 
   validate_repo_e2e_gateway:
     name: Gateway E2E${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}

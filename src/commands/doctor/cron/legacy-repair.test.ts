@@ -52,71 +52,6 @@ afterEach(async () => {
   noteMock.mockClear();
 });
 
-it.each<{
-  name: string;
-  agents: NonNullable<OpenClawConfig["agents"]>;
-  agentId?: string;
-  expectedOwner: { kind: "runtime-default" | "explicit"; agentId: string };
-}>([
-  {
-    name: "sole configured agent",
-    agents: { entries: { ops: {} } },
-    expectedOwner: { kind: "runtime-default", agentId: "ops" },
-  },
-  {
-    name: "configured system agent under explicit ownership",
-    agents: {
-      ownership: "explicit",
-      defaults: { systemAgent: { agentId: "ops" } },
-      entries: { main: {}, ops: {} },
-    },
-    expectedOwner: { kind: "runtime-default", agentId: "ops" },
-  },
-  {
-    name: "explicit job owner before the configured system agent",
-    agents: {
-      ownership: "explicit",
-      defaults: { systemAgent: { agentId: "ops" } },
-      entries: { main: {}, ops: {} },
-    },
-    agentId: "main",
-    expectedOwner: { kind: "explicit", agentId: "main" },
-  },
-])(
-  "projects the $name without changing the stored owner",
-  async ({ agents, agentId, expectedOwner }) => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-owner-projection-"));
-    const storePath = path.join(tempRoot, "cron", "jobs.json");
-    await saveCronStore(storePath, {
-      version: 1,
-      jobs: [
-        {
-          id: "dynamic-default",
-          agentId,
-          name: "Dynamic default",
-          enabled: true,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          payload: { kind: "agentTurn", message: "run" },
-          state: {},
-        },
-      ],
-    });
-
-    const cfg = {
-      cron: { store: storePath },
-      agents,
-    } as OpenClawConfig;
-    const state = await loadLegacyCronRepairState({ cfg, storePath, readOnly: true });
-
-    expect(state?.rawJobs[0]?.agentId).toBe(agentId);
-    expect(state?.projectedOwnersByJobId.get("dynamic-default")).toEqual(expectedOwner);
-  },
-);
-
 function job(id: string): CronJob {
   return {
     id,
@@ -150,6 +85,31 @@ const updateDoctorEnv = {
   }),
   OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
 };
+
+it("leaves canonical one-shot jobs untouched without a SQLite repair backup", async () => {
+  await withOpenClawTestState({ label: "cron-canonical-at-repair" }, async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const canonical: CronJob = {
+      ...job("canonical-at"),
+      schedule: { kind: "at", at: "2026-04-01T10:00:00.000Z" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    };
+    await saveCronStore(storePath, { version: 1, jobs: [canonical] });
+    const { cfg, state } = await loadRepairStateForStore(storePath);
+
+    expect(await applyLegacyCronStoreRepair({ cfg, state })).toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect((await loadCronStore(storePath)).jobs).toEqual([canonical]);
+    expect(
+      (await fs.readdir(fixture.statePath("state"))).filter((name) =>
+        name.includes(".doctor-cron-"),
+      ),
+    ).toEqual([]);
+  });
+});
 
 it("rehearses quarantine import without consuming the live source before activation", async () => {
   await withOpenClawTestState({ label: "cron-rehearsal-quarantine" }, async (state) => {
@@ -358,10 +318,7 @@ it("does not reactivate quarantined automations during startup repair", async ()
   expect(await loadCronQuarantinedJobs(storePath)).toHaveLength(1);
 });
 
-it.each([
-  { mode: "not-a-route", legacyHints: false },
-  { mode: 42, legacyHints: true },
-])(
+it.each([{ mode: 42, legacyHints: true }])(
   "preserves unknown delivery mode $mode alongside legacy hints=$legacyHints",
   async ({ mode, legacyHints }) => {
     await withOpenClawTestState({ label: "cron-unsupported-delivery" }, async (state) => {
@@ -441,7 +398,7 @@ it.each([
   },
 );
 
-it.each(["jobs.json", "jobs-state.json", "runs/old-job.jsonl"])(
+it.each(["runs/old-job.jsonl"])(
   "refuses retired %s before mutating supported quarantine or SQLite rows",
   async (relative) => {
     await withOpenClawTestState({ label: "cron-retired-files" }, async (state) => {

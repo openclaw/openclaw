@@ -38,6 +38,7 @@ export { normalizeEmbeddingModelWithPrefixes } from "./host/embeddings-model-nor
 export {
   embeddingProviderOwnsDestination,
   resolveEmbeddingEndpointUrl,
+  resolveEmbeddingProviderSsrFPolicy,
   resolveRemoteEmbeddingBearerClient,
 } from "./host/embeddings-remote-client.js";
 export {

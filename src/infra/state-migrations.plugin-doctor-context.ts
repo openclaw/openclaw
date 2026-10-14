@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   inspectAcpSessionClaimsForDoctor,
@@ -19,7 +18,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
-} from "../config/sessions/targets-read-availability.js";
+} from "../config/sessions/targets-read-availability.worker.js";
 import { dedupeSessionStoreTargetsBySqliteTarget } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWriteTransaction } from "../plugin-state/plugin-state-store.database.js";
@@ -53,6 +52,7 @@ import {
   resolveVerifiedSessionSource,
 } from "./deferred-plugin-session-sources.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -334,7 +334,7 @@ async function repairPluginStateEntriesForDoctor(params: {
     authority.assertCurrent();
     assertExistingDatabaseIdentity(databasePath, identity.key, identity.birthtime);
   };
-  const validate = (db: DatabaseSync) => {
+  const validate = (db: EngineConnection) => {
     for (const { entry } of rows) {
       const query = getPluginStateKysely(db)
         .selectFrom("plugin_state_entries")

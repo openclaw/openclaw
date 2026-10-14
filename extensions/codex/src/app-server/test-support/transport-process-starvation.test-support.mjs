@@ -55,6 +55,9 @@ if (fixtureProcfs) {
 const fixtureOpen = fixtureFs.openSync;
 const fixtureFiles = new Map(${JSON.stringify([...mapped])});
 fixtureFs.openSync = (file, ...args) => fixtureOpen(fixtureFiles.get(file) ?? file, ...args);
+const fixtureReaddir = fixtureFs.readdirSync;
+fixtureFs.readdirSync = (file, ...args) => file === "/proc"
+  ? [${JSON.stringify(String(process.pid))}] : fixtureReaddir(file, ...args);
 `;
       const injectedArgs = args.slice();
       injectedArgs[evalIndex + 1] = injected + injectedArgs[evalIndex + 1];
@@ -65,9 +68,9 @@ fixtureFs.openSync = (file, ...args) => fixtureOpen(fixtureFiles.get(file) ?? fi
   Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   syncBuiltinESMExports();
 }
-const own = (await readCodexAppServerProcessSnapshot(Date.now() + 10_000, [process.pid])).find(
-  (row) => row.pid === process.pid,
-);
+const own = (
+  await readCodexAppServerProcessSnapshot(performance.now() + 10_000, [process.pid])
+).find((row) => row.pid === process.pid);
 if (!own) {
   throw new Error("The observer identity is unavailable.");
 }
@@ -92,7 +95,7 @@ try {
   readFileSync(`/proc/${process.pid}/stat`);
   const directReadMs = performance.now() - directStart;
   const started = performance.now();
-  const deadline = Date.now() + 10_000;
+  const deadline = performance.now() + 10_000;
   let eventLoopDelayMs;
   const responsive = new Promise((resolve) => {
     setTimeout(() => {
@@ -104,6 +107,7 @@ try {
   const outcomes = await Promise.allSettled([
     readCodexAppServerProcessSnapshot(deadline, [process.pid]),
     readCodexAppServerProcessCommand(own, deadline),
+    readCodexAppServerProcessSnapshot(deadline),
   ]);
   const inspectionMs = performance.now() - started;
   const filesystemWorkerHeldAtInspection = blockedFilesystemWorkerMs === undefined;
@@ -128,7 +132,7 @@ try {
         eventLoopDelayMs,
         inspectionMs,
         outcomes: outcomes.map((outcome, index) => {
-          const operation = index === 0 ? "selected-identity" : "selected-command";
+          const operation = ["selected-identity", "selected-command", "full-snapshot"][index];
           if (outcome.status === "rejected") {
             return {
               operation,
@@ -137,7 +141,7 @@ try {
               reason: outcome.reason?.reason,
             };
           }
-          return index === 0
+          return index !== 1
             ? {
                 operation,
                 status: "fulfilled",

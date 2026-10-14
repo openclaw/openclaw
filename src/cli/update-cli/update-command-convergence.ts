@@ -1,5 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
+  UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
+} from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
@@ -40,6 +44,7 @@ export async function convergeUpdatePlugins(params: {
   coreAlreadyCurrent?: boolean;
   /** Local running-code context, never installation state or mutation authority. */
   candidateRuntime?: boolean;
+  deferPostActivationInspections?: boolean;
   result: UpdateRunResult;
   root: string;
   previousInstallRoot?: string;
@@ -143,11 +148,17 @@ export async function convergeUpdatePlugins(params: {
       ? postUpdateInstalledVersion
       : null;
   // Downgraded parents and candidate workers select the installed target version.
-  const compatibilityEnv = compatibilityHostVersion
-    ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion }
-    : {};
+  const convergenceEnv = {
+    ...(compatibilityHostVersion
+      ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion }
+      : {}),
+    [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]:
+      params.deferPostActivationInspections === true
+        ? UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE
+        : "0",
+  };
   return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
-    withUpdateEnv(compatibilityEnv, async () => {
+    withUpdateEnv(convergenceEnv, async () => {
       let postCorePluginUpdate;
       const doctorWarnings: string[] = [];
       let targetRuntimeConverged = false;
@@ -174,22 +185,20 @@ export async function convergeUpdatePlugins(params: {
           return {
             resultWithPostUpdate: {
               ...failedTargetRuntime(),
-              ...(freshProcessResult.failureFacts?.length
-                ? {
-                    steps: [
-                      ...params.result.steps,
-                      {
-                        name: "post-update verification",
-                        command: "openclaw update",
-                        cwd: postUpdateRoot,
-                        durationMs: 0,
-                        exitCode: freshProcessResult.exitCode,
-                        stderrTail: freshProcessResult.error,
-                        failureFacts: freshProcessResult.failureFacts,
-                      },
-                    ],
-                  }
-                : {}),
+              steps: [
+                ...params.result.steps,
+                {
+                  name: "post-update verification",
+                  command: "openclaw update",
+                  cwd: postUpdateRoot,
+                  durationMs: 0,
+                  exitCode: freshProcessResult.exitCode,
+                  stderrTail: freshProcessResult.error,
+                  failureFacts: freshProcessResult.failureFacts?.length
+                    ? freshProcessResult.failureFacts
+                    : [{ check: "runtime", code: "post-core-update-failed" }],
+                },
+              ],
             },
             detail: freshProcessResult.error,
             cancelled: freshProcessResult.exitCode === 130 || freshProcessResult.exitCode === 143,

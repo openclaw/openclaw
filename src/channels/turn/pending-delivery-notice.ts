@@ -1,7 +1,5 @@
-import {
-  loadSessionEntryReadOnly,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { getGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime-context.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
@@ -18,7 +16,7 @@ export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
 ): Promise<void> {
-  const entry = loadSessionEntryReadOnly({
+  const entry = await readSessionEntryReadOnlyInWorker({
     sessionKey,
     storePath,
     readConsistency: "latest",

@@ -3,6 +3,10 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context } from "../../../llm/types.js";
 import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
+import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
@@ -176,7 +180,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
         });
       const setPreparation = installAttemptPermissionPrompt({
         activeSession: session,
-        attempt: {},
+        attempt: { model: { api: "anthropic-messages" } },
         runAbortSignal: new AbortController().signal,
         setActiveSessionSystemPrompt: (prompt) => {
           session.setBaseSystemPrompt(prompt);
@@ -507,31 +511,32 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
     const { activeSession } = createSession();
     const stream = vi.fn<StreamFn>();
     activeSession.agent.streamFn = stream;
-    let active = true;
+    const admission = prepareSystemAgentRunAdmission({}, "prompt-restoration", "main", "prompt");
     const reader = vi.fn(() => ({ tools: [], systemPrompt: "restored" }));
     const observe = vi.fn();
-    await expect(
-      submitEmbeddedAttemptPrompt({
-        ...createBaseInput(),
-        activeSession,
-        onPrimaryModelRequest: observe,
-        assertHostActive: () => {
-          if (!active) {
-            throw new Error("authority closed");
-          }
-        },
-        preparePrimaryModelRequest: async () => {
-          active = false;
-          return reader;
-        },
-        promptActiveSession: async (_prompt, options) => {
-          options?.preflightResult?.(true);
-          await activeSession.agent.streamFn(testModel, { messages: [] }, {});
-        },
-      }),
-    ).rejects.toThrow("authority closed");
-    expect(reader).not.toHaveBeenCalled();
-    expect(observe).not.toHaveBeenCalled();
-    expect(stream).not.toHaveBeenCalled();
+    try {
+      const admitted = await admission.admit("embedded");
+      await expect(
+        submitEmbeddedAttemptPrompt({
+          ...createBaseInput(),
+          activeSession,
+          onPrimaryModelRequest: observe,
+          assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
+          preparePrimaryModelRequest: async () => {
+            admission.close();
+            return reader;
+          },
+          promptActiveSession: async (_prompt, options) => {
+            options?.preflightResult?.(true);
+            await activeSession.agent.streamFn(testModel, { messages: [] }, {});
+          },
+        }),
+      ).rejects.toThrow("admitted run authority is no longer active");
+      expect(reader).not.toHaveBeenCalled();
+      expect(observe).not.toHaveBeenCalled();
+      expect(stream).not.toHaveBeenCalled();
+    } finally {
+      admission.close();
+    }
   });
 });

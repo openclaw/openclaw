@@ -82,7 +82,7 @@ export async function createDiscordMonitorClient(params: {
   const readyListener = new (class DiscordStatusReadyListener extends ReadyListener {
     async handle(_data: unknown, client: Client) {
       if (autoPresenceController?.enabled) {
-        autoPresenceController.refresh();
+        void autoPresenceController.refresh();
         return;
       }
       client.getPlugin("gateway")?.updatePresence(resolveDiscordPresenceUpdate(readyDiscordConfig));
@@ -126,7 +126,7 @@ export async function createDiscordMonitorClient(params: {
       gateway,
       log: (message) => params.runtime.log?.(message),
     });
-    autoPresenceController.start();
+    void autoPresenceController.start();
   }
 
   return {

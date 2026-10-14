@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -71,7 +72,7 @@ suite.define(() => {
         await gateway.setOnline(false);
         await gateway.closeLatest(1001, "mock Gateway restart");
         await expect.poll(() => page.title()).toMatch(/^\(Disconnected/);
-        await page.locator(".gateway-status__label", { hasText: "Reconnecting…" }).waitFor();
+        await waitForControlUiGatewayReconnecting(page);
         await page.screenshot({ path: `${suite.artifactDir}/offline.png` });
         const offlineTitle = await page.title();
         const offlineHeadings = await headings.allTextContents();

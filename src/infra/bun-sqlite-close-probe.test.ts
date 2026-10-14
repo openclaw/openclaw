@@ -31,7 +31,8 @@ vi.mock("node:fs/promises", () => ({
   rm: state.remove,
 }));
 vi.mock("node:timers/promises", () => ({ setImmediate: async () => {} }));
-vi.mock("node:worker_threads", () => ({
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
   Worker: class extends EventEmitter {
     terminate = vi.fn(() => state.join);
     unref = vi.fn(() => this);

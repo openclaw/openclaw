@@ -7,7 +7,7 @@
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
@@ -109,8 +109,10 @@ export function createCodexSupervisionToolsMcpServer(params: {
 export async function serveCodexSupervisionToolsMcp(): Promise<void> {
   routeLogsToStderr();
   await serveRegisteredToolsMcpServer({
-    acquireRegistry: () =>
-      acquireCodexSupervisionTools(withCodexSupervisionEnabled(getRuntimeConfig())),
+    acquireRegistry: async () =>
+      acquireCodexSupervisionTools(
+        withCodexSupervisionEnabled(await captureRuntimeConfigAsyncReader()()),
+      ),
     createServer: (tools, sdkResourceHost) =>
       createCodexSupervisionToolsMcpServer({ tools, sdkResourceHost }),
   });
@@ -119,6 +121,6 @@ export async function serveCodexSupervisionToolsMcp(): Promise<void> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   serveCodexSupervisionToolsMcp().catch((error: unknown) => {
     process.stderr.write(`codex-supervisor-serve: ${formatErrorMessage(error)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

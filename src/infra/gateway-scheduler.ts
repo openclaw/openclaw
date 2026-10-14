@@ -4,6 +4,7 @@ import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-s
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { materializeErrorStack } from "./error-graph-internal.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 
 export type GatewaySchedulerClock = {
   now: () => number;
@@ -12,6 +13,7 @@ export type GatewaySchedulerClock = {
 };
 
 export type GatewayScheduledJob = {
+  readonly atMs: number;
   cancel: () => void;
   stop: () => Promise<void>;
 };
@@ -19,6 +21,8 @@ export type GatewayScheduledJob = {
 type ScheduleParams = {
   id: string;
   everyMs?: number;
+  /** Best-effort work may run up to 10s early to share a stable maintenance phase. */
+  phase?: "maintenance";
   /** Keep both pending clock deadlines when a stale read would postpone the wake. */
   mode?: "replace" | "earliest";
   run: () => void | Promise<unknown>;
@@ -39,9 +43,11 @@ type ScheduleOwner = {
 
 type ScheduledWork = {
   id: string;
+  diagnosticName: string;
   atMs: number;
   elapsedAtMs?: number;
   everyMs?: number;
+  phase?: "maintenance";
   run: () => void | Promise<unknown>;
   context: ReturnType<typeof AsyncLocalStorage.snapshot>;
   running?: Promise<void>;
@@ -56,12 +62,24 @@ const hostClock: GatewaySchedulerClock = {
   arm: (run, delayMs) => {
     // Host callbacks stay synchronous; execution joins belong to the scheduler.
     const timer = setTimeout(() => {
-      void run();
+      runWithMainThreadTask("scheduler:wake", () => {
+        void run();
+      });
     }, delayMs);
     timer.unref();
     return () => clearTimeout(timer);
   },
 };
+
+/** Next maintenance slot on one clock after a run, skipping missed slots without replay. */
+function nextMaintenanceSlot(slotMs: number, clockMs: number, everyMs: number): number {
+  // A slot more than half a period ahead was not served by this run (a forward wall-clock
+  // jump fired the job early); keep it so the elapsed cadence still runs on time.
+  if (slotMs - clockMs > everyMs / 2) {
+    return slotMs;
+  }
+  return slotMs + (Math.floor(Math.max(0, clockMs - slotMs) / everyMs) + 1) * everyMs;
+}
 
 /** Owns Gateway wakeups; stores and execution owners retain their deadlines and authority. */
 export class GatewayScheduler {
@@ -141,7 +159,11 @@ export class GatewayScheduler {
   private scheduleOwned(params: ScheduleParams, owner?: ScheduleOwner): GatewayScheduledJob {
     const relative = "delayMs" in params;
     const nowMs = this.now();
-    const atMs = relative ? nowMs + params.delayMs : params.atMs;
+    const requestedAtMs = relative ? nowMs + params.delayMs : params.atMs;
+    const atMs =
+      params.phase === "maintenance"
+        ? Math.max(nowMs, Math.floor(requestedAtMs / 10_000) * 10_000)
+        : requestedAtMs;
     if (
       !Number.isFinite(atMs) ||
       (params.everyMs !== undefined && (!Number.isFinite(params.everyMs) || params.everyMs <= 0))
@@ -152,8 +174,15 @@ export class GatewayScheduler {
     const previous = cancelled ? undefined : this.jobs.get(params.id);
     const job: ScheduledWork = {
       id: params.id,
+      // Dynamic suffixes can contain session IDs or paths; maintenance names are code-owned.
+      diagnosticName: `scheduler:${
+        params.id.startsWith("maintenance:")
+          ? params.id.split(":").slice(0, 3).join(":")
+          : params.id.split(/[:/]/u, 1)[0]!
+      }`,
       run: params.run,
       everyMs: params.everyMs,
+      phase: params.phase,
       atMs,
       elapsedAtMs:
         relative || params.everyMs !== undefined
@@ -182,6 +211,9 @@ export class GatewayScheduler {
       this.arm();
     }
     return {
+      get atMs() {
+        return job.atMs;
+      },
       cancel,
       stop: async () => {
         cancel();
@@ -303,8 +335,30 @@ export class GatewayScheduler {
       this.pending.delete(done.promise);
       // Coalesce all missed periods, including time spent in the callback, into this one run.
       if (job.everyMs !== undefined && !job.cancelled && !this.signal.aborted) {
-        job.atMs = this.now() + job.everyMs;
-        job.elapsedAtMs = this.clock.monotonicNow() + job.everyMs;
+        if (job.phase === "maintenance") {
+          // Advance nominal slots, including across sleep and slow async work, without replay.
+          // An immediate startup pass joins the shared phase on its next iteration.
+          const alignmentMs = job.atMs - Math.floor(job.atMs / 10_000) * 10_000;
+          job.atMs -= alignmentMs;
+          if (job.elapsedAtMs !== undefined) {
+            job.elapsedAtMs -= alignmentMs;
+          }
+          // Each clock advances only the slot this run served. A wall-clock jump must not
+          // advance the elapsed cadence with it, but ordinary drift between the clocks
+          // leaves the other clock's slot just ahead; it was served too, or the job would
+          // run again milliseconds later for the same slot.
+          job.atMs = nextMaintenanceSlot(job.atMs, this.now(), job.everyMs);
+          if (job.elapsedAtMs !== undefined) {
+            job.elapsedAtMs = nextMaintenanceSlot(
+              job.elapsedAtMs,
+              this.clock.monotonicNow(),
+              job.everyMs,
+            );
+          }
+        } else {
+          job.atMs = this.now() + job.everyMs;
+          job.elapsedAtMs = this.clock.monotonicNow() + job.everyMs;
+        }
       } else {
         job.owner?.jobs.delete(job);
       }
@@ -313,7 +367,9 @@ export class GatewayScheduler {
     };
     let result: void | Promise<unknown> = undefined;
     try {
-      result = job.context(() => work.run(job.run));
+      result = job.context(() =>
+        runWithMainThreadTask(job.diagnosticName, () => work.run(job.run)),
+      );
     } catch (error) {
       log.error(`${job.id} failed: ${String(error)}`);
     }

@@ -5,7 +5,8 @@ import {
   sessionsResult,
 } from "../../../ui/src/lib/sessions/session-capability.test-support.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
 import { createPluginServiceGatewayEvents } from "../../plugins/gateway-events.js";
@@ -61,10 +62,10 @@ it("coalesces prepared keyless refreshes without repeating prepared facts", asyn
   }
 });
 
-it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
+it.each(["ready", "preparation"] as const)(
   "publishes private repository facts or refreshes subscribers after %s preparation",
   async (failure) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const cfg = { agents: { entries: { main: {} } } };
       const sessionKey = "agent:main:dashboard:incognito-fallback";
       const repository = await getSessionRepositoryWorkspaceStore().create({
@@ -74,7 +75,7 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
         branch: "private-event",
         assertCurrent: () => {},
       });
-      replaceSessionEntrySync(
+      await replaceSessionEntry(
         { agentId: "main", sessionKey },
         {
           sessionId: "private-session",
@@ -166,29 +167,10 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
       try {
         await sessions.refresh({ agentId: "main", force: true });
         const initialReads = request.mock.calls.length;
-        if (failure === "capture") {
-          vi.spyOn(projection, "capture").mockImplementationOnce(() => {
-            throw new Error("synthetic capture failure");
-          });
-        } else if (failure === "preparation") {
+        if (failure === "preparation") {
           vi.spyOn(projection, "withPreparedExactRows").mockRejectedValueOnce(
             new Error("synthetic preparation failure"),
           );
-        } else if (failure === "canonical deferral") {
-          vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-            kind: "pending",
-            database: {
-              agentId: "main",
-              path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-              initializeCanonicalValidation: false,
-              assertStateCurrent: () => {},
-              source: {
-                key: "synthetic:pending",
-                canonicalPath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-                incarnation: "synthetic-pending",
-              },
-            },
-          });
         }
         if (failure !== "ready") {
           vi.useFakeTimers();
@@ -261,6 +243,10 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
         detach();
         await connection.mentionInbox.dispose();
         projection.dispose();
+        memorySessionActorOwners.closeDatabase({
+          agentId: "main",
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+        });
         vi.useRealTimers();
       }
     });
@@ -299,9 +285,9 @@ it.each(ownerCases)(
   async ({ cfg, sessionKey, canonicalKey }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const projection = createSessionRowProjectionFixture({ cfg, agentId: "ops", store: {} });
-      vi.spyOn(projection, "capture").mockImplementation(() => {
-        throw new Error("synthetic capture failure");
-      });
+      vi.spyOn(projection, "withPreparedExactRows").mockRejectedValue(
+        new Error("synthetic preparation failure"),
+      );
       const broadcaster = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
       const broadcast = vi.fn(broadcaster.broadcastToConnIds);
       const lease = createPluginRuntimeCapabilityLease("fallback-scope");

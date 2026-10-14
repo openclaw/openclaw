@@ -51,9 +51,10 @@ describe("scripts/test-live", () => {
           [
             'import fs from "node:fs";',
             'import path from "node:path";',
-            'if (["check-live-cache.ts", "vitest.mjs"].includes(path.basename(process.argv[1] ?? ""))) {',
+            'const bootstrap = path.basename(process.argv[1] ?? "") === "vitest-worker-bootstrap.mts";',
+            'if (bootstrap || ["check-live-cache.ts", "vitest.mjs"].includes(path.basename(process.argv[1] ?? ""))) {',
             "  fs.writeFileSync(process.env.OPENCLAW_CACHE_RUNTIME_RECEIPT, JSON.stringify({",
-            '    runtime: process.versions.bun ? "bun" : "node", args: process.argv.slice(2),',
+            '    runtime: process.versions.bun ? "bun" : "node", args: process.argv.slice(bootstrap ? 4 : 2),',
             "    live: process.env.OPENCLAW_LIVE_TEST, cache: process.env.OPENCLAW_LIVE_CACHE_TEST,",
             "  }));",
             "  process.exit(Number(process.env.OPENCLAW_FAKE_BUN_EXIT));",
@@ -179,6 +180,8 @@ describe("scripts/test-live", () => {
           expect(invocation.args).toEqual([
             "--tsconfig-override",
             join(process.cwd(), "tsconfig.json"),
+            join(process.cwd(), "scripts/lib/vitest-worker-bootstrap.mts"),
+            expect.stringContaining(join(process.cwd(), ".artifacts", "vitest-workers", "run-")),
             expect.stringMatching(/[/\\]vitest\.mjs$/),
             "run",
             "--config",
@@ -195,6 +198,7 @@ describe("scripts/test-live", () => {
           await waitForProcessExit(childPid, signal);
           await waitForProcessExit(descendantPid, signal);
           expect(existsSync(readFileSync(join(root, "namespace"), "utf8"))).toBe(false);
+          expect(existsSync(invocation.args[3])).toBe(false);
         } finally {
           await stopFixture(runner, completion, [childPid, descendantPid]);
           rmSync(root, { force: true, recursive: true });

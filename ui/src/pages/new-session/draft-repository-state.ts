@@ -39,9 +39,15 @@ function initialRepositoryState(snapshot: DraftRepositorySnapshot): DraftReposit
   if (snapshot.remoteProject) {
     return { kind: "pending-clone", cloneUrl: snapshot.remoteProject.cloneUrl };
   }
+  if (snapshot.selectedProject && !snapshot.selectedProject.repoRoot) {
+    // Path-redacted registered projects use creation-time validation by project ID.
+    return snapshot.selectedProject.source === "workspace"
+      ? { kind: "idle" }
+      : { kind: "pending-project", projectId: snapshot.selectedProject.id };
+  }
   const repoRoot =
     snapshot.selectedProject?.repoRoot ?? (snapshot.folder.trim() || snapshot.workspace);
-  if (!repoRoot || (snapshot.selectedProject && !snapshot.selectedProject.repoRoot)) {
+  if (!repoRoot) {
     return { kind: "idle" };
   }
   return !snapshot.selectedProject && repoRoot === snapshot.workspace && !snapshot.workspaceGit
@@ -245,13 +251,22 @@ export class DraftRepositoryController {
 
   available(): boolean {
     const state = this.repositoryValue;
-    // A saved path or .git marker cannot prove that Git has a usable HEAD.
-    return state.kind === "git" || state.kind === "pending-clone";
+    // Paths need discovery; project IDs and clones are validated when creating the session.
+    return (
+      state.kind === "git" || state.kind === "pending-clone" || state.kind === "pending-project"
+    );
   }
 
   matchesCurrentRepo(): boolean {
     const snapshot = this.read();
     const state = this.repositoryValue;
+    if (state.kind === "pending-project") {
+      return (
+        !snapshot.remoteProject &&
+        !snapshot.selectedProject?.repoRoot &&
+        snapshot.selectedProject?.id === state.projectId
+      );
+    }
     if (state.kind === "pending-clone") {
       return snapshot.remoteProject?.cloneUrl === state.cloneUrl;
     }

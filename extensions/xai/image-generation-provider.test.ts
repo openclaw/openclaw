@@ -105,7 +105,7 @@ describe("xai image generation provider", () => {
     resolveProviderOperationTimeoutMsMock.mockClear();
   });
 
-  it("builds provider with correct models, default, and capabilities", () => {
+  it("builds provider with correct models, default, and capabilities", async () => {
     const provider = buildXaiImageGenerationProvider();
     expect(provider.id).toBe("xai");
     expect(provider.label).toBe("xAI");
@@ -130,14 +130,14 @@ describe("xai image generation provider", () => {
     ]);
     expect(provider.capabilities.edit.enabled).toBe(true);
     expect(provider.capabilities.edit.maxInputImages).toBe(3);
-    const isConfigured = provider.isConfigured;
+    const isConfigured = provider.isConfiguredAsync;
     if (!isConfigured) {
       throw new Error("expected XAI image provider config predicate");
     }
     vi.stubEnv("XAI_API_KEY", undefined);
-    expect(isConfigured({})).toBe(false);
+    expect(await isConfigured({})).toBe(false);
     expect(
-      isConfigured({
+      await isConfigured({
         cfg: {
           models: {
             providers: {

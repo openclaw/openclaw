@@ -346,14 +346,6 @@ export class SubagentLifecycleController {
     this.scheduledResumeTimers.clear();
     for (const scheduled of this.scheduledRequesterSettleWakeTimers.values()) {
       clearTimeout(scheduled.timer);
-      this.pendingRequesterSettleWakeCommits
-        .get(getSubagentRunRuntimeKey(scheduled.entry))
-        ?.initialTransfer?.retire();
-    }
-    for (const entry of this.options.runs.values()) {
-      this.pendingRequesterSettleWakeCommits
-        .get(getSubagentRunRuntimeKey(entry))
-        ?.initialTransfer?.retire();
     }
     this.scheduledRequesterSettleWakeTimers.clear();
     this.pendingRequesterSettleWakeRearms = new Set();
@@ -386,6 +378,15 @@ export class SubagentLifecycleController {
   isCleanupAttemptCurrent = (entry: SubagentRunRecord, generation: number): boolean =>
     getCurrentSubagentRunOwner(this.options.runs, entry)?.cleanupHandled === true &&
     this.isCleanupGenerationCurrent(entry, generation);
+  /** Completion hands cleanup off synchronously, so these spans cover the whole live tail. */
+  isTerminalTailActive = (entry: SubagentRunRecord): boolean => {
+    const identity = getSubagentRunRuntimeKey(entry);
+    return (
+      this.terminalEffectUsers.has(identity) ||
+      this.cleanupReservations.has(identity) ||
+      this.activeCleanupAttempts.has(identity)
+    );
+  };
   isCleanupOwnerCurrent = (entry: SubagentRunRecord): boolean => {
     const current = this.liveRow(entry);
     return (
@@ -607,8 +608,6 @@ export class SubagentLifecycleController {
           assertSubagentRegistryWriteSourceCurrent(stateContext);
           assertCurrent?.();
         },
-        scheduleRetry: (entry) =>
-          scheduleRequesterSettleWake(this, entry.runId, entry, stateContext),
       });
   }
 

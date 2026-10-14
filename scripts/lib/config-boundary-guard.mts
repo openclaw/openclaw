@@ -7,12 +7,16 @@ const DEFAULT_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../.
 type SourceFile = { filePath: string; relPath: string };
 
 const COMPAT_CONFIG_API_FILES = new Set([
+  // Offline database port switches `database.engine` through the canonical config writer under custody and the config write lock.
+  "src/commands/doctor-database-port.ts",
   "src/config/config.ts",
   "src/config/io.runtime.ts",
   "src/config/io.ts",
   "src/config/mutate.ts",
   "src/memory-host-sdk/runtime-core.ts",
   "src/plugin-sdk/memory-core-host-runtime-core.ts",
+  // Released cold getter stays synchronous; migrate to readRuntimeConfig after async preparation.
+  "src/plugin-sdk/runtime-config-legacy.ts",
   "src/plugins/compat/registry.ts",
   "src/plugins/registry.runtime-config.test.ts",
   "src/plugins/registry.ts",
@@ -37,6 +41,12 @@ const PROCESS_BOUNDARY_DIRECT_CONFIG_LOAD_FILES = new Set([
   // snapshot, so it cannot express a pinned run; the file-scoped loader is the
   // point. Ambient resolution in the same command does use `getRuntimeConfig()`.
   "src/commands/agent-exec-input.ts",
+  // Offline CLI custody defers config loading until the domain has admitted the operation.
+  "src/cli/local-state-owner.ts",
+  // Doctor's one-shot maintenance runner resolves this synchronous config helper under its lock.
+  "src/commands/doctor-session-sqlite-targets.ts",
+  // One-shot migration plan/apply/import contexts retain their immediate object contract.
+  "src/commands/migrate/context.ts",
 ]);
 
 const BROAD_CONFIG_RUNTIME_COMPAT_FILES = new Set([
@@ -163,10 +173,12 @@ const DEPRECATED_RUNTIME_API_GUARDS = [
   },
 ];
 
+// Brace bodies must not cross statements: named imports stop at `}`; destructuring
+// allows one nested `{...}` level for defaults such as `x = () => {}`.
 const staticImportPattern =
-  /\b(?:import|export)\s+(?:type\s+)?\{[\s\S]*?\}\s+from\s+["']openclaw\/plugin-sdk\/config-runtime["']/g;
+  /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\}\s+from\s+["']openclaw\/plugin-sdk\/config-runtime["']/g;
 const dynamicImportPattern =
-  /\b(?:const|let|var)\s+\{[\s\S]*?\}\s*=\s*(?:await\s+)?import\(["']openclaw\/plugin-sdk\/config-runtime["']\)/g;
+  /\b(?:const|let|var)\s+\{(?:[^{}]|\{[^{}]*\})*\}\s*=\s*(?:await\s+)?import\(["']openclaw\/plugin-sdk\/config-runtime["']\)/g;
 const typeQueryPattern =
   /\b(?:typeof\s+)?import\(["']openclaw\/plugin-sdk\/config-runtime["']\)\.[A-Za-z_$][\w$]*/g;
 
@@ -277,7 +289,7 @@ export function collectDeprecatedInternalConfigApiViolations({
   scan(nonCompatFiles, [
     {
       pattern:
-        /\b(?:import|export)\s+(?:type\s+)?\{[\s\S]*?\b(?:loadConfig|writeConfigFile)\b[\s\S]*?\}\s+from\s+["']openclaw\/plugin-sdk\/(?:config-runtime|memory-core-host-runtime-core)["']/,
+        /(?<=\b(?:import|export)\s+(?:type\s+)?\{[^}]*)\b(?:loadConfig|writeConfigFile)\b(?=[^}]*\}\s+from\s+["']openclaw\/plugin-sdk\/(?:config-runtime|memory-core-host-runtime-core)["'])/,
       replacement:
         "use getRuntimeConfig(), runtime.config.current(), or mutation helpers with afterWrite",
     },
@@ -293,11 +305,11 @@ export function collectDeprecatedInternalConfigApiViolations({
     [
       {
         pattern:
-          /\bimport\s+\{[\s\S]*?\bwriteConfigFile\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["']/,
+          /(?<=\bimport\s+\{[^}]*)\bwriteConfigFile\b(?=[^}]*\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["'])/,
       },
       {
         pattern:
-          /\bconst\s+\{[\s\S]*?\bwriteConfigFile\b[\s\S]*?\}\s*=\s*await\s+import\(["'][^"']*(?:config\/config|config\/io)\.js["']\)/,
+          /(?<=\bconst\s+\{(?:[^{}]|\{[^{}]*\})*)\bwriteConfigFile\b(?=(?:[^{}]|\{[^{}]*\})*\}\s*=\s*await\s+import\(["'][^"']*(?:config\/config|config\/io)\.js["']\))/,
       },
       { pattern: /\.\s*writeConfigFile\s*\(/, findLines: findNonCommentLineNumbers },
     ].map(({ pattern, findLines }) => ({
@@ -314,7 +326,7 @@ export function collectDeprecatedInternalConfigApiViolations({
     [
       {
         pattern:
-          /\bimport\s+\{[\s\S]*?\b(?:mutateConfigFile|mutateConfigFileWithRetry|transformConfigFile|transformConfigFileWithRetry|replaceConfigFile)\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/mutate)\.js["']/,
+          /(?<=\bimport\s+\{[^}]*)\b(?:mutateConfigFile|mutateConfigFileWithRetry|transformConfigFile|transformConfigFileWithRetry|replaceConfigFile)\b(?=[^}]*\}\s+from\s+["'][^"']*(?:config\/config|config\/mutate)\.js["'])/,
         replacement: "use the local domain config mutation helper instead of direct config writes",
       },
     ],
@@ -339,7 +351,7 @@ export function collectDeprecatedInternalConfigApiViolations({
     [
       {
         pattern:
-          /\bimport\s+\{[\s\S]*?\bloadConfig\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["']/,
+          /(?<=\bimport\s+\{[^}]*)\bloadConfig\b(?=[^}]*\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["'])/,
       },
       { pattern: /(?<!\.)\bloadConfig\s*\(/, findLines: findNonCommentLineNumbers },
     ].map(({ pattern, findLines }) => ({

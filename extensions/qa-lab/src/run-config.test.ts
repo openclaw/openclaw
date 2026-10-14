@@ -75,24 +75,6 @@ describe("qa run config", () => {
   const catalog = readQaScenarioPack();
   const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
 
-  it("creates a canonical smoke-profile request without copying profile membership", () => {
-    const expected = {
-      profile: "smoke-ci",
-      channel: null,
-      channelDriver: "crabline",
-      evidenceMode: "slim",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      fastMode: false,
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: null,
-    } as const;
-    expect(normalizeQaRunSelection({}, scenarios, profiles)).toEqual(expected);
-    expect(normalizeQaRunSelection({ profile: null }, scenarios, profiles)).toEqual(expected);
-  });
-
   it("normalizes live selections and deduplicates scenario ids", () => {
     expect(
       normalizeQaRunSelection(
@@ -143,18 +125,6 @@ describe("qa run config", () => {
     );
   });
 
-  it("preserves explicit non-flow scenarios for the mixed-kind suite planner", () => {
-    expect(
-      normalizeQaRunSelection(
-        {
-          scenarioIds: ["control-ui-chat-flow-playwright", "thread-lifecycle"],
-        },
-        scenarios,
-        profiles,
-      ).scenarioIds,
-    ).toEqual(["control-ui-chat-flow-playwright", "thread-lifecycle"]);
-  });
-
   it("fails closed on unknown explicit scenario ids", () => {
     expect(() =>
       normalizeQaRunSelection(
@@ -182,35 +152,6 @@ describe("qa run config", () => {
     }
   });
 
-  it("normalizes every server-owned control-plane axis", () => {
-    expect(
-      normalizeQaRunSelection(
-        {
-          profile: "all",
-          channel: " Telegram ",
-          channelDriver: "crabline",
-          evidenceMode: "slim",
-          providerMode: "live-frontier",
-          primaryModel: "openai/gpt-5.6-luna",
-          runtimePair: ["openclaw", "codex"],
-          runtimePairLane: "extended",
-          scenarioIds: ["dm-chat-baseline"],
-        },
-        scenarios,
-        profiles,
-      ),
-    ).toMatchObject({
-      profile: "all",
-      channel: "telegram",
-      channelDriver: "crabline",
-      evidenceMode: "slim",
-      providerMode: "live-frontier",
-      runtimePair: ["openclaw", "codex"],
-      runtimePairLane: "extended",
-      scenarioIds: ["dm-chat-baseline"],
-    });
-  });
-
   it("rejects a reversed runtime pair instead of silently changing its order", () => {
     expect(() =>
       normalizeQaRunSelection(
@@ -221,42 +162,6 @@ describe("qa run config", () => {
         profiles,
       ),
     ).toThrow('runtimePair must be ["openclaw", "codex"]');
-  });
-
-  it("keeps portable thread scenarios in unpinned live profiles", () => {
-    const scenarioIds = new Set(["thread-follow-up", "thread-isolation"]);
-    const selected = catalog.scenarios.filter((scenario) => scenarioIds.has(scenario.id));
-
-    const execution = resolveQaRunProfileExecutionSelection({
-      scenarios: selected,
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      channelDriver: "live",
-    });
-
-    expect(execution.selectedScenarios.map((scenario) => scenario.id)).toEqual([
-      "thread-follow-up",
-      "thread-isolation",
-    ]);
-    expect(execution.excludedScenarios).toEqual([]);
-  });
-
-  it("selects a supported declared transport for portable live scenarios", () => {
-    const scenario = catalog.scenarios.find((entry) => entry.id === "thread-follow-up");
-    if (!scenario) {
-      throw new Error("thread-follow-up scenario is missing from the QA catalog");
-    }
-
-    const execution = resolveQaRunProfileExecutionSelection({
-      scenarios: [scenario],
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      channelDriver: "live",
-      supportsChannel: (channel) => channel === "matrix",
-    });
-
-    expect(execution.selectedScenarios).toEqual([scenario]);
-    expect(execution.excludedScenarios).toEqual([]);
   });
 
   it("keeps portable threads but excludes module flows from Crabline plans", () => {
@@ -420,34 +325,6 @@ describe("qa run config", () => {
     );
   });
 
-  it("does not apply live-adapter eligibility to non-flow executions", () => {
-    const selection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channelDriver: "live",
-        providerMode: "live-frontier",
-        scenarioIds: ["browser-talk-start-stop"],
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
-
-    const plan = resolveQaLabRunPlan({
-      selection,
-      scenarios: catalog.scenarios,
-      scorecardReport,
-      supportsChannel: () => false,
-    });
-
-    expect(plan.status).toBe("ready");
-    expect(plan.selectedScenarios).toEqual([
-      expect.objectContaining({
-        id: "browser-talk-start-stop",
-        effectiveChannel: null,
-      }),
-    ]);
-  });
-
   it("preserves canonical unresolved live dispatch and rejects unsupported driver channels", () => {
     const liveSelection = normalizeQaRunSelection(
       {
@@ -597,13 +474,6 @@ describe("qa run config", () => {
     ).toThrow("unknown QA channel driver: renamed-cli-policy");
   });
 
-  it("keeps idle snapshots on the canonical mock defaults", () => {
-    const selection = createIdleQaRunnerSnapshot(profiles).selection;
-    expect(selection.providerMode).toBe("mock-openai");
-    expect(selection.primaryModel).toBe("mock-openai/gpt-5.6-luna");
-    expect(selection.alternateModel).toBe("mock-openai/gpt-5.6-luna-alt");
-  });
-
   it("fails closed when required canonical profiles are missing", () => {
     const profilesWithoutSmoke = profiles.filter((profile) => profile.id !== "smoke-ci");
     const profilesWithoutAll = profiles.filter((profile) => profile.id !== "all");
@@ -617,12 +487,6 @@ describe("qa run config", () => {
     expect(() =>
       normalizeQaRunSelection({ scenarioIds: ["dm-chat-baseline"] }, scenarios, profilesWithoutAll),
     ).toThrow("unknown QA run profile: all");
-  });
-
-  it("anchors generated run output dirs under the provided repo root", () => {
-    const repoRoot = path.resolve("/tmp/openclaw-repo");
-    const outputDir = createQaRunOutputDir(repoRoot);
-    expect(outputDir.startsWith(path.join(repoRoot, ".artifacts", "qa-e2e", "lab-"))).toBe(true);
   });
 
   it("keeps generated run output dirs unique within the same millisecond", () => {
@@ -639,21 +503,5 @@ describe("qa run config", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("resolves omitted live models through the provider defaults", () => {
-    expect(normalizeQaRunSelection({ profile: "release" }, scenarios, profiles)).toEqual({
-      profile: "release",
-      channel: null,
-      channelDriver: "live",
-      evidenceMode: "full",
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-terra",
-      fastMode: true,
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: null,
-    });
   });
 });

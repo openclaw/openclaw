@@ -109,6 +109,8 @@ export type OpenClawPluginToolOptions = {
   name?: string;
   names?: string[];
   optional?: boolean;
+  /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
+  workspaceAccess?: boolean | "execute";
 };
 
 export type OpenClawPluginHookOptions = {

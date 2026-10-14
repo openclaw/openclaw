@@ -98,6 +98,20 @@ describe("doctor channel capabilities", () => {
     expect(channelPluginMocks.getBundledChannelPlugin).not.toHaveBeenCalled();
   });
 
+  it.each(["telegram", "whatsapp"])(
+    "returns %s sender semantics without loading its channel plugin",
+    (channelId) => {
+      expect(getDoctorChannelCapabilities(channelId)).toEqual({
+        dmAllowFromMode: "topOnly",
+        groupModel: "sender",
+        groupAllowFromFallbackToAllowFrom: true,
+        warnOnEmptyGroupSenderAllowlist: true,
+      });
+      expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
+      expect(channelPluginMocks.getBundledChannelPlugin).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns sender-scoped group semantics for line without a DM allowlist fallback", () => {
     expect(getDoctorChannelCapabilities("line")).toEqual({
       dmAllowFromMode: "topOnly",

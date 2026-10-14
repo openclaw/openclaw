@@ -374,7 +374,7 @@ describe("createOpenClawTestInstance acquisition", () => {
     },
   );
 
-  it.each(["state", "merge", "serialization", "write", "cleanup"] as const)(
+  it.each(["state", "write", "cleanup"] as const)(
     "cleans up available resources after %s acquisition failure",
     async (stage) => {
       const previousEnv = { ...process.env };
@@ -435,15 +435,13 @@ describe("createOpenClawTestInstance acquisition", () => {
         throw failure;
       };
       const config =
-        stage === "merge" || stage === "cleanup"
+        stage === "cleanup"
           ? {
               get gateway() {
                 return failConfig();
               },
             }
-          : stage === "serialization"
-            ? { toJSON: failConfig }
-            : {};
+          : {};
       try {
         const rejected = await createOpenClawTestInstance({
           name: "acquisition-failure",

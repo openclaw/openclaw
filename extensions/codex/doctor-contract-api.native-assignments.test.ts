@@ -7,6 +7,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
@@ -50,6 +54,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     clearSessionStoreCacheForTest();
+    clearRuntimeConfigSnapshot();
     cleanup();
   }),
 );
@@ -385,7 +390,10 @@ describe("Codex native Task assignment upgrade", () => {
     expect(imported.warnings).toEqual([]);
     expect(imported.changes.length).toBeGreaterThan(0);
     const currentOwner = { ...fixture.owner, parentThreadId: binding.threadId };
-    const assignments = fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner);
+    const assignments = await fixture.runtime.readNativeSubagentAssignments!(
+      identity,
+      currentOwner,
+    );
     expect(assignments).toEqual(
       expect.arrayContaining([
         {
@@ -435,6 +443,8 @@ describe("Codex native Task assignment upgrade", () => {
           },
         );
         params.agentId = identity.agentId;
+        assert(params.config);
+        setRuntimeConfigSnapshot(params.config);
         const host = await createAdmittedHostCapabilityTestFixture(params, {
           gatewayContext: true,
         });
@@ -509,7 +519,9 @@ describe("Codex native Task assignment upgrade", () => {
       }
     });
     await migration.migrateLegacyState(fixture.params);
-    expect(fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner)).toEqual([]);
+    expect(await fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner)).toEqual(
+      [],
+    );
 
     for (const operation of ["clear", "reset"] as const) {
       if (operation === "clear") {
@@ -528,7 +540,9 @@ describe("Codex native Task assignment upgrade", () => {
       });
       await expect(fixture.runtime.mutate(identity, { kind: "set", binding })).resolves.toBe(true);
       await migration.migrateLegacyState(fixture.params);
-      expect(fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner)).toEqual([]);
+      expect(await fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner)).toEqual(
+        [],
+      );
     }
     expect(fixture.rows()).toEqual(sourceRows);
   });

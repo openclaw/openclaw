@@ -172,6 +172,9 @@ export type ChannelOutboundAdapter = {
   shouldSuppressLocalPayloadPrompt?: (
     params: ChannelOutboundNormalizePayloadParams & { hint?: ChannelOutboundPayloadHint },
   ) => boolean;
+  shouldSuppressLocalPayloadPromptAsync?: (
+    params: ChannelOutboundNormalizePayloadParams & { hint?: ChannelOutboundPayloadHint },
+  ) => Promise<boolean>;
   beforeDeliverPayload?: (params: {
     cfg: OpenClawConfig;
     target: ChannelOutboundTargetRef;

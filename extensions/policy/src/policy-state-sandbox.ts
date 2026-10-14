@@ -1,11 +1,14 @@
 import { splitSandboxBindSpec } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asNonArrayRecord,
-  isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { collectPolicyConfiguredAgents, resolvePolicyValue } from "./policy-state-helpers.js";
+import {
+  collectPolicyAgentContexts,
+  resolvePolicyValue,
+  type PolicyAgentContext,
+} from "./policy-state-helpers.js";
 import { readStringArray } from "./policy-state-tool-posture.js";
 import type { PolicySandboxPostureEvidence } from "./policy-state-types.js";
 
@@ -15,45 +18,23 @@ const DEFAULT_POLICY_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
 export function scanPolicySandboxPosture(
   cfg: Record<string, unknown>,
 ): readonly PolicySandboxPostureEvidence[] {
-  const agents = asNonArrayRecord(cfg.agents);
-  const defaults = asNonArrayRecord(agents.defaults);
-  const defaultSandbox = asNonArrayRecord(defaults.sandbox);
   const entries: PolicySandboxPostureEvidence[] = [];
-  pushSandboxPostureEvidence(entries, {
-    id: "agents-defaults",
-    scope: "defaults",
-    sandbox: defaultSandbox,
-    inheritedSandbox: {},
-    sourceBase: "oc://openclaw.config/agents/defaults/sandbox",
-  });
-
-  collectPolicyConfiguredAgents(agents).forEach((configured) => {
-    const agent = configured.value;
-    if (!isRecord(agent)) {
-      return;
-    }
-    const sandbox = asNonArrayRecord(agent.sandbox);
+  for (const context of collectPolicyAgentContexts(cfg, "defaults")) {
     pushSandboxPostureEvidence(entries, {
-      id: configured.agentId,
-      scope: "agent",
-      agentId: configured.agentId,
-      sandbox,
-      inheritedSandbox: defaultSandbox,
-      sharedSandboxScope: sandboxScopeIsShared(sandbox, defaultSandbox),
-      sourceBase: `${configured.sourceBase}/sandbox`,
+      ...context,
+      sharedSandboxScope:
+        context.scope === "agent" &&
+        (readString(context.sandbox.scope) ?? readString(context.inheritedSandbox.scope)) ===
+          "shared",
+      sourceBase: `${context.workspaceSourceBase}/sandbox`,
     });
-  });
+  }
 
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-type SandboxPostureParams = {
-  readonly id: string;
-  readonly scope: "defaults" | "agent";
-  readonly agentId?: string;
+type SandboxPostureParams = PolicyAgentContext<"defaults"> & {
   readonly effectiveBackend?: string;
-  readonly sandbox: Record<string, unknown>;
-  readonly inheritedSandbox: Record<string, unknown>;
   readonly sharedSandboxScope?: boolean;
   readonly sourceBase: string;
 };
@@ -115,14 +96,13 @@ function pushSandboxDockerPosture(
     const inheritedValue = readString(inheritedDocker[key]);
     const inherited = localValue === undefined && inheritedValue !== undefined;
     const value = localValue ?? inheritedValue;
-    entries.push({
-      id: `${params.id}-docker-${profile}-profile`,
+    pushSandboxPostureValue(entries, params, {
+      suffix: `docker/${profile}/profile`,
+      sourceSuffix: `docker/${key}`,
       kind: "containerSecurityProfile",
-      source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/docker/${key}`,
-      scope: params.scope,
-      ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+      inherited,
       profile,
-      ...(value === undefined ? {} : { value }),
+      value,
       explicit: value !== undefined,
     });
   }
@@ -147,14 +127,11 @@ function pushSandboxBindPosture(
       .some((option) => option.trim().toLowerCase() === "ro")
       ? "ro"
       : "rw";
-    entries.push({
-      id: `${params.id}-${surface}-bind-${index}`,
+    pushSandboxPostureValue(entries, params, {
+      suffix: `${surface}/bind/${index}`,
       kind: "containerMount",
-      source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/${configSurface}/binds/#${
-        inherited ? index : index - inheritedBinds.length
-      }`,
-      scope: params.scope,
-      ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+      sourceSuffix: `${configSurface}/binds/#${inherited ? index : index - inheritedBinds.length}`,
+      inherited,
       bind,
       bindHost: parsed?.host,
       bindMode,
@@ -183,13 +160,12 @@ function pushSandboxBrowserPosture(
     ? !hasLocalRange && inheritedRange !== undefined
     : localEnabled === undefined && inheritedEnabled !== undefined;
   const value = enabled ? (hasLocalRange ? localRange : inheritedRange) : false;
-  entries.push({
-    id: `${params.id}-browser-cdp-source-range`,
+  pushSandboxPostureValue(entries, params, {
+    suffix: "browser/cdp-source-range",
+    sourceSuffix: `browser/${enabled ? "cdpSourceRange" : "enabled"}`,
     kind: "browserCdpSourceRange",
-    source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/browser/${enabled ? "cdpSourceRange" : "enabled"}`,
-    scope: params.scope,
-    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
-    ...(value === undefined ? {} : { value }),
+    inherited,
+    value,
     explicit: value !== undefined,
   });
   if (!enabled) {
@@ -216,35 +192,22 @@ function pushSandboxBrowserPosture(
   }
 }
 
-function sandboxScopeIsShared(
-  sandbox: Record<string, unknown>,
-  inheritedSandbox: Record<string, unknown>,
-): boolean {
-  const localScope = readString(sandbox.scope);
-  const inheritedScope = readString(inheritedSandbox.scope);
-  return (localScope ?? inheritedScope) === "shared";
-}
-
 function pushSandboxPostureValue(
   entries: PolicySandboxPostureEvidence[],
   params: SandboxPostureParams,
-  entry: {
+  entry: Omit<PolicySandboxPostureEvidence, "id" | "source" | "scope" | "agentId"> & {
     readonly suffix: string;
-    readonly kind: PolicySandboxPostureEvidence["kind"];
-    readonly value: string | undefined;
-    readonly networkSurface?: "browser" | "docker";
-    readonly explicit: boolean;
+    readonly sourceSuffix?: string;
     readonly inherited: boolean;
   },
 ): void {
+  const { suffix, sourceSuffix = suffix, inherited, value, ...evidence } = entry;
   entries.push({
-    id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
-    kind: entry.kind,
-    source: `${entry.inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/${entry.suffix}`,
+    id: `${params.id}-${suffix.replaceAll("/", "-")}`,
+    source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/${sourceSuffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
-    ...(entry.value === undefined ? {} : { value: entry.value }),
-    ...(entry.networkSurface === undefined ? {} : { networkSurface: entry.networkSurface }),
-    explicit: entry.explicit,
+    ...(value === undefined ? {} : { value }),
+    ...evidence,
   });
 }

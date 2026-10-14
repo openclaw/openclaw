@@ -20,7 +20,6 @@ const { state, remove, loadEntry } = vi.hoisted(() => {
 vi.mock("../config/sessions/session-accessor.js", () => ({
   applySessionEntryLifecycleMutation: remove,
   forkSessionFromParentTranscript: vi.fn(),
-  replaceTranscriptEvents: vi.fn(),
   upsertSessionEntryCore: vi.fn(),
 }));
 

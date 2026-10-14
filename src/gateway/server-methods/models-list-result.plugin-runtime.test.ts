@@ -257,6 +257,13 @@ describe("models.list plugin metadata handoff", () => {
         ).toEqual(["another", "modern"]);
         expect(prepared.isCurrent()).toBe(true);
         currentConfig = { ...cfg };
+        expect(prepared.isCurrent()).toBe(true);
+        currentConfig = { ...cfg, ui: { prefs: { theme: "knot" } } };
+        expect(prepared.isCurrent()).toBe(true);
+        currentConfig = {
+          ...cfg,
+          agents: { defaults: { ...cfg.agents?.defaults, model: "custom/another" } },
+        };
         expect(prepared.isCurrent()).toBe(false);
       },
     );

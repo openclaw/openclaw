@@ -249,6 +249,15 @@ the default trust.
 
 ## Troubleshooting
 
+### Context overflow
+
+When LM Studio rejects a prompt because it exceeds the loaded context, OpenClaw attempts
+[compaction and retry](/concepts/compaction), including for older servers that report
+`Trying to keep the first N tokens` and `the model is loaded with context length of only M tokens, which is not enough`.
+If a single message is too large, shorten it or load the model with a larger context; compacting
+earlier history cannot shrink that message. Server-side truncation without an overflow error
+does not trigger this recovery.
+
 ### Model discovery failures
 
 When a configured server cannot list models, OpenClaw reports an unavailable catalog or a

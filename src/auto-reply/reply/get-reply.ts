@@ -8,13 +8,13 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
@@ -31,7 +31,6 @@ import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
@@ -41,7 +40,7 @@ import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
@@ -103,7 +102,7 @@ import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
-import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
+import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -121,6 +120,17 @@ export async function getReplyFromConfig(
   ctx: MsgContext,
   options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  return withReplySessionDiffBaseline((baseline) =>
+    resolveReplyFromConfig(ctx, options, configOverride, baseline),
+  );
+}
+
+async function resolveReplyFromConfig(
+  ctx: MsgContext,
+  options: GetReplyOptions | undefined,
+  configOverride: OpenClawConfig | undefined,
+  baseline: ReplyDiffBaseline,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const opts = prepareInternalGetReplyOptions(options, ctx);
   const isFastTestEnv = isFastTestRuntimeEnv();
@@ -520,24 +530,9 @@ export async function getReplyFromConfig(
     }
     throw error;
   }
-  if (!useFastTestBootstrap) {
-    try {
-      await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
-        prepareReplySessionDiffBaseline({
-          agentId,
-          workspaceDir,
-          sessionState,
-        }),
-      );
-    } catch (error) {
-      if (isSessionWorkStartInvalidatedError(error)) {
-        throw error;
-      }
-      logVerbose(
-        `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
+  const awaitSessionDiffBaseline = useFastTestBootstrap
+    ? undefined
+    : baseline.start({ agentId, workspaceDir, sessionState }, traceGetReplyPhase);
   const {
     sessionCtx,
     sessionEntry,
@@ -576,9 +571,11 @@ export async function getReplyFromConfig(
   const turnToolOverrides = admittedSessionSettings
     ? admittedSessionSettings.toolOverrides
     : sessionEntry.toolOverrides;
-  const optsWithSessionSkillOverrides = turnToolOverrides?.skills
-    ? { ...optsWithCommandQueueOverride, skillOverrides: turnToolOverrides.skills }
-    : optsWithCommandQueueOverride;
+  const optsWithSessionSkillOverrides = {
+    ...optsWithCommandQueueOverride,
+    ...(turnToolOverrides?.skills ? { skillOverrides: turnToolOverrides.skills } : {}),
+    ...(awaitSessionDiffBaseline ? { awaitSessionDiffBaseline } : {}),
+  };
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
@@ -683,7 +680,7 @@ export async function getReplyFromConfig(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
   );
-  const storedModelOverride = resolveStoredModelOverride({
+  const storedModelOverride = await resolveStoredModelOverrideAsync({
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -816,6 +813,10 @@ export async function getReplyFromConfig(
     }
     const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
     const action = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
+    await resolvedOpts?.awaitSessionDiffBaseline?.();
+    assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+    resolvedOpts?.operatorAuthority?.assertCurrent();
+    command.assertOwnerCurrent?.();
     await emitResetCommandHooks({
       action,
       agentId,
@@ -974,7 +975,6 @@ export async function getReplyFromConfig(
     !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
-    const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
     const stagingSessionEntry =
       sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
     const stagingWorkspaceDir =
@@ -1004,8 +1004,8 @@ export async function getReplyFromConfig(
           })
         ).snapshot
       : undefined;
-    const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
-      stageSandboxMedia({
+    const stageResult = await traceGetReplyPhase("reply.stage_media", async () =>
+      (await stageSandboxMediaRuntimeLoader.load()).stageSandboxMedia({
         ctx,
         sessionCtx,
         cfg,
@@ -1014,6 +1014,7 @@ export async function getReplyFromConfig(
         workspaceDir: stagingWorkspaceDir,
         skillsSnapshot: stagingSkillsSnapshot,
         abortSignal: optsWithSkillFilter?.abortSignal,
+        awaitSessionDiffBaseline: resolvedOpts?.awaitSessionDiffBaseline,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;
@@ -1026,17 +1027,20 @@ export async function getReplyFromConfig(
       ctx: sessionCtx,
       sessionKey,
     });
-    const sandboxed = resolveSandboxRuntimeStatus({
-      cfg,
-      agentId,
-      sessionKey,
-      classificationSessionKey: policySessionKey,
-    }).sandboxed;
+    const sandboxed = (
+      await resolveSandboxRuntimeStatusAsync({
+        cfg,
+        agentId,
+        sessionKey,
+        classificationSessionKey: policySessionKey,
+        ...(policySessionKey === sessionKey ? { preparedSessionEntry: sessionEntry } : {}),
+      })
+    ).sandboxed;
     if (
       (sandboxed && stagedAttachmentPaths.size > 0) ||
       (!sandboxed && resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId }))
     ) {
-      const capabilityProfile = resolveConversationCapabilityProfile({
+      const capabilityProfile = await prepareConversationCapabilityProfile({
         config: cfg,
         sessionKey: policySessionKey,
         runSessionKey: policySessionKey === sessionKey ? undefined : sessionKey,

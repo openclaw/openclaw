@@ -396,9 +396,7 @@ function createServerMcpRuntime(
   let lastListedCatalog: McpToolCatalog | undefined;
   let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
-  let catalogInvalidationGeneration = 0;
   const invalidateCatalog = () => {
-    catalogInvalidationGeneration += 1;
     catalog = null;
     catalogRetryAfterMs = undefined;
   };
@@ -418,6 +416,7 @@ function createServerMcpRuntime(
   const catalogRetryIsDue = (): boolean =>
     catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
   let currentSession: BundleMcpSession | undefined;
+  let awaitSseRecovery = false;
   let disposal: Promise<void> | undefined;
   let cleanupFailed = false;
   const pendingDisposals = new Set<Promise<void>>();
@@ -611,7 +610,6 @@ function createServerMcpRuntime(
     if (catalogInFlight) {
       return catalogInFlight;
     }
-    const catalogGeneration = catalogInvalidationGeneration;
     const inFlight = (async (): Promise<McpToolCatalog> => {
       const rawServer = loaded.mcpServers[serverName]!;
       const override = params.connectionOverrides?.get(serverName);
@@ -635,12 +633,10 @@ function createServerMcpRuntime(
       failIfDisposed();
 
       let session = currentSession;
-      while (session && !session.retiring && !session.connected && !session.connectPromise) {
+      if (session && !session.retiring && !session.connected && !session.connectPromise) {
         // A closed SDK client cannot reconnect cleanly on the same transport.
         await retireSessionIfCurrent(session);
-        // Retirement yields while closing. Preserve any replacement that a
-        // newer catalog generation installed during that await.
-        session = currentSession;
+        session = undefined;
       }
       if (session?.retiring) {
         session = undefined;
@@ -698,6 +694,7 @@ function createServerMcpRuntime(
             !createdSession.retiring &&
             currentSession === createdSession
           ) {
+            awaitSseRecovery ||= createdSession.transportType === "sse";
             scheduleCatalogServerRetry("mcp transport closed");
             logWarn(`bundle-mcp: server "${serverName}" closed; next request reconnects`);
           }
@@ -811,14 +808,8 @@ function createServerMcpRuntime(
             `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
           );
         }
-        if (
-          !session.connected ||
-          isMcpHttpSessionExpired(session, error) ||
-          (!reusedSession && catalogInvalidationGeneration === catalogGeneration)
-        ) {
-          // Closed, expired, or isolated failed startups need a fresh process.
-          // A superseding catalog may reuse a healthy session; identity guards
-          // preserve any replacement installed before retirement yields.
+        if (!session.connected || isMcpHttpSessionExpired(session, error) || !reusedSession) {
+          // Closed, expired, or failed startups need a fresh process.
           await retireSessionIfCurrent(session);
         }
         failIfDisposed();
@@ -834,15 +825,16 @@ function createServerMcpRuntime(
     try {
       const nextCatalog = await inFlight;
       failIfDisposed();
-      if (catalogInvalidationGeneration === catalogGeneration) {
-        catalog = nextCatalog;
-        if (!nextCatalog.diagnostics?.length) {
-          lastListedCatalog = nextCatalog;
-        }
-        catalogRetryAfterMs = nextCatalog.diagnostics?.length
-          ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
-          : undefined;
+      // A list-change notification during this load is best effort; the next
+      // notification or explicit refresh replaces the completed inventory.
+      catalog = nextCatalog;
+      if (!nextCatalog.diagnostics?.length) {
+        lastListedCatalog = nextCatalog;
+        awaitSseRecovery = false;
       }
+      catalogRetryAfterMs = nextCatalog.diagnostics?.length
+        ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
+        : undefined;
       return nextCatalog;
     } finally {
       if (catalogInFlight === inFlight) {
@@ -857,14 +849,15 @@ function createServerMcpRuntime(
       return catalog;
     }
     if (!catalog) {
+      const retryExitedProcess = currentSession?.transportType === "stdio";
       const loadedCatalog = await loadCatalog();
-      if (catalog && catalog === loadedCatalog) {
-        return catalog;
-      }
-      // Replay one in-flight invalidation before accepting the latest completed
-      // snapshot. A server that invalidates every list must not block its siblings.
-      const replayedCatalog = await loadCatalog();
-      return catalog ?? replayedCatalog;
+      // Recover a previously healthy process once; HTTP list failures retain their diagnostic.
+      return retryExitedProcess &&
+        loadedCatalog.diagnostics?.length &&
+        lastListedCatalog &&
+        !currentSession
+        ? loadCatalog()
+        : loadedCatalog;
     }
 
     const staleCatalog = catalog;
@@ -883,6 +876,9 @@ function createServerMcpRuntime(
     const signal = getSessionMcpRequestSignal();
     signal?.throwIfAborted();
     await racePromiseWithAbortSignal(getCatalog(), signal);
+    if (awaitSseRecovery && catalogInFlight) {
+      await racePromiseWithAbortSignal(catalogInFlight, signal);
+    }
     return requireConnectedSession();
   };
 

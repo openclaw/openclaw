@@ -441,6 +441,40 @@ describe("control-ui-i18n generated ownership", () => {
     expect(shouldStrictControlUiI18n(null)).toBe(true);
   });
 
+  it("admits plugin bundle repairs only from the trusted locale publisher", () => {
+    const memory = "ui/src/i18n/.i18n/fr.tm.jsonl";
+    const bundle = "extensions/example/src/i18n/locales/translated.json";
+    const manifest = "extensions/example/openclaw.plugin.json";
+    const branch = "automation/control-ui-locale-refresh";
+    const trusted = resolveAllowedGeneratedMixBranch(
+      { GITHUB_ACTIONS: "true", OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: "true" },
+      branch,
+    );
+    const fork = resolveAllowedGeneratedMixBranch({ GITHUB_ACTIONS: "true" }, branch);
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([memory, bundle, manifest], trusted),
+    ).not.toThrow();
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([memory, bundle, manifest], fork),
+    ).toThrow("must be isolated");
+    expect(() => assertControlUiGeneratedArtifactsIsolated([memory, manifest], "feature")).toThrow(
+      "must be isolated",
+    );
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        [memory, "extensions/example/src/i18n/locales/en.ts"],
+        trusted,
+      ),
+    ).toThrow("must be isolated");
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        bundle,
+        "extensions/example/src/i18n/locales/en.ts",
+      ]),
+    ).not.toThrow();
+    expect(shouldStrictControlUiI18n(["extensions/example/src/i18n/.i18n/fr.tm.jsonl"])).toBe(true);
+  });
+
   it("allows only a complete canonical translation-memory ownership migration", () => {
     const locales = readdirSync(path.resolve("ui/src/i18n/.i18n"))
       .filter((fileName) => fileName.endsWith(".tm.jsonl"))

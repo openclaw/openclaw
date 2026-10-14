@@ -2,6 +2,13 @@ import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js"
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
 
+// Preserve existing le series while narrowing RPC quantile interpolation through 30 seconds.
+const RPC_DURATION_BUCKETS_SECONDS = [
+  0.005, 0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, 0.125, 0.15, 0.2,
+  0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12.5, 15, 20, 25, 30, 60,
+  120, 300, 600,
+];
+
 const RESPONSE_BYTE_BUCKETS = Array.from({ length: 17 }, (_, index) => 1024 * 2 ** index);
 const HEAP_DELTA_BYTE_BUCKETS = [
   ...RESPONSE_BYTE_BUCKETS.toReversed().map((bytes) => -bytes),
@@ -31,6 +38,8 @@ export function recordOperationTimingEvent(
         | "gateway.rpc"
         | "diagnostic.phase.completed"
         | "gateway.http.cancelled"
+        | "secret.egress"
+        | "tool.catalog"
         | "diagnostic.gc"
         | "gateway.event_loop.sample";
     }
@@ -38,6 +47,24 @@ export function recordOperationTimingEvent(
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
+    case "secret.egress":
+      store.counter(
+        "openclaw_secret_egress_requests_total",
+        "Secret egress proxy requests by outcome and credential substitution.",
+        { outcome: evt.outcome, substituted: String(evt.substituted) },
+      );
+      return;
+    case "tool.catalog": {
+      const labels = { source: evt.source, mode: evt.mode };
+      store.counter("openclaw_tool_catalog_total", "Tool catalogs prepared.", labels);
+      store.counter(
+        "openclaw_tool_catalog_tools_total",
+        "Tools cataloged during preparation.",
+        labels,
+        evt.toolCount,
+      );
+      return;
+    }
     case "gateway.http.cancelled":
       store.counter(
         "openclaw_gateway_http_cancelled_total",
@@ -78,10 +105,10 @@ export function recordOperationTimingEvent(
       const sendPhase = CHAT_SEND_PHASE.exec(evt.name)?.[1];
       if (sendPhase) {
         const stage = evt.details?.stage;
-        if (stage === "request" || stage === "startup") {
+        if (stage === "request" || stage === "startup" || stage === "steer" || stage === "queued") {
           store.histogram(
             "openclaw_chat_send_phase_seconds",
-            "Elapsed chat.send owner phases before acknowledgement and during run startup.",
+            "Elapsed chat.send owner phases before acknowledgement, during startup, or awaiting steering and queued follow-up delivery.",
             { phase: sendPhase, stage },
             seconds(evt.durationMs),
           );
@@ -147,6 +174,7 @@ export function recordOperationTimingEvent(
           "Elapsed time until the first Gateway RPC response is sent.",
           labels,
           seconds(evt.durationMs),
+          RPC_DURATION_BUCKETS_SECONDS,
         );
       } else if (evt.phase === "handler") {
         if (evt.heapDeltaBytes !== undefined) {
@@ -168,12 +196,14 @@ export function recordOperationTimingEvent(
           "Gateway RPC handler duration until return or throw.",
           labels,
           seconds(evt.durationMs),
+          RPC_DURATION_BUCKETS_SECONDS,
         );
         store.histogram(
           "openclaw_gateway_rpc_admission_seconds",
           "Elapsed time from Gateway RPC receipt until handler invocation.",
           labels,
           seconds(evt.admissionMs),
+          RPC_DURATION_BUCKETS_SECONDS,
         );
       } else if (evt.phase === "dispatch") {
         store.histogram(
@@ -181,6 +211,7 @@ export function recordOperationTimingEvent(
           "Gateway operator request start queue wait.",
           labels,
           seconds(evt.queueWaitMs),
+          RPC_DURATION_BUCKETS_SECONDS,
         );
       }
     }

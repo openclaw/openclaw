@@ -349,7 +349,7 @@ describe("worker tunnel manager", () => {
       try {
         await setImmediate();
         expect(settled).not.toHaveBeenCalled();
-        await expect(fs.access(knownHostsPath)).resolves.toBeUndefined();
+        await fs.access(knownHostsPath);
         await expect(handle.runWorkspaceCommand(PWD_COMMAND)).rejects.toThrow(
           "no longer connected",
         );

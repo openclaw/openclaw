@@ -1,10 +1,17 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
+  patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
+import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db-lifecycle.js";
 import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
@@ -16,9 +23,11 @@ import {
 import { commitPreparedSessionWorkspace } from "./session-lifecycle-preparation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 it("binds a workspace while retaining an admitted canonical session reader", async () => {
@@ -72,7 +81,7 @@ it.each(["replacement", "database-close"] as const)(
     };
     const admit = createGatewayWorkerDispatchAdmission(async () => ({
       managedWorktrees: { findLiveByOwner: async () => undefined },
-      resolveGatewaySessionStoreTargetWithStore: () => target,
+      resolveGatewaySessionStoreTargetInWorker: async () => target,
       resolveCanonicalSessionEntryFromStoreKeys: () => entry,
     }));
     const entered = createDeferredCore<AbortSignal>();
@@ -128,3 +137,121 @@ it.each(["replacement", "database-close"] as const)(
     }
   },
 );
+
+it.each([
+  "displayName",
+  "participants",
+  "transcript",
+  "unknown",
+  "lifecycleRevision",
+  "deviceFolder",
+  "replacement-before-read",
+  "partial-participants",
+  "unknown-participants",
+  "retained-participants",
+  "owner-generation",
+  "category-generation",
+  "member-generation",
+] as const)("reconciles a %s publication during worker source acquisition", async (field) => {
+  const identity = { agentId: "main", sessionKey: "agent:main:acquiring", sessionId: "acquiring" };
+  const storePath = path.join(tempDirs.make("worker-acquiring-"), "sessions.sqlite");
+  const scope = { ...identity, storePath };
+  await replaceSessionEntry(scope, {
+    sessionId: identity.sessionId,
+    lifecycleRevision: "original",
+    updatedAt: 1,
+  });
+  const originalRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
+  const read = vi.spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker");
+  read.mockImplementationOnce(async (input, assertCurrent, consume, ...rest) => {
+    if (field === "replacement-before-read") {
+      await patchSessionEntryCore(scope, () => ({ lifecycleRevision: "replacement" }));
+    }
+    return originalRead(
+      input,
+      assertCurrent,
+      async (result, owner) => {
+        // The UI can publish metadata while dispatch is acquiring its exact row.
+        if (
+          field === "partial-participants" ||
+          field === "unknown-participants" ||
+          field === "retained-participants"
+        ) {
+          sessionChanges.emit({
+            ...scope,
+            scope: "session-entry",
+            facts: {
+              kind: "participants",
+              ...(field !== "unknown-participants" ? { projection: { participantCount: 1 } } : {}),
+            },
+          });
+        } else if (field.endsWith("-generation")) {
+          sessionChanges.emit({
+            ...scope,
+            scope: "session-entry",
+            facts:
+              field === "owner-generation"
+                ? {
+                    kind: "owner",
+                    sessionId: scope.sessionId,
+                    lifecycleRevision: "replacement",
+                    owner: undefined,
+                  }
+                : field === "category-generation"
+                  ? { kind: "category", sessionId: "replacement", category: null }
+                  : { kind: "member", sessionId: "replacement", identityId: "user", present: true },
+          });
+        } else if (field === "transcript" || field === "unknown") {
+          sessionChanges.emit({
+            ...scope,
+            scope: field === "transcript" ? "transcript" : "session-entry",
+            ...(field === "transcript"
+              ? { facts: { kind: "unchanged" as const } }
+              : { factsInvalidated: true as const }),
+          });
+        } else if (field !== "replacement-before-read") {
+          await patchSessionEntryCore(scope, () =>
+            field === "deviceFolder"
+              ? { deviceFolder: { deviceId: "device", path: "/replacement" } }
+              : field === "participants"
+                ? { participantCount: 1 }
+                : { [field]: "changed" },
+          );
+        }
+        return consume(result, owner);
+      },
+      ...rest,
+    );
+  });
+  const run = vi.fn(async (source: { assertCurrent: () => unknown }) => source.assertCurrent());
+  try {
+    const operation = withGatewayWorkerSessionAdmission(
+      {
+        identity,
+        retainEntryFields:
+          field === "retained-participants" ? ["participantCount"] : ["deviceFolder"],
+        target: {
+          agentId: identity.agentId,
+          canonicalKey: identity.sessionKey,
+          storePath,
+          storeKeys: [identity.sessionKey],
+        },
+      },
+      run,
+    );
+    if (
+      field === "displayName" ||
+      field === "participants" ||
+      field === "partial-participants" ||
+      field === "transcript"
+    ) {
+      await expect(operation).resolves.toMatchObject({ sessionId: identity.sessionId });
+      expect(run).toHaveBeenCalledOnce();
+    } else {
+      await expect(operation).rejects.toThrow("changed during admission");
+      expect(run).not.toHaveBeenCalled();
+    }
+  } finally {
+    read.mockRestore();
+  }
+});

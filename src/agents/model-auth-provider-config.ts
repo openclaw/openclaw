@@ -9,6 +9,7 @@ import {
 } from "../config/model-provider-config.js";
 import {
   getResolvedConfigEnvSecretRef,
+  hasUnresolvedConfigPath,
   resolveConfigSecretRef,
 } from "../config/resolution-facts.js";
 import {
@@ -120,6 +121,7 @@ export function resolveProviderConfigSecretInput(
     : "";
   const resolvedEnvRef = entry ? getResolvedConfigEnvSecretRef(sourceConfig, path) : null;
   return {
+    path,
     providerConfig: resolveMergedModelProviderConfig(cfg, provider),
     resolvedEnvRef,
     ref: entry
@@ -143,11 +145,7 @@ export function getCustomProviderApiKey(
   if (!ref) {
     return normalizeOptionalSecretInput(providerConfig?.apiKey);
   }
-  if (ref.source === "env") {
-    const envId = ref.id.trim();
-    return envId || NON_ENV_SECRETREF_MARKER;
-  }
-  return NON_ENV_SECRETREF_MARKER;
+  return (ref.source === "env" && ref.id.trim()) || NON_ENV_SECRETREF_MARKER;
 }
 
 type ResolvedCustomProviderApiKey = {
@@ -371,7 +369,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
 }
 
 /** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
-export function canUseProfileAsProviderEntryApiKey(params: {
+function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
@@ -380,14 +378,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
   if (!isBearerProfileCredential(params.credential)) {
     return false;
   }
-  if (
-    isStoredCredentialCompatibleWithAuthProvider({
-      cfg: params.cfg,
-      authAliasLookupParams: params.authAliasLookupParams,
-      provider: params.provider,
-      credential: params.credential,
-    })
-  ) {
+  if (isStoredCredentialCompatibleWithAuthProvider(params)) {
     return true;
   }
   // Split-provider entries may intentionally point at the same upstream endpoint
@@ -674,7 +665,11 @@ export function resolveRuntimeProviderConfigApiKeyAuth(params: {
   sourceConfig: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | undefined {
-  const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  const input = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  if (hasUnresolvedConfigPath(params.cfg, input.path)) {
+    return undefined;
+  }
+  const { providerConfig, ref } = input;
   const sourceRef = resolveProviderConfigSecretInput(params.sourceConfig, params.provider).ref;
   // Prepared Ref values are opaque bytes, not authored markers or copy/paste input.
   // Legacy metadata markers without a source Ref still use literal validation.

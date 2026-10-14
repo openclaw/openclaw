@@ -119,6 +119,7 @@ function parseArgs(argv) {
     command,
     dryRun: false,
     failedOnly: false,
+    force: false,
     json: false,
     repository: DEFAULT_REPOSITORY,
     runId: "",
@@ -149,6 +150,8 @@ function parseArgs(argv) {
       options.intervalMs = positiveInteger(argv[++index], "--interval") * 1000;
     } else if (argument === "--once") {
       options.once = true;
+    } else if (argument === "--force") {
+      options.force = true;
     } else if (argument === "--failed") {
       options.failedOnly = true;
     } else if (argument === "--restore") {
@@ -161,10 +164,15 @@ function parseArgs(argv) {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!["continue", "prioritize", "rerun", "status", "verify", "watch"].includes(command)) {
+  if (
+    !["cancel", "continue", "prioritize", "rerun", "status", "verify", "watch"].includes(command)
+  ) {
     throw new Error(
-      "usage: pnpm frv <status|watch|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>",
+      "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>",
     );
+  }
+  if (options.force && command !== "cancel") {
+    throw new Error("--force is valid only with cancel");
   }
   const restoring = command === "prioritize";
   if (restoring && options.restore === undefined) {
@@ -185,8 +193,8 @@ function parseArgs(argv) {
   if (command !== "continue" && options.failedOnly) {
     throw new Error("--failed is valid only with continue");
   }
-  if (!["continue", "prioritize", "rerun"].includes(command) && options.dryRun) {
-    throw new Error("--dry-run is valid only with continue, rerun, or prioritize");
+  if (!["cancel", "continue", "prioritize", "rerun"].includes(command) && options.dryRun) {
+    throw new Error("--dry-run is valid only with cancel, continue, rerun, or prioritize");
   }
   if (command === "rerun") {
     if ((options.job === undefined) === (options.child === undefined)) {
@@ -838,6 +846,34 @@ export async function inspectContinuation(plan, client, options = {}) {
   return continuationStatus(children);
 }
 
+function releaseCandidateIdentity(plan) {
+  const ref =
+    plan?.sourceAdmission?.targetContextRef ?? plan?.qualificationInputs?.target_context_ref;
+  return { sha: plan?.targetSha ?? null, ref: ref ?? null, tipSha: null, state: "unknown" };
+}
+
+async function observeReleaseCandidate(plan, client, options) {
+  const candidate = releaseCandidateIdentity(plan);
+  const ref = candidate.ref;
+  if (!ref || /^[a-f0-9]{40}$/u.test(ref)) {
+    return candidate;
+  }
+  const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
+  const tip = await client.getRef(fullRef, options);
+  if (
+    tip.ref !== fullRef ||
+    tip.object?.type !== "commit" ||
+    !/^[a-f0-9]{40}$/u.test(tip.object.sha)
+  ) {
+    throw new Error("Candidate tip observation has invalid ref identity");
+  }
+  return {
+    ...candidate,
+    tipSha: tip.object.sha,
+    state: tip.object.sha === plan.targetSha ? "current" : "superseded",
+  };
+}
+
 async function inspectQualificationStatus(plan, runId, client) {
   const operationDeadline = createOperationDeadline();
   let status;
@@ -934,22 +970,11 @@ async function inspectQualificationStatus(plan, runId, client) {
               : "running",
     evidence,
   };
-  const ref =
-    plan.sourceAdmission?.targetContextRef ?? plan.qualificationInputs?.target_context_ref;
-  let candidate = { sha: plan.targetSha, ref: ref ?? null, tipSha: null, state: "unknown" };
-  if (ref && !/^[a-f0-9]{40}$/u.test(ref)) {
-    try {
-      const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
-      const tip = await client.getRef(fullRef, { operationDeadline });
-      candidate = {
-        sha: plan.targetSha,
-        ref,
-        tipSha: tip.object.sha,
-        state: tip.object.sha === plan.targetSha ? "current" : "superseded",
-      };
-    } catch {
-      observationErrors.push("Candidate tip observation unavailable");
-    }
+  let candidate = releaseCandidateIdentity(plan);
+  try {
+    candidate = await observeReleaseCandidate(plan, client, { operationDeadline });
+  } catch {
+    observationErrors.push("Candidate tip observation unavailable");
   }
   const nextCommand = `pnpm frv ${
     status.active.length || parent.status !== "completed"
@@ -1047,7 +1072,10 @@ export function createClient(repository, dependencies = {}) {
         .split("/")
         .map(encodeURIComponent)
         .join("/");
-      return apiJson(`git/ref/${ref}`, options);
+      // Mutable candidate tips must stay fresh even when watcher job reads use the relay cache.
+      return dependencies.apiJson
+        ? dependencies.apiJson(`git/ref/${ref}`, options)
+        : ghJson(repository, `git/ref/${ref}`, options, true);
     },
     getRun(runId, options) {
       return apiJson(`actions/runs/${runId}`, options);
@@ -1071,6 +1099,7 @@ export function createClient(repository, dependencies = {}) {
         return apiText(path, undefined, [], options);
       }
     },
+    cancelRun: (runId, force) => rerun(runId, force ? "force-cancel" : "cancel"),
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
     rerunRun: (runId) => rerun(runId, "rerun"),
     listRuns: (query) => listReleasePriorityRuns(query, apiJson, apiText),
@@ -1520,23 +1549,24 @@ async function planChildRerun(child, target, client, operationDeadline) {
     ? await client.getVariable("OPENCLAW_CI_RUNNER_BACKEND").catch(() => "unknown")
     : "unknown";
   // The producer rerun also reruns every dependent consumer in the same new attempt.
-  const job =
-    plan.mode === "producer"
-      ? await selectedRerunJob(
-          child,
-          { childKey: child.key, name: plan.producer },
-          client,
-          operationDeadline,
-        )
-      : undefined;
+  const job = plan.producer
+    ? await selectedRerunJob(
+        child,
+        { childKey: child.key, name: plan.producer },
+        client,
+        operationDeadline,
+      )
+    : undefined;
   return { ...plan, failedJobs, job, runnerBackend };
 }
 
 function reportChildRerun(child, rerun, log) {
   log(
-    rerun.mode === "producer"
-      ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
-      : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning failed jobs`,
+    rerun.mode === "receipt"
+      ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning only failed receipt "${rerun.producer}"; passing workloads are retained`
+      : rerun.mode === "producer"
+        ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
+        : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning failed jobs`,
   );
   for (const job of rerun.failedJobs) {
     log(
@@ -2497,6 +2527,8 @@ const DISPATCHED_CHILD_PATTERN =
 const ARTIFACT_DISPATCH_JOBS = [
   ["Prepare release npm artifacts", "artifact:npm"],
   ["Prepare release Docker artifacts", "artifact:docker"],
+  ["Acquire full release candidate", "artifact:candidate"],
+  ["Prepare exact plugin npm artifacts", "artifact:plugin-npm"],
 ];
 const FAILED_JOB_CONCLUSIONS = new Set([
   "action_required",
@@ -2569,17 +2601,21 @@ async function mapBounded(values, limit, operation) {
   return results;
 }
 
-async function pollRelease(state, client, pending, readOptions) {
+async function pollRelease(state, client, pending, observation, readOptions) {
   const events = [];
   const failedReads = [];
-  const report = (id, message, url) => {
+  const report = (id, message, url, candidate) => {
     if (!state.reported.has(id)) {
       state.reported.add(id);
-      events.push({ message, ...(url ? { url: String(url) } : {}) });
+      events.push({
+        message,
+        ...(url ? { url: String(url) } : {}),
+        ...(candidate ? { candidate } : {}),
+      });
     }
   };
   // Transient GitHub failures, including HTML 5xx bodies, never become job results.
-  const read = async (label, operation) => {
+  const read = async (label, operation, required = true) => {
     if (state.nextCheckAt > Date.now()) {
       return undefined;
     }
@@ -2592,10 +2628,16 @@ async function pollRelease(state, client, pending, readOptions) {
         state.rateLimitFailures += 1;
       }
       const text = String(error?.stderr ?? error?.message ?? error);
-      if (classifyReleaseGhTransportError(error) === "hard" && !/HTTP 404\b/u.test(text)) {
+      if (
+        required &&
+        classifyReleaseGhTransportError(error) === "hard" &&
+        !/HTTP 404\b/u.test(text)
+      ) {
         throw error;
       }
-      failedReads.push(label);
+      if (required) {
+        failedReads.push(label);
+      }
       return undefined;
     }
   };
@@ -2710,8 +2752,70 @@ async function pollRelease(state, client, pending, readOptions) {
       return done && scansComplete;
     },
   );
+  // Required tree reads precede advisory metadata so a tip throttle cannot suppress
+  // terminal evidence; its shared backoff still prevents requests before the retry boundary.
+  // The execution plan binds the candidate, not the parent's tooling SHA. Before sealing,
+  // candidate identity is unknown; retained in-process bytes never replace a fresh tip read.
+  if (
+    !observation.plan &&
+    parentJobs?.some(
+      (job) =>
+        job.name === "Seal release execution plan" &&
+        (job.conclusion === "success" ||
+          job.steps?.some(
+            (step) =>
+              step.name === "Upload immutable release execution plan" &&
+              step.conclusion === "success",
+          )),
+    )
+  ) {
+    observation.plan = await read(
+      "execution plan",
+      async () => {
+        const evidence = await client
+          .getReleaseEvidenceClient()
+          .loadExecutionPlanEvidence(parentRunId);
+        return validateReleaseExecutionPlanArtifact(evidence.plan, {
+          parentRunId,
+          workflowSha: parent.head_sha,
+        });
+      },
+      false,
+    );
+  }
+  // Candidate metadata is advisory: absent artifacts or refs stay unknown, never hold
+  // an independently verified terminal tree open or grant qualification authority.
+  const candidate =
+    (await read(
+      "candidate tip",
+      () => observeReleaseCandidate(observation.plan, client, readOptions),
+      false,
+    )) ?? releaseCandidateIdentity(observation.plan);
+  const candidateKey = `candidate:${candidate.sha}:${candidate.tipSha}:${candidate.state}`;
+  // Deduplicate unchanged observations, not historical values: a ref can return to an old tip.
+  for (const previous of state.reported) {
+    if (previous.startsWith("candidate:") && previous !== candidateKey) {
+      state.reported.delete(previous);
+    }
+  }
+  report(
+    candidateKey,
+    candidate.state === "superseded"
+      ? `candidate ${candidate.sha} is superseded by ${candidate.ref} tip ${candidate.tipSha}; this run does not qualify the current tip`
+      : candidate.state === "current"
+        ? `candidate ${candidate.sha} is the current ${candidate.ref} tip; qualification remains separate`
+        : `candidate ${candidate.sha ?? "identity"}: tip observation unknown; no current-tip qualification claim`,
+    undefined,
+    candidate,
+  );
   const complete =
     parentDone && !dispatchPending && childStates.every(Boolean) && failedReads.length === 0;
+  if (complete) {
+    report(
+      `terminal:${parent.run_attempt}`,
+      `parent ${parentRunId} and every dispatched child are terminal`,
+    );
+  }
   return { complete, events, failedReads };
 }
 
@@ -2725,11 +2829,12 @@ export async function watchRelease(parentRunId, client, options = {}) {
   const emit = options.emit ?? ((event) => console.log(event.message));
   const state = readWatchState(statePath, repository, String(parentRunId));
   const pending = new Set();
+  const observation = {};
   while (true) {
     const { complete, events, failedReads } =
       state.nextCheckAt > Date.now()
         ? { complete: false, events: [], failedReads: [] }
-        : await pollRelease(state, client, pending, { operationDeadline });
+        : await pollRelease(state, client, pending, observation, { operationDeadline });
     if (failedReads.length > 0) {
       const fingerprint = `${failedReads.join(", ")}:${state.nextCheckAt}`;
       if (state.failedReadFingerprint !== fingerprint) {
@@ -2751,7 +2856,6 @@ export async function watchRelease(parentRunId, client, options = {}) {
       emit(event);
     }
     if (complete) {
-      emit({ message: `parent ${parentRunId} and every dispatched child are terminal` });
       return { complete, statePath };
     }
     const remaining = operationDeadline - Date.now();
@@ -2774,6 +2878,15 @@ function print(value, json) {
   if (json) {
     console.log(JSON.stringify(value, null, 2));
     return;
+  }
+  if (value.cancellation) {
+    console.log(
+      `cancellation: ${value.complete ? "complete" : "incomplete"}; active: ${value.activeRunIds.join(", ") || "none"}`,
+    );
+    for (const run of value.cancellation) {
+      console.log(`${run.key}: ${run.state} attempt=${run.runAttempt} run=${run.runId}`);
+    }
+    console.log(`next: ${value.nextCommand}`);
   }
   if (value.qualification) {
     console.log(
@@ -2859,6 +2972,15 @@ async function main() {
     return;
   }
   const client = createClient(options.repository);
+  if (options.command === "cancel") {
+    const { cancelReleaseTree } = await import("./frv-cancellation.mjs");
+    const result = await cancelReleaseTree(options.runId, client, options);
+    print(result, options.json);
+    if (!result.complete && !options.dryRun) {
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (options.command === "prioritize") {
     print(
       await restoreReleasePriority(options.restore, client, { dryRun: options.dryRun }),

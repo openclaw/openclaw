@@ -230,11 +230,11 @@ export async function persistPluginStatusLines(params: {
         return;
       }
     }
-    await params.api.runtime.agent.session.patchSessionEntry({
+    await params.api.runtime.agent.session.prepareSessionEntryPatch({
       agentId,
       sessionKey,
       preserveActivity: true,
-      update: (existing) => {
+      prepare: (existing) => {
         const previousEntries = Array.isArray(existing.pluginDebugEntries)
           ? existing.pluginDebugEntries
           : [];

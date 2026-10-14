@@ -57,7 +57,7 @@ export async function forkCodexUpstreamSession(
       return unavailable(UNAVAILABLE_CONNECTION_MESSAGE);
     }
     return await requestControl.withPinnedConnection(async (control) => {
-      const sourceBinding = options.bindingStore.read(
+      const sourceBinding = await options.bindingStore.readAsync(
         sessionBindingIdentity({ ...params.source, config: options.resolveConfig?.() }),
       );
       // Imported identities remain rooted at S; new canonical turns belong to C.

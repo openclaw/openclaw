@@ -20,6 +20,7 @@ import {
   type MemoryPromptSectionParams,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
+import { limitHistoryTurns } from "../embedded-agent-runner/history.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
   assembleHarnessContextEngine,
@@ -63,6 +64,261 @@ function uniqueConfiguredProofEngineId() {
 }
 
 describe("harness context engine lifecycle", () => {
+  it("repairs windowed engine input and independently repairs engine output", async () => {
+    const evictedCall = textMessage("assistant", "", 2);
+    if (evictedCall.role !== "assistant") {
+      throw new Error("Expected assistant fixture");
+    }
+    evictedCall.content = [{ type: "toolCall", id: "evicted_call", name: "exec", arguments: {} }];
+    const currentRequest = textMessage("user", "Current request", 4);
+    const messages: AgentMessage[] = [
+      textMessage("user", "Old request", 1),
+      evictedCall,
+      textMessage("user", "Middle request", 3),
+      currentRequest,
+      {
+        role: "toolResult",
+        toolCallId: "evicted_call",
+        toolName: "exec",
+        content: [{ type: "text", text: "Late result from evicted history" }],
+        isError: false,
+        timestamp: 5,
+      },
+    ];
+    const original = JSON.stringify(messages);
+    const windowed = limitHistoryTurns(messages, 1);
+    expect(windowed).toEqual(messages.slice(3));
+    const output = textMessage("assistant", "", 6);
+    if (output.role !== "assistant") {
+      throw new Error("Expected assistant fixture");
+    }
+    output.content = [{ type: "toolCall", id: "engine_call", name: "exec", arguments: {} }];
+    const assemble = vi.fn(
+      async ({ messages: input }: Parameters<ContextEngine["assemble"]>[0]) => {
+        expect(input).toEqual([currentRequest]);
+        return {
+          messages: [...input, output],
+          estimatedTokens: 0,
+          promptAuthority: "preassembly_may_overflow" as const,
+        };
+      },
+    );
+    const warn = vi.fn();
+    const result = await prepareHarnessContextEnginePrompt({
+      ...sessionParams,
+      modelId: "test-model",
+      messages: windowed,
+      contextEngine: createContextEngine({ assemble }),
+      promptBudget: {
+        contextTokens: 100_000,
+        reserveTokens: 0,
+        systemPrompt: "system",
+        prompt: "next",
+      },
+      repairToolUseResultPairing: true,
+      isOpenAIResponsesApi: true,
+      warn,
+    });
+    expect(assemble).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+    expect(result.unwindowedContextEngineMessagesForPrecheck).toEqual([currentRequest]);
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "engine_call",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+    expect(JSON.stringify(messages)).toBe(original);
+    expect(windowed).toEqual(messages.slice(3));
+  });
+
+  it.each(["absent", "assembled", "fallback"] as const)(
+    "repairs the final tool conversation when the engine is %s",
+    async (mode) => {
+      const messages: AgentMessage[] = [
+        textMessage("user", "Run the tool", 1),
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_fixture", name: "exec", arguments: {} }],
+          timestamp: 2,
+        } as AgentMessage,
+      ];
+      const before = JSON.stringify(messages);
+      const warn = vi.fn();
+      const result = await prepareHarnessContextEnginePrompt({
+        ...sessionParams,
+        modelId: "test-model",
+        messages,
+        ...(mode === "absent"
+          ? {}
+          : {
+              contextEngine: createContextEngine({
+                assemble: async () => {
+                  if (mode === "fallback") {
+                    throw new Error("synthetic assembly failure");
+                  }
+                  return { messages, estimatedTokens: 0 };
+                },
+              }),
+            }),
+        promptBudget: {
+          contextTokens: 100_000,
+          reserveTokens: 0,
+          systemPrompt: "system",
+          prompt: "next",
+        },
+        repairToolUseResultPairing: true,
+        isOpenAIResponsesApi: true,
+        warn,
+      });
+      expect(result.messages).toHaveLength(3);
+      expect(result.messages[2]).toMatchObject({
+        role: "toolResult",
+        toolCallId: "call_fixture",
+        toolName: "exec",
+        isError: true,
+        content: [{ type: "text", text: "aborted" }],
+      });
+      expect(JSON.stringify(messages)).toBe(before);
+      expect(warn).toHaveBeenCalledTimes(mode === "fallback" ? 1 : 0);
+    },
+  );
+
+  it.each(["repair", "bounding"] as const)(
+    "falls back when plugin output fails during %s",
+    async (phase) => {
+      const engineId = uniqueConfiguredProofEngineId();
+      const messages = [textMessage("user", "Valid pipeline history", 1)];
+      const original = JSON.stringify(messages);
+      const malformed = textMessage("assistant", "Malformed plugin output", 2);
+      if (phase === "repair") {
+        Object.defineProperty(malformed, "content", {
+          get: () => {
+            throw new Error("synthetic repair failure");
+          },
+        });
+      } else {
+        const argumentsWithCycle: Record<string, unknown> = {};
+        argumentsWithCycle.self = argumentsWithCycle;
+        if (malformed.role !== "assistant") {
+          throw new Error("Expected assistant fixture");
+        }
+        malformed.content = [
+          { type: "toolCall", id: "cyclic_fixture", name: "exec", arguments: argumentsWithCycle },
+        ];
+      }
+      await registerTestContextEngine(engineId, () =>
+        createContextEngine({
+          info: { id: engineId, name: engineId },
+          assemble: async () => ({
+            messages: [malformed],
+            estimatedTokens: 0,
+            systemPromptAddition: "Invalid plugin instructions",
+          }),
+        }),
+      );
+      const lease = await createContextEngineLogicalTurnLease({
+        identity: { runId: engineId, sessionId: sessionParams.sessionId },
+        config: {
+          plugins: { slots: { contextEngine: engineId } },
+          agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1024 } } },
+        },
+      });
+      const warn = vi.fn();
+      try {
+        const result = await prepareHarnessContextEnginePrompt({
+          ...sessionParams,
+          contextEngine: lease.engine,
+          messages,
+          modelId: "test-model",
+          promptBudget: {
+            contextTokens: 100_000,
+            reserveTokens: 0,
+            systemPrompt: "Required instructions",
+            prompt: "next",
+          },
+          repairToolUseResultPairing: true,
+          isOpenAIResponsesApi: true,
+          warn,
+        });
+        expect(result.messages).toEqual(messages);
+        expect(Buffer.byteLength(JSON.stringify(result.messages))).toBeLessThanOrEqual(1024);
+        expect(JSON.stringify(messages)).toBe(original);
+        expect(result.systemPrompt).toBe("Required instructions");
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("context engine assemble failed, using pipeline messages:"),
+        );
+      } finally {
+        await lease.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "counts synthetic tool results in the byte cap (engine throws=%s)",
+    async (throws) => {
+      const engineId = uniqueConfiguredProofEngineId();
+      const messages: AgentMessage[] = [
+        textMessage("user", "old history ".repeat(500), 1),
+        textMessage("user", "Run the tools", 2),
+        {
+          role: "assistant",
+          content: Array.from({ length: 6 }, (_, index) => ({
+            type: "toolCall",
+            id: `call_fixture_${index}`,
+            name: "exec",
+            arguments: {},
+          })),
+          timestamp: 3,
+        } as AgentMessage,
+        textMessage("user", "Current surviving request", 4),
+      ];
+      const original = JSON.stringify(messages);
+      const cap = Buffer.byteLength(JSON.stringify(messages.slice(1))) + 1;
+      await registerTestContextEngine(engineId, () =>
+        createContextEngine({
+          info: { id: engineId, name: engineId },
+          assemble: async ({ messages: input }) => {
+            if (throws) {
+              throw new Error("fixture assembly failure");
+            }
+            return { messages: input, estimatedTokens: 0 };
+          },
+        }),
+      );
+      const lease = await createContextEngineLogicalTurnLease({
+        identity: { runId: engineId, sessionId: sessionParams.sessionId },
+        config: {
+          plugins: { slots: { contextEngine: engineId } },
+          agents: { defaults: { compaction: { maxActiveTranscriptBytes: cap } } },
+        },
+      });
+      try {
+        const bounded = await prepareHarnessContextEnginePrompt({
+          ...sessionParams,
+          contextEngine: lease.engine,
+          messages,
+          modelId: "test-model",
+          promptBudget: {
+            contextTokens: 100_000,
+            reserveTokens: 0,
+            systemPrompt: "Required instructions",
+            prompt: "next",
+          },
+          repairToolUseResultPairing: true,
+          isOpenAIResponsesApi: true,
+          warn: vi.fn(),
+        });
+        expect(bounded.messages).toEqual(messages.slice(3));
+        expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(cap);
+        expect(JSON.stringify(messages)).toBe(original);
+      } finally {
+        await lease.dispose();
+      }
+    },
+  );
+
   it.each([false, true])(
     "bounds oversized assembly without changing stored messages (engine throws=%s)",
     async (throws) => {

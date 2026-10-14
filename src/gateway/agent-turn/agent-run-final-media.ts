@@ -18,8 +18,8 @@ import {
 } from "../managed-image-attachments.js";
 import { hasAssistantDisplayMediaContent } from "../server-methods/chat-assistant-content.js";
 import {
+  captureWebchatReplyMediaAuthority,
   prepareWebchatReplyMediaForDisplay,
-  webchatReplyMediaAuthority,
 } from "../server-methods/chat-reply-media.js";
 import type { createAssistantCommentaryMediaCustody } from "../server-methods/chat-send-commentary-media.js";
 import {
@@ -63,6 +63,12 @@ export async function finalizeAgentRunMedia(
   let releaseSource: (() => void) | undefined;
   let releasePlacement: (() => void) | undefined;
   let work: Promise<void> | undefined;
+  const release = () => {
+    active = false;
+    predicate?.release();
+    releaseSource?.();
+    releasePlacement?.();
+  };
   try {
     const state = captureOpenClawStateWorkerContext();
     const placement = await prepareSessionPlacementRead(
@@ -101,14 +107,12 @@ export async function finalizeAgentRunMedia(
           requesterContext: params.requesterContext,
           accountId: params.accountId,
         };
-        const expected = webchatReplyMediaAuthority(scope, initialPlacement);
+        const authority = captureWebchatReplyMediaAuthority(scope, initialPlacement);
         predicate = retainPreparedSessionEntryPredicate({
           databaseIdentity,
           sessionKey: selected.legacyKey ?? selected.canonicalKey,
           entry: selected.entry,
-          matches: (_before, after) =>
-            webchatReplyMediaAuthority({ ...scope, sessionEntry: after }, initialPlacement).key ===
-            expected.key,
+          matches: (_before, after) => authority.matches(after, initialPlacement),
         });
         releaseSource = registerOpenClawAgentDatabaseAsyncResource({
           agentId: source.agentId,
@@ -124,15 +128,16 @@ export async function finalizeAgentRunMedia(
         return {
           ...scope,
           readSource: source,
-          workspace: expected.workspace,
+          workspace: authority.workspace,
+          prepareRead: predicate.prepareRead,
+          release,
           assertCurrent: () => {
             assertCurrent();
             assertExistingDatabaseIdentity(source.path, databaseIdentity, source.databaseBirthtime);
             if (
               !active ||
               !predicate?.isCurrent() ||
-              webchatReplyMediaAuthority({ ...scope, cfg: getRuntimeConfig() }, placement.current())
-                .key !== expected.key
+              !authority.matches(scope.sessionEntry, placement.current(), getRuntimeConfig())
             ) {
               throw new SessionTranscriptWriterClaimReboundError();
             }
@@ -210,9 +215,6 @@ export async function finalizeAgentRunMedia(
     })();
     await work;
   } finally {
-    active = false;
-    predicate?.release();
-    releaseSource?.();
-    releasePlacement?.();
+    release();
   }
 }

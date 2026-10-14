@@ -1,19 +1,19 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  listSessionEntriesCore,
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  setCanonicalUserProfileRole,
+} from "../../state/user-profile-writes.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -24,12 +24,14 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 const mocks = { upstreamFork: vi.fn() };
 const sessionKey = "agent:main:rewind-handler";
 const sourceSessionId = "rewind-handler-source";
+const cfg = { agents: { entries: { main: {} } } };
 let state: OpenClawTestState;
 
 beforeEach(async () => {
   mocks.upstreamFork.mockReset();
   setActivePluginRegistry(createEmptyPluginRegistry());
   state = await createOpenClawTestState({ label: "rewind-upstream", layout: "state-only" });
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     { sessionId: sourceSessionId, updatedAt: Date.now() },
@@ -69,7 +71,7 @@ async function invoke(
     context: {
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
-      getRuntimeConfig: runtimeConfig ?? (() => ({ agents: { entries: { main: {} } } })),
+      getRuntimeConfig: runtimeConfig ?? (() => cfg),
       getSessionEventSubscriberConnIds: () => new Set(),
     } as unknown as GatewayRequestContext,
     client,
@@ -226,40 +228,14 @@ describe("upstream session message-cut methods", () => {
     },
   );
 
-  it("rejects a foreign upstream source change before deferred native fork I/O", async () => {
-    linkToUpstreamConversation();
-    installUpstreamForkHarness();
-    const nativeWrite = vi.fn();
-    mocks.upstreamFork.mockImplementation(
-      async ({ assertCurrent }: { assertCurrent: () => void }) => {
-        assertCurrent();
-        await Promise.resolve();
-        const foreign = new DatabaseSync(openOpenClawStateDatabase().path);
-        try {
-          foreign
-            .prepare("UPDATE session_upstream_links SET thread_id = ? WHERE session_key = ?")
-            .run("replacement-thread", sessionKey);
-        } finally {
-          foreign.close();
-        }
-        assertCurrent();
-        nativeWrite();
-        return { status: "created", key: "agent:main:dashboard:forked" };
-      },
-    );
-
-    await expect(invoke("sessions.fork", "user-entry")).rejects.toThrow(
-      "changed during fork initialization",
-    );
-    expect(nativeWrite).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe(sourceSessionId);
-  });
-
   it.each(["dual", "legacy", "v2"] as const)(
     "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",
     async (contract) => {
-      const profile = ensureProfileForEmail(`sandbox-required-${contract}-fork@example.com`);
-      setUserProfileRole(profile.id, "guest");
+      const profile = await ensureCanonicalUserProfileForEmail(
+        `sandbox-required-${contract}-fork@example.com`,
+      );
+      await setCanonicalUserProfileRole(profile.id, "guest");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = {
         connect: { scopes: ["operator.write"] },
         authenticatedUserProfile: {
@@ -302,7 +278,12 @@ describe("upstream session message-cut methods", () => {
         }),
       );
       expect(mocks.upstreamFork).not.toHaveBeenCalled();
-      expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(1);
+      expect(
+        await readSessionEntrySummariesInWorker({
+          agentId: "main",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        }),
+      ).toHaveLength(1);
     },
   );
 
@@ -315,7 +296,12 @@ describe("upstream session message-cut methods", () => {
       message: "Codex is offline. Try again.",
     });
 
-    const entryCount = listSessionEntriesCore({ agentId: "main" }).length;
+    const entryCount = (
+      await readSessionEntrySummariesInWorker({
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      })
+    ).length;
     const respond = await invoke("sessions.fork", "user-entry");
 
     expect(respond).toHaveBeenCalledWith(
@@ -326,7 +312,12 @@ describe("upstream session message-cut methods", () => {
         details: { reason: "upstream-unavailable" },
       }),
     );
-    expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(entryCount);
+    expect(
+      await readSessionEntrySummariesInWorker({
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      }),
+    ).toHaveLength(entryCount);
   });
 
   it("passes through an invalid fork boundary failure", async () => {

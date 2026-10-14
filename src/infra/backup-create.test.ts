@@ -1024,7 +1024,7 @@ describe("createBackupArchive", () => {
       /belongs to agent Main; requested agent main/iu,
     ],
   ])(
-    "rejects a managed %s database without changing its bytes before outcome recording",
+    "rejects a managed %s database without changing its bytes before or during outcome recording",
     async (_name, kind, createDatabase, expected, external) => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-backup-invalid-owner-", scenario: "minimal" },
@@ -1049,9 +1049,9 @@ describe("createBackupArchive", () => {
           let bytesBeforeOutcome: Buffer | undefined;
           const outcomeSpy = vi
             .spyOn(backupRunRecords, "recordBackupRunOutcome")
-            .mockImplementation(async (params) => {
+            .mockImplementation(async (params, options) => {
               bytesBeforeOutcome = await fs.readFile(dbPath);
-              await recordOutcome(params);
+              await recordOutcome(params, options);
             });
           try {
             await expect(
@@ -1062,11 +1062,13 @@ describe("createBackupArchive", () => {
             ).rejects.toThrow(expected);
             expect(outcomeSpy).toHaveBeenCalledExactlyOnceWith(
               expect.objectContaining({ status: "failed" }),
+              expect.objectContaining({
+                assertCurrent: expect.any(Function),
+                signal: expect.any(AbortSignal),
+              }),
             );
             expect(bytesBeforeOutcome).toEqual(sourceBytes);
-            if (kind === "agent") {
-              expect(await fs.readFile(dbPath)).toEqual(sourceBytes);
-            }
+            expect(await fs.readFile(dbPath)).toEqual(sourceBytes);
             expect(await fs.readdir(outputDir)).toEqual([]);
           } finally {
             outcomeSpy.mockRestore();

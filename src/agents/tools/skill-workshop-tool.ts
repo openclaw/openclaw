@@ -1,5 +1,6 @@
 import path from "node:path";
 import { getRuntimeConfig } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -21,7 +22,10 @@ import {
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { skillWriteAdvisories } from "../../skills/workshop/skill-lint.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "../agent-tool-source-execution-guard.js";
 import { recordSkillUsed } from "../agent-tools.before-tool-call.diagnostics.js";
 import { SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { canonicalizePath } from "../utils/paths.js";
@@ -92,8 +96,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
     const ctx: WorkshopMutationContext = {
       ...baseCtx,
-      assertLive: () => {
-        assertSourceCurrent();
+      assertLive: composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
+        assertSource();
         // The operator may switch Learning Off mid-review.
         if (
           options.reviewOf &&
@@ -103,8 +107,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             "Learning is off; background reviews may not change skills.",
           );
         }
-      },
+      }),
     };
+    const runMutation = <T>(run: () => Promise<T>) =>
+      runWithAgentToolSourceExecutionScope(ctx.assertLive, run);
     const action = readToolStringParam(params, "action", { required: true });
     if (action === "list") {
       const [skills, archive] = await Promise.all([
@@ -192,42 +198,55 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     let change: WorkshopChange;
     let verb: string;
     switch (action) {
-      case "create":
-        written = readToolStringParam(params, "content", { required: true, trim: false });
-        change = await createWorkshopSkill(ctx, {
-          name,
-          content: written,
-          ...(reason ? { summary: reason } : {}),
-        });
+      case "create": {
+        const content = readToolStringParam(params, "content", { required: true, trim: false });
+        written = content;
+        change = await runMutation(() =>
+          createWorkshopSkill(ctx, {
+            name,
+            content,
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         viewed.add(name);
         verb = "Created";
         break;
+      }
       case "patch":
-        change = await patchWorkshopSkill(ctx, {
-          name,
-          oldText: readToolStringParam(params, "old_text", { required: true, trim: false }),
-          newText: readToolStringParam(params, "new_text", { trim: false, allowEmpty: true }) ?? "",
-          ...(filePath ? { filePath } : {}),
-          ...(reason ? { summary: reason } : {}),
-        });
+        change = await runMutation(() =>
+          patchWorkshopSkill(ctx, {
+            name,
+            oldText: readToolStringParam(params, "old_text", { required: true, trim: false }),
+            newText:
+              readToolStringParam(params, "new_text", { trim: false, allowEmpty: true }) ?? "",
+            ...(filePath ? { filePath } : {}),
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         verb = "Patched";
         break;
-      case "write_file":
-        written = readToolStringParam(params, "content", { required: true, trim: false });
-        change = await writeWorkshopSkillFile(ctx, {
-          name,
-          filePath: readToolStringParam(params, "file_path", { required: true }),
-          content: written,
-          ...(reason ? { summary: reason } : {}),
-        });
+      case "write_file": {
+        const content = readToolStringParam(params, "content", { required: true, trim: false });
+        written = content;
+        change = await runMutation(() =>
+          writeWorkshopSkillFile(ctx, {
+            name,
+            filePath: readToolStringParam(params, "file_path", { required: true }),
+            content,
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         verb = "Updated";
         break;
+      }
       case "remove_file":
-        change = await removeWorkshopSkillFile(ctx, {
-          name,
-          filePath: readToolStringParam(params, "file_path", { required: true }),
-          ...(reason ? { summary: reason } : {}),
-        });
+        change = await runMutation(() =>
+          removeWorkshopSkillFile(ctx, {
+            name,
+            filePath: readToolStringParam(params, "file_path", { required: true }),
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         verb = "Updated";
         break;
       case "archive": {
@@ -237,20 +256,24 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             "archive needs absorbed_into (the live skill that now covers this one) or a reason.",
           );
         }
-        change = await archiveWorkshopSkill(ctx, {
-          name,
-          ...(absorbedInto ? { absorbedInto } : {}),
-          ...(reason ? { reason } : {}),
-        });
+        change = await runMutation(() =>
+          archiveWorkshopSkill(ctx, {
+            name,
+            ...(absorbedInto ? { absorbedInto } : {}),
+            ...(reason ? { reason } : {}),
+          }),
+        );
         verb = "Archived";
         break;
       }
       case "restore":
-        change = await restoreWorkshopSkill(ctx, {
-          name,
-          ...(version ? { versionId: version } : {}),
-          ...(reason ? { summary: reason } : {}),
-        });
+        change = await runMutation(() =>
+          restoreWorkshopSkill(ctx, {
+            name,
+            ...(version ? { versionId: version } : {}),
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         verb = "Restored";
         break;
       default:

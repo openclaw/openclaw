@@ -18,17 +18,26 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
+  "scripts/generate-postgres-schema.mts!",
+  // Immutable activation and release deployment launch this packaged entry by path.
+  "gateway-prewarm.mjs!",
   "apps/linux/scripts/test-runtime-boundary.mjs!",
   "apps/linux/scripts/stage-runtime.mjs!",
   "apps/linux/scripts/test-stage-runtime.mjs!",
+  "apps/linux/scripts/test-stage-package.mjs!",
   // The Python onboarding driver installs this synthetic CLI by path.
   "apps/linux/tests/fixtures/onboarding-cli.mjs!",
+  // The Linux onboarding proof builds its card fixture through Vite's --config option.
+  "apps/linux/tests/fixtures/vite.onboarding.config.ts!",
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
   "apps/linux/scripts/test-native-control-auth.mjs!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  // db:postgres:gen/check invoke this generator through the source loader.
+  "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
   "scripts/ci-build-manifest.mjs!",
   // CI security-fast runs this from its trusted harness checkout.
@@ -49,6 +58,15 @@ const repositoryScriptEntries = [
   // setup-pnpm-store-cache invokes this helper from composite-action YAML.
   ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
+  // The cold-load benchmark guide invokes this opt-in CLI by path.
+  "scripts/bench-control-ui-cold-load.ts!",
+  // The channel-turn benchmark guide invokes this opt-in CLI by path.
+  "scripts/bench-channel-turn.mts!",
+  // Maintainers invoke this isolated transcript-rewrite benchmark by path.
+  "scripts/bench-session-manager-rewrite.ts",
+  // The team-shaped fixture README invokes these measurement CLIs by path.
+  "scripts/perf/team-shape-measure.ts",
+  "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
@@ -112,6 +130,10 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
+  // Muse Docker shells invoke auth directly and select deterministic/live by mode.
+  "scripts/e2e/lib/muse-runtime/auth.mjs!",
+  "scripts/e2e/lib/muse-runtime/deterministic.mjs!",
+  "scripts/e2e/lib/muse-runtime/live.mjs!",
   // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
   "scripts/e2e/lib/node-auto-update/scenario.mjs!",
   // Installed-package authority proof runs by path and injects its worker preload via NODE_OPTIONS.
@@ -135,9 +157,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/run-with-pty.mjs!",
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
   "scripts/e2e/lib/session-cold-storage/client.mjs!",
-  // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
-  "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
-  "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
   // abandoned-update.sh invokes the upgrade ledger assertions through Node.
   "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   // backup-rollback.sh invokes capture and verification through this CLI.
@@ -184,6 +203,8 @@ const repositoryScriptEntries = [
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   // Generates the native browser page scripts from their UI source modules.
   "scripts/generate-browser-inspect-script-swift.mts!",
+  // db:postgres:gen and db:postgres:check invoke the canonical schema generator by path.
+  "scripts/generate-postgres-schema.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.
@@ -218,6 +239,8 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
+  // Boundary lint loads this migration plugin by path; remove with that config entry.
+  "scripts/oxlint-solid-migration.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -225,10 +248,10 @@ const repositoryScriptEntries = [
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
-  // merge.sh invokes this native review-authority parser by path.
-  "scripts/pr-lib/clawsweeper-review-gate.mjs!",
   // review.sh invokes the corrected-candidate review validator by path.
   "scripts/pr-lib/correction-review.mjs!",
+  // prepare-core.sh invokes correction continuation and recovery by path.
+  "scripts/pr-lib/correction-continuation.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
@@ -409,6 +432,10 @@ const rootEntries = [
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Inactive phase-owner API for the staged session caller cutover. Remove these
+  // audit roots once accept-input, transcript, and delivery callers activate it.
+  "src/config/sessions/session-actor-contract.ts!",
+  "src/config/sessions/session-actor-durable.ts!",
   // Startup metadata renders source help through a generated child module's file-URL import.
   "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.
@@ -418,7 +445,9 @@ const rootEntries = [
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-entry.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
+  "src/worker/worker-deploy-file-tool-read.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
+  "src/worker/worker-deploy-sqlite-source-revision.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
   "src/worker/worker-deploy-state-read.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
@@ -432,6 +461,9 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // Offline port foundations precede orchestration; remove with their first production callers.
+  "src/infra/database-engine/port.worker.ts!",
+  "src/snapshot/export-envelope.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/config/sessions/disk-budget.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
@@ -644,7 +676,7 @@ function compileNativeProtocolConsumer(source: string, filePath: string): string
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
     entry: [...bundledPluginEntries, ...extraEntries],
-    project: ["**/*.{js,mjs,ts}!"],
+    project: ["**/*.{js,jsx,mjs,ts,tsx}!"],
     ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
   } as const;
 }
@@ -733,11 +765,24 @@ const config = {
   ],
   // Knip's `ignoreFiles` only suppresses unused-file findings. Test helpers
   // belong in `ignore` so they do not inflate unused-export/type findings.
-  ignore: ["dist/**", "packages/*/dist/**", "**/.boundary-stubs/**", ...ignoredTestSupportFiles],
+  ignore: [
+    "dist/**",
+    "packages/*/dist/**",
+    "**/.boundary-stubs/**",
+    ...ignoredTestSupportFiles.map((pattern) => pattern.replace(/\.ts$/u, ".{ts,tsx}")),
+  ],
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // P3-6c.1 stages manifest write/archive and typed replacement outcomes for P3-6c.2.
+    // Remove these production-only exceptions when the offline port caller lands;
+    // the full-tree audit still checks all exports against their boundary tests.
+    "src/infra/database-port-recovery.ts": ["exports"],
+    "src/infra/sqlite-snapshot.ts": ["exports"],
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    // PR2a admits physical facts now; PR2b routes state maintenance to these capabilities.
+    // The full-tree test-aware scan still audits their boundary-test consumers.
+    "src/infra/database-engine/physical-facts.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
     "src/boards/board-notices.ts": ["exports"],
@@ -750,7 +795,7 @@ const config = {
     "src/agents/harness/registry.ts": ["exports"],
     // Focused outbox tests seed and recover rows through these kernels; production
     // reaches them only through the agent database worker's command dispatcher.
-    "src/agents/harness/context-engine-turn-outbox.ts": ["exports"],
+    "src/agents/harness/context-engine-turn-outbox.kernel.worker.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
@@ -759,8 +804,29 @@ const config = {
     "src/plugins/session-discussion-registry.ts": ["exports"],
     // Focused Control UI tests consume these explicit state-machine seams;
     // production uses them through their owning module/controller.
-    "ui/src/pages/chat/chat-state-refresh.ts": ["exports"],
-    "ui/src/pages/chat/composer-persistence.ts": ["exports"],
+    "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
+    "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
+    // The Lit/Solid presentation fixture and focused UI tests consume these seams;
+    // the full-tree companion scan continues to audit their actual consumers.
+    "ui/src/components/provider-icon.ts": ["exports"],
+    "ui/src/components/settings-ui.ts": ["exports"],
+    "ui/src/components/terminal/terminal-panel.ts": ["types"],
+    "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-child-attention.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-ci-automation-control.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-ci-details.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-clawhub-card.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-details.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-question-card{,-view}.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-skill-learned-notice.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-svg-attachment.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-summary-automations.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-tool-output{,-view}.{ts,tsx}": ["exports"],
+    "ui/src/pages/chat/components/session-diff-panel.tsx": ["exports"],
+    "ui/src/pages/model-providers/data.ts": ["exports"],
+    "ui/src/pages/plugins/credential-editor.tsx": ["types"],
+    "ui/src/pages/plugins/skill-preview.tsx": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
@@ -776,6 +842,15 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Lazy loaders import these modules opaquely (media-understanding runner, config model
+    // validation), which Knip counts as using every export until a bare namespace reference
+    // disables that shortcut: plugin-test-runtime's isolated-completion fixture passes these
+    // namespaces to vi.spyOn. Plain unused exports stay reported here; the full-tree scan
+    // still audits every export against its test consumers.
+    "src/agents/model-auth.ts": ["nsExports"],
+    "src/agents/model-auth-runtime.ts": ["nsExports"],
+    "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
+    "src/agents/prepared-model-runtime.ts": ["nsExports"],
   },
   workspaces: {
     ".": {
@@ -793,6 +868,12 @@ const config = {
         // Loaded via createRequire in src/agents/utils/syntax-highlight.ts because its
         // d.ts force-includes lib.dom; knip cannot see the dynamic require.
         "highlight.js",
+        // Solid plugin builds createRequire the compiler from the plugin author's package.json;
+        // the host never resolves or ships it (docs/plugins/feature-plugins.md).
+        "@solidjs/compiler",
+        // Canvas bundling resolves these from extensions/canvas/package.json.
+        "@solidjs/web",
+        "solid-js",
         "playwright-core",
         "partial-json",
         // The native Canvas bundle falls back without optional Markdown support.
@@ -806,6 +887,8 @@ const config = {
       ignoreBinaries: [
         "lsattr",
         "mint",
+        // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).
+        "muse",
         "ngrok",
         "open",
         "openclaw",
@@ -846,10 +929,19 @@ const config = {
         // The standalone proof-video skill imports this developer API by path.
         "src/test-helpers/proof-video.ts!",
         "index.html!",
-        "src/main.ts!",
-        "src/lib/browser-redact.ts!",
+        "src/main.{ts,tsx}!",
+        "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",
+        // The standalone Solid compiler smoke is not a production import.
+        "src/solid-smoke/solid-smoke.tsx!",
+        // Solid presentation primitives (#168576) and the chat render lifecycle (#168657) land
+        // before their page and chat consumers; drop each entry with its first production importer.
+        "src/components/solid/*.tsx!",
+        "!src/components/solid/*.test.tsx!",
+        "src/components/icon-data*.ts!",
+        "src/app/shell-layout-traits-solid.tsx!",
+        "src/pages/chat/solid-render-lifecycle.ts!",
       ],
       // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
       ignoreDependencies: ["three"],
@@ -939,13 +1031,11 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
       // Package build/copy scripts are invoked from package.json.
-      "scripts/bundle-a2ui.mjs!",
       "scripts/copy-a2ui.mjs!",
-      "scripts/pnpm-runner.mjs!",
       // Rolldown consumes this config and its browser bootstrap entry.
       "src/host/a2ui-app/rolldown.config.mjs!",
-      "src/host/a2ui-app/bootstrap.js!",
-      "src/host/a2ui-app/bootstrap-v0.9.js!",
+      "src/host/a2ui-app/bootstrap.jsx!",
+      "src/host/a2ui-app/bootstrap-v0.9.jsx!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),
@@ -1086,7 +1176,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
-      project: ["**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts,tsx}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: bundledPluginWorkspace(),
@@ -1096,14 +1186,14 @@ const config = {
       // public surface, so its exports are intentional even where the channel
       // consumes only a subset.
       entry: [...bundledPluginEntries, "protocol/index.ts!"],
-      project: ["**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts,tsx}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
       // `index.ts` contracts, so Knip needs these convention-based entry files.
       entry: bundledPluginEntries,
-      project: ["**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts,tsx}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
   },

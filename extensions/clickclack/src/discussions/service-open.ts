@@ -376,11 +376,12 @@ export async function openClickClackDiscussionBinding(
       assertCurrentAuthority();
       try {
         if (adopted) {
-          revokeChannel(adopted.id);
+          await revokeChannel(adopted.id);
+          assertCurrentAuthority();
           resolved = await client.updateChannel(adopted.id, managedFields);
         } else {
           resolved = await client.createChannel(workspace.id, { ...managedFields, kind: "public" });
-          revokeChannel(resolved.id);
+          await revokeChannel(resolved.id);
         }
         break;
       } catch (error) {
@@ -401,7 +402,7 @@ export async function openClickClackDiscussionBinding(
           );
           if (recovered) {
             adopted = recovered;
-            revokeChannel(recovered.id);
+            await revokeChannel(recovered.id);
             assertCurrentAuthority();
             resolved = await client.updateChannel(recovered.id, managedFields);
             break;
@@ -508,7 +509,18 @@ export async function openClickClackDiscussionBinding(
     };
     try {
       nextBinding.sessionId = assertCurrentAuthority().sessionId;
-      store.set(sessionKey, nextBinding);
+      const applied = await store.setIfCurrent(sessionKey, undefined, nextBinding, {
+        assertCurrent: () => {
+          if (assertCurrentAuthority().sessionId !== nextBinding.sessionId) {
+            throw new Error("ClickClack discussion session changed before binding committed");
+          }
+        },
+      });
+      if (!applied) {
+        await clearPendingDiscussionOpen(generationScope);
+        params.warn(`superseded discussion channel remains quarantined: ${channel.id}`);
+        return undefined;
+      }
     } catch (error) {
       await clearPendingDiscussionOpen(generationScope);
       params.warn(`unbound discussion channel remains quarantined: ${channel.id}`);
@@ -582,7 +594,7 @@ export async function reconcilePendingDiscussionOpen(params: {
       candidate.external_managed === true && candidate.external_ref === pending.externalRef,
   );
   if (channel) {
-    markClickClackDiscussionChannelIdentityRevoked({
+    await markClickClackDiscussionChannelIdentityRevoked({
       runtime: params.runtime,
       accountId: pending.accountId,
       serverBaseUrl: pending.serverBaseUrl,

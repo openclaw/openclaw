@@ -10,8 +10,9 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createIrcIngressMonitor } from "./irc-ingress.js";
 import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
 import { monitorIrcProvider } from "./monitor.js";
@@ -30,6 +31,7 @@ type InboundIrcServer = {
   port: number;
   lines: string[];
   sendInbound(target: string, colonlessBody?: boolean, senderNick?: string): void;
+  sendNotice(target: string, text: string): void;
   close(): Promise<void>;
 };
 
@@ -63,6 +65,7 @@ async function withIngressQueue<T>(
     return await fn(queue, stateDir);
   } finally {
     queue.complete = complete;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   }
@@ -95,7 +98,7 @@ function observeReconnect() {
   return { statusSink, reconnected: reconnected.promise };
 }
 
-async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
+async function startDisconnectingIrcServer(loginError?: string): Promise<DisconnectingIrcServer> {
   const lines: string[] = [];
   let connectionCount = 0;
   let firstSocket: net.Socket;
@@ -108,7 +111,11 @@ async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
       lines.push(line);
       if (line.startsWith("USER ")) {
         if (connectionNumber === 2) {
-          socket.destroy();
+          if (loginError) {
+            socket.write(`:server ${loginError} bot :login rejected\r\n`);
+          } else {
+            socket.destroy();
+          }
         } else {
           socket.write(":server 001 bot :welcome\r\n");
         }
@@ -145,6 +152,9 @@ async function startInboundIrcServer(welcomeNick = "bot"): Promise<InboundIrcSer
       clientSocket.write(
         `:${senderNick}!ident@example.org PRIVMSG ${target}${bodySeparator}hello\r\n`,
       );
+    },
+    sendNotice: (target, text) => {
+      clientSocket.write(`:server NOTICE ${target} :${text}\r\n`);
     },
   };
 }
@@ -201,13 +211,13 @@ function monitorConfig(
   };
 }
 
-function installMonitorRuntime() {
+function installMonitorRuntime(debug = vi.fn(), verbose = false) {
   const activityRecord = vi.fn();
   setIrcRuntime({
     logging: {
-      shouldLogVerbose: vi.fn(() => false),
+      shouldLogVerbose: vi.fn(() => verbose),
       getChildLogger: vi.fn(() => ({
-        debug: vi.fn(),
+        debug,
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
@@ -436,46 +446,74 @@ describe("irc monitor reconnect", () => {
     }, "alpha");
   });
 
-  it("reconnects when an established IRC socket closes", async () => {
-    await withIngressQueue(async (ingressQueue) => {
-      installMonitorRuntime();
-      const { statusSink, reconnected } = observeReconnect();
-      const server = await startDisconnectingIrcServer();
-      const config = monitorConfig(server.port, "bot", { channels: ["#openclaw"] });
-      let monitor: { stop: () => Promise<void> } | undefined;
+  it.for([
+    { failure: "a closed socket", loginError: undefined, error: "closed before ready" },
+    { failure: "a rejected login", loginError: "464", error: "login failed (464)" },
+  ])(
+    "reports disconnected status and recovers after $failure",
+    async ({ loginError, error }, { signal }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      await withIngressQueue(async (ingressQueue) => {
+        installMonitorRuntime();
+        const disconnected = createDeferred<void>();
+        const failedReconnect = createDeferred<void>();
+        const reconnected = createDeferred<void>();
+        let readyCount = 0;
+        let recoveringCount = 0;
+        const status: Parameters<
+          NonNullable<Parameters<typeof monitorIrcProvider>[0]["statusSink"]>
+        >[0] = {};
+        const statusSink: NonNullable<Parameters<typeof monitorIrcProvider>[0]["statusSink"]> = (
+          patch,
+        ) => {
+          Object.assign(status, patch);
+          if (patch.lifecycle === "ready" && ++readyCount === 2) {
+            reconnected.resolve();
+          }
+          if (patch.lifecycle === "recovering") {
+            recoveringCount += 1;
+            (recoveringCount === 1 ? disconnected : failedReconnect).resolve();
+          }
+        };
+        const server = await startDisconnectingIrcServer(loginError);
+        const config = monitorConfig(server.port, "bot", { channels: ["#openclaw"] });
+        let monitor: { stop: () => Promise<void> } | undefined;
 
-      try {
-        monitor = await monitorIrcProvider({ config, ingressQueue, statusSink });
-        server.disconnectFirst();
-        await withTimeout(reconnected, 10_000, "IRC recovery after a failed reconnect attempt");
-        expect(
-          server.lines.filter((line) => line === "USER bot 0 * :OpenClaw").length,
-        ).toBeGreaterThanOrEqual(3);
-        expect(server.connectionCount).toBeGreaterThanOrEqual(3);
-        expect(
-          statusSink.mock.calls.flatMap(([patch]) =>
-            patch.lifecycle ? [patch.lifecycle as string] : [],
-          ),
-        ).toEqual(["ready", "recovering", "recovering", "ready"]);
-        for (const [readyPatch] of statusSink.mock.calls.filter(
-          ([statusPatch]) => statusPatch.lifecycle === "ready",
-        )) {
-          expect(readyPatch).toMatchObject({
+        try {
+          monitor = await monitorIrcProvider({ config, ingressQueue, statusSink });
+          server.disconnectFirst();
+          await withinTest(disconnected.promise, signal);
+          expect(status).toMatchObject({
             running: true,
-            connected: true,
-            lastConnectedAt: expect.any(Number),
-            lastError: null,
-            terminalDisconnect: undefined,
+            connected: false,
+            lifecycle: "recovering",
+            lastDisconnect: { at: expect.any(Number) },
           });
+          const disconnectedAt = status.lastDisconnect;
+          await vi.advanceTimersByTimeAsync(1_200);
+          await withinTest(failedReconnect.promise, signal);
+          expect(status).toMatchObject({
+            running: true,
+            connected: false,
+            lifecycle: "recovering",
+            lastError: expect.stringContaining(error),
+            lastDisconnect: disconnectedAt,
+          });
+          await vi.advanceTimersByTimeAsync(2_400);
+          await withinTest(reconnected.promise, signal);
+          expect(status).toMatchObject({ running: true, connected: true, lastError: null });
+        } finally {
+          if (monitor) {
+            await monitor.stop();
+          }
+          await server.close();
         }
-      } finally {
-        if (monitor) {
-          await monitor.stop();
-        }
-        await server.close();
-      }
-    });
-  });
+      });
+    },
+  );
 
   it("does not send a delayed private reply through the reconnected client", async () => {
     await withIngressQueue(async (ingressQueue) => {
@@ -552,8 +590,10 @@ describe("irc monitor inbound target", () => {
     "maps $label targets through the monitor boundary",
     async ({ serverTarget, colonlessBody, expected }) => {
       await withIngressQueue(async (ingressQueue) => {
-        installMonitorRuntime();
+        const debug = vi.fn();
+        installMonitorRuntime(debug, true);
         const server = await startInboundIrcServer();
+        const noticeText = "private-notice-sentinel";
         const messages: IrcInboundMessage[] = [];
         const completed = observeIngressCompletion(ingressQueue);
         let monitor: { stop: () => Promise<void> } | undefined;
@@ -565,6 +605,7 @@ describe("irc monitor inbound target", () => {
               messages.push(message);
             },
           });
+          server.sendNotice(serverTarget, noticeText);
           server.sendInbound(serverTarget, colonlessBody);
           const completedId = await withTimeout(completed, 3000, "inbound IRC message completion");
           expect(messages).toHaveLength(1);
@@ -574,6 +615,10 @@ describe("irc monitor inbound target", () => {
             senderNick: "alice",
             text: "hello",
           });
+          expect(debug).toHaveBeenCalledWith(expect.stringContaining(`notice ${serverTarget}`));
+          const diagnostics = JSON.stringify(debug.mock.calls);
+          expect(diagnostics).not.toContain("hello");
+          expect(diagnostics).not.toContain(noticeText);
         } finally {
           if (monitor) {
             await monitor.stop();

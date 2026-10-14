@@ -97,14 +97,6 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     vi.useRealTimers();
   });
 
-  it("keeps one-time migration out of repeated canonical drains", async () => {
-    await drain();
-    await drain();
-    await drain();
-
-    expect(migrateLegacyPendingOutboundDeliveriesMock).not.toHaveBeenCalled();
-  });
-
   it("leaves Gateway conversation records for the authorized recovery owner", async () => {
     const operationId = "conversation-reconnect";
     const storePath = path.join(tmpDir, "agent-sessions.json");

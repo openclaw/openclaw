@@ -31,9 +31,6 @@ class IntervalSyncHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Interval harness does not acquire embedding providers");
   };
-  protected releaseProvider(): never {
-    throw new Error("Interval harness does not own embedding providers");
-  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-memory-interval-test";

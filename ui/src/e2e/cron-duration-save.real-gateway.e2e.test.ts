@@ -625,9 +625,9 @@ suite.define(() => {
         const saved = await submitCronForm(evidence, cliJson, "cron.update");
         const savedFields = await readAlertFields(page);
         await capture(page, "real-alert-saved", { ...saved, savedFields });
-        const menu = page.locator(".cron-detail-actions wa-dropdown");
-        await menu.locator('button[slot="trigger"]').click();
-        await menu.locator('wa-dropdown-item[value="clone"]').click();
+        const menu = page.locator(".cron-detail-actions .cron-job-menu");
+        await menu.locator(".cron-job-menu__trigger").click();
+        await menu.locator('[data-value="clone"]').click();
         await page.locator("#cron-name").fill("Cloned partial failure policy");
         const cloned = await submitCronForm(evidence, cliJson, "cron.add");
         const cloneId = cronJobId(cloned.stored);
@@ -789,9 +789,9 @@ suite.define(() => {
             original,
             servedDocumentSha256,
           });
-          const menu = page.locator(".cron-detail-actions wa-dropdown");
-          await menu.locator('button[slot="trigger"]').click();
-          await menu.locator('wa-dropdown-item[value="clone"]').click();
+          const menu = page.locator(".cron-detail-actions .cron-job-menu");
+          await menu.locator(".cron-job-menu__trigger").click();
+          await menu.locator('[data-value="clone"]').click();
           await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
           await expect
             .poll(() => page.locator("#cron-name").inputValue())

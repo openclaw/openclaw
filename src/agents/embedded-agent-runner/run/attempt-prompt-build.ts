@@ -65,7 +65,6 @@ import {
 } from "./attempt-prompt-helpers.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
-import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
@@ -159,8 +158,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     modelId: attempt.model.id,
     inputProvenance: attempt.inputProvenance,
   };
-  const promptBuildMessages =
-    pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
+  const promptBuildMessages = input.activeSession.messages;
   const promptEvent = { prompt: effectivePrompt, messages: promptBuildMessages };
   const hookResult = preserveExactPrompt
     ? undefined

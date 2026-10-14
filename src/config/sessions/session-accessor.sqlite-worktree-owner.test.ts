@@ -1,4 +1,5 @@
 import { afterAll, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -64,6 +65,7 @@ it("reads GC owner facts without parsing unrelated session payloads", () => {
     }
     return parseJson(text, reviver);
   });
+  const sql = observeHostDataSql();
   try {
     const result = readExactSessionEntriesWithLifecycle({
       kind: "session-exact-entries",
@@ -79,7 +81,11 @@ it("reads GC owner facts without parsing unrelated session payloads", () => {
     expect(result.entries.toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey))).toEqual(
       entries.toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey)),
     );
+    expect(
+      sql.queries.filter((query) => /^(BEGIN|COMMIT|SAVEPOINT|RELEASE)\b/i.test(query)),
+    ).toEqual([]);
   } finally {
+    sql.restore();
     parse.mockRestore();
   }
 });

@@ -65,23 +65,25 @@ function observeModelCallIterator<T>(
         return returning.then(() => ({ done: true as const, value: undefined }));
       }
       started = true;
-      return observed.next();
+      return lifecycle.runInTransportContext(() => observed.next());
     },
     return(value) {
-      returning ??= started
-        ? observed.return(value)
-        : Promise.resolve().then(async () => {
-            // An unopened async generator skips its finally block. Forward closure
-            // explicitly so inner stream owners can settle their admitted repairs.
-            await safeReturnIterator(iterator, trackCleanup);
-            lifecycle.emitCompleted();
-            return { done: true as const, value };
-          });
+      returning ??= lifecycle.runInTransportContext(() =>
+        started
+          ? observed.return(value)
+          : Promise.resolve().then(async () => {
+              // An unopened async generator skips its finally block. Forward closure
+              // explicitly so inner stream owners can settle their admitted repairs.
+              await safeReturnIterator(iterator, trackCleanup);
+              lifecycle.emitCompleted();
+              return { done: true as const, value };
+            }),
+      );
       return returning;
     },
     throw(error) {
       started = true;
-      return observed.throw(error);
+      return lifecycle.runInTransportContext(() => observed.throw(error));
     },
   };
 
@@ -139,16 +141,21 @@ function createSharedResultObserver(
   return () => {
     if (!cached) {
       cached = Promise.resolve()
-        .then(() => resultFn.call(stream))
+        .then(() => lifecycle.runInTransportContext(() => resultFn.call(stream)))
         .then(
           (resolved) => {
-            lifecycle.observer.observeFinalResult(
-              lifecycle.eventBase,
-              lifecycle.startedAt,
-              resolved,
-            );
-            lifecycle.emitCompleted();
-            return resolved;
+            try {
+              lifecycle.observer.observeFinalResult(
+                lifecycle.eventBase,
+                lifecycle.startedAt,
+                resolved,
+              );
+              lifecycle.emitCompleted();
+              return resolved;
+            } catch (error) {
+              lifecycle.emitError(error);
+              throw error;
+            }
           },
           (err: unknown) => throwModelCallError(lifecycle, err),
         );
@@ -165,8 +172,18 @@ function observeModelCallStream(
   lifecycle: ModelCallLifecycle,
 ): AsyncIterable<unknown> {
   const observedResult = createSharedResultObserver(stream, lifecycle);
-  const observedIterator = () =>
-    observeModelCallIterator(createIterator(), lifecycle, observedResult);
+  const observedIterator = () => {
+    try {
+      return observeModelCallIterator(
+        lifecycle.runInTransportContext(createIterator),
+        lifecycle,
+        observedResult,
+      );
+    } catch (error) {
+      lifecycle.emitError(error);
+      throw error;
+    }
+  };
   let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =
@@ -195,12 +212,17 @@ function observeModelCallStream(
 }
 
 function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle): unknown {
-  const createIterator = asyncIteratorFactory(result);
-  if (createIterator) {
-    return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
+  try {
+    const createIterator = asyncIteratorFactory(result);
+    if (createIterator) {
+      return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
+    }
+    lifecycle.emitCompleted();
+    return result;
+  } catch (error) {
+    lifecycle.emitError(error);
+    throw error;
   }
-  lifecycle.emitCompleted();
-  return result;
 }
 
 export function wrapStreamFnWithDiagnosticModelCallEvents(
@@ -228,7 +250,9 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     });
 
     try {
-      const result = streamFn(model, streamContext, lifecycle.propagatedOptions);
+      const result = lifecycle.runInTransportContext(() =>
+        streamFn(model, streamContext, lifecycle.propagatedOptions),
+      );
       if (isPromiseLike(result)) {
         return result.then(
           (resolved) => observeModelCallResult(resolved, lifecycle),

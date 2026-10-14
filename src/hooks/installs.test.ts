@@ -12,18 +12,32 @@ import {
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { stageHookInstall } from "./install-record-transaction.js";
-import { readHookInstalls, recordHookInstall } from "./installs.js";
+import { readHookInstalls, readHookInstallsAsync, recordHookInstall } from "./installs.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  });
 });
 
 describe("hook install machine state", () => {
+  it("reads newly recorded packs after a worker read", async () => {
+    const stateDir = tempDirs.make("openclaw-hook-installs-");
+    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    recordHookInstall({ hookId: "alpha", source: "npm" }, options);
+    expect(await readHookInstallsAsync(options)).toMatchObject({ alpha: { source: "npm" } });
+
+    recordHookInstall({ hookId: "beta", source: "path" }, options);
+    expect(await readHookInstallsAsync(options)).toMatchObject({
+      alpha: { source: "npm" },
+      beta: { source: "path" },
+    });
+  });
+
   it("merges independently recorded hook packs", () => {
     const stateDir = tempDirs.make("openclaw-hook-installs-");
     const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };

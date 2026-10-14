@@ -1,36 +1,39 @@
 import { renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
-  appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
-  replaceTranscriptEvents,
-  withTranscriptWriteTransaction,
 } from "./session-accessor.js";
-import {
-  readRecentSessionTranscriptHistoryEvents,
-  readSessionTranscriptHistoryEventPage,
-} from "./session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite-history-events.js";
+import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
   readSessionTranscriptHistoryEventCount,
   useHistoryEventScope,
 } from "./session-accessor.sqlite-history.test-support.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
+
+afterAll(clearRuntimeConfigSnapshot);
 
 describe("SQLite transcript history cache", () => {
   const fixtureScope = useHistoryEventScope();
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   const limits = { maxMessages: 20, maxLines: 20, maxBytes: 64 * 1024 };
   const read = () => readRecentSessionTranscriptHistoryEvents(fixtureScope, limits);
   const readHeadPage = () =>
@@ -132,26 +135,30 @@ describe("SQLite transcript history cache", () => {
         page.events.length = 0;
         throw new Error("rollback pending history");
       };
-      const transaction = withTranscriptWriteTransaction(fixtureScope, () => {
-        if (outcome !== "savepoint rollback") {
-          appendPending();
-          return;
-        }
-        expect(() =>
-          runOpenClawAgentWriteTransaction(appendPending, {
-            agentId: fixtureScope.agentId,
-            env: fixtureScope.env,
-          }),
-        ).toThrow("rollback pending history");
-        expect(
-          appendTranscriptMessageSync(
-            fixtureScope,
-            transcriptMessage("committed", "root", { role: "user", content: "committed" }),
-          ),
-        ).toMatchObject({ ok: true, value: { appended: true } });
-      });
+      const transaction = () =>
+        runOpenClawAgentWriteTransaction(
+          () => {
+            if (outcome !== "savepoint rollback") {
+              appendPending();
+              return;
+            }
+            expect(() =>
+              runOpenClawAgentWriteTransaction(appendPending, {
+                agentId: fixtureScope.agentId,
+                env: fixtureScope.env,
+              }),
+            ).toThrow("rollback pending history");
+            expect(
+              appendTranscriptMessageSync(
+                fixtureScope,
+                transcriptMessage("committed", "root", { role: "user", content: "committed" }),
+              ),
+            ).toMatchObject({ ok: true, value: { appended: true } });
+          },
+          { agentId: fixtureScope.agentId, env: fixtureScope.env },
+        );
       if (outcome === "rollback") {
-        await expect(transaction).rejects.toThrow("rollback pending history");
+        expect(transaction).toThrow("rollback pending history");
         // Reuse the rolled-back physical sequence before any intervening history read.
         await persistSessionTranscriptTurn(fixtureScope, {
           messages: [
@@ -160,7 +167,7 @@ describe("SQLite transcript history cache", () => {
           touchSessionEntry: false,
         });
       } else {
-        await transaction;
+        transaction();
       }
       const page = read();
       expect(page.events.map(historyEventId)).toEqual(["root", "committed"]);
@@ -173,20 +180,23 @@ describe("SQLite transcript history cache", () => {
   it("does not retain a rolled-back reset in uncached history pages", async () => {
     await seedRoot();
     const initial = readHeadPage();
-    await expect(
-      withTranscriptWriteTransaction(fixtureScope, () => {
-        expect(
-          appendTranscriptEventSync(fixtureScope, {
-            type: "reset",
-            id: "pending-reset",
-            parentId: "root",
-            reason: "new",
-          }),
-        ).toMatchObject({ ok: true, value: true });
-        expect(readHeadPage().events.map(historyEventId)).toEqual(["pending-reset"]);
-        throw new Error("rollback reset");
-      }),
-    ).rejects.toThrow("rollback reset");
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        () => {
+          expect(
+            appendTranscriptEventSync(fixtureScope, {
+              type: "reset",
+              id: "pending-reset",
+              parentId: "root",
+              reason: "new",
+            }),
+          ).toMatchObject({ ok: true, value: true });
+          expect(readHeadPage().events.map(historyEventId)).toEqual(["pending-reset"]);
+          throw new Error("rollback reset");
+        },
+        { agentId: fixtureScope.agentId, env: fixtureScope.env },
+      ),
+    ).toThrow("rollback reset");
     await appendTranscriptMessage(
       fixtureScope,
       transcriptMessage("committed", "root", { role: "user", content: "committed" }),

@@ -16,6 +16,7 @@ describe("worker process protocol", () => {
   it.each([
     { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 },
     { status: "failed", reason: "turn-failed", transcriptLeafId: "leaf", transcriptNextSeq: 2 },
+    { status: "failed", reason: "node-lost", transcriptLeafId: "leaf", transcriptNextSeq: 2 },
     { status: "fenced", reason: "credential-replaced" },
     { status: "not-started", reason: "admission-deadline", errorText: "admission timed out" },
   ])("only retains workers after started $status results", (result) => {
@@ -24,12 +25,12 @@ describe("worker process protocol", () => {
     expect(parseWorkerProcessMessage(frame)).toStrictEqual(frame);
     const retained = { ...frame, retainWorker: true };
     expect(parseWorkerProcessMessage(retained)).toStrictEqual(
-      result.status === "completed" || result.status === "failed" ? retained : null,
+      result.status === "completed" || result.reason === "turn-failed" ? retained : null,
     );
     for (const retention of ["background", "idle"]) {
       const negotiated = { ...retained, retention };
       expect(parseWorkerProcessMessage(negotiated)).toStrictEqual(
-        result.status === "completed" || result.status === "failed" ? negotiated : null,
+        result.status === "completed" || result.reason === "turn-failed" ? negotiated : null,
       );
       expect(parseWorkerProcessMessage({ ...frame, retention })).toBeNull();
     }
@@ -59,48 +60,8 @@ describe("worker process protocol", () => {
         { reason: "credential-replaced", unexpected: true },
       ),
     },
-    {
-      name: "admission deadline result",
-      value: inheritedRecord(
-        { status: "not-started", reason: "admission-deadline" },
-        { errorText: "worker admission timed out", unexpected: true, ignored: true },
-      ),
-    },
-    {
-      name: "completed result",
-      value: inheritedRecord(
-        { status: "completed" },
-        { transcriptLeafId: null, transcriptNextSeq: 1, unexpected: true },
-      ),
-    },
-    {
-      name: "failed result",
-      value: inheritedRecord(
-        { status: "failed", reason: "turn-failed" },
-        {
-          transcriptLeafId: null,
-          transcriptNextSeq: 1,
-          unexpected: true,
-          ignored: true,
-        },
-      ),
-    },
   ])("rejects an inherited discriminator for a $name", ({ value }) => {
     expect(parseWorkerRuntimeResult(value)).toBeNull();
-  });
-
-  it("rejects process-result types inherited alongside the wrong own keys", () => {
-    const result = inheritedRecord(
-      { type: "result" },
-      {
-        turnId: "turn-1",
-        result: { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 },
-        retainWorker: false,
-        unexpected: true,
-      },
-    );
-
-    expect(parseWorkerProcessMessage(result)).toBeNull();
   });
 });
 

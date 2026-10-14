@@ -15,7 +15,7 @@ import {
 import { createModalDialogTestFixture, submitInputDialog } from "../test-helpers/modal-dialog.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 function drag(
   target: Element,
@@ -75,6 +75,10 @@ it("drags a nested conversation into the top level and keeps its history identit
   sidebar.connected = true;
   sidebar.activeRouteId = "chat";
   sidebar.sessionKey = parent.key;
+  sidebar.sidebarEntries = [];
+  sidebar.onUpdateSidebarEntries = (entries) => {
+    sidebar.sidebarEntries = entries;
+  };
   await sidebar.updateComplete;
   sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
   await waitForFast(() =>
@@ -82,6 +86,12 @@ it("drags a nested conversation into the top level and keeps its history identit
   );
   const row = sidebar.querySelector<HTMLElement>(".sidebar-recent-session--child")!;
   expect(row.getAttribute("draggable")).toBe("true");
+  const shortcutDrop = createDataTransferStub();
+  drag(row, "dragstart", shortcutDrop);
+  drag(sidebar.querySelector(".sidebar-rail__pins")!, "drop", shortcutDrop);
+  expect(child.sidebarRoot).toBeUndefined();
+  expect(sidebar.sidebarEntries).toEqual([]);
+  expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(0);
   const data = createDataTransferStub();
   drag(row, "dragstart", data);
   await sidebar.updateComplete;
@@ -102,6 +112,13 @@ it("drags a nested conversation into the top level and keeps its history identit
     parentSessionKey: parent.key,
     spawnedBy: parent.key,
   });
+  sidebar
+    .querySelector<HTMLButtonElement>(
+      '[data-session-key="agent:main:child"] [data-sidebar-session-pin]',
+    )!
+    .click();
+  await sidebar.updateComplete;
+  expect(sidebar.sidebarEntries).toEqual(["session:agent:main:child"]);
   expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
 });
 

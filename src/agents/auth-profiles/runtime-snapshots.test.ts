@@ -1,7 +1,11 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as authProfileClone from "./clone.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import {
   getPreparedRuntimeAuthMaterializations,
   recordRuntimeAuthMaterialization,
@@ -21,11 +25,15 @@ import {
   noteRuntimeAuthProfileStorePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
+  replaceOwnedRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { createSnapshotStore as createStore, testing } from "./runtime-snapshots.test-support.js";
+import { acquireAuthProfileReadDatabase } from "./sqlite-read-pool.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectOpenAICodexSnapshotCredential(
   store: AuthProfileStore | undefined,
@@ -44,6 +52,53 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
+  beforeEach(() => {
+    prepareSharedAuthStoreOwnershipForNative();
+  });
+
+  it("retires only the changed owner's reader until the runtime closes", () => {
+    const agentDir = tempDirs.make("auth-snapshot-readers-");
+    const databasePath = resolveAuthProfileDatabasePath(agentDir);
+    {
+      using database = openNodeSqliteDatabase(databasePath);
+      database.exec(
+        "CREATE TABLE reader_fixture (value TEXT); INSERT INTO reader_fixture VALUES ('available')",
+      );
+    }
+    setRuntimeAuthProfileStoreSnapshot(createStore("reader-owner"), agentDir);
+    const reader = acquireAuthProfileReadDatabase(databasePath);
+    expect(reader.status).toBe("readable");
+    if (reader.status !== "readable") {
+      throw new Error("Expected a pooled auth reader");
+    }
+    try {
+      const revision = getRuntimeAuthProfileStoreSnapshotRevision(agentDir);
+      setRuntimeAuthProfileStoreSnapshot(
+        { ...createStore("reader-owner"), usageStats: { "openai:default": { lastUsed: 2 } } },
+        agentDir,
+      );
+      expect(getRuntimeAuthProfileStoreSnapshotRevision(agentDir)).not.toBe(revision);
+      expect(reader.db.isOpen).toBe(true);
+      clearRuntimeAuthProfileStoreSnapshotCore(path.join(agentDir, "unrelated"));
+      expect(reader.db.isOpen).toBe(true);
+      expect(reader.db.prepare("SELECT value FROM reader_fixture").get()).toEqual({
+        value: "available",
+      });
+
+      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
+      expect(reader.db.isOpen).toBe(false);
+      const replacement = acquireAuthProfileReadDatabase(databasePath);
+      expect(replacement.status).toBe("readable");
+      if (replacement.status !== "readable") {
+        throw new Error("Expected the pooled auth reader to reopen");
+      }
+      clearRuntimeAuthProfileStoreSnapshots();
+      expect(replacement.db.isOpen).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
   it("marks default-owner materializations as inherited mutations", () => {
     const listener = vi.fn();
     const unregister = registerRuntimeAuthMaterializationMutationListener(listener);
@@ -176,6 +231,51 @@ describe("runtime auth profile snapshots", () => {
           missingRevision,
         );
         expect(listener).not.toHaveBeenCalled();
+      } finally {
+        unregister();
+        clearRuntimeAuthProfileStoreSnapshots();
+      }
+    },
+  );
+
+  it.each(["replace", "remove"] as const)(
+    "invalidates inherited runtimes after a shared-store %s publishes the complete roster",
+    (operation) => {
+      const sharedPath = "/tmp/openclaw-auth-publication/state/openclaw.sqlite";
+      const agentPath = "/tmp/openclaw-auth-publication/agents/other/agent/openclaw-agent.sqlite";
+      const entry = (databasePath: string, key: string) => ({
+        databasePath,
+        agentDir: path.dirname(databasePath),
+        owner: {
+          kind: "resolved" as const,
+          sharedDatabasePath: sharedPath,
+          location: "state-db" as const,
+        },
+        store: { version: 1, profiles: { "acme:primary": createApiKeyCredential("acme", key) } },
+      });
+      const shared = entry(sharedPath, "shared-not-real");
+      const local = entry(agentPath, "local-not-real");
+      replaceOwnedRuntimeAuthProfileStoreSnapshots([shared, local]);
+      const nextLocal = entry(agentPath, "replacement-local-not-real");
+      const nextShared =
+        operation === "replace" ? entry(sharedPath, "replacement-shared-not-real") : undefined;
+      const listener = vi.fn(() => {
+        expect(getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(agentPath)?.store).toEqual(
+          nextLocal.store,
+        );
+        expect(getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(sharedPath)?.store).toEqual(
+          nextShared?.store,
+        );
+      });
+      const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+      try {
+        replaceOwnedRuntimeAuthProfileStoreSnapshots(
+          nextShared ? [nextShared, nextLocal] : [nextLocal],
+        );
+        expect(listener).toHaveBeenCalledExactlyOnceWith({
+          affectsInheritedStores: true,
+          profileSetChanged: operation === "remove",
+        });
       } finally {
         unregister();
         clearRuntimeAuthProfileStoreSnapshots();

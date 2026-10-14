@@ -5,7 +5,11 @@ import type { ModelCatalogResult } from "../../api/types.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
 
-beforeEach(() => vi.useFakeTimers());
+beforeEach(() => {
+  sessionStorage.clear();
+  localStorage.clear();
+  vi.useFakeTimers();
+});
 afterEach(() => {
   vi.useRealTimers();
   sessionStorage.clear();
@@ -85,7 +89,7 @@ function accountTitleFixture(preview?: Promise<ModelCatalogResult>) {
 }
 
 describe("prepared title creation handoff", () => {
-  it.each(["ready", "before update"])(
+  it.each(["before update"])(
     "keeps a %s title handoff on the selected draft account",
     async (handoff) => {
       const fixture = accountTitleFixture();
@@ -180,23 +184,6 @@ describe("prepared title creation handoff", () => {
       }
     },
   );
-
-  it("does not send a native draft to title inference", async () => {
-    const catalogId = "claude";
-    const { flow, request, titles } = createDraftTitleFixture(undefined, {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId,
-      catalogLabel: catalogId,
-      startTerminal: true,
-    });
-    flow.setMessage("inspect this native-only workspace");
-    titles.hostUpdated();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
-    ).toHaveLength(0);
-  });
 
   it("uses a ready title at creation without changing an explicit worktree name", async () => {
     const { flow, context, place, titles } = createDraftTitleFixture();

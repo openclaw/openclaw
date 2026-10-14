@@ -3,6 +3,7 @@ import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -77,8 +78,6 @@ export async function configureMockSubagentRegistryPersistence(methods: {
   const worker = await import("../state/openclaw-state-worker-store.js");
   const { rowToSubagentRunRecord } =
     await import("./subagents/registry/subagent-registry.store.codec.js");
-  const { subagentRunRowVersion } =
-    await import("./subagents/registry/subagent-registry.store.row.js");
   const original = worker.runOpenClawStateWorkerOperation;
   const spy = vi
     .spyOn(worker, "runOpenClawStateWorkerOperation")
@@ -123,10 +122,6 @@ export async function configureMockSubagentRegistryPersistence(methods: {
               options?.assertCurrent?.();
               return {
                 writeId: write.writeId,
-                versions: new Map([
-                  ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
-                  ...write.deleteRunIds.map((id) => [id, null] as const),
-                ]),
                 notices: [],
               };
             },
@@ -210,6 +205,8 @@ export function createSubagentRunParams(
 ): RegisterSubagentRunParams {
   return {
     childSessionKey: "agent:main:subagent:child",
+    childAgentId: parseAgentSessionKey(overrides.childSessionKey)?.agentId ?? "main",
+    sessionEntry: { sessionId: "sess-child" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: overrides.runId,
@@ -347,15 +344,6 @@ export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSuba
     params: SubagentRunParamsOverrides,
   ): ReturnType<SubagentRegistryModule["registerSubagentRun"]>;
 };
-
-export function createSubagentRegistryHarness(
-  registry: SubagentRegistryModule,
-): SubagentRegistryHarness {
-  return {
-    ...registry,
-    registerSubagentRun: (params) => registry.registerSubagentRun(createSubagentRunParams(params)),
-  };
-}
 
 export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
   const now = Date.now();

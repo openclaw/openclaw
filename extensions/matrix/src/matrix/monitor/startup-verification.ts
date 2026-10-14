@@ -48,7 +48,7 @@ function normalizeCooldownHours(value: number | undefined): number {
 }
 
 function createStartupVerificationStore(params: { env?: NodeJS.ProcessEnv; stateDir?: string }) {
-  return getMatrixRuntime().state.openKeyedStore<MatrixStartupVerificationState>({
+  return getMatrixRuntime().state.openKeyedStoreV2<MatrixStartupVerificationState>({
     namespace: STARTUP_VERIFICATION_NAMESPACE,
     maxEntries: STARTUP_VERIFICATION_MAX_ENTRIES,
     env: resolveMatrixSqliteStateEnv(params),

@@ -3,9 +3,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import {
+  findStartupMaintenanceRequiredError,
+  StartupMaintenanceRequiredError,
+} from "../infra/startup-maintenance-required.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { isStateDatabaseReadAdmissionInvalidatedError as retainedReadAdmissionInvalidated } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -13,6 +15,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as worker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   captureConfigHealthStateStore,
@@ -31,7 +34,7 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-it("preserves typed maintenance errors for a reloaded caller after broker reuse", async () => {
+it("preserves typed maintenance errors after broker reuse", async () => {
   const warm = createHealthDeps();
   patchConfigHealthEntryToStore(warm, "/warm.json", { lastObservedSuspiciousSignature: "warm" });
   {
@@ -39,12 +42,6 @@ it("preserves typed maintenance errors for a reloaded caller after broker reuse"
     expect(await first.read()).not.toBeNull();
   }
   await closeOpenClawStateDatabaseAsync();
-  vi.resetModules();
-  const [health, errors, worker] = await Promise.all([
-    import("./io.health-state.js"),
-    import("../infra/startup-maintenance-required.js"),
-    import("../state/openclaw-state-worker-store.js"),
-  ]);
   const deps = createHealthDeps();
   makeNewerSchema(deps);
   let incoming: unknown;
@@ -62,7 +59,7 @@ it("preserves typed maintenance errors for a reloaded caller after broker reuse"
     }),
   );
   try {
-    using store = health.captureConfigHealthStateStore(deps, "/config.json");
+    using store = captureConfigHealthStateStore(deps, "/config.json");
     const previous = await readCurrent(store);
     let failure: unknown;
     try {
@@ -70,8 +67,9 @@ it("preserves typed maintenance errors for a reloaded caller after broker reuse"
     } catch (error) {
       failure = error;
     }
-    expect(incoming).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
-    expect(errors.findStartupMaintenanceRequiredError(failure)).toMatchObject({
+    expect(incoming).toBeInstanceOf(StartupMaintenanceRequiredError);
+    expect(failure).toBe(incoming);
+    expect(findStartupMaintenanceRequiredError(failure)).toMatchObject({
       kind: "newer-schema",
     });
     expect(deps.logger.warn).not.toHaveBeenCalled();
@@ -161,19 +159,9 @@ describe("config health-state warnings", () => {
       using retained = captureConfigHealthStateStore(deps, configPath);
       expect(await retained.read()).not.toBeNull();
     }
-    vi.resetModules();
-    const [freshConfig, freshHealth, freshLifecycle, freshReadHelpers] = await Promise.all([
-      import("./io.js"),
-      import("./io.health-state.js"),
-      import("../state/openclaw-state-db-async-lifecycle.js"),
-      import("./io.read-helpers.js"),
-    ]);
-    expect(freshLifecycle.isStateDatabaseReadAdmissionInvalidatedError).not.toBe(
-      retainedReadAdmissionInvalidated,
-    );
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const normalized = freshReadHelpers.normalizeConfigIoDeps(options);
+    const normalized = normalizeConfigIoDeps(options);
     const realStat = normalized.fs.promises.stat.bind(normalized.fs.promises);
     const stat = vi.spyOn(normalized.fs.promises, "stat").mockImplementation(async (...args) => {
       if (path.resolve(String(args[0])) === configPath) {
@@ -182,15 +170,13 @@ describe("config health-state warnings", () => {
       }
       return realStat(...args);
     });
-    const pending = freshConfig
-      .createConfigIO({ ...options, fs: normalized.fs })
-      .readConfigFileSnapshot();
+    const pending = createConfigIO({ ...options, fs: normalized.fs }).readConfigFileSnapshot();
     try {
       await entered.promise;
       await closeOpenClawStateDatabaseAsync();
       release.resolve();
       expect((await pending).valid).toBe(true);
-      expect(freshHealth.readConfigHealthStateFromStore(deps)).toEqual(seeded);
+      expect(readConfigHealthStateFromStore(deps)).toEqual(seeded);
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);

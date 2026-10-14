@@ -4,6 +4,7 @@ export {
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
   attachInternalToolResultAcknowledgement,
+  attachInternalToolResultContentSource,
   attachInternalToolResultProvenance,
   copyInternalToolExecutionPreparer,
   copyInternalToolResultState,

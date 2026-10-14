@@ -23,9 +23,11 @@ describe("system prompt messaging routing", () => {
       );
       expect(prompt).toContain("normal tool permissions and approvals still apply");
       expect(prompt).toContain(
-        "user explicitly requests only a reaction to the current source message: use `message(action=react, final=true)`",
+        "or a final reaction to the current source message: `message(action=react, final=true)`",
       );
       expect(prompt).not.toContain("Provider messaging: never exec/curl");
+      expect(prompt).not.toContain("NO_REPLY");
+      expect(prompt).not.toContain("user explicitly requests only a reaction");
     },
   );
 });

@@ -429,7 +429,14 @@ export const ChatStatusEventSchema = closedObject({
     closedObject({
       attempt: Type.Integer({ minimum: 1, maximum: 10 }),
       maxAttempts: Type.Integer({ minimum: 1, maximum: 10 }),
-      reason: Type.Literal("rate_limit"),
+      reason: Type.Union([
+        Type.Literal("rate_limit"),
+        Type.Literal("overloaded"),
+        Type.Literal("server_error"),
+        Type.Literal("timeout"),
+        Type.Literal("output_limit"),
+      ]),
+      retryAt: Type.Optional(Type.Number({ minimum: 0 })),
     }),
   ),
 });

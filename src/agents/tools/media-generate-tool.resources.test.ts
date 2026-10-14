@@ -28,6 +28,7 @@ import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
+import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import {
   imageGenerationTaskLifecycle,
@@ -313,6 +314,79 @@ describe.each(["image", "music", "video"] as const)(
       music: musicGenerationTaskLifecycle,
       video: videoGenerationTaskLifecycle,
     }[kind];
+    it("waits for the captured workspace before reading a generation reference", async () => {
+      const fixture = createNativeFixture(kind, true);
+      const waiting = createDeferredCore();
+      const ready = createDeferredCore();
+      try {
+        await fixture.withEnvironment(async () => {
+          useNoBundledPlugins();
+          const first = await acquirePluginRegistryForInspection({ config: fixture.config });
+          const prepared = await prepareSnapshot(fixture, first.registry);
+          const sessionKey = "agent:main:discord:direct:synthetic-media";
+          const referencePath = path.join(fixture.dir, "pending-reference.png");
+          const createTask = vi.spyOn(lifecycle, "createTaskRun").mockResolvedValue({
+            taskId: "workspace-reference-task",
+            detach: true,
+            runId: "workspace-reference-run",
+            requesterSessionKey: sessionKey,
+            taskLabel: "Synthetic workspace reference",
+          });
+          const schedule = vi.fn();
+          const readReference = vi.spyOn(webMedia, "loadWebMedia");
+          const tool = await runWithAgentWorkspaceReadiness(
+            {
+              sessionKey,
+              waitUntilReady: () => {
+                waiting.resolve();
+                return ready.promise;
+              },
+              assertCurrent: () => {},
+            },
+            async () =>
+              createTool({
+                config: fixture.config,
+                agentDir: prepared.snapshot.agentDir,
+                workspaceDir: fixture.dir,
+                preparedModelRuntime: prepared.snapshot,
+                agentSessionKey: sessionKey,
+                scheduleBackgroundWork: schedule,
+              }),
+          );
+          const outcome = tool!.execute("workspace-reference", {
+            prompt: "Use the synthetic workspace reference",
+            image: referencePath,
+          });
+          try {
+            await Promise.race([
+              waiting.promise,
+              outcome.then(() => {
+                throw new Error("Media preflight finished before workspace readiness");
+              }),
+            ]);
+            expect(readReference).not.toHaveBeenCalled();
+            expect(createTask).not.toHaveBeenCalled();
+            const inline = await tool!.execute("inline-reference", {
+              prompt: "Use an inline reference while the workspace is pending",
+              image: `data:image/png;base64,${png.toString("base64")}`,
+            });
+            expect(inline.details).toMatchObject({ status: "started" });
+            fs.writeFileSync(referencePath, png);
+            ready.resolve();
+            expect((await outcome).details).toMatchObject({ status: "started" });
+            expect(readReference).toHaveBeenCalledOnce();
+            expect(schedule).toHaveBeenCalledTimes(2);
+          } finally {
+            ready.resolve();
+            await outcome.catch(() => {});
+            await first.release();
+            await prepared.release();
+          }
+        });
+      } finally {
+        fixture.cleanup();
+      }
+    });
     it.each(["request lookup", "duplicate lookup", "reference loading"] as const)(
       "refuses preflight work when the prepared owner releases during %s",
       async (pause) => {

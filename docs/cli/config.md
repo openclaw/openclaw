@@ -9,6 +9,11 @@ sidebarTitle: "Config"
 
 Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
+`config set`, `config patch`, and `config unset` require the local Gateway to be
+stopped. These commands hold exclusive state ownership while publishing the file
+and its database metadata. Stop the Gateway through its service owner, wait for
+it to exit, then rerun the command.
+
 <Note>
 When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
 </Note>
@@ -97,9 +102,13 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
 ```
 
+For missing containers, dotted numeric segments use the config schema to distinguish
+arrays from maps. Use `[0]` for an explicit array index or `["0"]` for a numeric map
+key. All writes validate the resulting config before saving.
+
 Prefer `agents.entries.<id>` paths for agent edits. The legacy `agents.list[0]`
 syntax and whole-list inputs still work with `set`, `patch`, and `unset`; writes
-persist the canonical keyed roster. Indexed edits use the current roster order.
+persist the current keyed roster. Indexed edits use the current roster order.
 Within a batch, a submitted list keeps its order across subsequent keyed edits,
 including when agent IDs are numeric strings. Existing roster-deletion and
 `$include` ownership protections still apply.
@@ -610,6 +619,9 @@ describes expected application; it is not a receipt from a running Gateway.
 See [Config hot reload](/gateway/configuration/hot-reload).
 
 Successful `config set` or `config unset` operations that produce no effective config diff print `No change` and leave the JSON5 file byte-for-byte untouched. A `config unset` target that is absent from the authored config exits with status 1 and also leaves the file untouched. Setting an absent key to a value equal to its runtime default is still an authored change and persists the explicit value.
+
+Model references are normalized before a mutation is saved. Core agent model references do not require plugin discovery; provider catalog model IDs reuse compatible prepared plugin metadata or load their manifest normalization policies on demand.
+Unrelated edits leave provider catalogs unchanged. Catalog writes and changes to plugin discovery or activation policy normalize provider model IDs before saving.
 
 ## Write safety
 

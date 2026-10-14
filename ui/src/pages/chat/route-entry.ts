@@ -1,8 +1,7 @@
-import "./chat-page.ts";
 import "../../styles/chat/composer-progress.css";
 import "../../styles/chat/composer-queue.css";
 import "../../styles/chat/composer-status.css";
-import { renderChatRoute, sessionRenderOwnerKey } from "./route-view.ts";
+import { renderChatRoute, sessionRenderOwnerKey } from "./route-view.tsx";
 
 export const header = true;
 // ChatPage's bounded inner cache owns per-session teardown. Routes share the

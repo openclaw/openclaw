@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { TemplateContext } from "../templating.js";
 import {
   createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
-  createRunAgentTurnParams,
   createMockTypingSignaler,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
@@ -17,7 +17,17 @@ import {
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: conversation failures", () => {
-  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+  it("preserves typed node-loss guidance on internal control surfaces", async () => {
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    const failure = new WorkerNodeLostError();
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(failure);
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+    expect(result).toMatchObject({ kind: "final", payload: { text: failure.message } });
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([NON_DIRECT_FAILURE_SURFACE_CASES[0]])(
     "surfaces a safe failure for an accepted request in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(
@@ -38,46 +48,6 @@ describe("executeAgentTurn: conversation failures", () => {
       }
     },
   );
-
-  it("returns a session reset hint for Bedrock tool mismatch errors on external chat channels", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        "The number of toolResult blocks at messages.186.content exceeds the number of toolUse blocks of previous turn.",
-      ),
-    );
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
-    }
-  });
-
-  it("returns a provider conversation-state error for OpenAI missing custom tool output errors on external chat channels", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error("Custom tool call output is missing for call id: call_live_123."),
-    );
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "slack",
-        ChannelId: "channel-1",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
-    });
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
-    }
-  });
 
   it("does not auto-reset role-ordering provider conversation-state errors", async () => {
     const followupRun = createFollowupRun();

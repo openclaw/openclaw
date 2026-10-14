@@ -176,7 +176,7 @@ describe("embedded Tool Search prompt parity", () => {
         }
         expect(submittedPrompt.includes("fixture_allowed")).toBe(toolsAllow?.length !== 0);
         if (toolsAllow?.length === 0) {
-          expect(submittedPrompt).not.toContain("Call tool_call");
+          expect(submittedPrompt).not.toContain("Call dispatch_action");
           expect(submittedPrompt).not.toContain("openclaw.tools.call");
           expect(submittedPrompt).not.toContain("Call a unique deferred tool name directly");
         }

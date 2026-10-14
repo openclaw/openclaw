@@ -345,8 +345,8 @@ preamble headlines remain enabled:
 }
 ```
 
-Narration input is bounded and redacted: the utility model receives the
-inbound request text plus the same compact, redacted tool summaries the draft
+Narration input is bounded: the utility model receives the
+inbound request text plus the same compact tool summaries the draft
 would render — never raw command output or tool results. With
 `commandText: "status"`, narration input also omits exec/bash command text,
 matching what the draft shows.
@@ -391,6 +391,8 @@ characters; prose cuts at a word boundary, while long details such as paths or
 raw commands are shortened with a middle ellipsis so the suffix stays visible.
 The same budget applies to prepared tool titles, including paths embedded in a
 Read title, rather than only to separate tool details.
+On Telegram, the budget includes the tool icon, label, and status as well as the
+command or detail text.
 
 Tune the per-line budget:
 

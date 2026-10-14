@@ -72,7 +72,7 @@ export function cleanDeferredFinalText(text: string | undefined): string {
     return "";
   }
   const cleaner = createTtsDirectiveTextStreamCleaner();
-  return `${cleaner.push(text)}${cleaner.flush()}`.replace(/[ \t]+\n/gu, "\n");
+  return `${cleaner.push(text)}${cleaner.flush()}`;
 }
 
 export function buildCaptionedFinalTextFallback(payload: ReplyPayload): ReplyPayload {

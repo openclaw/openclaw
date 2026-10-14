@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  assertOwnedTranscriptWriteCommit,
+  runWithOwnedSessionTranscriptWrite,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
+import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
   seedActivePlacement,
   SESSION_ID,
   SESSION_KEY,
+  sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
@@ -13,6 +19,7 @@ import {
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
@@ -65,27 +72,41 @@ async function fromParent(
   const admittedRunContext = await admission.admit("embedded");
   const handle = createEmbeddedRunHandle({ runId: parent.runId });
   try {
-    await withPreparedEmbeddedRunToolAuthority(
-      { admittedRunContext },
-      parent,
-      undefined,
-      async (prepared) => {
-        const caller = getGatewayToolCallerIdentity()!;
-        handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
-        await run({
-          admittedRunContext,
-          preparedRunAdmission: admission,
-          register: () =>
-            setActiveEmbeddedRun(
-              parent.sessionId,
-              handle,
-              parent.sessionKey,
-              parent.sessionFile,
-              parent.agentId,
-            ),
-        });
-        expect(getGatewayToolCallerIdentity()).toBe(caller);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          agentId: parent.agentId,
+          sessionId: parent.sessionId,
+          sessionKey: parent.sessionKey,
+          storePath: sessionTarget.storePath,
+          expectedWriterRunId: parent.runId,
+        },
+        assertCommitAllowed: resolveAdmittedRunActiveAssertion(admittedRunContext),
+        withTranscriptWrite: async (write) => await write(),
       },
+      () =>
+        withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext },
+          parent,
+          undefined,
+          async (prepared) => {
+            const caller = getGatewayToolCallerIdentity()!;
+            handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+            await run({
+              admittedRunContext,
+              preparedRunAdmission: admission,
+              register: () =>
+                setActiveEmbeddedRun(
+                  parent.sessionId,
+                  handle,
+                  parent.sessionKey,
+                  parent.sessionFile,
+                  parent.agentId,
+                ),
+            });
+            expect(getGatewayToolCallerIdentity()).toBe(caller);
+          },
+        ),
     );
   } finally {
     clearActiveEmbeddedRun(parent.sessionId, handle, parent.sessionKey, parent.sessionFile);
@@ -212,11 +233,22 @@ describe("independent placement caller scope", () => {
           runId: "parent-run",
         };
         const execute = async () => {
+          const target = { ...claim, storePath: sessionTarget.storePath };
+          const commit = vi.fn();
+          const write = () =>
+            runWithOwnedSessionTranscriptWrite({ sessionTarget: target }, () => {
+              assertOwnedTranscriptWriteCommit(target);
+              commit();
+            });
+          await write();
+          expect(commit).toHaveBeenCalledOnce();
           owner.register();
           expect(resolveActiveEmbeddedRunOwner(claim.sessionId)?.runId).toBe(claim.runId);
           await Promise.resolve();
           owner.preparedRunAdmission.close();
           expect(owner.register).toThrow(/no longer active/);
+          await expect(write()).rejects.toThrow(/no longer active/);
+          expect(commit).toHaveBeenCalledOnce();
           return { meta: { durationMs: 0 } };
         };
         const input = {

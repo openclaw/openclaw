@@ -1,8 +1,8 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -17,11 +17,11 @@ import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-
 import {
   isPreparedSessionSharingChange,
   projectSessionSharingEntry,
-  readCommittedSessionEntryCache,
   readSessionEntryCache,
   retainPreparedSessionGenerationFacts,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -33,9 +33,9 @@ import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 
 const failures = vi.hoisted(() => ({
@@ -84,7 +84,7 @@ afterEach(async () => {
   resetConfigRuntimeState();
 });
 
-it("publishes history changes only after deletion while fresh reads observe foreign protection", async () => {
+it("publishes history changes only after deletion while fresh reads observe sibling protection", async () => {
   const stateDir = tempDirs.make("session-history-publication-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -129,7 +129,6 @@ it("publishes history changes only after deletion while fresh reads observe fore
   const completed: boolean[] = [];
   const reclaim = () =>
     runSqliteSessionReclamation({
-      forceInProcess: false,
       plan,
       onWorkerResult(result) {
         if (result.kind === "history-eviction") {
@@ -143,7 +142,7 @@ it("publishes history changes only after deletion while fresh reads observe fore
       changes.push(change);
     }
   });
-  const peer = new DatabaseSync(database.path);
+  const peer = openNodeSqliteDatabase(database.path);
   const writeProtection = (updatedAt: number) => {
     peer.exec("BEGIN IMMEDIATE");
     try {
@@ -151,7 +150,7 @@ it("publishes history changes only after deletion while fresh reads observe fore
         .prepare("UPDATE session_nodes SET updated_at = ?, entry_json = ? WHERE session_key = ?")
         .run(
           updatedAt,
-          JSON.stringify({ ...successor, updatedAt, label: "foreign protection" }),
+          JSON.stringify({ ...successor, updatedAt, label: "sibling protection" }),
           sessionKey,
         );
       peer
@@ -175,7 +174,7 @@ it("publishes history changes only after deletion while fresh reads observe fore
     expect(loadSessionEntryReadOnly(scope)).toMatchObject({
       ...successor,
       updatedAt,
-      label: "foreign protection",
+      label: "sibling protection",
     });
     await expect(loadTranscriptEvents(scope)).resolves.toEqual(events);
 
@@ -190,7 +189,7 @@ it("publishes history changes only after deletion while fresh reads observe fore
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
     expect(loadSessionEntryReadOnly(scope)).toMatchObject({
       ...successor,
-      label: "foreign protection",
+      label: "sibling protection",
     });
   } finally {
     stop();
@@ -210,6 +209,14 @@ it.each(["publication", "writer return", "rollback"] as const)(
       sessionKey: "agent:main:lifecycle-publication",
     };
     const entry = { sessionId: "committed-session", updatedAt: 1, label: "Committed row" };
+    const owner = { actor: { type: "human" as const, id: "lifecycle-creator" }, assignedAt: 1 };
+    const transcript = [
+      {
+        id: "created-event",
+        type: "message",
+        message: { role: "user", content: "Created with its lifecycle entry" },
+      },
+    ];
     const failure = new Error(`synthetic ${outcome} failure`);
     failures.publication = outcome === "publication" ? failure : undefined;
     const events: string[] = [];
@@ -228,6 +235,14 @@ it.each(["publication", "writer return", "rollback"] as const)(
         agentId: scope.agentId,
         storePath: scope.storePath,
         upserts: [{ sessionKey: scope.sessionKey, entry }],
+        creation: {
+          preparedTranscript: {
+            sessionKey: scope.sessionKey,
+            sessionId: entry.sessionId,
+            events: transcript,
+          },
+          ownerAssignment: { sessionKey: scope.sessionKey, owner },
+        },
         skipMaintenance: true,
         onLifecycleCommitted: committed,
         withCommit:
@@ -240,7 +255,7 @@ it.each(["publication", "writer return", "rollback"] as const)(
             : undefined,
         ...(outcome === "rollback"
           ? {
-              afterUpsertsInTransaction: () => {
+              beforeCommitInTransaction: () => {
                 throw failure;
               },
             }
@@ -258,15 +273,18 @@ it.each(["publication", "writer return", "rollback"] as const)(
       if (outcome === "rollback") {
         expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
       } else {
-        expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
+        expect(loadSessionEntryReadOnly(scope)).toMatchObject({ ...entry, owner });
       }
+      await expect(loadTranscriptEvents({ ...scope, sessionId: entry.sessionId })).resolves.toEqual(
+        outcome === "rollback" ? [] : transcript,
+      );
     } finally {
       unsubscribe();
     }
   },
 );
 
-it("publishes removal invalidations before identity and row observers without archive intent", async () => {
+it("publishes confirmed removals before identity and row observers without archive intent", async () => {
   const stateDir = tempDirs.make("session-lifecycle-removal-publication-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const storePath = path.join(stateDir, "sessions.json");
@@ -336,7 +354,7 @@ it("publishes removal invalidations before identity and row observers without ar
     readOnlyCache: readCommittedSessionEntryCache(reader.database.db),
   });
   const observedFacts: Array<
-    ReturnType<typeof readFacts> & { invalidated: boolean; ownerTagged: boolean }
+    ReturnType<typeof readFacts> & { invalidated: boolean; removed: boolean; ownerTagged: boolean }
   > = [];
   const stopFacts = sessionChanges.subscribeFacts((change) => {
     if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
@@ -345,6 +363,7 @@ it("publishes removal invalidations before identity and row observers without ar
     order.push("facts");
     observedFacts.push({
       invalidated: change.factsInvalidated === true,
+      removed: change.facts?.kind === "removed",
       ownerTagged: isPreparedSessionSharingChange(change),
       ...readFacts(),
     });
@@ -395,7 +414,9 @@ it("publishes removal invalidations before identity and row observers without ar
       readOnlyCache: undefined,
     };
     expect(lifecycleFacts).toEqual([retiredFacts]);
-    expect(observedFacts).toEqual([{ invalidated: true, ownerTagged: true, ...retiredFacts }]);
+    expect(observedFacts).toEqual([
+      { invalidated: false, removed: true, ownerTagged: true, ...retiredFacts },
+    ]);
     expect(() =>
       acquiring.initialize({ entry: sharingEntry, membership: new Set(["member"]) }),
     ).toThrow("Session sharing acquisition is no longer current");

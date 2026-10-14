@@ -24,6 +24,7 @@ export type UsageSessionSummaryTarget = {
 };
 
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
+const USAGE_REPORT_PUBLICATION_WAIT_MS = 100;
 
 export async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
   const result = await runTasksWithConcurrency({
@@ -60,9 +61,7 @@ export async function discoverAllSessionsForUsage(params: {
       return sessions.map((session) => Object.assign({}, session, { agentId }));
     }),
   );
-  const allSessions = discovered.flat();
-  allSessions.sort((a, b) => b.mtime - a.mtime);
-  return allSessions;
+  return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
 }
 
 export function mergeUsageCacheStatus(
@@ -88,7 +87,12 @@ export function mergeUsageCacheStatus(
 }
 
 export async function loadUsageSessionSummaries(params: {
-  entries: UsageSessionSummaryTarget[];
+  entries: Array<{
+    agentId: string;
+    sessionId?: string;
+    sessionFile?: string;
+    instances: Array<{ sessionId?: string; sessionFile: string }>;
+  }>;
   config: OpenClawConfig;
   startMs: number;
   endMs: number;
@@ -109,10 +113,12 @@ export async function loadUsageSessionSummaries(params: {
     () => null,
   );
 
+  const computing = Array<boolean>(mergedEntries.length).fill(false);
+
   // Batch all included instances by agent so cache reads do not scale with the row limit.
   const sessionsByAgent = new Map<
     string,
-    Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
+    Array<{ entryIndex: number; sessionId?: string; sessionFile: string }>
   >();
   for (const [entryIndex, merged] of mergedEntries.entries()) {
     for (const { sessionId, sessionFile } of merged.instances) {
@@ -137,6 +143,7 @@ export async function loadUsageSessionSummaries(params: {
         endMs,
         includeUntimestamped,
         dayBucket,
+        maxPublicationWaitMs: USAGE_REPORT_PUBLICATION_WAIT_MS,
       }),
     })),
   );
@@ -145,15 +152,23 @@ export async function loadUsageSessionSummaries(params: {
     let usage: ReturnType<typeof createSessionCostSummaryAccumulator> | undefined;
     for (const [index, summary] of loaded.summaries.entries()) {
       const session = expectDefined(agentSessions[index], "agent sessions entry at index");
+      if (!summary) {
+        computing[session.entryIndex] = true;
+      }
       if (summary) {
         const merged = expectDefined(
           mergedEntries[session.entryIndex],
           "merged entries entry at session.entry index",
         );
-        usage ??= createSessionCostSummaryAccumulator({
-          sessionId: merged.sessionId,
-          sessionFile: merged.sessionFile,
-        });
+        const identity = {
+          sessionId: merged.sessionId ?? merged.instances[0]?.sessionId,
+          sessionFile: merged.sessionFile ?? merged.instances[0]?.sessionFile,
+        };
+        if (merged.instances.length === 1) {
+          usageByEntryIndex[session.entryIndex] = { ...summary, ...identity };
+          continue;
+        }
+        usage ??= createSessionCostSummaryAccumulator(identity);
         usage.add(summary);
       }
       // Construction above keeps each family's instances contiguous within its agent batch.
@@ -164,5 +179,5 @@ export async function loadUsageSessionSummaries(params: {
     }
   }
 
-  return { summaries: usageByEntryIndex, cacheStatus };
+  return { summaries: usageByEntryIndex, computing, cacheStatus };
 }

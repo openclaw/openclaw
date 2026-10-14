@@ -38,10 +38,10 @@ describe("trajectory tool definition preparation", () => {
     expect(digest).toHaveBeenCalledTimes(2);
     registerSecretValueForRedaction("synthetic-new-registration");
     expect(project()[0]?.parameters).toMatchObject({ nested: { ordinary: "changed" } });
-    expect(digest).toHaveBeenCalledTimes(3);
+    expect(digest).toHaveBeenCalledTimes(2);
   });
 
-  it("rechecks changed schemas and current secret registrations after repeated projections", async () => {
+  it("keeps schema text unchanged across secret registrations and log policy changes", async () => {
     const writes: string[] = [];
     const description = "trajectory-fixture-value";
     vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockResolvedValueOnce({
@@ -70,11 +70,13 @@ describe("trajectory tool definition preparation", () => {
     expect(writes).toHaveLength(7);
     expect(writes[0]).toContain(description);
     expect(writes[1]).toContain(description);
-    expect(writes[2]).not.toContain(description);
-    expect(writes[3]).not.toContain("synthetic-changed-value");
-    expect(JSON.parse(writes[3]!).data.tools[0].parameters.description).toContain("redacted");
+    expect(writes[2]).toContain(description);
+    expect(writes[3]).toContain("synthetic-changed-value");
+    expect(JSON.parse(writes[3]!).data.tools[0].parameters.description).toBe(
+      "Authorization: Bearer synthetic-changed-value",
+    );
     expect(writes[4]).toContain("policy-fixture-value");
-    expect(writes[5]).not.toContain("policy-fixture-value");
+    expect(writes[5]).toContain("policy-fixture-value");
     expect(writes[6]).toContain("policy-fixture-value");
   });
 
@@ -134,7 +136,9 @@ describe("trajectory tool definition preparation", () => {
       get: readNested,
     });
 
-    expect(projectParameters(parameters)).toEqual({ nested: { ordinary: "kept", toJSON } });
+    expect(projectParameters(parameters)).toEqual({
+      nested: { ordinary: "kept", password: "synthetic-secret", toJSON },
+    });
     expect(readNested).toHaveBeenCalledOnce();
     expect(toJSON).not.toHaveBeenCalled();
   });

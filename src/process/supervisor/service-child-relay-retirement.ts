@@ -1,7 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { toErrorObject } from "../../infra/errors.js";
-import type { ServiceChildRelayRetirement } from "./service-child-protocol.js";
 import type { ProcessCleanupResult } from "./types.js";
 
 /** Transport loss asks a native owner to drain; killing it would abandon descendant custody. */
@@ -28,7 +27,6 @@ export function createServiceChildRelayRetirement(params: {
   let sequence: number | undefined;
   let signaledAt: number | undefined;
   let signalError: Error | undefined;
-  let anchorExited = false;
   let relaySignaled = false;
   let exit: { code: number | null; signal: NodeJS.Signals | null; at: number } | undefined;
   const recordError = (error: unknown) => {
@@ -41,9 +39,8 @@ export function createServiceChildRelayRetirement(params: {
     if (!requested || exit || !params.canRetire()) {
       return;
     }
-    anchorExited ||= params.anchorGone();
     signaledAt ??= performance.now();
-    if (anchorExited) {
+    if (params.anchorGone()) {
       if (relaySignaled) {
         return;
       }
@@ -82,19 +79,12 @@ export function createServiceChildRelayRetirement(params: {
       reconcile();
     },
     reconcile,
-    receive: (message: ServiceChildRelayRetirement) => {
-      if (
-        sequence === undefined ||
-        message.generation !== params.generation ||
-        message.sequence !== sequence
-      ) {
-        return;
+    recordSignalError(error: Error): boolean {
+      if (signaledAt === undefined) {
+        return false;
       }
-      if (message.signalError) {
-        recordError(new Error(message.signalError));
-      }
-      anchorExited ||= message.anchorExited;
-      reconcile();
+      recordError(error);
+      return true;
     },
     observeExit: (code: number | null, signal: NodeJS.Signals | null) => {
       exit = { code, signal, at: performance.now() };

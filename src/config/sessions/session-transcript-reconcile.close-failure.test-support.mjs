@@ -1,4 +1,3 @@
-import { appendFileSync } from "node:fs";
 import { workerData } from "node:worker_threads";
 const { register } = await import(workerData.sourceLoaderUrl);
 register();
@@ -15,27 +14,4 @@ sqlite.DatabaseSync.prototype.close = function () {
   }
   return close.call(this);
 };
-if (workerData.schemaTrace) {
-  const paths = new Set(workerData.schemaTrace.databasePaths.map(resolveNodeSqliteLocation));
-  const statements = new WeakMap();
-  // oxlint-disable-next-line typescript/unbound-method -- The trace wrapper supplies the intercepted database receiver.
-  const prepare = sqlite.DatabaseSync.prototype.prepare;
-  sqlite.DatabaseSync.prototype.prepare = function (sql) {
-    const statement = prepare.call(this, sql);
-    if (paths.has(this.location())) {
-      statements.set(statement, sql);
-    }
-    return statement;
-  };
-  for (const method of ["get", "all", "iterate"]) {
-    const execute = sqlite.StatementSync.prototype[method];
-    sqlite.StatementSync.prototype[method] = function (...args) {
-      const sql = statements.get(this);
-      if (sql && /PRAGMA\s+(?:schema_version|user_version)\b/i.test(sql)) {
-        appendFileSync(workerData.schemaTrace.path, `${JSON.stringify(sql)}\n`);
-      }
-      return Reflect.apply(execute, this, args);
-    };
-  }
-}
 await import("./session-transcript-reconcile.worker.ts");

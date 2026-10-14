@@ -15,6 +15,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import {
   NodeWorkerLaunchStore,
@@ -110,11 +111,14 @@ describe("node worker turn journal", () => {
       const admission = vi
         .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
         .mockImplementation(() => {});
-      const reads = trackSqliteStatementExecutions(database.db, ["receipt"], (sql) =>
-        sql.startsWith("select ") &&
-        (sql.includes('from "node_worker_turns"') || sql.includes('from "node_worker_launches"'))
-          ? "receipt"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["receipt"],
+        (sql) =>
+          sql.startsWith("select ") &&
+          (sql.includes('from "node_worker_turns"') || sql.includes('from "node_worker_launches"'))
+            ? "receipt"
+            : null,
       );
       try {
         const result = operation();

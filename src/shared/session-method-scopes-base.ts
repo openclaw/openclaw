@@ -70,6 +70,10 @@ export function resolveSessionMethodScope(
   method: string,
   params?: unknown,
 ): SessionOperatorScope | undefined {
+  // Selecting a device filesystem requires the broader operator capability.
+  if (method === "sessions.create" && isRecord(params) && params.deviceFolder !== undefined) {
+    return undefined;
+  }
   if (SESSION_READ_METHODS.has(method)) {
     return "operator.sessions.read";
   }
@@ -100,6 +104,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "thinkingLevel",
   "fastMode",
   "permissionMode",
+  "communication",
 ]);
 
 const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([

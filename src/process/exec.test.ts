@@ -501,7 +501,7 @@ describe("runCommandBuffered", () => {
 
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
           // Force delivery now has a separate bounded exit-observation phase.
-          await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+          await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
           expect(await withinTest(command, signal)).toMatchObject(
             exitCode === 0
               ? { code: null, termination: "timeout" }
@@ -648,7 +648,7 @@ describe("runExec", () => {
 });
 
 describe("attachChildProcessBridge", () => {
-  it("forwards SIGTERM to the wrapped child and detaches on exit", () => {
+  it("forwards SIGTERM until child exit and detaches only after close", () => {
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const child = new EventEmitter() as EventEmitter & ChildProcess;
     const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
@@ -659,20 +659,30 @@ describe("attachChildProcessBridge", () => {
       signals: ["SIGTERM"],
       onSignal: (signal) => observedSignals.push(signal),
     });
-    const addedSigterm = process
-      .listeners("SIGTERM")
-      .find((listener) => !beforeSigterm.has(listener));
-    if (!addedSigterm) {
-      throw new Error("expected SIGTERM listener");
+    try {
+      const addedSigterm = process
+        .listeners("SIGTERM")
+        .find((listener) => !beforeSigterm.has(listener));
+      if (!addedSigterm) {
+        throw new Error("expected SIGTERM listener");
+      }
+
+      addedSigterm("SIGTERM");
+      expect(observedSignals).toEqual(["SIGTERM"]);
+      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+
+      child.emit("exit", 0, null);
+      expect(process.listeners("SIGTERM")).toContain(addedSigterm);
+      addedSigterm("SIGTERM");
+      expect(observedSignals).toEqual(["SIGTERM"]);
+      expect(kill).toHaveBeenCalledOnce();
+
+      child.emit("close", 0, null);
+      expect(process.listeners("SIGTERM")).not.toContain(addedSigterm);
+      expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
+    } finally {
+      detach();
     }
-
-    addedSigterm("SIGTERM");
-    expect(observedSignals).toEqual(["SIGTERM"]);
-    expect(kill).toHaveBeenCalledWith("SIGTERM");
-
-    child.emit("exit");
-    expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
-    detach();
   });
 });
 

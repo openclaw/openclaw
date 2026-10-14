@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { runGitBuffered } from "../../agents/worktrees/git.js";
+import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import {
@@ -23,24 +24,6 @@ import {
 } from "./workspace-result-inventory.js";
 
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
-
-async function readGitBlob(params: {
-  root: string;
-  objectId: string;
-  maxBytes: number;
-}): Promise<Buffer> {
-  const result = await runGitBuffered(params.root, ["cat-file", "blob", params.objectId], {
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: params.maxBytes + 1,
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error(result.stderr.toString("utf8").trim() || "git cat-file failed");
-  }
-  if (result.stdout.byteLength > params.maxBytes) {
-    throw new Error("Cloud workspace staged result exceeds its byte limit");
-  }
-  return result.stdout;
-}
 
 export async function loadStagedWorkerWorkspace(
   root: string,
@@ -176,16 +159,6 @@ export async function readStagedWorkerWorkspaceEntries(params: {
   if (params.entries.length > 1 && bytes > STAGED_WORKSPACE_READ_MAX_BYTES) {
     throw new Error("Cloud workspace staged result batch exceeds its byte limit");
   }
-  const only = params.entries.length === 1 ? params.entries[0] : undefined;
-  if (only) {
-    const content = await readGitBlob({
-      root: params.root,
-      objectId: only.object.objectId,
-      maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-    });
-    assertStagedEntryContent(only.entry, content);
-    return only.entry.type === "file" ? content : Buffer.alloc(0);
-  }
   if (params.entries.length === 0) {
     return Buffer.alloc(0);
   }
@@ -233,7 +206,7 @@ export async function readStagedWorkerWorkspaceEntries(params: {
     throw new Error("Cloud workspace staged result contains unexpected payload bytes");
   }
   // Links are validated above; their filesystem representation uses the manifest target.
-  return Buffer.concat(contents);
+  return contents.length === 1 ? contents[0]! : Buffer.concat(contents);
 }
 
 export async function collectStagedWorkerArtifacts(
@@ -273,6 +246,6 @@ export async function collectStagedWorkerArtifacts(
     current: { baseCommit: snapshot.current.baseCommit },
     changedEntries: snapshot.changedEntries,
     changes,
-    ...(preview === undefined ? {} : { preview }),
+    ...(preview === undefined ? {} : { preview: ownedWorkerBytes(preview) }),
   };
 }

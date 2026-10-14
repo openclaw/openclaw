@@ -94,6 +94,55 @@ describe("Microsoft Teams read policy", () => {
     expect(mocks.resolveGraphToken).not.toHaveBeenCalled();
   });
 
+  it("keeps named account identity for Graph-backed policy mapping", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          authType: "federated",
+          defaultAccount: "default",
+          accounts: {
+            support: {
+              authType: "secret",
+              appId: "support-app",
+              appPassword: "support-secret",
+              tenantId: "support-tenant",
+              groupPolicy: "allowlist",
+              teams: {
+                "19:general@thread.tacv2": {
+                  channels: { "19:roadmap@thread.tacv2": {} },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
+      items: [{ id: "19:general@thread.tacv2" }, { id: "19:roadmap@thread.tacv2" }],
+      truncated: false,
+    });
+
+    await expect(
+      assertMSTeamsReadTargetAllowed({
+        cfg,
+        ctx: { accountId: "support", requesterAccountId: "support", toolContext: {} },
+        target: "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2",
+      }),
+    ).resolves.toBe("11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2");
+    expect(mocks.resolveGraphToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          msteams: expect.objectContaining({
+            defaultAccount: "support",
+            authType: "secret",
+            appId: "support-app",
+          }),
+        }),
+      }),
+      { accountId: "support" },
+    );
+  });
+
   it("rejects an ambiguous Bot Framework team mapping", async () => {
     const cfg = {
       channels: {
@@ -307,6 +356,7 @@ describe("Microsoft Teams read policy", () => {
     ).resolves.toBe("11111111-1111-1111-1111-111111111111");
     expect(mocks.resolveMSTeamsTeamsConfig).toHaveBeenCalledWith({
       cfg,
+      accountId: "default",
       teamIdMode: "graph",
       teams: cfg.channels?.msteams?.teams,
     });

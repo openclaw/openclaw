@@ -14,6 +14,7 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 export type SqliteReadOnlyWorkerMode =
   | "sync"
   | "content-version"
+  | "file-generation"
   | "async"
   | "consolidated"
   | "reclaim"
@@ -35,11 +36,11 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
+  | { ok: true; generation: string }
   | { ok: true; warnings: string[] }
   | { ok: false; message: string };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
-export class SqliteSnapshotAllocationRefusedError extends Error {}
 
 // Released updater parents require exactly { ok, message }. A negotiated worker
 // protocol can replace this owner-generated tag when those parents are retired.
@@ -123,6 +124,7 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       "contentVersion" in value &&
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
+    (value.ok === true && "generation" in value && typeof value.generation === "string") ||
     (value.ok === true &&
       "warnings" in value &&
       Array.isArray(value.warnings) &&
@@ -165,7 +167,7 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "sync" | "async" | "consolidated" | "content-version",
+  mode: "sync" | "async" | "consolidated" | "content-version" | "file-generation",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -212,9 +214,6 @@ export function readSqliteReadOnlyWorkerValue(
       const failure = new SqliteReadOnlyInspectionContentionError(error.message);
       throw allocationRefused ? markPrivateDirectoryCreationRefused(failure) : failure;
     }
-    if (allocationRefused) {
-      throw new SqliteSnapshotAllocationRefusedError(error.message);
-    }
     throw error;
   }
   if (
@@ -228,6 +227,9 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;
+  }
+  if (mode === "file-generation" && "generation" in result) {
+    return result.generation;
   }
   if (mode === "reclaim" && "warnings" in result) {
     return result.warnings;

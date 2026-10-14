@@ -97,6 +97,21 @@ plugin makes it available; the model's `agentRuntime` setting selects it for
 conversations. See [runtime configuration](/plugins/sdk-agent-harness/runtime-config)
 for provider and per-agent model settings.
 
+### Shared model tuning
+
+Agents API uses its own native context management. Shared OpenClaw settings
+`responsesServerCompaction` and `responsesCompactThreshold` do not prevent
+selecting it, but they do not control hosted compaction (including when
+`responsesServerCompaction` is `false`). They keep their existing behavior when
+you use the same model with the OpenClaw runtime. Model capability metadata such
+as `supportsTemperature` and `codeMode` also does not require an exact native
+implementation.
+
+This is best-effort tuning compatibility, not permission to drop request policy.
+Custom endpoints, authentication, headers, request parameters, and storage
+behavior still require a runtime that can honor them; Agents API continues to
+require its official API-key route.
+
 ### 3. Start a conversation and try a task
 
 In the Control UI, open **New session → Environments** and select
@@ -160,8 +175,11 @@ Built-in web search is available in new sessions unless disabled globally with
 `tools.web.search.enabled: false` or through the session’s **Web search** control.
 Changing the effective search setting requires `/new` or `/reset`; an existing
 session refuses to continue with a different native search policy.
-Your enabled OpenClaw and plugin tools remain available under your configured tool policies, including
-memory search and recall. You can also connect remote tools through MCP; see
+By default, your enabled OpenClaw and plugin tools remain available under your
+configured tool policies, including memory search and recall. You can disable
+[Gateway tool and MCP forwarding](/plugins/agentsapi#forwarding-controls) separately
+without disabling hosted commands, files, or attachments. You can also connect
+remote tools through MCP; see
 [MCP connections](/plugins/agentsapi#mcp-connections) below.
 
 ## Advanced configuration and reference
@@ -181,6 +199,61 @@ Instructions are supplied as context; send files as attachments when the agent
 needs their contents in its workspace. See the
 [hosted environment guide](https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted)
 for environment lifecycle and storage behavior.
+
+### Forwarding controls
+
+To use the hosted environment without exposing Gateway function callbacks or
+configured MCP servers, merge this into your existing configuration:
+
+```json5
+{
+  plugins: {
+    entries: {
+      agentsapi: {
+        enabled: true,
+        config: {
+          forwarding: {
+            gatewayTools: false,
+            mcpServers: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Both settings default to `true` and are independent:
+
+- `gatewayTools: false` skips constructing OpenClaw and plugin tools for Gateway
+  function callbacks. No Gateway functions are declared, and unexpected remote
+  function calls are rejected without invoking a tool or its execution hooks.
+- `mcpServers: false` skips loading configured and plugin-bundled MCP servers,
+  including discovery and credential resolution. It also excludes servers added
+  later; it is not a list of currently known server names.
+
+Set both to `false` for no forwarded Gateway functions or MCP servers. A native
+shell/file tool allowlist alone does not disable MCP forwarding. These controls
+apply only to the Agents API plugin, not other harnesses or the Gateway's own
+tool configuration. Native hosted shell and file operations, attachment uploads,
+output artifact delivery, and same-session follow-ups remain available.
+
+Native tool declarations are separate. To omit hosted web search, set
+`plugins.entries.agentsapi.config.nativeTools` to a list without `web_search`,
+for example `[{ type: "programmatic_tool_calling", enabled: true }]`. A supplied
+list replaces the defaults. These forwarding controls do not change native
+shell, file, or web-search permissions or bypass the existing preflight checks.
+
+Apply the configuration through your usual Gateway workflow, then use `/new` or
+`/reset`. Remote tool declarations are fixed for a session: changing either
+forwarding setting refuses continuation and retains the original binding until
+you reset it. Reset and deletion can still settle the saved native session under
+the new policy; the plugin never silently creates a replacement conversation.
+
+This is **tool-exposure isolation, not full Gateway prompt or persona isolation**.
+OpenClaw instructions, persona, and ordinary prompt/lifecycle hooks still apply.
+Tool-authorized prompt hooks receive only the exposed Gateway function names,
+which are empty when Gateway tool forwarding is disabled.
 
 ### MCP connections
 
@@ -307,7 +380,7 @@ requires a reset. It does not migrate files between hosts.
 4. Finishing or interrupting a turn leaves the executor available. Gateway
    disposal also retains its saved binding and executor. A running executor
    handles native reconnection; an outstanding connection action can ask the
-   controller to ensure the same session again.
+   controller to prepare the same session again.
 5. Reset, session deletion, or confirmed terminal native-session failure attempts
    `retire(binding, context)` after native work settles. It stops only that
    binding's executor. If native work cannot be confirmed settled, reset or
@@ -326,8 +399,8 @@ codex exec-server \
   --environment-id "<binding.environmentId>"
 ```
 
-Use a separate managed process for each native session and make repeated
-`ensure` calls idempotent. Reconnection does not guarantee an interrupted command
+Use a separate managed process for each native session and make
+`ensure` calls safe to repeat. Reconnection does not guarantee an interrupted command
 survives. Check the original turn's outcome before repeating work that might
 already have changed files or called a service. Input submission has a 60-second
 HTTP deadline, including connection wait, so prepare hosts to connect promptly.
@@ -365,9 +438,9 @@ for these boundaries and upgrade notes.
 ### Session settings and diagnostics
 
 Use `/new` or `/reset` to adopt changes to session instructions, MCP connections,
-or reasoning-summary display. These commands start a fresh session on the next
-message. Remote history and workspace resources remain managed through the
-Agents API.
+forwarding controls, or reasoning-summary display. These commands start a fresh
+session on the next message. Remote history and workspace resources remain
+managed through the Agents API.
 
 Reset and deletion confirm that native work has stopped before removing a session
 binding, including after a Gateway restart. If that confirmation fails, the binding

@@ -27,15 +27,16 @@ Custom plugin UI flag below controls user-installed native browser code only.
 | Cloud workers    | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
 | Custom plugin UI | `gateway.controlUi.experimental.customPlugins`                          | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
 | Host Desktop     | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
+| Speech bubbles   | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
 | Tool Search      | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 
 ## Control UI Labs
 
 Open **Settings → Labs** to manage experiments that have a
-Control UI switch. Enabling or disabling a lab patches the canonical Gateway
+Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Decision assistance, Code Mode, Tool Search for all models, Custom
+Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models, Custom
 plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
 plugin views and desktop availability update in connected Control UI pages.
 Code Mode and Tool Search changes take effect for future agent runs.
@@ -137,7 +138,7 @@ preference does not select a new provider or grant tool authority. Operators who
 do not want automatic evaluation can turn the preference off or clear that
 agent’s Decision model. The transferred evidence and costs are described below.
 
-The prefilter sends the complete current request and a deterministic, bounded
+The prefilter sends the complete current request and a rule-based, bounded
 projection of recent conversation to the owning agent’s configured Decision
 provider. It retains the nearest complete user/assistant exchange and, when it
 fits, one additional exchange in chronological order. Resolved output from

@@ -32,12 +32,12 @@ import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
 import { renderKbd } from "./kbd.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
+import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
 import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 import "./agent-select-registration.ts";
-import "./settings-save-indicator.ts";
+import "./settings-save-indicator.tsx";
 import "../styles/settings.css";
-import "./sidebar-build-chip.ts";
+import "./sidebar-build-chip.tsx";
 
 type AgentRosterRow = AgentsListResult["agents"][number];
 

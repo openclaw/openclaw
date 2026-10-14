@@ -168,16 +168,6 @@ export async function discoverRealtimeTalkCameras(
   return discoverRealtimeTalkDevices(requestPermission, "videoinput");
 }
 
-function realtimeTalkAudioConstraints(inputDeviceId: string | undefined): MediaTrackConstraints {
-  const deviceId = inputDeviceId?.trim();
-  return {
-    autoGainControl: true,
-    echoCancellation: true,
-    noiseSuppression: true,
-    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-  };
-}
-
 function realtimeTalkAbortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
@@ -223,13 +213,19 @@ async function openRealtimeTalkInput(
   if (!devices?.getUserMedia) {
     throw new Error(t("chat.composer.realtimeTalkRequiresMicrophone"));
   }
+  const deviceId = inputDeviceId?.trim();
   // A DOMException cause makes the shared formatter append its legacy code to this UI message.
   let acquisition: MediaStream | string;
   try {
     acquisition = await awaitRealtimeTalkMediaRequest(
       () =>
         devices.getUserMedia({
-          audio: realtimeTalkAudioConstraints(inputDeviceId),
+          audio: {
+            autoGainControl: true,
+            echoCancellation: true,
+            noiseSuppression: true,
+            ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+          },
         }),
       signal,
     );
@@ -240,7 +236,7 @@ async function openRealtimeTalkInput(
     }
     // Exact selection is consent, including legacy WebKit failures. Only the
     // calling surface can offer an explicit choice to open a different input.
-    if (inputDeviceId?.trim() && errorName === "OverconstrainedError") {
+    if (deviceId && errorName === "OverconstrainedError") {
       throw new RealtimeTalkSelectedMicrophoneError();
     }
     acquisition = describeRealtimeTalkInputError(error);

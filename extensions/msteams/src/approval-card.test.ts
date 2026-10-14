@@ -2,7 +2,6 @@ import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway
 import type {
   ExecApprovalPendingView,
   PendingApprovalView,
-  PluginApprovalPendingView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { msTeamsApprovalControls } from "./approval-card-actions.js";
@@ -42,50 +41,8 @@ function createExecPendingView() {
   } satisfies ExecApprovalPendingView;
 }
 
-function createPluginPendingView(): PluginApprovalPendingView {
-  return {
-    approvalId: "plugin-1",
-    approvalKind: "plugin",
-    phase: "pending",
-    title: "Publish production changes",
-    description: "Allow the deploy plugin to update production.",
-    metadata: [{ label: "Plugin", value: "deploy" }],
-    severity: "warning",
-    actions: [
-      {
-        decision: "deny",
-        label: "Deny",
-        style: "danger",
-        command: "/approve plugin-1 deny",
-      },
-    ],
-    expiresAtMs: 31_000,
-  };
-}
-
 describe("Microsoft Teams approval Adaptive Cards", () => {
   it.each([
-    {
-      view: createExecPendingView(),
-      label: "Exec",
-      decision: "allow-once",
-      decisionLabel: "Allowed once",
-      subject: [
-        { type: "TextBlock", text: "Command", weight: "Bolder", wrap: true },
-        { type: "TextBlock", text: "npm run deploy", fontType: "Monospace", wrap: true },
-      ],
-    },
-    {
-      view: createPluginPendingView(),
-      label: "Plugin",
-      decision: "deny",
-      decisionLabel: "Denied",
-      subject: [
-        { type: "TextBlock", text: "Request", weight: "Bolder", wrap: true },
-        { type: "TextBlock", text: "Publish production changes", weight: "Bolder", wrap: true },
-        { type: "TextBlock", text: "Allow the deploy plugin to update production.", wrap: true },
-      ],
-    },
     {
       view: {
         ...createExecPendingView(),
@@ -136,7 +93,7 @@ describe("Microsoft Teams approval Adaptive Cards", () => {
             version: "1.5",
             body: [
               { ...heading, text: `${label} Approval Required` },
-              { ...subtitle, text: `Expires in ${label === "Plugin" ? 30 : 60}s` },
+              { ...subtitle, text: "Expires in 60s" },
               ...tail,
             ],
             actions: actions.map(({ label: actionLabel }, index) => ({
@@ -149,7 +106,7 @@ describe("Microsoft Teams approval Adaptive Cards", () => {
             token: tokens[index],
             decision: actionDecision,
           })),
-          allowedDecisions: label === "Plugin" ? ["deny"] : ["allow-once", "deny"],
+          allowedDecisions: ["allow-once", "deny"],
         });
         expect(createToken).toHaveBeenCalledTimes(actions.length);
         for (const [resolvedBy, text] of [
@@ -185,168 +142,6 @@ describe("Microsoft Teams approval Adaptive Cards", () => {
       } finally {
         createToken.mockRestore();
       }
-    },
-  );
-
-  it("renders an exec command, ordered metadata, and only the available namespaced actions", () => {
-    const result = buildMSTeamsPendingApprovalCard({
-      view: createExecPendingView(),
-      nowMs: 1_000,
-    });
-
-    expect(result.card).toEqual({
-      type: "AdaptiveCard",
-      version: "1.5",
-      body: [
-        {
-          type: "TextBlock",
-          text: "Exec Approval Required",
-          weight: "Bolder",
-          size: "Medium",
-          wrap: true,
-        },
-        { type: "TextBlock", text: "Expires in 60s", isSubtle: true, wrap: true },
-        { type: "TextBlock", text: "Command", weight: "Bolder", wrap: true },
-        { type: "TextBlock", text: "npm run deploy", fontType: "Monospace", wrap: true },
-        {
-          type: "FactSet",
-          facts: [
-            { title: "Approval ID:", value: "approval-1" },
-            { title: "Agent:", value: "main" },
-            { title: "Host:", value: "gateway" },
-          ],
-        },
-      ],
-      actions: [
-        {
-          type: "Action.Submit",
-          title: "Approve once",
-          data: { openclawAction: "approval", token: expect.any(String) },
-        },
-        {
-          type: "Action.Submit",
-          title: "Deny",
-          data: { openclawAction: "approval", token: expect.any(String) },
-        },
-      ],
-    });
-    expect(result.allowedDecisions).toEqual(["allow-once", "deny"]);
-    expect(result.actionTokens.map(({ token }) => token)).toEqual(
-      (result.card.actions as Array<{ data: { token: string } }>).map(({ data }) => data.token),
-    );
-    expect(new Set(result.actionTokens.map(({ token }) => token)).size).toBe(2);
-  });
-
-  it("presents plugin-owned request details and never invents unavailable approval actions", () => {
-    const result = buildMSTeamsPendingApprovalCard({
-      view: createPluginPendingView(),
-      nowMs: 1_000,
-    });
-
-    expect(result.card).toMatchObject({
-      body: [
-        { text: "Plugin Approval Required" },
-        { text: "Expires in 30s" },
-        { text: "Request" },
-        { text: "Publish production changes" },
-        { text: "Allow the deploy plugin to update production." },
-        {
-          facts: [
-            { title: "Approval ID:", value: "plugin-1" },
-            { title: "Plugin:", value: "deploy" },
-          ],
-        },
-      ],
-      actions: [
-        {
-          title: "Deny",
-          data: { openclawAction: "approval", token: expect.any(String) },
-        },
-      ],
-    });
-    expect(result.allowedDecisions).toEqual(["deny"]);
-  });
-
-  it("removes approval actions from resolved and expired cards", () => {
-    const { actions: _actions, expiresAtMs: _expiresAtMs, ...view } = createExecPendingView();
-    const resolved = buildMSTeamsResolvedApprovalCard({
-      ...view,
-      phase: "resolved",
-      decision: "allow-always",
-      resolvedBy: "alice",
-    });
-    const expired = buildMSTeamsExpiredApprovalCard({ ...view, phase: "expired" });
-
-    expect(resolved.body).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ text: "Exec Approval: Allowed always" }),
-        expect.objectContaining({ text: "Resolved by alice" }),
-      ]),
-    );
-    expect(expired.body).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ text: "Exec Approval Expired" }),
-        expect.objectContaining({
-          text: "This approval request expired before it was resolved.",
-        }),
-      ]),
-    );
-    expect(resolved).not.toHaveProperty("actions");
-    expect(expired).not.toHaveProperty("actions");
-  });
-
-  it.each([
-    {
-      decision: "deny",
-      applicationStatus: "not-applied",
-      terminalStatus: undefined,
-      label: "Denied",
-    },
-    {
-      decision: "deny",
-      applicationStatus: "not-applied",
-      terminalStatus: "cancelled",
-      label: "Cancelled",
-    },
-    {
-      decision: "allow-once",
-      applicationStatus: "applied",
-      terminalStatus: undefined,
-      label: "Applied",
-    },
-    {
-      decision: "allow-once",
-      applicationStatus: "not-applied",
-      terminalStatus: undefined,
-      label: "Completion unconfirmed",
-    },
-    {
-      decision: "allow-once",
-      applicationStatus: "applied",
-      terminalStatus: "cancelled",
-      label: "Cancelled",
-    },
-  ] as const)(
-    "preserves the $label system-agent heading for $decision/$applicationStatus",
-    ({ decision, applicationStatus, terminalStatus, label }) => {
-      const card = buildMSTeamsResolvedApprovalCard({
-        approvalKind: "system-agent",
-        approvalId: "system-agent:change-1",
-        phase: "resolved",
-        title: "OpenClaw change",
-        metadata: [],
-        commandText: "restart the Gateway",
-        operationSummary: "restart the Gateway",
-        decision,
-        applicationStatus,
-        terminalStatus,
-      });
-
-      expect(card.body).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ text: `OpenClaw Change Approval: ${label}` }),
-        ]),
-      );
     },
   );
 

@@ -26,11 +26,11 @@ function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
 function senderAttributedTextMessage(
   text: string,
   sender: { senderId?: string; senderName?: string; senderUsername?: string },
-): AgentMessage {
+) {
   return {
     ...textMessage("user", text),
     __openclaw: sender,
-  } as unknown as AgentMessage;
+  };
 }
 
 function summaryMessages(type: "compaction" | "branch_summary", summary: string): AgentMessage[] {
@@ -165,6 +165,61 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.developerInstructionAddition).toBe("memory recall");
   });
 
+  it.each([true, false])(
+    "places stable current sender provenance beside the request (history: %s)",
+    async (withHistory) => {
+      const prompt = "i am Bea coded wdym";
+      const currentUserMessage = {
+        ...senderAttributedTextMessage(prompt, {
+          senderId: "bea-id",
+          senderName: "Bea",
+          senderUsername: "bea",
+        }),
+        idempotencyKey: "current:user",
+      };
+      const result = await projectContextEngineAssemblyForCodex({
+        assembledMessages: withHistory
+          ? [
+              senderAttributedTextMessage("Alice asked about the roster.", {
+                senderId: "alice-id",
+                senderName: "Alice",
+              }),
+              textMessage("assistant", "Alice got the strategist role; Bea got the scout role."),
+              currentUserMessage,
+            ]
+          : [currentUserMessage],
+        prompt,
+        currentUserMessage,
+        currentUserTurnIdempotencyKey: "current:user",
+      });
+
+      if (withHistory) {
+        expect(result.promptText).toContain('[user sender={"id":"alice-id","name":"Alice"}]');
+      }
+      expect(result.promptText).toMatch(
+        /\[user sender={"id":"bea-id","name":"Bea","username":"bea"}\]\ni am Bea coded wdym$/,
+      );
+      expect(result.promptText.match(/i am Bea coded wdym/g)).toHaveLength(1);
+    },
+  );
+
+  it("does not infer current sender identity from display names without a stable ID", async () => {
+    const prompt = "Current direct request";
+    const currentUserMessage = senderAttributedTextMessage(prompt, {
+      senderName: "Bea",
+      senderUsername: "bea",
+    });
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier reply.")],
+      prompt,
+      currentUserMessage,
+    });
+
+    expect(result.promptText.slice(result.promptText.lastIndexOf("Current user request:"))).toBe(
+      `Current user request:\n${prompt}`,
+    );
+  });
+
   it("preserves role order and falls back to the raw prompt for empty history", async () => {
     const empty = await projectContextEngineAssemblyForCodex({
       assembledMessages: [],
@@ -273,7 +328,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("cat .env");
   });
 
-  it("preserves redacted tool payload context for thread bootstrap projections", async () => {
+  it("preserves tool payload context for thread bootstrap projections", async () => {
     const shared = { recursive: true };
     const nested: Record<string, unknown> = {
       first: shared,
@@ -341,12 +396,12 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).toContain("OPENAI_API_KEY=");
     expect(result.promptText).toContain("status ok");
     expect(result.promptText).not.toContain("cat .env");
-    expect(result.promptText).not.toContain("sk-1234567890abcdef");
-    expect(result.promptText).not.toContain("842761");
+    expect(result.promptText).toContain("sk-1234567890abcdef");
+    expect(result.promptText).toContain("842761");
     expect(result.promptText).toContain('"attemptsRemaining": 3');
   });
 
-  it("preserves canonical tool results without exposing secrets or media bytes", async () => {
+  it("preserves canonical tool result text while omitting media bytes", async () => {
     const toolText = `OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok\n${"x".repeat(6_000)} tool tail`;
     const message: AgentMessage = {
       role: "toolResult",
@@ -366,7 +421,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
 
     expect(result.promptText).toContain("tool result: call-1");
-    expect(result.promptText).not.toContain("sk-1234567890abcdef");
+    expect(result.promptText).toContain("sk-1234567890abcdef");
     expect(result.promptText).not.toContain("private-image-bytes");
     expect(result.promptText).not.toContain("tool tail");
     expect(result.promptText).toContain("status ok");

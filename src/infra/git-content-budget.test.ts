@@ -146,7 +146,8 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
               stderr: "",
             }),
           },
-          false,
+          // Keep this slot/cancellation test independent of checkout filesystem setup.
+          true,
           "bounded",
           undefined,
           queueSignal,

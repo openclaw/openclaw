@@ -23,6 +23,7 @@ import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-ru
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
+  collectActiveSessionWorkAdmissions,
   getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
 } from "../sessions/session-lifecycle-admission.js";
@@ -42,6 +43,7 @@ import type {
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import {
   createGoalChatStartRequest,
+  expectGoalChatRetryResponses,
   readGoalChatUserMessages,
   registerGoalChatRestartSettlementCase,
 } from "./server.chat-goal.test-support.js";
@@ -240,10 +242,40 @@ async function waitForModelRun(count = 1) {
     getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
   expect(context.logGateway.error).not.toHaveBeenCalled();
-  expect(
-    runEmbeddedAgent.mock.calls,
-    JSON.stringify(vi.mocked(context.logGateway.warn).mock.calls),
-  ).toHaveLength(count);
+  let failureDiagnostic: string | undefined;
+  if (runEmbeddedAgent.mock.calls.length !== count) {
+    const entry = loadSessionEntry(scope());
+    failureDiagnostic = JSON.stringify({
+      warningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
+      abortControllers: context.chatAbortControllers.size,
+      admissionScopes: [...collectActiveSessionWorkAdmissions()]
+        .filter(([, identities]) => identities.has(sessionKey))
+        .slice(0, 5)
+        .map(([activeScope, identities]) => ({
+          file: path.basename(activeScope),
+          matchesExpected: activeScope === storePath,
+          identityCount: identities.size,
+          includesExpectedSessionId: identities.has(sessionId),
+        })),
+      dedupe: [...context.dedupe]
+        .filter(([key]) => key.startsWith("chat:"))
+        .slice(0, 5)
+        .map(([key, cached]) => ({
+          key,
+          ok: cached.ok,
+          status: isRecord(cached.payload) ? cached.payload.status : undefined,
+          error: cached.error && { code: cached.error.code, message: cached.error.message },
+        })),
+      entry: entry && {
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+        status: entry.status,
+        lastRunId: entry.lastRunId,
+        abortedLastRun: entry.abortedLastRun,
+      },
+    });
+  }
+  expect(runEmbeddedAgent.mock.calls, failureDiagnostic).toHaveLength(count);
 }
 
 describe("Goal chat admission and continuation", () => {
@@ -286,66 +318,68 @@ describe("Goal chat admission and continuation", () => {
           (event.kind === "created" || event.kind === "goal_changed"),
       );
     let eventsAtAck: ReturnType<typeof creationEvents> = Promise.resolve([]);
-    await withHeldModel(async () => {
-      const signal = loseSessionSignalAcknowledgement();
-      const started = await rpc(
-        "chat.send",
-        request,
-        (ok) => {
-          if (ok) {
-            entryAtAck = loadSessionEntry(scope());
-            messagesAtAck = userMessages();
-            eventsAtAck = creationEvents();
-          }
-        },
-        requestClient,
-      ).finally(signal.restore);
-      const acknowledgedEvents = await eventsAtAck;
-      expect(entryAtAck, "fresh Goal commits its own local incarnation").toMatchObject({
-        sessionId: expect.any(String),
-        restartRecoveryDeliveryRunId: request.idempotencyKey,
-        restartRecoveryDeliverySourceRunId: request.idempotencyKey,
-        goal: { objective: request.message, status: "active" },
+    try {
+      await withHeldModel(async () => {
+        const signal = loseSessionSignalAcknowledgement();
+        const started = await rpc(
+          "chat.send",
+          request,
+          (ok) => {
+            if (ok) {
+              entryAtAck = loadSessionEntry(scope());
+              messagesAtAck = userMessages();
+              eventsAtAck = creationEvents();
+            }
+          },
+          requestClient,
+        ).finally(signal.restore);
+        const acknowledgedEvents = await eventsAtAck;
+        expect(entryAtAck, "fresh Goal commits its own local incarnation").toMatchObject({
+          sessionId: expect.any(String),
+          restartRecoveryDeliveryRunId: request.idempotencyKey,
+          restartRecoveryDeliverySourceRunId: request.idempotencyKey,
+          goal: { objective: request.message, status: "active" },
+        });
+        expect(entryAtAck?.status).toBeUndefined();
+        expect(signal.attempts()).toBe(2);
+        expect(started.mock.calls).toEqual([
+          [
+            true,
+            expect.objectContaining({ status: "started", runId: sessionId }),
+            undefined,
+            expect.anything(),
+          ],
+        ]);
+        expect(entryAtAck?.sessionId).not.toBe(request.idempotencyKey);
+        expect(messagesAtAck).toEqual([expect.objectContaining({ content: request.message })]);
+        expect(acknowledgedEvents.map((event) => event.kind)).toEqual(["created", "goal_changed"]);
+        await waitForModelRun();
+        context.dedupe.clear();
+        const replay = await rpc("chat.send", request, undefined, requestClient);
+        expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, runId: sessionId });
+        expect(userMessages()).toHaveLength(1);
+        expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(await creationEvents()).toEqual(acknowledgedEvents);
+        expect(acpDispatch).not.toHaveBeenCalled();
+        expect(loadSessionEntry(scope())?.sessionId).toBe(entryAtAck?.sessionId);
+        const placementFacts = await placements.readProjection([request.idempotencyKey], {
+          current: true,
+        });
+        expect(placementFacts.placements.get(request.idempotencyKey)).toMatchObject({
+          agentId: "main",
+          sessionKey,
+          sessionId: request.idempotencyKey,
+          state: "requested",
+          generation: provisionalPlacement.generation,
+        });
       });
-      expect(entryAtAck?.status).toBeUndefined();
-      expect(signal.attempts()).toBe(2);
-      expect(started.mock.calls).toEqual([
-        [
-          true,
-          expect.objectContaining({ status: "started", runId: sessionId }),
-          undefined,
-          expect.anything(),
-        ],
-      ]);
-      expect(entryAtAck?.sessionId).not.toBe(request.idempotencyKey);
-      expect(messagesAtAck).toEqual([expect.objectContaining({ content: request.message })]);
-      expect(acknowledgedEvents.map((event) => event.kind)).toEqual(["created", "goal_changed"]);
-      await waitForModelRun();
-      context.dedupe.clear();
-      const replay = await rpc("chat.send", request, undefined, requestClient);
-      expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, runId: sessionId });
-      expect(userMessages()).toHaveLength(1);
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(await creationEvents()).toEqual(acknowledgedEvents);
-      expect(acpDispatch).not.toHaveBeenCalled();
-      expect(loadSessionEntry(scope())?.sessionId).toBe(entryAtAck?.sessionId);
-      const placementFacts = await placements.readProjection([request.idempotencyKey], {
-        current: true,
-      });
-      expect(placementFacts.placements.get(request.idempotencyKey)).toMatchObject({
-        agentId: "main",
-        sessionKey,
-        sessionId: request.idempotencyKey,
-        state: "requested",
-        generation: provisionalPlacement.generation,
-      });
-    }).finally(() => {
-      placements.retireSessionPlacement({
+    } finally {
+      await placements.retireSessionPlacementAsync({
         sessionId: request.idempotencyKey,
         expectedState: "requested",
         expectedGeneration: provisionalPlacement.generation,
       });
-    });
+    }
   });
 
   it("keeps an unscoped reply-dispatch hook from admitting a fresh Goal", async () => {
@@ -754,17 +788,9 @@ describe("Goal chat admission and continuation", () => {
     const request = goalStart("Finish the release checklist", "goal-identical-retry");
     await withHeldModel(async () => {
       const responses = await Promise.all([rpc("chat.send", request), rpc("chat.send", request)]);
-      expect(responses.some((response) => response.mock.calls[0]?.[0])).toBe(true);
       const goal = loadSessionEntry(scope())?.goal;
       expect(goal?.objective).toBe(request.message);
-      for (const response of responses) {
-        const [ok, result, error] = response.mock.calls[0]!;
-        if (ok) {
-          expect(result).toMatchObject({ status: "started", goalId: goal?.id });
-        } else {
-          expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-        }
-      }
+      expectGoalChatRetryResponses(responses, request.idempotencyKey, goal?.id);
       await waitForModelRun();
       const replay = await rpc("chat.send", request);
       expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, goalId: goal?.id });

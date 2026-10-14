@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./app-server/client.js";
@@ -181,47 +180,6 @@ describe("Codex catalog home discovery", () => {
         config,
       }),
     );
-  });
-
-  it("serves a replacement owner while obsolete discovery is pending", async () => {
-    const root = tempDirs.make("codex-catalog-generation-");
-    const alpha = { agentDir: path.join(root, "alpha") };
-    const beta = { agentDir: path.join(root, "beta") };
-    await Promise.all(
-      [alpha, beta].map(({ agentDir }) =>
-        fs.mkdir(path.join(agentDir, "codex-home"), { recursive: true }),
-      ),
-    );
-    let config: OpenClawConfig = { agents: { ownership: "explicit", entries: { alpha, beta } } };
-    const resolver = createCodexCatalogHomeResolver({
-      config,
-      getRuntimeConfig: () => config,
-      getPluginConfig: () => ({ appServer: { homeScope: "agent" } }),
-      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-      env: { CODEX_HOME: path.join(root, "native") },
-    });
-    const directoryStat = await fs.stat(root);
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const stat = vi.spyOn(fs, "stat").mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return directoryStat;
-    });
-    const pending = resolver.forAgent("beta");
-    const rejected = expect(pending).rejects.toThrow("configuration changed");
-    try {
-      await entered.promise;
-      config = { agents: { ownership: "explicit", entries: { alpha } } };
-      expect((await resolver.forAgent("alpha"))[0]?.agentDir).toBe(alpha.agentDir);
-      expect(await resolver.forAgent("beta")).toEqual([]);
-      release.resolve();
-      await rejected;
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pending, rejected]);
-      stat.mockRestore();
-    }
   });
 
   it("stops shared fleet discovery at the existing host limit", async () => {

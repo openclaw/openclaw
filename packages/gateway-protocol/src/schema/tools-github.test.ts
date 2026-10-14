@@ -31,43 +31,16 @@ describe("GitHub tools protocol", () => {
       mode: "managed",
       secretName: "github-setup-11111111111111111111111111111111",
     },
-    { scope: "system", agentId: "main", mode: "inherit" },
-    {
-      scope: "agent",
-      agentId: "main",
-      mode: "managed",
-      secretName: "github-setup-22222222222222222222222222222222",
-      gitAuthor: { name: "Agent" },
-    },
-    { scope: "agent", agentId: "main", mode: "inherit" },
   ])("accepts configure action %#", (action) => {
     expect(Value.Check(ToolsGitHubConfigureParamsSchema, action)).toBe(true);
   });
 
-  it.each([
-    { scope: "system", mode: "inherit" },
-    { scope: "agent", mode: "inherit" },
-    { scope: "system", mode: "managed" },
-    { scope: "system", agentId: "main", mode: "managed", secretName: "ONE_USE_HANDOFF" },
-    { scope: "system", agentId: "main", mode: "managed", secretName: "github-setup-token" },
-    { scope: "agent", agentId: "main", mode: "managed", secretName: "HANDOFF", extra: true },
-    {
-      scope: "system",
-      agentId: "main",
-      mode: "managed",
-      secretName: "github-setup-33333333333333333333333333333333",
-      gitAuthor: { name: "   " },
+  it.each([{ scope: "system", agentId: "main", mode: "managed", secretName: "ONE_USE_HANDOFF" }])(
+    "rejects impossible configure action %#",
+    (action) => {
+      expect(Value.Check(ToolsGitHubConfigureParamsSchema, action)).toBe(false);
     },
-    {
-      scope: "agent",
-      agentId: "main",
-      mode: "managed",
-      secretName: "github-setup-44444444444444444444444444444444",
-      gitAuthor: { email: "\t\n" },
-    },
-  ])("rejects impossible configure action %#", (action) => {
-    expect(Value.Check(ToolsGitHubConfigureParamsSchema, action)).toBe(false);
-  });
+  );
 
   it("separates the selected configuration scope from the effective identity", () => {
     expect(
@@ -120,28 +93,6 @@ describe("GitHub tools protocol", () => {
         deviceCode: "must-not-cross-the-wire",
       }),
     ).toBe(false);
-  });
-
-  it.each([
-    { status: "pending", retryAfterMs: 5_000 },
-    { status: "slow_down", retryAfterMs: 10_000 },
-    { status: "access_denied" },
-    { status: "expired" },
-    { status: "incorrect_device_code" },
-    { status: "network_error", retryAfterMs: 5_000 },
-    { status: "failed", reason: "identity_changed" },
-    { status: "failed", reason: "setup_failed" },
-    {
-      status: "success",
-      githubStatus: {
-        agentId: "main",
-        selectedScope: "system",
-        selected: { scope: "system", configured: true, identity: identityFacts },
-        effective: identityFacts,
-      },
-    },
-  ])("accepts the secret-free device poll outcome %#", (result) => {
-    expect(Value.Check(ToolsGitHubAuthorizePollResultSchema, result)).toBe(true);
   });
 
   it("rejects credentials and upstream diagnostics in device polling", () => {

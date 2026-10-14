@@ -196,12 +196,7 @@ export function buildMistralRealtimeTranscriptionProvider({
         terminal = true;
         clearPartial();
         transport.closeNow();
-        try {
-          callbacks.onError?.(error);
-        } catch {
-          // The terminal provider error already owns the outcome. Do not let an
-          // observer exception re-enter shared error dispatch and emit it twice.
-        }
+        callbacks.onError?.(error);
       };
 
       return createRealtimeTranscriptionWebSocketSession<MistralRealtimeTranscriptionEvent>({

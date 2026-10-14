@@ -4,17 +4,20 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
-  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   ensureSessionEntrySync,
   loadSessionEntry,
   loadTranscriptEventsSync,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "./session-accessor.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEventsSync,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   bindOwnedSessionTranscriptWrites,
   captureOwnedTranscriptWriteAssertion,
@@ -33,6 +36,7 @@ async function withWriteTarget(
   await withOpenClawTestState(
     { label: "owned-transcript-commit", scenario: "minimal" },
     async (state) => {
+      setRuntimeConfigSnapshot({});
       await run(
         {
           agentId: "main",

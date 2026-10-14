@@ -677,6 +677,8 @@ Replace model ids with names from `llmman list` or
 
     Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas; it disables tool use entirely. For a deliberately narrower agent, prefer `tools.profile` or a per-agent tool policy.
 
+    When you switch an existing session to a no-tools model, OpenClaw replays earlier tool names, arguments, and results as assistant text. Stored session history stays unchanged.
+
   </Accordion>
 
   <Accordion title="Multiple llmman hosts">

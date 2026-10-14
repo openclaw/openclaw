@@ -17,6 +17,7 @@ function createCheckerFixture(files: Record<string, string>, config: object = {}
     "scripts/check-import-cycles.ts",
     "scripts/tsx.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/lib/managed-cleanup-handoff.mts",
     "scripts/lib/local-check-runtime.mts",
     "scripts/lib/import-cycle-graph.ts",
     "scripts/lib/native-typescript.mts",

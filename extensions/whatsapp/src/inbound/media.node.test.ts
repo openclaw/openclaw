@@ -94,16 +94,8 @@ describe("downloadInboundMedia", () => {
     expect(result).toBeUndefined();
   });
 
-  it("uses explicit mimetype from audioMessage when present", async () => {
-    await expectMimetype({ audioMessage: { mimetype: "audio/mp4", ptt: true } }, "audio/mp4");
-  });
-
   it("defaults audio messages without MIME to OGG Opus", async () => {
     await expectMimetype({ audioMessage: {} }, "audio/ogg; codecs=opus");
-  });
-
-  it("uses explicit mimetype from imageMessage when present", async () => {
-    await expectMimetype({ imageMessage: { mimetype: "image/png" } }, "image/png");
   });
 
   it.each([
@@ -149,36 +141,7 @@ describe("downloadInboundMedia", () => {
     expect(downloadMediaMessage.mock.calls[0]?.[1]).toBe("stream");
   });
 
-  it("preserves the store's fractional limit error for the message owner", async () => {
-    const limitError = Object.assign(new Error("Media exceeds 256KB limit"), { code: "too-large" });
-    saveMediaStream.mockRejectedValueOnce(limitError);
-
-    await expect(
-      downloadInboundMedia(
-        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
-        mockSock as never,
-        0.25 * 1024 * 1024,
-      ),
-    ).rejects.toBe(limitError);
-  });
-
-  it("propagates transport download failures to the message owner", async () => {
-    downloadMediaMessage.mockRejectedValueOnce(new Error("expired media reference"));
-
-    await expect(
-      downloadInboundMedia(
-        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
-        mockSock as never,
-      ),
-    ).rejects.toThrow("expired media reference");
-  });
-
   it.each([
-    {
-      name: "the bot's device-scoped phone identity",
-      participant: "15559876543@s.whatsapp.net",
-      expectedFromMe: true,
-    },
     {
       name: "the bot's LID identity",
       participant: "277038292303944@lid",

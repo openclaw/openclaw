@@ -77,7 +77,7 @@ export async function createFaceTimeRuntime(params: {
 
   const calls = new FaceTimeCallRegistry<ActiveFaceTimeCall>();
   const pendingDialStore = new PendingFaceTimeDialStore(
-    params.runtime.state.openKeyedStore({
+    params.runtime.state.openKeyedStoreV2({
       namespace: "pending-dial",
       maxEntries: 1,
       overflowPolicy: "reject-new",
@@ -662,7 +662,7 @@ export async function createFaceTimeRuntime(params: {
                   outboundCallPending !== shutdownPending ||
                   shutdownPending.ownerEpoch !== pendingEpoch
                 ) {
-                  throw new Error("pending FaceTime dial changed during fail-closed shutdown");
+                  throw new Error("pending FaceTime dial changed during shutdown");
                 }
               },
             });

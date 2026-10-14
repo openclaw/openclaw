@@ -41,7 +41,7 @@ function parseBearerToken(request: Request) {
   return token;
 }
 
-function resolveAuthRole(token: string | null): ActorRole {
+function resolveAuthRole(token: string | null, maintainerOnly = false): ActorRole {
   if (!token) {
     throw new BrokerHttpError(
       401,
@@ -50,50 +50,31 @@ function resolveAuthRole(token: string | null): ActorRole {
     );
   }
   const maintainerSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim();
-  const ciSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
-
-  if (!maintainerSecret && !ciSecret) {
+  let ciSecret = maintainerOnly ? undefined : process.env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
+  if (!maintainerSecret && (maintainerOnly || !ciSecret)) {
     throw new BrokerHttpError(
       500,
       "SERVER_MISCONFIGURED",
-      "No Convex broker role secrets are configured on this deployment.",
+      maintainerOnly
+        ? "Admin endpoints require OPENCLAW_QA_CONVEX_SECRET_MAINTAINER on this deployment."
+        : "No Convex broker role secrets are configured on this deployment.",
     );
   }
   if (maintainerSecret && token === maintainerSecret) {
     return "maintainer";
   }
+  if (maintainerOnly) {
+    ciSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
+  }
   if (ciSecret && token === ciSecret) {
+    if (maintainerOnly) {
+      throw new BrokerHttpError(
+        403,
+        "AUTH_ROLE_MISMATCH",
+        "Admin endpoints require maintainer credentials.",
+      );
+    }
     return "ci";
-  }
-  throw new BrokerHttpError(401, "AUTH_INVALID", "Credential broker secret is invalid.");
-}
-
-function assertMaintainerAdminAuth(token: string | null) {
-  if (!token) {
-    throw new BrokerHttpError(
-      401,
-      "AUTH_REQUIRED",
-      "Missing Authorization: Bearer <secret> header.",
-    );
-  }
-  const maintainerSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim();
-  if (!maintainerSecret) {
-    throw new BrokerHttpError(
-      500,
-      "SERVER_MISCONFIGURED",
-      "Admin endpoints require OPENCLAW_QA_CONVEX_SECRET_MAINTAINER on this deployment.",
-    );
-  }
-  if (token === maintainerSecret) {
-    return;
-  }
-  const ciSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
-  if (ciSecret && token === ciSecret) {
-    throw new BrokerHttpError(
-      403,
-      "AUTH_ROLE_MISMATCH",
-      "Admin endpoints require maintainer credentials.",
-    );
   }
   throw new BrokerHttpError(401, "AUTH_INVALID", "Credential broker secret is invalid.");
 }
@@ -284,7 +265,7 @@ async function parseLeaseRequest(request: Request) {
 }
 
 async function parseAdminRequest(request: Request) {
-  assertMaintainerAdminAuth(parseBearerToken(request));
+  resolveAuthRole(parseBearerToken(request), true);
   return await parseJsonObject(request);
 }
 

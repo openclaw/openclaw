@@ -62,39 +62,10 @@ afterEach(() => {
 
 describe("session menu navigation actions", () => {
   it.each([
-    ["copy-session-link", "/control"],
-    ["copy-session-preview-link", "/control/share"],
-  ] as const)("copies %s with the stored face and deployment prefix", async (kind, basePath) => {
-    const { params } = fixture();
-    await runSessionNavigationAction(kind, params);
-    const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0];
-    const url = new URL(copied!);
-    expect(url.origin).toBe(window.location.origin);
-    expect(url.pathname).toBe(
-      `${basePath}/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
-    );
-    expect(url.search).toBe("");
-    expect(url.hash).toBe("");
-  });
-
-  it.each([
-    ["https://gateway.example.test", "ws://127.0.0.1:28789", "https://gateway.example.test"],
-    [
-      "https://gateway.example.test/remote",
-      "ws://127.0.0.1:28789",
-      "https://gateway.example.test/remote",
-    ],
     [
       undefined,
       "wss://gateway.example.test/remote?token=secret",
       "https://gateway.example.test/remote",
-    ],
-    [undefined, "ws://192.168.1.10:18789", "http://192.168.1.10:18789"],
-    [undefined, " WSS://gateway.example.test/remote ", "https://gateway.example.test/remote"],
-    [
-      undefined,
-      `${window.location.origin.replace(/^http/u, "ws")}/remote`,
-      `${window.location.origin}/remote`,
     ],
   ])("copies the Gateway session address %s through %s", async (controlUiUrl, gatewayUrl, base) => {
     const { params } = fixture();

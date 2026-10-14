@@ -96,7 +96,11 @@ export function maintenanceOwnerMayCopySourcesInProcess(
 export const maintenanceResources = resolveGlobalSingleton(
   Symbol.for("openclaw.databaseMaintenanceResources"),
   () => ({
-    current: new AsyncLocalStorage<{ scope: OpenClawDatabaseMaintenanceScope; active: boolean }>(),
+    current: new AsyncLocalStorage<{
+      scope: OpenClawDatabaseMaintenanceScope;
+      active: boolean;
+      workerAccess?: boolean;
+    }>(),
     claims: new WeakMap<
       object,
       MaintenanceResource & { scope: OpenClawDatabaseMaintenanceScope; release: () => void }
@@ -109,6 +113,11 @@ export function getOpenClawDatabaseMaintenanceScope():
   | OpenClawDatabaseMaintenanceScope
   | undefined {
   return maintenanceResources.current.getStore()?.scope;
+}
+
+/** Background work retains command custody without borrowing its native execution path. */
+export function isOpenClawDatabaseMaintenanceWorkerAccess(): boolean {
+  return maintenanceResources.current.getStore()?.workerAccess === true;
 }
 
 /** Doctor selects live source reads only after its pre-mutation backup boundary. */
@@ -144,8 +153,12 @@ export function getOpenClawDatabaseMaintenanceResourceScope(
   return maintenanceResources.claims.get(resource)?.scope;
 }
 
-export function runMaintenance<T>(scope: OpenClawDatabaseMaintenanceScope, operation: () => T): T {
-  const accepted = { scope, active: true };
+export function runMaintenance<T>(
+  scope: OpenClawDatabaseMaintenanceScope,
+  operation: () => T,
+  workerAccess = isOpenClawDatabaseMaintenanceWorkerAccess(),
+): T {
+  const accepted = { scope, active: true, workerAccess };
   try {
     const result = maintenanceResources.current.run(accepted, operation);
     if (result instanceof Promise) {
@@ -182,6 +195,10 @@ export function captureOpenClawDatabaseMaintenanceResource(
     async run<T>(operation: () => Promise<T>): Promise<T> {
       assertCurrent();
       return runMaintenance(expectedScope, operation);
+    },
+    async runWorker<T>(operation: () => Promise<T>): Promise<T> {
+      assertCurrent();
+      return runMaintenance(expectedScope, operation, true);
     },
   };
 }

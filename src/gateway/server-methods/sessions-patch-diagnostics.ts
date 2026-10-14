@@ -9,13 +9,15 @@ const PHASES = [
   "snapshot",
   "projection",
   "catalog",
+  "runtimeSelection",
+  "archivePlacement",
   "worktree",
   "commit",
-  "worktreeCleanup",
   "permissions",
   "lifecycleFinalize",
   "cleanup",
   "effects",
+  "cronEffects",
   "response",
 ] as const;
 type SessionPatchPhase = (typeof PHASES)[number];

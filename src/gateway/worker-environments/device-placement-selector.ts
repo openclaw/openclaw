@@ -1,5 +1,4 @@
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
-import { availableWorkerSlots } from "../../../packages/gateway-protocol/src/worker-capacity.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry } from "../node-registry.js";
@@ -88,9 +87,7 @@ export async function selectDevicePlacementCandidates(params: {
                 0,
                 eligibility.availableSlots - (params.getPendingDispatchCount?.(deviceId) ?? 0),
               )
-            : node.workerSlots
-              ? availableWorkerSlots(node.workerSlots)
-              : 0,
+            : 0,
           eligibility,
         };
       }),
@@ -126,23 +123,16 @@ export async function selectDevicePlacementCandidates(params: {
   if (updateRequired && !updateRequired.eligibility.ok) {
     return { ok: false, error: updateRequired.eligibility.error };
   }
-  const atCapacity =
-    requirement.consumesWorkerSlot && attempts.every(({ availableSlots }) => availableSlots === 0);
-  if (atCapacity) {
-    return {
-      ok: false,
-      error: `all paired session-host nodes are at capacity; ${deviceUnavailableText(
-        attempts[0]!.deviceId,
-        { available: false, unavailableReason: "at-capacity" },
-      )}`,
-    };
-  }
+  // Live eligibility owns the refusal; stale inventory cannot prove capacity.
   const failed = attempts.find(({ eligibility }) => !eligibility.ok);
+  if (failed && !failed.eligibility.ok) {
+    return { ok: false, error: failed.eligibility.error };
+  }
   return {
     ok: false,
-    error:
-      failed && !failed.eligibility.ok
-        ? failed.eligibility.error
-        : "no paired session-host node supports this runtime; check node commands and reconnect an eligible host",
+    error: `all paired session-host nodes are at capacity; ${deviceUnavailableText(
+      attempts[0]!.deviceId,
+      { available: false, unavailableReason: "at-capacity" },
+    )}`,
   };
 }

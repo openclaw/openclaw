@@ -20,11 +20,9 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
+import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
 import {
-  assertCanonicalStateSchemaShape,
-  detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
-} from "./openclaw-state-db-schema-repair.js";
-import {
+  admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
@@ -44,11 +42,11 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     if (scope === "automatic" && getStateRuntimeSchemaAdmission(database)?.startupReady) {
       return false;
     }
+    admitStateSchemaFacts(database, pathname);
     assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
       readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
-      hasLegacyCronRunLogs(database) ||
-      detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
+      hasLegacyCronRunLogs(database);
     if (!needsRepair) {
       assertCurrentStateRuntimeSchema(database, pathname);
       if (scope === "doctor") {
@@ -67,7 +65,7 @@ export function needsOpenClawStateDatabaseSchemaRepair(
 export function assertCurrentStateRuntimeSchema(
   database: DatabaseSync,
   pathname: string,
-  readTable?: SqliteTableContractReader,
+  readTable: SqliteTableContractReader = createSqliteTableContractReader(database),
 ): void {
   assertCanonicalStateSchemaShape(database, pathname);
   assertOpenClawStateDatabaseForMaintenance(database, { pathname }, readTable);
@@ -109,12 +107,6 @@ export function isOpenClawStateSchemaFastPathEligible(
         if (typeof schemaVersion !== "number") {
           throw new Error(`Shared-state database ${pathname} schema version is unavailable.`);
         }
-        publishIntegrity = assertOpenClawStateRuntimeIntegrity(
-          database,
-          pathname,
-          { schemaVersion, userVersion },
-          integrity,
-        );
         // Both policies see this read transaction; repair must collect fresh facts after it ends.
         const readTable = createSqliteTableContractReader(database);
         assertCurrentStateRuntimeSchema(database, pathname, readTable);
@@ -128,6 +120,12 @@ export function isOpenClawStateSchemaFastPathEligible(
           return false;
         }
         assertNoLegacyStateRuntimeRepair(database, pathname);
+        publishIntegrity = assertOpenClawStateRuntimeIntegrity(
+          database,
+          pathname,
+          { schemaVersion, userVersion },
+          integrity,
+        );
         return true;
       },
       { operationLabel: "state.admission.fast-path" },

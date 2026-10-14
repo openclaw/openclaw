@@ -3,8 +3,12 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../extensions/openai/api.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../src/gateway/local-request-context.js";
+import { bindSessionRowProjection } from "../src/gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../src/gateway/session-row-projection.js";
 import { talkHandlers } from "../src/gateway/talk/handlers/index.js";
 import { getPluginRuntimeGatewayRequestScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../src/plugins/types.js";
@@ -73,14 +77,18 @@ vi.mock("../src/gateway/talk/client-agent-consult.js", () => ({
 }));
 vi.mock("../src/gateway/talk/client-gateway-control.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/gateway/talk/client-gateway-control.js")>()),
-  createTalkClientGatewayControlOwner: () => ({
-    control: { bindBridge: () => undefined },
-    runAgentConsult: async () => ({ text: "Done" }),
-    assertOpen: () => undefined,
-    adoptProvider: async () => undefined,
-    activate: () => undefined,
-    close: async () => undefined,
-  }),
+  createTalkClientGatewayControlOwner: () => {
+    const lifetime = new AbortController();
+    return {
+      signal: lifetime.signal,
+      control: { bindBridge: () => undefined },
+      runAgentConsult: async () => ({ text: "Done" }),
+      assertOpen: () => undefined,
+      adoptProvider: async () => undefined,
+      activate: () => undefined,
+      close: async () => lifetime.abort(),
+    };
+  },
 }));
 vi.mock("../src/talk/client-voice-session-read.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/talk/client-voice-session-read.js")>()),
@@ -167,6 +175,13 @@ describe("OpenAI browser Talk catalog defaults", () => {
             },
           },
         };
+        await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "agent:main:main" },
+          { sessionId: "test-agent-session", updatedAt: 1, visibility: "shared" },
+        );
+        const projection = await createSessionRowProjection({ cfg });
         const provider = buildOpenAIRealtimeVoiceProvider({
           quicksilverBrowserSessionBroker: {
             capabilities: { handlesAgentConsult: true },
@@ -216,6 +231,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
               if (!context) {
                 throw new Error("Local Gateway context was not installed");
               }
+              bindSessionRowProjection(context, () => projection);
               await handler({
                 req: { type: "req", id: method, method },
                 params,
@@ -247,6 +263,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
                     sessionKey: "agent:main:main",
                     canonicalKey: "agent:main:main",
                     storePath: state.sessionsDir(),
+                    assertCurrent: () => undefined,
                   },
                   assertCurrent: () => undefined,
                   assertTargetCurrent: () => undefined,
@@ -292,7 +309,11 @@ describe("OpenAI browser Talk catalog defaults", () => {
             );
           }
         } finally {
-          void session.stop();
+          try {
+            await session.stop();
+          } finally {
+            projection.dispose();
+          }
         }
       });
     },

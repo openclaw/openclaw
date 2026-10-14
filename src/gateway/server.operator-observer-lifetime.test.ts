@@ -17,6 +17,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as approvalWebPush from "./approval-web-push.js";
 import { issueOperatorToken } from "./device-authz.test-helpers.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
+import * as approvalStore from "./operator-approval-store.js";
 import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -438,6 +439,21 @@ describe("public Gateway close operator observer lifetime", () => {
 });
 
 describe("public Gateway close startup presentation lifetime", () => {
+  it("refuses startup when durable approval recovery fails", async () => {
+    const recovery = vi
+      .spyOn(approvalStore, "recoverOperatorApprovalsOnStartup")
+      .mockRejectedValueOnce(new Error("synthetic approval recovery failure"));
+    try {
+      await expect(
+        createGatewaySuiteHarness({
+          serverOptions: { bind: "loopback", auth: { mode: "none" } },
+        }),
+      ).rejects.toThrow("synthetic approval recovery failure");
+    } finally {
+      recovery.mockRestore();
+    }
+  });
+
   it("starts without waiting for approval recovery but joins it before close returns", async ({
     signal,
   }) => {

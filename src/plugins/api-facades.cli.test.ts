@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { Argument, Command, Option } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError, isExpectedCliError } from "../cli/failure-output.js";
 import { createPluginRuntimeStore, type PluginRuntime } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { buildPluginApi } from "./api-builder.js";
@@ -63,6 +64,83 @@ afterEach(async () => {
 });
 
 describe("managed CLI callbacks", () => {
+  it.each(["async", "sync", "commander", "hook", "prepared action", "prepared hook"])(
+    "reports failures from a plugin %s through the expected-error boundary",
+    async (kind) => {
+      const host = new Command();
+      const owner = fixture();
+      const error = new Error("--limit must be a positive integer");
+      if (kind === "commander") {
+        Object.assign(error, {
+          name: "InvalidArgumentError",
+          code: "commander.invalidArgument",
+          exitCode: 1,
+        });
+      }
+      const fail = () => {
+        throw error;
+      };
+      await owner.register(host, ({ program }) => {
+        const prepared = kind.startsWith("prepared");
+        const command = prepared ? new Command("fail") : program.command("fail");
+        if (kind.endsWith("hook")) {
+          command.hook("preAction", fail).action(() => {});
+        } else {
+          command.action(kind === "async" ? async () => fail() : fail);
+        }
+        if (prepared) {
+          program.addCommand(new Command("parent").addCommand(command));
+        }
+      });
+
+      const args = kind.startsWith("prepared") ? ["parent", "fail"] : ["fail"];
+      if (kind === "sync") {
+        expect(() => host.parse(args, { from: "user" })).toThrow(ExpectedCliError);
+      }
+      await expect(host.parseAsync(args, { from: "user" })).rejects.toSatisfy(
+        (failure: unknown) => isExpectedCliError(failure) && failure.message === error.message,
+      );
+    },
+  );
+
+  it("preserves Commander's already-reported action exit", async () => {
+    const host = new Command();
+    const owner = fixture();
+    const writeErr = vi.fn();
+    let reported: unknown;
+    await owner.register(host, ({ program }) => {
+      program
+        .command("fail")
+        .configureOutput({ writeErr })
+        .exitOverride((error) => {
+          reported = error;
+          throw error;
+        })
+        .action(function () {
+          this.error("already reported");
+        });
+    });
+
+    await expect(host.parseAsync(["fail"], { from: "user" })).rejects.toSatisfy(
+      (error: unknown) => error === reported && !(error instanceof ExpectedCliError),
+    );
+    expect(reported).toMatchObject({ name: "CommanderError", exitCode: 1 });
+    expect(writeErr).toHaveBeenCalledWith("already reported\n");
+  });
+
+  it("leaves host-owned action errors unchanged", async () => {
+    const host = new Command();
+    const error = new Error("host failure");
+    host.command("host").action(() => {
+      throw error;
+    });
+    await fixture().register(host, ({ program }) => {
+      program.command("plugin").action(() => {});
+    });
+
+    await expect(host.parseAsync(["host"], { from: "user" })).rejects.toBe(error);
+  });
+
   it("keeps native fluent/subclass identity and scopes delayed action, hook and parser callbacks", async () => {
     class NativeCommand extends Command {
       #marker = "native";

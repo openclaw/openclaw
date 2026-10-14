@@ -35,6 +35,7 @@ it.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arc
         extinct: true,
         owner: "linux-subreaper",
       },
+      { label: "realtime-signal", signalNumber: 34, extinct: true },
       {
         label: "startup-failed",
         code: null,

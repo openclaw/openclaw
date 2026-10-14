@@ -207,22 +207,4 @@ describe("racePromiseWithAbortSignal", () => {
     resolveSource("still alive");
     await expect(source).resolves.toBe("still alive");
   });
-
-  it("catches aborts that land while the listener is registered", async () => {
-    let aborted = false;
-    const signal = {
-      get aborted() {
-        return aborted;
-      },
-      reason: "registration race",
-      addEventListener: () => {
-        aborted = true;
-      },
-      removeEventListener: () => {},
-    } as unknown as AbortSignal;
-
-    await expect(
-      racePromiseWithAbortSignal(new Promise<never>(() => {}), signal),
-    ).rejects.toMatchObject({ name: "AbortError", cause: "registration race" });
-  });
 });

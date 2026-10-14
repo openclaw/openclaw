@@ -1,16 +1,12 @@
 import { randomBytes } from "node:crypto";
-import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseModelRef } from "openclaw/plugin-sdk/model-ref-parse";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  runCommandWithTimeout,
-  type CommandOptions,
-  type SpawnResult,
-} from "openclaw/plugin-sdk/process-runtime";
+import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
   withConfiguredModelEgress,
   type ConfiguredModelEgress,
 } from "openclaw/plugin-sdk/secret-egress-runtime";
+import { runCrabboxProcess } from "./crabbox-process.js";
 
 const UPSTREAM_PROXY_ENV = "CRABBOX_MODEL_PROXY";
 const MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -72,7 +68,7 @@ export async function runCrabboxModelCommand(params: CrabboxModelRunOptions): Pr
     args: string[],
     options: Pick<CommandOptions, "env" | "input" | "onOutputChunk"> = {},
   ) =>
-    runCommandWithTimeout([params.binary, "egress", "run", ...args], {
+    runCrabboxProcess([params.binary, "egress", "run", ...args], {
       timeoutMs: params.timeoutMs,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       killProcessTree: true,
@@ -118,11 +114,7 @@ export async function runCrabboxModelCommand(params: CrabboxModelRunOptions): Pr
       if (result.cleanup === "uncertain") {
         throw new Error("Crabbox could not confirm that the command stopped");
       }
-      return {
-        ...result,
-        stdout: redactSensitiveText(result.stdout),
-        stderr: redactSensitiveText(result.stderr),
-      };
+      return result;
     },
   );
 }

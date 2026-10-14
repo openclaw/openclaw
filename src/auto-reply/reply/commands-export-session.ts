@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import { isSessionFileEntry } from "../../agents/sessions/session-file-parser.js";
 import {
   migrateSessionEntries,
@@ -38,15 +38,16 @@ interface SessionData {
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
 
-function hasPersistedAcpSession(params: {
+async function hasPersistedAcpSession(params: {
+  cfg: HandleCommandsParams["cfg"];
   sessionKey: string;
   entry: StoredSessionEntry;
-}): boolean {
+}): Promise<boolean> {
   if (params.entry.acp) {
     return true;
   }
   try {
-    return Boolean(readAcpSessionMetaForEntry(params));
+    return Boolean(await readAcpSessionMetaForEntryAsync(params));
   } catch {
     return false;
   }
@@ -236,7 +237,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (args.error) {
     return { text: args.error };
   }
-  const sessionTarget = resolveExportCommandSessionTarget(params);
+  const sessionTarget = await resolveExportCommandSessionTarget(params);
   if ("text" in sessionTarget) {
     return sessionTarget;
   }
@@ -256,7 +257,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     sessionEntry: entry,
   });
 
-  const hasStoredAcpSession = hasPersistedAcpSession({
+  const hasStoredAcpSession = await hasPersistedAcpSession({
+    cfg: params.cfg,
     sessionKey: params.sessionKey,
     entry,
   });

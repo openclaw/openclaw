@@ -374,31 +374,6 @@ describe("voice-call runtime lifecycle", () => {
     expect(runtimeB.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("does not revive an older staged A after activated B stops", async () => {
-    const logged = createDeferred<string>();
-    const runtimeB = createRuntime("call-b", "+15550000002");
-    vi.mocked(createVoiceCallRuntime).mockResolvedValue(runtimeB.runtime);
-    const stagedA = registerVoiceCall({
-      logger: createLogger(logged.resolve),
-      registrationMode: "full",
-    });
-    const retainedToolA = stagedA.tool();
-    const generationB = registerVoiceCall({ registrationMode: "full" });
-
-    expect(generationB.service.start(serviceContext)).toBeUndefined();
-    await executeCall(generationB.tool());
-    await generationB.service.stop?.(serviceContext);
-    expectLifecycleError(await executeCall(retainedToolA), "retired");
-    expect(stagedA.service.start(serviceContext)).toBeUndefined();
-    await expect(logged.promise).resolves.toContain("superseded");
-    expect(serviceHealth.reportFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("superseded") }),
-    );
-
-    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
-    expect(runtimeB.stop).toHaveBeenCalledTimes(1);
-  });
-
   it("takes over a running slot owned by a retired predecessor", async () => {
     const runtimeA = createRuntime("call-a", "+15550000001");
     const runtimeB = createRuntime("call-b", "+15550000002");

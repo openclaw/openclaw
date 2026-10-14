@@ -8,7 +8,8 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
-import { ChatSummaryAutomationsElement } from "./chat-summary-automations.ts";
+import type { ChatSummaryAutomationsElement } from "./chat-summary-automations.tsx";
+import "./chat-summary-automations.tsx";
 
 function job(overrides: Partial<CronCompactJob> = {}): CronCompactJob {
   return {
@@ -65,7 +66,9 @@ function source(request = createGatewayRequestMock(async () => page())) {
 const mounted: HTMLElement[] = [];
 const observers: MutationObserver[] = [];
 function component(gateway: ApplicationGateway, presented = true) {
-  const element = new ChatSummaryAutomationsElement();
+  const element = document.createElement(
+    "openclaw-chat-summary-automations",
+  ) as ChatSummaryAutomationsElement;
   element.gateway = gateway;
   element.sessionKey = "agent:ops:task";
   element.presented = presented;
@@ -145,12 +148,48 @@ describe("Details compact automations", () => {
     const link = element.querySelector<HTMLAnchorElement>(".chat-summary__automation")!;
     expect(link.getAttribute("href")).toBe("/automations?job=summary-job");
     expect(link.textContent).toContain("Every 10m");
-    expect(link.querySelector("openclaw-summary-overflow")?.getAttribute("title")).toBe(fullTitle);
+    expect(link.querySelector(".chat-summary__automation-title")?.textContent?.trim()).toBe(
+      fullTitle,
+    );
+    expect(
+      element.querySelector<HTMLDetailsElement>('[data-details-group="automations"]')?.open,
+    ).toBe(true);
     expect(link.querySelector("svg")).not.toBeNull();
     element.onNavigate = vi.fn();
     link.click();
     expect(element.onNavigate).toHaveBeenCalledWith("summary-job");
     expect(current.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits confirmed-empty sections and preserves manual collapse until the content disappears", async () => {
+    const current = source(
+      createGatewayRequestMock()
+        .mockResolvedValueOnce(page())
+        .mockResolvedValue(page([job()])),
+    );
+    const element = component(current.gateway);
+    await element.updateComplete;
+    await observe(element, () => element.querySelector(".chat-summary__automations") === null);
+    expect(element.querySelector("summary")).toBeNull();
+    current.publishEvent({ type: "event", event: "cron", payload: { action: "added" } });
+    await textReady(element, "Check the task");
+    const group = element.querySelector<HTMLDetailsElement>("details")!;
+    expect(group.open).toBe(true);
+    group.open = false;
+    group.dispatchEvent(new Event("toggle"));
+    await element.updateComplete;
+    current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+    await element.updateComplete;
+    await textReady(element, "Check the task");
+    expect(element.querySelector("details")).toBe(group);
+    expect(group.open).toBe(false);
+    current.request.mockResolvedValueOnce(page());
+    current.publishEvent({ type: "event", event: "cron", payload: { action: "removed" } });
+    await observe(element, () => element.querySelector(".chat-summary__automations") === null);
+    expect(element.querySelector("summary")).toBeNull();
+    current.publishEvent({ type: "event", event: "cron", payload: { action: "added" } });
+    await textReady(element, "Check the task");
+    expect(element.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
   });
 
   it("keeps Retry focused while pending, preserves sibling disclosure, and moves focus only after its own success", async () => {
@@ -199,7 +238,7 @@ describe("Details compact automations", () => {
     document.body.append(composer);
     composer.focus();
     pending.resolve(page());
-    await textReady(element, "No automations for this session");
+    await observe(element, () => element.querySelector(".chat-summary__automations") === null);
     expect(document.activeElement).toBe(composer);
     expect(composer.value).toBe("Keep my draft");
   });

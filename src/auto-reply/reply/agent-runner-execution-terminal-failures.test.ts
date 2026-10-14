@@ -5,6 +5,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
+import { buildPayloads } from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
   formatBillingErrorMessage,
@@ -21,8 +22,10 @@ import {
   createAgentRunSupersededAbortError,
   createSessionPlacementSettlementClosedAbortError,
 } from "../../agents/run-termination.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
@@ -31,6 +34,7 @@ import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
+  getRawExecuteAgentTurnForTest,
   createRunAgentTurnParams,
   createMockTypingSignaler,
   createFollowupRun,
@@ -46,6 +50,75 @@ import { createReplyOperation } from "./reply-run-registry.js";
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: terminal failures", () => {
+  it.each([0, 1, 9])(
+    "preserves retry exhaustion through returned provider payloads (%s)",
+    async (retries) => {
+      const rawError = "429 rate limit exceeded. Please try again in 221ms.";
+      const payloads = buildPayloads({
+        provider: "external",
+        lastAssistant: makeAssistantMessageFixture({
+          provider: "external",
+          model: "primary",
+          errorMessage: rawError,
+        }),
+        rateLimitRetriesExhausted: retries,
+      });
+      expect(getReplyPayloadMetadata(payloads[0]!)?.providerFailure).toMatchObject({
+        rawError,
+        rateLimitRetriesExhausted: retries,
+      });
+      state.runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          payloads,
+          meta: {
+            durationMs: 1,
+            replayInvalid: true,
+            error: { kind: "incomplete_turn", message: rawError, fallbackSafe: false },
+          },
+        },
+        provider: "external",
+        model: "primary",
+        attempts: [],
+      });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
+      const text = JSON.stringify(result);
+      expect(text).toContain(
+        retries === 0
+          ? "recovery is disabled"
+          : `${retries} automatic ${retries === 1 ? "retry" : "retries"}`,
+      );
+      // Diagnostics keep the raw hint, but the delivered payload names exhaustion.
+      if (result.kind !== "success") {
+        throw new Error("expected success result");
+      }
+      expect(result.runResult.payloads?.[0]?.text).not.toContain("221ms");
+    },
+  );
+
+  it.each([
+    "429 rate limit exceeded. Please try again in 221ms.",
+    "HTTP 429: An error occurred while processing your request. Try again in 221ms.",
+  ])("preserves retry exhaustion through external thrown failures (%s)", async (rawError) => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new FailoverError(rawError, {
+        rawError,
+        status: 429,
+        reason: "rate_limit",
+        rateLimitRetriesExhausted: 9,
+      }),
+    );
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
+      ...createRunAgentTurnParams(createFollowupRun()),
+      sessionCtx: { Provider: "whatsapp", MessageSid: "message" },
+    });
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("9 automatic retries");
+    }
+  });
+
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       createTestFallbackSummaryError({
@@ -195,7 +268,7 @@ describe("executeAgentTurn: terminal failures", () => {
     const error = createSessionPlacementSettlementClosedAbortError();
     state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
     try {
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
       const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
       expect(result.outcome.kind).toBe("rejected");
       if (result.outcome.kind === "rejected") {
@@ -222,6 +295,14 @@ describe("executeAgentTurn: terminal failures", () => {
 
   it.each([
     { reason: "restart", code: "aborted_for_restart", phase: "end", stopReason: "restart" },
+    {
+      reason: "restart",
+      code: "aborted_for_restart",
+      phase: "end",
+      stopReason: "restart",
+      backendOwned: true,
+      restartError: true,
+    },
     {
       reason: "superseded",
       code: "aborted_for_supersession",
@@ -260,7 +341,7 @@ describe("executeAgentTurn: terminal failures", () => {
       state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
         if (reason === "superseded") {
           replyOperation.supersede();
-        } else {
+        } else if (!("backendOwned" in testCase)) {
           const abortReason =
             reason === "restart"
               ? createAgentRunRestartAbortError()
@@ -279,7 +360,7 @@ describe("executeAgentTurn: terminal failures", () => {
       });
 
       try {
-        const { executeAgentTurn } = await import("./agent-runner-execution.js");
+        const executeAgentTurn = await getRawExecuteAgentTurnForTest();
         const result = await executeAgentTurn({
           ...createMinimalRunAgentTurnParams({
             replyOperation: "supersededError" in testCase ? undefined : replyOperation,
@@ -312,7 +393,7 @@ describe("executeAgentTurn: terminal failures", () => {
   it.for([false, true])(
     "preserves the prior terminal row when cancellation precedes execution (started=%s)",
     async (started, { signal }) => {
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
       const { emitAgentEvent } = await import("../../infra/agent-events.js");
       const reachedBoundary = createDeferred();
       const release = createDeferred();
@@ -420,7 +501,7 @@ describe("executeAgentTurn: terminal failures", () => {
       complete,
     } satisfies typeof replyOperation;
     state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
     const execution = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ replyOperation: restartReplyOperation }),

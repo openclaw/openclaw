@@ -98,6 +98,7 @@ export function createDiscordClient(opts: DiscordClientOpts) {
   const request = createDiscordRetryRunner({
     retry: opts.retry,
     verbose: opts.verbose,
+    signal: opts.signal,
     isGatewayDisconnected: () => {
       const gateway = getGateway(restAccount.accountId);
       return gateway !== undefined && !gateway.isConnected;

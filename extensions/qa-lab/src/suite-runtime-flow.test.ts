@@ -412,6 +412,67 @@ describe("qa suite runtime flow", () => {
     expect(readLogsSince).toHaveBeenCalledTimes(3);
   });
 
+  it.each([
+    ["fail", true],
+    ["pass", false],
+  ] as const)(
+    "attaches scenario-window gateway sentinels only to a failed step (%s)",
+    async (outcome, expectEvidence) => {
+      const finalReplyFailure =
+        "[telegram] final reply failed: SqliteWorkerError: Session actor version changed before command admission";
+      const readLogsSince = vi.fn((mark: number) =>
+        mark === 4_096 ? `gateway ready\n${finalReplyFailure}\n` : "stale scenario logs",
+      );
+      const env = createQaSuiteRuntimeFlowTestEnv();
+      env.gateway = {
+        markLogs: () => 4_096,
+        readLogsSince,
+      } as unknown as QaSuiteRuntimeEnv["gateway"];
+      createQaScenarioRuntimeApi.mockImplementationOnce(
+        (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+          runScenario: params.deps.runScenario,
+        }),
+      );
+      runScenarioFlow.mockImplementationOnce(async (params) => {
+        const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+        return await api.runScenario("Terminal reply", [
+          { name: "visible", run: async () => undefined },
+          {
+            name: "silent",
+            run: async () => {
+              if (outcome === "fail") {
+                throw new Error("[public:silent] timed out after 60000ms");
+              }
+            },
+          },
+        ]);
+      });
+
+      const result = await runQaSuiteScenarioDefinition({
+        env,
+        scenario: makeQaSuiteTestScenario("gateway-sentinel-evidence", { config: {} }),
+        runScenario: runQaSuiteScenarioSteps,
+        constants: qaSuiteRuntimeFlowTestConstants,
+      });
+
+      if (!expectEvidence) {
+        expect(result.status).toBe("pass");
+        expect(readLogsSince).not.toHaveBeenCalled();
+        return;
+      }
+      // Scenario-level details feed keyword classifiers and stay unchanged.
+      expect(result.details).toBe("[public:silent] timed out after 60000ms");
+      expect(result.steps.map((step) => step.details)).toEqual([
+        undefined,
+        [
+          "[public:silent] timed out after 60000ms",
+          "Gateway log sentinel(s) during scenario:",
+          `final-reply-delivery-failure@2 product-bug owner=openclaw-routing: ${finalReplyFailure}`,
+        ].join("\n"),
+      ]);
+    },
+  );
+
   it("does not turn the preparation fallback into a whole-flow deadline", async () => {
     vi.useFakeTimers();
     try {

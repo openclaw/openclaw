@@ -779,7 +779,7 @@ ${packageNames.map((name) => `  ${name}@1.0.0: {}`).join("\n")}
           expect(stdoutChunks.join("")).toContain(
             "Upstream repository advisories were not checked",
           );
-          expect(stdoutChunks.join("")).toContain("not comprehensive vulnerability clearance");
+          expect(stdoutChunks.join("")).toContain("not a full vulnerability assessment");
         }
       } finally {
         vi.unstubAllEnvs();

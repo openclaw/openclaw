@@ -6,7 +6,7 @@ import {
   normalizeOptionalAgentRuntimeId,
 } from "../../agents/agent-runtime-id.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
@@ -53,6 +53,7 @@ export function readPreparedChatMetadata(
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
   acpMeta: SessionAcpMeta | null,
+  runtimeOwnership: AgentHarnessSessionRuntimeOwnership | undefined,
   readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
 ): ChatMetadataResult {
   readParams.draftAccountSelection?.assertCurrent();
@@ -69,7 +70,10 @@ export function readPreparedChatMetadata(
       }),
   };
   const projected = metadata.models
-    ? { ...metadata, models: projectSessionModelCatalog(readParams, metadata.models, config) }
+    ? {
+        ...metadata,
+        models: projectSessionModelCatalog(readParams, metadata.models, config, runtimeOwnership),
+      }
     : metadata;
   if (!readParams.sessionKey) {
     return projected;
@@ -250,13 +254,13 @@ function resolveRequiredWorkerInferenceProfileId(
     : undefined;
 }
 
-// Read native ownership after profile projection; never cache this session overlay.
+// Native ownership is prepared for this read after profile projection, never cached by agent.
 export function projectSessionModelCatalog(
   readParams: ChatMetadataReadParams,
   models: ModelChoice[],
   config: OpenClawConfig,
+  ownership: AgentHarnessSessionRuntimeOwnership | undefined,
 ): ModelChoice[] {
-  const ownership = readSessionRuntimeOwnership({ ...readParams, config });
   const requiredWorker = resolveRequiredWorkerInferenceProfileId(readParams, config);
   const nativeAuth = ownership?.auth === "native";
   const entry = readParams.sessionEntry;

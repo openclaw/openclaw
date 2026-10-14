@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
+import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
-import { renderAgentRowChip } from "./agent-row-chip.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import "./agent-row-chip.tsx";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -25,10 +26,11 @@ it("uses loaded agent names and avatars, preserving default and unknown ownershi
     },
   );
   const provider = createApplicationContextProvider(context);
-  render(
-    html`${renderAgentRowChip()}${renderAgentRowChip("research")}${renderAgentRowChip("retired")}`,
-    provider,
-  );
+  for (const agentId of [undefined, "research", "retired"]) {
+    const chip = document.createElement("openclaw-agent-row-chip");
+    chip.agentId = agentId;
+    provider.append(chip);
+  }
   document.body.append(provider);
   await Promise.all(
     [...provider.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
@@ -58,4 +60,32 @@ it("uses loaded agent names and avatars, preserving default and unknown ownershi
     ["retired", "agent:retired", "agent:retired"],
   ]);
   expect(request).not.toHaveBeenCalled();
+});
+
+it("updates a mounted chip when the identity owner publishes", async () => {
+  const client = createTestGatewayClient(async () => ({
+    agentId: "research",
+    name: "Research Lab",
+    emoji: "🧪",
+  }));
+  const gateway = createGateway(client);
+  const identities = createAgentIdentityCapability(gateway);
+  const context = createContext(gateway, createSessions("research", []), null, [], identities);
+  const provider = createApplicationContextProvider(context);
+  const mountedChip = document.createElement("openclaw-agent-row-chip");
+  mountedChip.agentId = "research";
+  provider.append(mountedChip);
+  document.body.append(provider);
+  const chip = provider.querySelector("openclaw-agent-row-chip");
+  await chip?.updateComplete;
+  expect(provider.querySelector(".agent-row-chip__name")?.textContent).toBe("research");
+
+  await identities.ensure(["research"]);
+  await waitForSolid(() => {
+    expect(provider.querySelector(".agent-row-chip__name")?.textContent).toBe("Research Lab");
+    expect(provider.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+      "🧪",
+    );
+  });
+  expect(provider.querySelector("openclaw-agent-row-chip")).toBe(chip);
 });

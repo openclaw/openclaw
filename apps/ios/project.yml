@@ -3,7 +3,7 @@ options:
   preGenCommand: bash ../../scripts/ios-generate-test-tls-identity.sh && node ../../scripts/prepare-apple-mermaid.mjs
   bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
-    iOS: "18.0"
+    iOS: "26.2"
   xcodeVersion: "26.0"
 
 settings:

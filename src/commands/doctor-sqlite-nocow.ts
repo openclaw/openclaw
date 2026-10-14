@@ -6,7 +6,7 @@ import path from "node:path";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
-import { copyFileHandle, sameFileMutationFingerprint } from "../infra/file-descriptor.js";
+import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -15,6 +15,7 @@ import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wa
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
+import { reconcileNoCowRecoveryIdentities } from "./doctor-sqlite-nocow-recovery-identity.js";
 
 const TOOL_TIMEOUT_MS = 2_000;
 const FUSER_MAX_PATHS = 2_000;
@@ -92,10 +93,6 @@ function runAclTool(command: "getfacl" | "setfacl", args: string[], input?: stri
 
 function readAcl(pathname: string): string {
   return runAclTool("getfacl", ["-cEpn", "--", pathname]);
-}
-
-function sameDirectoryMetadata(left: fs.BigIntStats, right: fs.BigIntStats): boolean {
-  return (["dev", "ino", "mode", "uid", "gid"] as const).every((key) => left[key] === right[key]);
 }
 
 function preserveMetadata(target: string, original: fs.BigIntStats, acl: string) {
@@ -200,7 +197,7 @@ function assertNoOpenFiles(paths: readonly string[]) {
   }
   if (inspectionError) {
     throw new Error(
-      `fuser could not establish that all handles are closed: ${inspectionError}; ensure fuser is installed and can inspect processes using this store`,
+      `fuser could not establish that all handles are closed: ${inspectionError}; check that fuser is installed and can inspect processes using this store`,
     );
   }
 }
@@ -227,6 +224,7 @@ function readStoreEntries(directory: string): fs.Dirent[] {
 export async function repairDoctorSqliteNoCow(params: {
   paths: readonly string[];
   stateDir: string;
+  env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
 }): Promise<MigrationMessages> {
   const help = spawnSync("mv", ["--help"], { encoding: "utf8", timeout: TOOL_TIMEOUT_MS });
@@ -402,60 +400,7 @@ export async function repairDoctorSqliteNoCow(params: {
           "SQLite NOCOW staging directory",
         );
       }
-      params.assertCurrent();
-      const observedFiles = readStoreEntries(directory).map((entry) =>
-        path.join(entry.parentPath, entry.name),
-      );
-      for (const pathname of sqlitePaths) {
-        params.assertCurrent();
-        retireSqliteDatabaseAdmissionForPath(pathname, { requireSoleDescriptor: true });
-      }
-      assertNoOpenFiles(observedFiles.filter((pathname) => fs.lstatSync(pathname).isFile()));
-      // A file can appear while fuser checks the previously observed inventory.
-      const currentIdentity = fs.statSync(directory, { bigint: true });
-      const currentFiles = readStoreEntries(directory)
-        .map((entry) => path.join(entry.parentPath, entry.name))
-        .filter((pathname) => {
-          if (sharedMemoryPaths.has(pathname) && fs.lstatSync(pathname).isFile()) {
-            return false;
-          }
-          // Reading a cleanly closed WAL database can create an empty WAL beside the source.
-          if (
-            pathname.endsWith("-wal") &&
-            sqlitePaths.has(pathname.slice(0, -4)) &&
-            !sourceFiles.has(pathname)
-          ) {
-            const stat = fs.lstatSync(pathname);
-            return !stat.isFile() || stat.size !== 0;
-          }
-          return true;
-        });
-      if (
-        !sameDirectoryMetadata(currentIdentity, sourceIdentity) ||
-        readAcl(directory) !== sourceAcls.get(directory) ||
-        currentFiles.length !== sourceFiles.size ||
-        currentFiles.some((pathname) => {
-          const expected = sourceFiles.get(pathname);
-          const current = fs.lstatSync(pathname, { bigint: true });
-          return (
-            !expected ||
-            (expected.isDirectory()
-              ? !current.isDirectory() ||
-                !sameDirectoryMetadata(expected, current) ||
-                readAcl(pathname) !== sourceAcls.get(pathname)
-              : !sameFileMutationFingerprint(expected, current) ||
-                (expected.isSymbolicLink() &&
-                  (!current.isSymbolicLink() ||
-                    !fs
-                      .readlinkSync(pathname, { encoding: "buffer" })
-                      .equals(sourceLinks.get(pathname)!))))
-          );
-        })
-      ) {
-        throw new Error(
-          "source store changed during the NOCOW rewrite; original retained for retry",
-        );
-      }
+      // Offline maintenance excludes writers; unsupported outside writes remain in the retained original.
       const original = fs.statSync(directory);
       const replacement = fs.statSync(backup);
       params.assertCurrent();
@@ -489,6 +434,21 @@ export async function repairDoctorSqliteNoCow(params: {
         await syncDirectory(path.dirname(directory)),
         "SQLite NOCOW store parent",
       );
+      // Keep recovery-manifest identities truthful for the originals this rewrite relocated.
+      // Bookkeeping only: a failure leaves cleanup conservative and never unsettles the store.
+      try {
+        result.warnings.push(
+          ...reconcileNoCowRecoveryIdentities({
+            env: params.env,
+            previousIdentities: inventory,
+            assertCurrent: params.assertCurrent,
+          }),
+        );
+      } catch (error) {
+        result.warnings.push(
+          `NOCOW recovery-identity reconciliation failed for ${directory}: ${String(error)}`,
+        );
+      }
       result.changes.push(
         `Rewrote SQLite store directory with NOCOW: ${directory}. Original retained at ${backup}; verified WAL-aware snapshots at ${snapshotRoot}.`,
       );

@@ -33,6 +33,7 @@ import type {
   CommandQueueEnqueueOptions,
   CommandQueueTaskDeadline,
 } from "./command-queue.types.js";
+import { isExpectedRunCancellation } from "./expected-run-cancellation.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -101,7 +102,10 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
 }
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
-  return err instanceof Error && err.name === "LiveSessionModelSwitchError";
+  return (
+    (err instanceof Error && err.name === "LiveSessionModelSwitchError") ||
+    isExpectedRunCancellation(err)
+  );
 }
 
 function isQuietProbeLane(lane: string): boolean {
@@ -151,6 +155,7 @@ function retireIdleScopedCommandLane(state: LaneState): void {
       (state.maxConcurrent !== 1 ||
         (!state.lane.startsWith("session:") &&
           !state.lane.startsWith("nested:") &&
+          !state.lane.startsWith("cli:") &&
           !state.lane.startsWith("context-engine-turn-maintenance:"))))
   ) {
     return;
@@ -692,13 +697,13 @@ export function prepareCommandLaneClear(lane: string, matches: CommandLaneEntryF
   const cleaned = normalizeLane(lane);
   const state = getQueueState().lanes.get(cleaned);
   const entries = state ? selectQueuedCommandEntries(state, matches) : [];
-  return () => {
+  return (select: CommandLaneEntryFilter = () => true) => {
     if (!state || getQueueState().lanes.get(cleaned) !== state) {
       return 0;
     }
     let removed = 0;
     for (const entry of entries) {
-      if (removeLaneQueueEntry(state.queue, entry)) {
+      if (select(entry.sessionTarget) && removeLaneQueueEntry(state.queue, entry)) {
         removed += 1;
         entry.reject(new CommandLaneClearedError(cleaned));
       }

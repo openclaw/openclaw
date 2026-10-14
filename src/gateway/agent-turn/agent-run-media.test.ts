@@ -12,6 +12,7 @@ import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -35,7 +36,7 @@ import { resolveManagedOutgoingMediaArtifactDownload } from "../managed-image-at
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
 import * as replyMedia from "../server-methods/chat-reply-media.js";
 import * as transcriptMedia from "../server-methods/chat-transcript-persistence.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 import { dispatchAgentRunWithMedia } from "./agent-run-media.js";
@@ -50,6 +51,14 @@ vi.mock("../../commands/agent.js", () => ({ agentCommandFromGatewayIngress: mock
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.embedded }));
 
 afterEach(() => vi.restoreAllMocks());
+
+async function writeMediaImage(state: OpenClawTestState, name: string) {
+  const imagePath = path.join(state.workspaceDir, name);
+  const png = createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 });
+  await fs.mkdir(state.workspaceDir, { recursive: true });
+  await fs.writeFile(imagePath, png);
+  return { imagePath, png };
+}
 
 async function runMediaTurn(
   state: OpenClawTestState,
@@ -87,11 +96,13 @@ async function runMediaTurn(
     plugins: { enabled: false },
   };
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   const scope = {
     agentId: "main",
     sessionId,
     sessionKey,
-    storePath: logicalStore ?? loadSessionEntry(sessionKey, { agentId: "main" }).storePath,
+    storePath:
+      logicalStore ?? (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).storePath,
   };
   const transcriptScope = {
     ...scope,
@@ -250,7 +261,12 @@ async function runMediaTurn(
       context,
       isIncognito: final?.incognito,
     },
-    { cfg, client: null, activeSessionAgentId: "main" },
+    {
+      cfg,
+      client: null,
+      activeSessionAgentId: "main",
+      prepared: { lifecycleStorePath: scope.storePath },
+    },
   );
   return {
     result,
@@ -260,7 +276,7 @@ async function runMediaTurn(
     messageAtFinal,
     finalizationStatements,
     retargetedEntry: logicalStore
-      ? loadSessionEntry(sessionKey, { agentId: "main" }).entry
+      ? (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).entry
       : undefined,
   };
 }
@@ -347,9 +363,7 @@ it.each(["raw directive", "structured attachment", "separate text payload"] as c
   "owns the agent-run final %s before publishing completion",
   async (source) => {
     await withOpenClawTestState({ label: "agent-final-media" }, async (state) => {
-      const imagePath = path.join(state.workspaceDir, "completed.png");
-      await fs.mkdir(state.workspaceDir, { recursive: true });
-      await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 }));
+      const { imagePath } = await writeMediaImage(state, "completed.png");
       const text =
         source === "raw directive"
           ? `Completed\nMEDIA:${imagePath}`
@@ -398,9 +412,7 @@ it.each(["raw directive", "structured attachment", "separate text payload"] as c
 
 it("keeps final media under its original sandbox policy when the store alias changes", async () => {
   await withOpenClawTestState({ label: "agent-final-media-alias" }, async (state) => {
-    const imagePath = path.join(state.workspaceDir, "completed.png");
-    await fs.mkdir(state.workspaceDir, { recursive: true });
-    await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 }));
+    const { imagePath } = await writeMediaImage(state, "completed.png");
     const text = `Completed\nMEDIA:${imagePath}`;
     const { result, context, messageAtFinal, retargetedEntry } = await runMediaTurn(
       state,
@@ -434,9 +446,7 @@ it.each<{
   { name: "incognito dispatch", incognito: true },
 ])("does not retain final $name through the WebChat projector", async (scenario) => {
   await withOpenClawTestState({ label: "agent-final-media-suppression" }, async (state) => {
-    const imagePath = path.join(state.workspaceDir, "private.png");
-    await fs.mkdir(state.workspaceDir, { recursive: true });
-    await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 }));
+    const { imagePath } = await writeMediaImage(state, "private.png");
     const { sessionKey, message } = await runMediaTurn(
       state,
       makeAgentAssistantMessage({
@@ -458,9 +468,7 @@ it.each(["abort", "permission", "placement", "route"] as const)(
   "settles prepared final media after a %s change",
   async (change) => {
     await withOpenClawTestState({ label: "agent-final-media-revocation" }, async (state) => {
-      const imagePath = path.join(state.workspaceDir, "revoked.png");
-      await fs.mkdir(state.workspaceDir, { recursive: true });
-      await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 }));
+      const { imagePath } = await writeMediaImage(state, "revoked.png");
       const { result, sessionKey, message, messageAtFinal } = await runMediaTurn(
         state,
         makeAgentAssistantMessage({
@@ -494,10 +502,7 @@ it.each(["abort", "permission", "placement", "route"] as const)(
 
 it("settles committed media ownership even when the run aborts before publication", async () => {
   await withOpenClawTestState({ label: "agent-final-media-committed" }, async (state) => {
-    const imagePath = path.join(state.workspaceDir, "committed.png");
-    const png = createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 });
-    await fs.mkdir(state.workspaceDir, { recursive: true });
-    await fs.writeFile(imagePath, png);
+    const { imagePath, png } = await writeMediaImage(state, "committed.png");
     const { sessionKey, messageAtFinal } = await runMediaTurn(
       state,
       makeAgentAssistantMessage({

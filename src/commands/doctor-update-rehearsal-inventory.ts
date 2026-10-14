@@ -204,7 +204,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
     path.resolve(stateDir) !== stateDir ||
     realpathSync(stateDir) !== stateDir
   ) {
-    refuse("the rehearsal root is not a private canonical directory");
+    refuse("the rehearsal root is not a private directory at its resolved path");
   }
   // Revalidate producer bindings before plugin inventory can import copied code.
   for (const fact of params.pluginCodeLinks ?? []) {
@@ -353,6 +353,13 @@ export async function inspectPreparedDoctorRehearsal(params: {
       registeredDatabases: registered,
     }),
   ];
+  // Plugin collectors read their configured roots. Admit copied roots first so
+  // no collector reads through an unsafe link; deferred external roots stay unread.
+  for (const root of configuredMigrationRoots) {
+    if (within(stateDir, root.path)) {
+      inspectPath(root.path);
+    }
+  }
   const resourceWarnings: PluginDoctorMigrationBackupWarning[] = [];
   const pluginScope = await preparePluginDoctorMigrationBackupResources({
     config,

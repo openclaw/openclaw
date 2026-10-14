@@ -8,8 +8,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
-  listMessageActionDiscoveryChannels,
-  resolveMessageActionDiscoveryForPlugin,
+  type MessageActionDiscoverySteps,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
   type PreparedMessageToolCatalog,
@@ -47,11 +46,9 @@ type ChannelMessageActionDiscoveryParams = {
  * Get the list of supported message actions for a specific channel.
  * Returns an empty array if channel is not found or has no actions configured.
  */
-export function listChannelSupportedActions(
-  params: ChannelMessageActionDiscoveryParams & {
-    channel?: string;
-  },
-): ChannelMessageActionName[] {
+export function* listChannelSupportedActionsSteps(
+  params: ChannelMessageActionDiscoveryParams & { channel?: string },
+): MessageActionDiscoverySteps<ChannelMessageActionName[]> {
   const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
   if (!channelId) {
     return [];
@@ -63,37 +60,13 @@ export function listChannelSupportedActions(
   if (!pluginActions?.actions) {
     return [];
   }
-  return resolveMessageActionDiscoveryForPlugin({
+  const discovered = yield {
     pluginId: pluginActions.pluginId,
     actions: pluginActions.actions,
     context: createMessageActionDiscoveryContext(params),
     includeActions: true,
-  }).actions;
-}
-
-/**
- * Get the list of all supported message actions across all configured channels.
- */
-export function listAllChannelSupportedActions(
-  params: ChannelMessageActionDiscoveryParams,
-): ChannelMessageActionName[] {
-  const actions = new Set<ChannelMessageActionName>();
-  const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
-  for (const plugin of channels) {
-    const channelActions = resolveMessageActionDiscoveryForPlugin({
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: createMessageActionDiscoveryContext({
-        ...params,
-        currentChannelProvider: plugin.id,
-      }),
-      includeActions: true,
-    }).actions;
-    for (const action of channelActions) {
-      actions.add(action);
-    }
-  }
-  return Array.from(actions);
+  };
+  return discovered.actions;
 }
 
 /** List agent tools contributed by registered channel plugins. */

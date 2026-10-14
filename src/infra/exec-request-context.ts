@@ -36,6 +36,9 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.execRequestContext"), 
 const EVENT_OWNERS = Symbol.for("openclaw.execRequestEventOwners");
 type OwnedEvent = { [EVENT_OWNERS]?: readonly ExecRequestOwner[] };
 
+/** Opaque request ancestry retained by work admitted through a host capability. */
+export type ExecRequestCustody = Readonly<OwnedEvent>;
+
 function createExecRequestOwner(identity: ExecRequestIdentity): ExecRequestOwner {
   const controller = new AbortController();
   return {
@@ -76,6 +79,34 @@ export function captureExecRequestOwners(
     turn.identity.sessionId === identity.sessionId
     ? turn.owners
     : undefined;
+}
+
+export function captureExecRequestCustody(
+  identity: ExecRequestIdentity,
+): ExecRequestCustody | undefined {
+  const owners = captureExecRequestOwners(identity);
+  return owners?.length ? Object.freeze({ [EVENT_OWNERS]: Object.freeze([...owners]) }) : undefined;
+}
+
+/** Selection retains owner references, including their admitted continuation aliases. */
+export function captureExecRequestCustodySelection(
+  owners: readonly ExecRequestOwner[],
+  origin?: {
+    target: ExecRequestIdentity;
+    acceptsRequest: (identity: Readonly<ExecRequestIdentity>) => boolean;
+  },
+): (custody: ExecRequestCustody | undefined) => boolean {
+  const selected = new Set(owners);
+  return (custody) =>
+    custody?.[EVENT_OWNERS]?.some(
+      (owner) =>
+        selected.has(owner) ||
+        Boolean(
+          origin &&
+          execRequestMatches(owner, origin.target) &&
+          origin.acceptsRequest(owner.identity),
+        ),
+    ) === true;
 }
 
 export function activeExecRequestOwners(

@@ -17,6 +17,7 @@ import type {
   TtsModelOverrideConfig,
   TtsProvider,
 } from "../config/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeSpeechProviderId } from "./provider-registry-core.js";
 import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
@@ -29,6 +30,7 @@ import {
   type TtsConfigResolutionContext,
   type TtsUserPrefs,
 } from "./tts-config.js";
+import { DEFAULT_MAX_TEXT_LENGTH } from "./tts-limits.js";
 import type { PreparedTtsPreferences } from "./tts-preferences.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
@@ -38,7 +40,6 @@ export { readTtsPrefs, type TtsUserPrefs } from "./tts-config.js";
 export const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
-const DEFAULT_MAX_TEXT_LENGTH = 4096;
 let machinePrefsPathResolver: () => string | undefined = () => undefined;
 
 export function setTtsMachinePrefsPathResolver(resolver?: () => string | undefined): void {
@@ -185,15 +186,54 @@ export function resolveTtsConfig(
   };
 }
 
+/** Resolves a prepared preference path without reading the state database. */
+export function resolveTtsPrefsPath(
+  config: ResolvedTtsConfig,
+  preparedTtsPreferences: PreparedTtsPreferences,
+): string;
+/** @deprecated Use resolveTtsPrefsPathAsync or pass awaited prepareTtsPreferences(). Removal follows a stable deprecation period. */
+export function resolveTtsPrefsPath(
+  config: ResolvedTtsConfig,
+  preparedTtsPreferences?: PreparedTtsPreferences,
+): string;
 export function resolveTtsPrefsPath(
   config: ResolvedTtsConfig,
   preparedTtsPreferences?: PreparedTtsPreferences,
 ): string {
+  if (!preparedTtsPreferences) {
+    warnPluginSdkDeprecation({
+      family: "tts",
+      method: "resolveTtsPrefsPath",
+      replacement: "resolveTtsPrefsPathAsync",
+    });
+  }
   return resolveTtsPrefsPathValue(
     config.prefsPath,
     preparedTtsPreferences
       ? () => preparedTtsPreferences.machinePrefsPath
       : machinePrefsPathResolver,
+  );
+}
+
+export async function resolveTtsPrefsPathAsync(
+  config: ResolvedTtsConfig,
+  preparedTtsPreferences?: PreparedTtsPreferences,
+): Promise<string> {
+  return resolveTtsPrefsPath(
+    config,
+    await prepareTtsPreferencesForConfig(config, preparedTtsPreferences),
+  );
+}
+
+async function prepareTtsPreferencesForConfig(
+  config: ResolvedTtsConfig,
+  preparedTtsPreferences?: PreparedTtsPreferences,
+): Promise<PreparedTtsPreferences> {
+  return (
+    preparedTtsPreferences ??
+    (config.prefsPath?.trim() || process.env.OPENCLAW_TTS_PREFS?.trim()
+      ? {}
+      : await (await import("./tts-preferences.js")).prepareTtsPreferences())
   );
 }
 
@@ -286,11 +326,31 @@ export function resolveTtsSettingsSnapshot(params: {
   };
 }
 
+/** Builds the hint from an awaited preference-path preparation without state-database reads. */
+export function buildTtsSystemPromptHint(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+  options: { messageToolOnly?: boolean; preparedTtsPreferences: PreparedTtsPreferences },
+): string | undefined;
+/** @deprecated Use buildTtsSystemPromptHintAsync or pass awaited prepareTtsPreferences(). Removal follows a stable deprecation period. */
+export function buildTtsSystemPromptHint(
+  cfg: OpenClawConfig,
+  agentId?: string,
+  options?: { messageToolOnly?: boolean; preparedTtsPreferences?: PreparedTtsPreferences },
+): string | undefined;
 export function buildTtsSystemPromptHint(
   cfg: OpenClawConfig,
   agentId?: string,
   options?: { messageToolOnly?: boolean; preparedTtsPreferences?: PreparedTtsPreferences },
 ): string | undefined {
+  if (!options?.preparedTtsPreferences) {
+    warnPluginSdkDeprecation({
+      family: "tts",
+      method: "buildTtsSystemPromptHint",
+      replacement:
+        "buildTtsSystemPromptHintAsync or await prepareTtsPreferences() and pass preparedTtsPreferences",
+    });
+  }
   const settings = resolveTtsSettingsSnapshot({
     cfg,
     agentId,
@@ -326,6 +386,19 @@ export function buildTtsSystemPromptHint(
     .join("\n");
 }
 
+/** Prepares machine preferences through their worker owner before rendering the hint. */
+export async function buildTtsSystemPromptHintAsync(
+  cfg: OpenClawConfig,
+  agentId?: string,
+  options?: { messageToolOnly?: boolean; preparedTtsPreferences?: PreparedTtsPreferences },
+): Promise<string | undefined> {
+  const preparedTtsPreferences = await prepareTtsPreferencesForConfig(
+    resolveTtsConfig(cfg, agentId),
+    options?.preparedTtsPreferences,
+  );
+  return buildTtsSystemPromptHint(cfg, agentId, { ...options, preparedTtsPreferences });
+}
+
 export function isTtsEnabled(
   config: ResolvedTtsConfig,
   prefsPath: string,
@@ -345,9 +418,9 @@ export function listTtsPersonas(config: ResolvedTtsConfig): ResolvedTtsPersona[]
   return Object.values(config.personas).toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-export function resolveTtsPersonaList(cfg: OpenClawConfig) {
+export async function resolveTtsPersonaList(cfg: OpenClawConfig) {
   const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
+  const prefsPath = await resolveTtsPrefsPathAsync(config);
   const active = getTtsPersona(config, prefsPath);
   return {
     active: active?.id ?? null,

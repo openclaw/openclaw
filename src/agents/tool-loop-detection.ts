@@ -251,6 +251,35 @@ function stripVolatileSendIds(value: unknown): unknown {
   return stripped;
 }
 
+const VOLATILE_MEMORY_SEARCH_DEBUG_KEYS = new Set([
+  "managerMs",
+  "searchMs",
+  "toolMs",
+  "outsideSearchMs",
+]);
+
+function getMemorySearchToolOutcome(details: Record<string, unknown>): unknown {
+  if (!Array.isArray(details.results)) {
+    return undefined;
+  }
+  // Rank and hit content carry progress; aggregate scores also decay with wall time.
+  const results = details.results.map((result) => {
+    if (!isPlainObject(result)) {
+      return result;
+    }
+    const { score: _score, ...stableResult } = result;
+    return stableResult;
+  });
+  const debug = isPlainObject(details.debug)
+    ? Object.fromEntries(
+        Object.entries(details.debug).filter(
+          ([key]) => !VOLATILE_MEMORY_SEARCH_DEBUG_KEYS.has(key),
+        ),
+      )
+    : details.debug;
+  return { ...details, results, debug };
+}
+
 function isVolatileSendResult(toolName: string, params: unknown): boolean {
   if (toolName === "sessions_send") {
     return true;
@@ -299,14 +328,15 @@ function hashToolOutcome(
   if (isError) {
     return { resultHash: digestToolOutcome(result) };
   }
-  if (toolName === "computer" && result.isError !== true) {
-    const outcome = getComputerToolOutcome(result);
+  if (toolName === "memory_search" && result.isError !== true) {
+    const outcome = getMemorySearchToolOutcome(details);
     if (outcome !== undefined) {
       return { resultHash: digestToolOutcome(outcome) };
     }
   }
-  if (toolName === "progress_card" && result.isError !== true) {
-    const outcome = getProgressCardToolOutcome(result);
+  if ((toolName === "computer" || toolName === "progress_card") && result.isError !== true) {
+    const outcome =
+      toolName === "computer" ? getComputerToolOutcome(result) : getProgressCardToolOutcome(result);
     if (outcome !== undefined) {
       return { resultHash: digestToolOutcome(outcome) };
     }
@@ -534,14 +564,14 @@ export function detectToolCallLoop(
 
   if (noProgressStreak >= GLOBAL_CIRCUIT_BREAKER_THRESHOLD) {
     log.error(
-      `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
+      `Runaway-loop limit reached: ${toolName} repeated ${noProgressStreak} times with no progress`,
     );
     return {
       stuck: true,
       level: "critical",
       detector: "global_circuit_breaker",
       count: noProgressStreak,
-      message: `CRITICAL: ${toolName} repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
+      message: `CRITICAL: ${toolName} repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by the runaway-loop limit to prevent runaway loops.`,
       warningKey: `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }

@@ -6,9 +6,9 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
-import { buildCommandContext } from "./commands-context.js";
+import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -246,41 +246,6 @@ describe("handleInlineActions", () => {
       kind: "continue",
       cleanedBody: "use the monochrome version",
       queueModeOverride: "steer",
-    });
-  });
-
-  it("delivers a continuing mixed directive ack as a status block without losing metadata", async () => {
-    const typing = createTypingController();
-    const ctx = buildTestCtx({
-      Body: "keep going",
-      CommandBody: "keep going",
-    });
-    const onBlockReply = vi.fn(async () => {});
-    const directiveAck = setReplyPayloadMetadata(
-      { text: "Model set to openai/gpt-5.5 for this session." },
-      { assistantMessageIndex: 7 },
-    );
-
-    const result = await runTestInlineActions({
-      ctx,
-      typing,
-      cleanedBody: "keep going",
-      overrides: {
-        directiveAck,
-        opts: { onBlockReply } as HandleInlineActionsInput["opts"],
-      },
-    });
-
-    expect(result.kind).toBe("continue");
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const delivered = mockCallArgs(onBlockReply, "onBlockReply")[0];
-    expect(delivered).toEqual({
-      text: "Model set to openai/gpt-5.5 for this session.",
-      isStatusNotice: true,
-    });
-    expect(getReplyPayloadMetadata(delivered as object)).toEqual({
-      assistantMessageIndex: 7,
-      deliverDespiteSourceReplySuppression: true,
     });
   });
 

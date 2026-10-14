@@ -11,16 +11,18 @@ import {
   isCronStateWorkerCommand,
   prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
-import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
+import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import {
-  readStableSqliteFileGeneration,
-  sameSqliteFileGeneration,
-} from "../infra/sqlite-file-generation.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
-import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.worker.js";
+import {
+  recordUpdateRunMutationInWorker,
+  withUpdateRunWriteAdmission,
+} from "../infra/update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -34,8 +36,10 @@ import { executeSessionStateCommand } from "../sessions/session-state-events.wor
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import { executeSessionUpstreamCommand } from "../sessions/session-upstream-links.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
+import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "../tui/tui-last-session.contract.js";
 import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal-recovery.kernel.js";
+import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
@@ -55,7 +59,10 @@ import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import {
+  isOpenClawStateDatabaseOpen,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
@@ -85,22 +92,26 @@ export function executeSharedStateCommand(
   if (stateWorkerRegistry.has(command)) {
     return stateWorkerRegistry.execute(command, { open, write, writeAdmitted, stateOptions });
   }
-  if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
-    return recordUpdateRunMutationInWorker(
-      command,
-      stateOptions(),
-      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
-      updateRunWriter(),
+  if (
+    command.type === "updateRuns.recordStep" ||
+    command.type === "updateRuns.recordPhase" ||
+    command.type === "updateRuns.create" ||
+    command.type === "updateRuns.finish" ||
+    command.type === "updateRuns.recordVerification" ||
+    command.type === "updateRuns.recordDiagnostics"
+  ) {
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      recordUpdateRunMutationInWorker(command, stateOptions(), assertCurrent, updateRunWriter),
     );
   }
   if (command.type === "updateRuns.reconcile") {
-    return reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "updateRuns.reconcileInterrupted") {
-    return persistInterruptedUpdateObservation(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      persistInterruptedUpdateObservation(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "claws.install-schema-versions") {
@@ -112,13 +123,6 @@ export function executeSharedStateCommand(
       return readClawInstallSchemaVersionRows(db);
     }, stateOptions());
   }
-  if (command.type === "database.generationMatches") {
-    // Unavailable inspection retains the known failure; only a stable mismatch expires it.
-    return sameSqliteFileGeneration(
-      command.input.generation,
-      readStableSqliteFileGeneration(context.databasePath),
-    );
-  }
   if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
     return executeUserPreferenceCommand(command, {
       database: open(),
@@ -127,6 +131,20 @@ export function executeSharedStateCommand(
   }
   if (command.type === "tui.lastSession.clear") {
     return clearRetiredTuiPointers(new Set(command.input.retiredSessionKeys), stateOptions(), open);
+  }
+  if (command.type === "backup.recordOutcome") {
+    // A best-effort ledger must not initialize or change a refused backup source.
+    // An already-admitted writer carries ownership; cold admission stays read-only.
+    if (!isOpenClawStateDatabaseOpen(context.databasePath)) {
+      const existing = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+        assertOpenClawStateDatabaseOwner(db, { pathname: context.databasePath });
+        return true;
+      }, stateOptions());
+      if (!existing) {
+        return undefined;
+      }
+    }
+    return write(({ db }) => recordBackupRunInDatabase(db, command.input));
   }
   const database = open();
   if (command.type === "githubPublication.prepareSessionReceiptDeletion") {
@@ -173,7 +191,11 @@ export function executeSharedStateCommand(
     ...stateOptions(),
   };
   if (command.type === "tui.lastSession.write") {
-    return writeConfigMachineState(command.input.stateKey, command.input.sessionKey, writeOptions);
+    return writeConfigMachineState(
+      `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${command.input.scopeKey}`,
+      command.input.sessionKey,
+      writeOptions,
+    );
   }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
@@ -247,13 +269,19 @@ export function executeSharedStateCommand(
   if (command.type === "agentProvenance.record") {
     ensureAgentProvenanceSchema(writeOptions);
     return runOpenClawStateWriteTransaction(
-      ({ db }) => recordAgentProvenanceInDatabase(db, command.input),
+      ({ db }) => {
+        const { receipt } = agentProvenancePublication.capture(db, () =>
+          recordAgentProvenanceInDatabase(db, command.input),
+        );
+        deferSqliteWorkerCommitReceipt(db, {
+          provenanceAuthority: agentProvenancePublication.bound(receipt),
+        });
+      },
       writeOptions,
       { operationLabel: "agent-provenance.record" },
     );
   }
   if (
-    command.type === "sessionUpstream.current" ||
     command.type === "sessionUpstream.settle" ||
     command.type === "sessionUpstream.upsert" ||
     command.type === "sessionUpstream.delete"
@@ -272,12 +300,6 @@ export function executeSharedStateCommand(
   }
   if (command.type === "subagents.persistChanges") {
     return persistSubagentRunChangesInWorker(command.input, writeOptions);
-  }
-  if (command.type === "backup.recordOutcome") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => recordBackupRunInDatabase(db, command.input),
-      writeOptions,
-    );
   }
   if (command.type === "config.health.patch") {
     const { configPath, patch, expected, updatedAtMs } = command.input;
