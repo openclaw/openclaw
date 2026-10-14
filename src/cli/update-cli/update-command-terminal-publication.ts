@@ -225,6 +225,7 @@ export function createPostUpdateFailureResult(
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
   const failureFacts = collectUpdateDoctorFailureFacts(error);
+  const version = params.result.after?.version?.trim();
   return {
     message,
     result: {
@@ -234,8 +235,8 @@ export function createPostUpdateFailureResult(
       recovery:
         classifyDoctorMaintenanceRefusal(error).kind === "data-at-risk"
           ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
-          : isUpdateStateReadContention(error)
-            ? { serviceRestartSafe: true }
+          : isUpdateStateReadContention(error) && version
+            ? (params.result.recovery ?? { serviceRestartSafe: true, version })
             : params.result.recovery,
       steps: [
         ...params.result.steps,

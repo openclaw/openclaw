@@ -324,10 +324,6 @@ export function createUpdateCommandFailureResult(
   };
   return {
     ...result,
-    recovery:
-      !preMutationFailure && isUpdateStateReadContention(failure.cause)
-        ? { serviceRestartSafe: true }
-        : result.recovery,
     status: "error",
     reason,
     failedStep,
@@ -391,7 +387,7 @@ export async function resolveMutableUpdateFailure(params: {
       mode: params.mode,
       root: params.root,
       recovery:
-        primary instanceof UpdatePreMutationError
+        primary instanceof UpdatePreMutationError || isUpdateStateReadContention(params.cause)
           ? await params.originalRecovery()
           : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       failure,

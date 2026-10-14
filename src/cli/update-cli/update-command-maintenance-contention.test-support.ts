@@ -22,10 +22,7 @@ import {
   successfulPluginUpdate,
   managedServiceState,
 } from "./update-command-post-update.test-support.js";
-import {
-  createUpdateCommandFailureResult,
-  resolveMutableUpdateFailure,
-} from "./update-command-result.js";
+import { resolveMutableUpdateFailure } from "./update-command-result.js";
 import * as service from "./update-command-service.js";
 import { createPostUpdateFailureResult } from "./update-command-terminal-publication.js";
 import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
@@ -134,7 +131,17 @@ export function registerMaintenanceContentionTests(
       try {
         const work = finishSuccessfulPackageSwitch(
           { packageRoot: identity.home, restartEnvironment: env },
-          { updateStepTimeoutMs: 300 },
+          {
+            updateStepTimeoutMs: 300,
+            result: {
+              status: "ok",
+              mode: "npm",
+              root: identity.home,
+              after: { version: "2026.10.3" },
+              steps: [],
+              durationMs: 1,
+            },
+          },
           { candidateRuntime: true },
         );
         if (expires) {
@@ -146,9 +153,9 @@ export function registerMaintenanceContentionTests(
             mode: "npm",
             root: identity.home,
             durationMs: 300,
-            originalRecovery: async () => undefined,
+            originalRecovery: async () => ({ serviceRestartSafe: true, version: "2026.10.3" }),
           });
-          expect(result.recovery?.serviceRestartSafe).toBe(true);
+          expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "2026.10.3" });
           const settled = await resolveSettledUpdateCommandResult(
             { opts: {}, root: identity.home, ownedManagedUpdateEnv: env },
             result,
@@ -175,7 +182,7 @@ export function registerMaintenanceContentionTests(
 
   it.each([false, true])(
     "keeps actual data-at-risk refusal authoritative (dataAtRisk=$dataAtRisk)",
-    (dataAtRisk) => {
+    async (dataAtRisk) => {
       const contention = new StateDatabaseOfflineMaintenanceError(
         "/synthetic/state.sqlite",
         "maintenance busy",
@@ -189,17 +196,34 @@ export function registerMaintenanceContentionTests(
             }),
           ])
         : new Error("settlement failed", { cause: contention });
-      const original = { status: "ok" as const, mode: "npm" as const, steps: [], durationMs: 1 };
+      const original = {
+        status: "ok" as const,
+        mode: "npm" as const,
+        after: { version: "2026.10.3" },
+        steps: [],
+        durationMs: 1,
+      };
       const postUpdate = createPostUpdateFailureResult(
         { result: original, root: "/synthetic", startedAt: Date.now() },
         error,
       ).result;
-      const fallback = createUpdateCommandFailureResult({ ...original, failure: { cause: error } });
+      const originalRecovery = vi.fn(async () => ({
+        serviceRestartSafe: true as const,
+        version: "2026.10.3",
+      }));
+      const { result: fallback } = await resolveMutableUpdateFailure({
+        ...original,
+        root: "/synthetic",
+        cause: error,
+        originalRecovery,
+      });
       expect(postUpdate.recovery?.serviceRestartSafe).toBe(!dataAtRisk);
       if (dataAtRisk) {
         expect(fallback.recovery?.serviceRestartSafe).not.toBe(true);
+        expect(originalRecovery).not.toHaveBeenCalled();
       } else {
-        expect(fallback.recovery?.serviceRestartSafe).toBe(true);
+        expect(fallback.recovery).toEqual({ serviceRestartSafe: true, version: "2026.10.3" });
+        expect(originalRecovery).toHaveBeenCalledOnce();
       }
     },
   );

@@ -397,7 +397,9 @@ export async function resolveSettledUpdateCommandResult(
         stderrTail: activationTimeout?.message ?? formatErrorMessage(failure),
       }
     : undefined;
-  const recovery = pendingResult.recovery ?? { serviceRestartSafe: true };
+  const version = pendingResult.after?.version?.trim();
+  const recovery: UpdateRunResult["recovery"] =
+    pendingResult.recovery ?? (version ? { serviceRestartSafe: true, version } : undefined);
   const result: UpdateRunResult = failedStep
     ? {
         ...pendingResult,
