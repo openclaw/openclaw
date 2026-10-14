@@ -50,7 +50,7 @@ export function resolvePhysicalPathIdentity(pathname: string): string {
     }
     return `file:${stat.dev}:${stat.ino}`;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (!hasErrnoCode(error, "ENOENT")) {
       throw error;
     }
     return `missing:${resolveMissingPhysicalPath(pathname)}`;

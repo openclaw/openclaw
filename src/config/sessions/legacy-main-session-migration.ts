@@ -154,10 +154,14 @@ function resolvePhysicalStores(params: {
   });
   for (const { target, resolved } of selectSessionStoreMaintenanceTargets(candidates, {
     ...params,
-    onExcluded: (pathname) =>
-      warnings.push(
-        `session: skipped legacy-main scan of held session store ${pathname}; preserved any legacy rows for explicit agent restoration`,
-      ),
+    // Retained stores are expected state; only Doctor repair reports the skip, never every startup.
+    onExcluded:
+      params.mode === "doctor-fix"
+        ? (pathname) =>
+            warnings.push(
+              `session: skipped legacy-main scan of held session store ${pathname}; preserved any legacy rows for explicit agent restoration`,
+            )
+        : undefined,
   })) {
     try {
       if (
