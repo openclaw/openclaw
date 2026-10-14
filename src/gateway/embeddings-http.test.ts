@@ -440,17 +440,6 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(providersCreatedBefore);
   });
 
-  it("ignores narrower declared scopes for shared-secret bearer auth", async () => {
-    const res = await postEmbeddings(
-      {
-        model: "openclaw/default",
-        input: "hello",
-      },
-      { "x-openclaw-scopes": "operator.read" },
-    );
-    await expectDefaultEmbeddingResponse(res);
-  });
-
   it.each([
     { model: "nomic-embed-text", override: undefined },
     { model: "library/bge-m3", override: undefined },

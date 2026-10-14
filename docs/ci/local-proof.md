@@ -19,9 +19,9 @@ Cancellation during natural drainage forwards its signal immediately; its grace
 ends no later than the original halfway point, preserving the recovery allowance
 and total cleanup deadline.
 
-The complete channels test lane prepares its native worker artifacts before
-starting the test process. Cold compilation therefore does not consume the
-test-output watchdog's deadline. Focused channel selections retain lazy
+The complete channels and gateway-methods test projects prepare their native worker
+artifacts before starting the test process. Cold compilation therefore does not
+consume the test-output watchdog's deadline. Focused selections retain lazy
 preparation; the watchdog and compiler cleanup rules remain unchanged.
 
 The lint wrapper owns Go resource limits for current CI. It applies them on

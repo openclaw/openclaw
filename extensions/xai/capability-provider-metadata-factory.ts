@@ -222,6 +222,7 @@ export function createXaiRealtimeTranscriptionProviderMetadata(
     aliases: ["xai-realtime", "grok-stt-streaming"],
     autoSelectOrder: 25,
     resolveConfig: ({ rawConfig }) => normalizeXaiRealtimeTranscriptionProviderConfig(rawConfig),
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ providerConfig, cfg }) =>
       Boolean(
         normalizeXaiRealtimeTranscriptionProviderConfig(providerConfig).apiKey ??
@@ -274,6 +275,7 @@ export function createXaiRealtimeVoiceProviderMetadata(
       supportsToolCalls: true,
       supportsSessionResumption: true,
     },
+    // Retained for synchronous SDK consumers through 2026-12-31.
     resolveConfig: ({ rawConfig }) => normalizeXaiRealtimeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig, cfg, agentId }) =>
       hasXaiRealtimeApiKeyInput(
@@ -282,6 +284,7 @@ export function createXaiRealtimeVoiceProviderMetadata(
         agentId,
         context,
       ),
+    resolveConfigAsync: async ({ rawConfig }) => normalizeXaiRealtimeProviderConfig(rawConfig),
     isConfiguredAsync: ({ providerConfig, cfg, agentId }) =>
       hasXaiRealtimeApiKeyInputAsync(
         normalizeXaiRealtimeProviderConfig(providerConfig).apiKey,
@@ -306,6 +309,7 @@ export function assertXaiRealtimeVoiceRequestSupported(
   }
 }
 
+// Retained for synchronous SDK consumers through 2026-12-31.
 function hasXaiRealtimeApiKeyInput(
   configApiKey: string | undefined,
   cfg: OpenClawConfig | undefined,

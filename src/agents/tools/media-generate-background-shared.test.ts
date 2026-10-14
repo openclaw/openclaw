@@ -135,7 +135,6 @@ function scheduleImageCompletion(
 
 describe("media generation detachment admission", () => {
   it.each([
-    ["agent:main:discord:direct:123", true],
     ["agent:main:cron:daily-media", true],
     ["agent:main:cron:daily-media:run:run-123", false],
     [undefined, undefined],

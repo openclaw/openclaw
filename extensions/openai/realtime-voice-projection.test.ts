@@ -44,7 +44,7 @@ describe("OpenAI realtime public projection", () => {
 
   it.each([false, true])(
     "advertises the subscription relay capability independently of OAuth readiness=%s",
-    (hasOAuth) => {
+    async (hasOAuth) => {
       isProviderAuthProfileConfiguredMock.mockImplementation(
         ({ profileTypes }: { profileTypes?: readonly string[] }) =>
           hasOAuth && profileTypes?.includes("oauth") === true,
@@ -58,9 +58,9 @@ describe("OpenAI realtime public projection", () => {
         config: providerConfig,
         clientHints: { gatewayRelaySupported: true },
       });
-      expect(internalApi.isGatewayRelayConfigured({ providerConfig, agentId: "main" })).toBe(
-        hasOAuth,
-      );
+      expect(
+        await internalApi.isGatewayRelayConfiguredAsync({ providerConfig, agentId: "main" }),
+      ).toBe(hasOAuth);
       for (const [azureConfig, supportsRelay] of [
         [{ azureEndpoint: " https://example.openai.azure.com " }, false],
         [{ azureDeployment: " live-deployment " }, false],
@@ -80,7 +80,7 @@ describe("OpenAI realtime public projection", () => {
           clientHints: { gatewayRelaySupported: supportsRelay },
         });
         expect(
-          internalApi.isGatewayRelayConfigured({
+          await internalApi.isGatewayRelayConfiguredAsync({
             providerConfig: azureProviderConfig,
             agentId: "main",
           }),
@@ -89,7 +89,7 @@ describe("OpenAI realtime public projection", () => {
     },
   );
 
-  it("admits opaque realtime models without publishing them", () => {
+  it("admits opaque realtime models without publishing them", async () => {
     const { broker } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({
       quicksilverBrowserSessionBroker: broker,
@@ -102,7 +102,7 @@ describe("OpenAI realtime public projection", () => {
 
     expect(provider.models).not.toContain(OPAQUE_REALTIME_MODEL);
     expect(
-      internalApi.isGatewayRelayConfigured({
+      await internalApi.isGatewayRelayConfiguredAsync({
         providerConfig,
         agentId: "main",
       }),

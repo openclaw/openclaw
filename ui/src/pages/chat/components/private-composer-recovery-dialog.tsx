@@ -5,7 +5,6 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { downloadBlobFile } from "../../../lib/download.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentBlob } from "../attachment-payload-store.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 
 type PrivateComposerDraft = {
   text: string;
@@ -102,6 +101,6 @@ function PrivateComposerRecoveryDialog(
 
 export function reviewPrivateComposerDraft(params: PrivateComposerDraft): Promise<boolean> {
   return withPromiseModalHost({ signal: params.signal, value: false }, ({ render, finish }) => {
-    render(() => solidTemplate(PrivateComposerRecoveryDialog, { ...params, finish }));
+    render(() => <PrivateComposerRecoveryDialog {...params} finish={finish} />);
   });
 }

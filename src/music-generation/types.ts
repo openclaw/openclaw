@@ -96,7 +96,7 @@ export type MusicGenerationProvider = {
   defaultModel?: string;
   models?: string[];
   capabilities: MusicGenerationProviderCapabilities;
-  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. */
+  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. Final compatibility day: 2026-12-31. */
   isConfigured?: (ctx: MusicGenerationProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: MusicGenerationProviderConfiguredContext) => Promise<boolean>;
   generateMusic: (req: MusicGenerationRequest) => Promise<MusicGenerationResult>;

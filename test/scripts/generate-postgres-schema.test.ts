@@ -177,6 +177,7 @@ describe("PostgreSQL schema generation", () => {
         "manifest.json",
         "portability-report.md",
         "state.postgres.sql",
+        "runtime.ts",
       ].toSorted(),
     );
     expect(

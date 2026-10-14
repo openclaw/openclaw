@@ -164,7 +164,7 @@ function providerConfigContext<TFullConfig, TProvider extends AutoSelectableProv
   };
 }
 
-/** @deprecated Use resolveConfiguredCapabilityProviderAsync when providers resolve stored credentials. */
+/** @deprecated Use resolveConfiguredCapabilityProviderAsync when providers resolve stored credentials. Final compatibility day: 2026-12-31. */
 export function resolveConfiguredCapabilityProvider<
   TConfig,
   TFullConfig,
