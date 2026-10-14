@@ -468,11 +468,15 @@ async function withDownloadFixture(
           },
           afterOpen: (filePath, handle) => {
             if (options.image && path.dirname(filePath) === mediaDir && filePath.endsWith(".png")) {
-              const read = handle.readFile.bind(handle);
-              vi.spyOn(handle, "readFile").mockImplementation(async (...args) => {
-                const bytes = await read(...args);
-                hit("image-read");
-                return bytes;
+              const read = handle.read.bind(handle);
+              let bytesRead = 0;
+              vi.spyOn(handle, "read").mockImplementation(async (...args) => {
+                const result = await read(...args);
+                bytesRead += result.bytesRead;
+                if (bytesRead >= body.length) {
+                  hit("image-read");
+                }
+                return result;
               });
             }
           },

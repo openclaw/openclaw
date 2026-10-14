@@ -44,7 +44,10 @@ import {
   type createSessionTranscriptHistoryPool,
   type SessionDatabaseWorkerLane,
 } from "./session-transcript-read-pools.js";
-import type { SessionHistoryWorkerInput } from "./session-transcript-worker.types.js";
+import type {
+  SessionHistoryWorkerInput,
+  SessionTranscriptWorkerValues,
+} from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
@@ -527,13 +530,15 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
         }
       }
-      const runRead = async (
-        input: Extract<
+      const runRead = async <
+        Input extends Extract<
           SessionHistoryWorkerInput,
           { kind: "session-store-target" | "session-target-inventory" | "combined-store-topology" }
         >,
+      >(
+        input: Input,
         inputBytes: number,
-      ) => {
+      ): Promise<SessionTranscriptWorkerValues[Input["kind"]]> => {
         const reply = await runWithSqliteDatabaseAdmissionTurn(
           admissionPaths,
           () =>
@@ -548,7 +553,9 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             ),
           admissionFamilies,
         );
-        return unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+        const result = unwrapSessionTranscriptWorkerReply(reply);
+        // SAFETY: The pool pairs this reply with the exact request dispatched above.
+        return result as SessionTranscriptWorkerValues[Input["kind"]];
       };
       const readStoreTargetResult = async (
         request: Omit<SessionStoreTargetReadRequest, "candidates">,
@@ -562,14 +569,6 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           { kind: "session-store-target", request: preparedRequest },
           JSON.stringify(preparedRequest).length * 2,
         );
-        if (
-          typeof result === "boolean" ||
-          Array.isArray(result) ||
-          (result.kind !== "session-store-target" &&
-            result.kind !== "session-target-registry-required")
-        ) {
-          throw new Error("Session history worker returned another result instead of store target");
-        }
         return "readError" in result
           ? err(decodeSessionTranscriptWorkerReadError(result.readError))
           : ok(result);
@@ -588,18 +587,10 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             },
             candidates: capturedCandidates,
           };
-          const result = await runRead(
+          return await runRead(
             { kind: "combined-store-topology", request: preparedRequest },
             JSON.stringify(preparedRequest).length * 2,
           );
-          if (
-            typeof result === "boolean" ||
-            Array.isArray(result) ||
-            result.kind !== "combined-store-topology"
-          ) {
-            throw new Error("Session history worker returned another result instead of topology");
-          }
-          return result;
         },
         readStoreTargetResult,
         readStoreTarget: async (request) => {
@@ -619,16 +610,6 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             { kind: "session-target-inventory", request: preparedRequest },
             measureSessionStoreTargetInventoryInputBytes(preparedRequest),
           );
-          if (
-            typeof result === "boolean" ||
-            Array.isArray(result) ||
-            (result.kind !== "session-target-inventory" &&
-              result.kind !== "session-target-registry-required")
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of target inventory",
-            );
-          }
           if (result.kind === "session-target-registry-required") {
             // Release native readers before registry work without discarding a healthy worker.
             await settleCandidates();

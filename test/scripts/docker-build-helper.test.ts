@@ -2832,7 +2832,7 @@ exec "$@"
 import fs from "node:fs";
 import http from "node:http";
 const identity = { pid: process.pid, managed: process.env.OPENCLAW_SYSTEMD_UNIT === "openclaw-gateway.service" };
-const server = http.createServer((_req, res) => res.end(JSON.stringify(identity)));
+const server = http.createServer((_req, res) => res.end(JSON.stringify({ ready: true, ...identity })));
 const firstStart = !fs.existsSync(process.env.PORT_FILE);
 const port = fs.existsSync(process.env.PORT_FILE) ? Number(fs.readFileSync(process.env.PORT_FILE, "utf8")) : 0;
 server.listen(port, "127.0.0.1", () => {

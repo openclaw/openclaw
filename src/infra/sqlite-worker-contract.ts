@@ -99,6 +99,7 @@ export type SqliteWorkerRequest = {
   actor: number;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
+  operationAttachment?: { value: unknown };
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
   stateDatabasePath?: string;
@@ -128,7 +129,6 @@ export type SqliteWorkerReply = {
   transactionCount?: number;
   timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
-  databaseAdmissions?: SqliteDatabaseAdmissions;
 } & (
   | {
       ok: true;

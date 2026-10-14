@@ -1,13 +1,18 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
-import type { RealtimeVoiceProviderPlugin, SpeechProviderPlugin } from "../../../plugins/types.js";
+import type {
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeVoiceProviderPlugin,
+  SpeechProviderPlugin,
+} from "../../../plugins/types.js";
 import { callGatewayHandler } from "../../server-methods/skills.test-helpers.js";
 import { talkHandlers } from "./index.js";
 
 const registry = vi.hoisted(() => ({
   providers: [] as SpeechProviderPlugin[],
   realtime: [] as RealtimeVoiceProviderPlugin[],
+  transcription: [] as RealtimeTranscriptionProviderPlugin[],
 }));
 
 vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
@@ -26,9 +31,20 @@ vi.mock("../../../talk/provider-registry.js", async (importOriginal) => ({
     registry.realtime.find((provider) => provider.id === id),
 }));
 
+vi.mock("../../../realtime-transcription/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../realtime-transcription/provider-registry.js")
+  >()),
+  listRealtimeTranscriptionProviders: () => registry.transcription,
+  canonicalizeRealtimeTranscriptionProviderId: (id: string | undefined) => id,
+  getRealtimeTranscriptionProvider: (id: string | undefined) =>
+    registry.transcription.find((provider) => provider.id === id),
+}));
+
 beforeEach(() => {
   registry.providers = [];
   registry.realtime = [];
+  registry.transcription = [];
 });
 
 it.each([false, true])(
@@ -152,5 +168,55 @@ it("prepares the selected realtime catalog once per request and refreshes availa
   expect(await read()).toMatchObject({
     ok: true,
     response: { realtime: { ready: false, providers: [{ configured: false }] } },
+  });
+});
+
+it("reuses selected transcription readiness and refreshes it on the next catalog request", async () => {
+  const cfg: OpenClawConfig = {
+    plugins: {
+      enabled: false,
+      entries: { "voice-call": { config: { streaming: { provider: "sample" } } } },
+    },
+  };
+  let available = true;
+  const readAvailability = vi.fn(async () => available);
+  const resolveConfig = vi.fn(({ rawConfig }) => rawConfig);
+  registry.transcription = [
+    {
+      id: "sample",
+      label: "Sample transcription",
+      resolveConfig,
+      isConfigured: () => false,
+      isConfiguredAsync: readAvailability,
+      createSession: () => {
+        throw new Error("catalog must not create a session");
+      },
+    },
+  ];
+  const read = () =>
+    callGatewayHandler(
+      talkHandlers,
+      "talk.catalog",
+      {},
+      {
+        context: { getRuntimeConfig: () => cfg },
+      },
+    );
+  expect(await read()).toMatchObject({
+    ok: true,
+    response: {
+      transcription: {
+        ready: true,
+        activeProvider: "sample",
+        providers: [{ id: "sample", configured: true }],
+      },
+    },
+  });
+  expect(readAvailability).toHaveBeenCalledTimes(1);
+  expect(resolveConfig).toHaveBeenCalledTimes(1);
+  available = false;
+  expect(await read()).toMatchObject({
+    ok: true,
+    response: { transcription: { ready: false, providers: [{ configured: false }] } },
   });
 });

@@ -136,39 +136,45 @@ function ChannelStatusBody(params: {
       count={params.accountCount !== undefined ? params.accountCount : undefined}
     >
       {showAccounts() ? (
-        accounts().map((account) => {
-          const username =
-            standardKey() === "telegram"
-              ? readStringField(asNullableRecord(asNullableRecord(account.probe)?.bot), "username")
-              : undefined;
-          return (
-            <ChannelAccount
-              title={username ? `@${username}` : account.name || account.accountId}
-              accountId={account.accountId}
-              facts={
-                standardKey() === "telegram"
-                  ? [
-                      `${t("common.configured")}: ${account.configured ? t("common.yes") : t("common.no")}`,
-                    ]
-                  : undefined
-              }
-              status={{
-                kind: boolStatusKind(
+        <For each={accounts()} keyed={(account) => account.accountId}>
+          {(account) => {
+            const username = createMemo(() =>
+              standardKey() === "telegram"
+                ? readStringField(
+                    asNullableRecord(asNullableRecord(account().probe)?.bot),
+                    "username",
+                  )
+                : undefined,
+            );
+            return (
+              <ChannelAccount
+                title={username() ? `@${username()}` : account().name || account().accountId}
+                accountId={account().accountId}
+                facts={
                   standardKey() === "telegram"
-                    ? account.running
-                    : (account.running ?? account.configured),
-                ),
-                label: account.running
-                  ? t("common.running")
-                  : !standardKey() && account.configured
-                    ? t("common.configured")
-                    : t("common.no"),
-              }}
-              lastInboundAt={account.lastInboundAt}
-              lastError={account.lastError}
-            />
-          );
-        })
+                    ? [
+                        `${t("common.configured")}: ${account().configured ? t("common.yes") : t("common.no")}`,
+                      ]
+                    : undefined
+                }
+                status={{
+                  kind: boolStatusKind(
+                    standardKey() === "telegram"
+                      ? account().running
+                      : (account().running ?? account().configured),
+                  ),
+                  label: account().running
+                    ? t("common.running")
+                    : !standardKey() && account().configured
+                      ? t("common.configured")
+                      : t("common.no"),
+                }}
+                lastInboundAt={account().lastInboundAt}
+                lastError={account().lastError}
+              />
+            );
+          }}
+        </For>
       ) : (
         <ChannelFacts rows={statusRows()} />
       )}

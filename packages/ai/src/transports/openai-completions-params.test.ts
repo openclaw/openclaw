@@ -609,6 +609,99 @@ function requestTools(
 }
 
 describe("OpenAI completions compatibility and tools", () => {
+  it.each(["direct", "managed"] as const)(
+    "types Moonshot union branches in outgoing tools without changing other providers (%s)",
+    (mode) => {
+      const parameters = {
+        type: "object",
+        properties: { v: { anyOf: [{ enum: ["x", "y"] }, { minimum: 1 }] } },
+      };
+      for (const [provider, baseUrl, moonshot] of [
+        ["moonshot", "https://api.moonshot.ai/v1", true],
+        ["custom", "https://api.moonshot.cn/v1", true],
+        ["moonshotai", "", true],
+        ["openai", "https://api.openai.com/v1", false],
+        ["openrouter", "https://openrouter.ai/api/v1", false],
+      ] as const) {
+        const model = makeCompletionsModel({ id: "kimi-k2.6", provider, baseUrl });
+        const payload = buildOpenAICompletionsRequest(
+          model,
+          toolContext(parameters),
+          undefined,
+          mode === "direct"
+            ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+            : { mode },
+        );
+        expect(payload.tools?.[0]?.function.parameters, provider).toHaveProperty("properties.v", {
+          anyOf: moonshot
+            ? [
+                { type: "string", enum: ["x", "y"] },
+                { type: "number", minimum: 1 },
+              ]
+            : parameters.properties.v.anyOf,
+        });
+      }
+      expect(parameters.properties.v.anyOf).toEqual([{ enum: ["x", "y"] }, { minimum: 1 }]);
+    },
+  );
+
+  it("infers only unambiguous branch types and leaves literal data and explicit types intact", () => {
+    const cases = [
+      [{ const: null }, { const: null, type: "null" }],
+      [{ const: false }, { const: false, type: "boolean" }],
+      [{ enum: [1, 2.5] }, { enum: [1, 2.5], type: "number" }],
+      [{ const: [] }, { const: [], type: "array", items: {} }],
+      [{ const: {} }, { const: {}, type: "object" }],
+      [
+        { maximum: 9, multipleOf: 0.5 },
+        { maximum: 9, multipleOf: 0.5, type: "number" },
+      ],
+      [
+        { minLength: 1, pattern: "x" },
+        { minLength: 1, pattern: "x", type: "string" },
+      ],
+      [
+        { properties: { anyOf: { enum: ["x"] } } },
+        { properties: { anyOf: { enum: ["x"] } }, type: "object" },
+      ],
+      [{ required: ["a"] }, { required: ["a"], type: "object" }],
+      [
+        { items: { anyOf: [{ const: "x" }] } },
+        { items: { anyOf: [{ const: "x", type: "string" }] }, type: "array" },
+      ],
+      [
+        { type: "integer", minimum: 1 },
+        { type: "integer", minimum: 1 },
+      ],
+      [{ description: "Unknown type" }, { description: "Unknown type" }],
+      [{ enum: ["x", 1] }, { enum: ["x", 1] }],
+      [
+        { properties: {}, items: {} },
+        { properties: {}, items: {} },
+      ],
+    ] as const;
+    const literal = { anyOf: [{ enum: ["literal"] }] };
+    for (const union of ["anyOf", "oneOf"] as const) {
+      const payload = request(
+        { provider: "moonshot", baseUrl: "https://api.moonshot.ai/v1", id: "kimi-k2.6" },
+        undefined,
+        toolContext({
+          type: "object",
+          properties: { v: { [union]: cases.map(([branch]) => branch), default: literal } },
+        }),
+      );
+      expect(payload.tools?.[0]?.function.parameters).toEqual({
+        type: "object",
+        properties: {
+          v: {
+            [union]: cases.map(([, expected]) => expected),
+            default: literal,
+          },
+        },
+      });
+    }
+  });
+
   it("reuses published wire descriptors while applying current strict compatibility", () => {
     const { schema: parameters } = publishRuntimeToolInputSchema({
       type: "object",

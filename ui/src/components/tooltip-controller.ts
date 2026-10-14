@@ -98,7 +98,6 @@ export class TooltipController {
   #describedBy: string | null = null;
   #descriptionCaptured = false;
   #suppressNextFocusOpen = false;
-  #focusRevision = 0;
   #descriptionElement: HTMLSpanElement | null = null;
   #richContentObserver: MutationObserver | null = null;
   readonly #triggerContentObserver = new MutationObserver(() => this.#syncDescription());
@@ -286,7 +285,6 @@ export class TooltipController {
     this.#close();
   };
   readonly handleFocusIn = () => {
-    this.#focusRevision += 1;
     if (this.#suppressNextFocusOpen) {
       this.#suppressNextFocusOpen = false;
       this.#close();
@@ -308,16 +306,11 @@ export class TooltipController {
       return;
     }
     if (event instanceof FocusEvent && event.relatedTarget === null) {
-      const revision = this.#focusRevision;
       const trigger = this.#triggerElement;
       // Chromium blurs a removed trigger before disconnecting its subtree.
       // Let that removal retire silently, while preserving ordinary blur dismissal.
       queueMicrotask(() => {
-        if (
-          revision !== this.#focusRevision ||
-          trigger !== this.#triggerElement ||
-          this.#shouldRemainOpen()
-        ) {
+        if (trigger !== this.#triggerElement || this.#shouldRemainOpen()) {
           return;
         }
         if (!this.host.isConnected || !trigger?.isConnected) {

@@ -73,7 +73,7 @@ export async function retainSessionScopedRead(
   };
   try {
     assertCurrent();
-    return { assertCurrent, release: read.release };
+    return { assertCurrent, release: read.release, prepared: read };
   } catch (error) {
     read.release();
     throw error;

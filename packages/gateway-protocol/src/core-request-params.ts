@@ -25,7 +25,7 @@ import type {
   ThemesSetParams,
   ThemesImportParams,
 } from "./schema/themes.js";
-import type { UiCommandParams } from "./schema/ui-command.js";
+import type { UiCommandParams, UiCommandReportParams } from "./schema/ui-command.js";
 import type { UpdateRunsGetParams, UpdateRunsListParams } from "./schema/update-runs.js";
 import type * as UsersSchema from "./schema/users.js";
 
@@ -101,6 +101,7 @@ export type GatewayCoreRequestParams = {
   "users.github.disconnect": Static<typeof UsersSchema.UsersGitHubDisconnectParamsSchema>;
   "users.mentionable": HumanMentionsSchema.UsersMentionableParams;
   "ui.command": UiCommandParams;
+  "ui.command.result": UiCommandReportParams;
   "themes.list": ThemesListParams;
   "themes.get": ThemesGetParams;
   "themes.set": ThemesSetParams;

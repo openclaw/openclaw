@@ -9,6 +9,7 @@ const GOOGLE_MODEL_ALIASES = new Map([
   ["gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite"],
   ["gemini-3.1-flash", "gemini-3-flash-preview"],
   ["gemini-3.1-flash-preview", "gemini-3-flash-preview"],
+  ["gemini-4", "gemini-4-argon"],
   ["gemma-4-26b", "gemma-4-26b-a4b-it"],
 ]);
 

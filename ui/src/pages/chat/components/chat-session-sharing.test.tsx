@@ -283,6 +283,11 @@ describe("chat session sharing menu", () => {
       ".chat-pane__sharing-owner a.person-activity-link",
     );
     expect(ownerLink?.getAttribute("href")).toBe("/activity/owner");
+    const ownerAvatarLink = root.querySelector<HTMLAnchorElement>(
+      ".chat-pane__sharing-owner a.person-activity-avatar-link",
+    );
+    expect(ownerAvatarLink?.tabIndex).toBe(-1);
+    expect(ownerAvatarLink?.getAttribute("aria-hidden")).toBe("true");
     expect(root.querySelector(".session-menu__separator")).toBeNull();
 
     ownerLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -379,11 +384,14 @@ describe("chat session sharing menu", () => {
     const indicator = root.querySelector(".chat-pane__draft-indicator");
     expect(indicator?.querySelector("svg")).not.toBeNull();
     expect(indicator?.textContent?.trim()).toBe("");
-    expect(
-      root
-        .querySelector("a.person-activity-avatar-link:has(openclaw-session-owner-chip)")
-        ?.getAttribute("href"),
-    ).toBe("/activity/owner");
+    const ownerLink = root.querySelector<HTMLAnchorElement>(
+      "a.person-activity-avatar-link:has(openclaw-session-owner-chip)",
+    );
+    expect(ownerLink?.getAttribute("href")).toBe("/activity/owner");
+    expect(ownerLink?.tabIndex).toBe(0);
+    expect(ownerLink?.hasAttribute("aria-hidden")).toBe(false);
+    ownerLink?.focus();
+    expect(document.activeElement).toBe(ownerLink);
   });
 
   it("keeps read-only owner controls visible but refuses disabled synthetic actions", () => {

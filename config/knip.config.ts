@@ -69,6 +69,8 @@ const repositoryScriptEntries = [
   "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/perf/post-restart-burst-measure.ts",
   "scripts/bundle-a2ui.mts!",
+  // The standalone build guide invokes this builder by path.
+  "scripts/build-bun-standalone.mjs!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
   "scripts/build-plugin-control-ui.mts!",

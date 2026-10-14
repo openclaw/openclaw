@@ -102,8 +102,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
     let workspaceOverride = prepared.workspaceOverride;
     let leaseActive = true;
     const abortRegistration = prepared.activeRunAbort;
-    const abortEntry = abortRegistration.entry;
-    const abortController = abortRegistration.controller;
+    const { entry: abortEntry, controller: abortController } = abortRegistration;
     const operationalRunInstance = prepared.operationalRunInstance;
     const sessionKey = abortEntry?.sessionKey;
     const admittedRunIdentity = abortEntry
@@ -537,6 +536,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
+                replyExpectation: prepared.userTurn.replyExpectation,
                 senderIsOwner: prepared.userTurn.senderIsOwner,
                 sessionEffects: params.sessionEffects,
                 skipInitialSessionTouch: params.skipAgentInitialSessionTouch,

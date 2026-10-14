@@ -71,7 +71,7 @@ export function renderSidebarRail(
       ? t("nav.pages")
       : view === "sessions"
         ? titleForRoute("sessions")
-        : t("presence.rosterTitle");
+        : t("presence.usersTitle");
   return (
     <nav
       class="sidebar-rail"
@@ -111,7 +111,7 @@ export function renderSidebarRail(
               type="button"
               class="sidebar-rail__button"
               title={
-                host.navigationView === view
+                host.navigationView === view && view !== "online"
                   ? `${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`
                   : viewLabel(view)
               }
@@ -125,13 +125,10 @@ export function renderSidebarRail(
               onClick={() => {
                 const active = host.navigationView === view;
                 host.navigationView = view;
-                if (view === "online") {
-                  host.teamOnlineExpanded = true;
-                  if (host.collapsedSessionSections.has("online")) {
-                    host.toggleSection("online");
-                  }
-                }
-                if (!isMobileNavLayout() && (active || host.navigationCollapsed)) {
+                if (
+                  !isMobileNavLayout() &&
+                  ((active && view !== "online") || host.navigationCollapsed)
+                ) {
                   host.onToggleSidebar?.();
                 }
                 host.requestUpdate();
@@ -454,9 +451,9 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
   const dashboards = () => host.navigationCatalog.dashboards;
   const dashboardRows = createMemo(() =>
     host.sidebarSnapshot
-      ? host.sidebarSnapshot.pages.map((row) =>
-          restoreSnapshotSession(row, host.getRouteSessionKey()),
-        )
+      ? host.sidebarSnapshot.pages
+          .filter((row) => !row.archived)
+          .map((row) => restoreSnapshotSession(row, host.getRouteSessionKey()))
       : (dashboards()?.result?.sessions ?? []).map((row) =>
           host.getSessionNavigationState().toSidebarSession(row),
         ),
@@ -499,9 +496,13 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
         {(entry) => {
           const fixedEntry = untrack(entry);
           const key = serializeSidebarEntry(fixedEntry);
+          // Allocate once per entry; the rendered link owns its reactive fields.
+          const content = untrack(() =>
+            renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs),
+          );
           return (
             <div class="sidebar-pages__entry">
-              {renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs)}
+              {content}
               <button
                 type="button"
                 class={[

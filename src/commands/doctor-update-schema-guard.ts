@@ -167,6 +167,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   onVerifiedBackup?: (snapshots: readonly BackupSqliteSnapshotFact[]) => void;
   /** Read-only pre-capture publication check; never authorizes an agent repair. */
   statePublicationOnly?: boolean;
+  preserveSourceArtifacts?: true;
 }): Promise<DoctorDatabasePreflight | undefined> {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
     return undefined;
@@ -178,9 +179,10 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     : createDoctorRehearsalDatabaseCoverage(process.env);
   const schemas =
     options.schemas ??
-    (await prepareDoctorDatabasePreflight(
-      options.statePublicationOnly ? { scope: "state" } : undefined,
-    ));
+    (await prepareDoctorDatabasePreflight({
+      scope: options.statePublicationOnly ? "state" : undefined,
+      preserveSourceArtifacts: options.preserveSourceArtifacts,
+    }));
   rehearsal?.assertCurrent();
   if (!schemas.pendingMigrations?.length) {
     return schemas;
