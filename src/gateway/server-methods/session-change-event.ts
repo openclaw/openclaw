@@ -264,16 +264,13 @@ async function publishSessionChange(context: SessionChangeContext, change: Sessi
   };
   try {
     if (query && projection) {
-      const prepared = await sessionEventPublicationRows(projection).withPreparedExactRows(
+      await sessionEventPublicationRows(projection).withPreparedExactRows(
         () => [query],
         (read) => {
           broadcast(true, read);
         },
         { includeAncestors: true },
       );
-      if (prepared.kind !== "complete") {
-        broadcast(false);
-      }
     } else {
       broadcast();
     }

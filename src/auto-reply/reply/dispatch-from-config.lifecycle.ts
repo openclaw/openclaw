@@ -499,6 +499,9 @@ export function createDispatchReplyOperationCoordinator(params: {
           : { status: "skipped", reason: admission.reason };
     }
     if (admission.status === "skipped") {
+      if (admission.error) {
+        params.replyOptions?.internalEventExecution?.onFailed?.(admission.error);
+      }
       if (
         admission.reason === "active-run" &&
         (allowActiveResolution ||

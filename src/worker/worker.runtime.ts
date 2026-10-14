@@ -19,6 +19,7 @@ import {
 import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
+import { WorkerNodeLostError } from "./worker-node-loss.js";
 import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
@@ -209,12 +210,16 @@ export async function runWorkerDescriptor(
     } else if (state.kind === "fenced") {
       abortController.abort(new Error(`worker fenced: ${state.reason}`));
     } else if (state.kind === "failed") {
-      abortController.abort(state.error);
+      abortController.abort(
+        wasAdmitted && state.error instanceof WorkerAdmissionDeadlineExceededError
+          ? new WorkerNodeLostError({ cause: state.error })
+          : state.error,
+      );
     } else if (wasAdmitted && descriptor.assignment.inference === "runtime-local") {
       // Startup may retry before admission. Once admitted, any transport loss
       // ends local provider authority, even while runtime setup is still awaited.
       // Reconnection may settle the failed turn; it cannot revive its producer.
-      abortController.abort(new Error("Runtime-local inference lost Gateway admission"));
+      abortController.abort(new WorkerNodeLostError());
     }
   });
 
@@ -364,10 +369,11 @@ export async function runWorkerDescriptor(
       if (options.signal?.aborted && !options.environmentStateDir) {
         throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
-      if (resultFenceAcked && connection.state.kind === "ready") {
+      const nodeLost = abortController.signal.reason instanceof WorkerNodeLostError;
+      if (nodeLost || (resultFenceAcked && connection.state.kind === "ready")) {
         return {
           status: "failed",
-          reason: "turn-failed",
+          reason: nodeLost ? "node-lost" : "turn-failed",
           transcriptLeafId: transcript.baseLeafId,
           transcriptNextSeq: transcript.nextSeq,
         };

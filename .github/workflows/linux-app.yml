@@ -9,6 +9,8 @@ on:
       - "test/scripts/stage-openclaw-bun.test.ts"
       - ".github/workflows/linux-app.yml"
       - ".github/workflows/linux-app-release.yml"
+      - "!apps/linux/README.md"
+      - "!apps/linux/omarchy/README.md"
   workflow_dispatch:
 
 concurrency:

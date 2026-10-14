@@ -23,6 +23,7 @@ import {
   openAgentDatabaseSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
 } from "../infra/sqlite-worker-store.js";
+import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
 import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
@@ -241,6 +242,7 @@ export function createAgentDatabaseNativeGeneration(
               }),
             };
             facts.validationPort.postMessage(preparation, []);
+            recordWorkerMessage("admission", "to_worker");
           } finally {
             facts.validationPort.close();
           }

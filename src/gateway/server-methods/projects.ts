@@ -428,8 +428,8 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         if (client?.authenticatedUserProfile?.profileId || (params.includeObserved && canWrite())) {
           projection = requireSessionRowProjection(context);
           do {
-            await projection.prepareSelection();
-          } while (projection.needsSelectionPreparation());
+            await projection.prepareSelection({ metadataOnly: true });
+          } while (projection.needsSelectionPreparation({ metadataOnly: true }));
           if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
             throw new Error(
               "Session projection changed while preparing the listing. Retry the request.",

@@ -2,12 +2,8 @@ import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeGitPathForFilesystem, requireGitCommandOutput } from "../../infra/git-exec.js";
-import {
-  readGitHead,
-  readGitMetadataDirectories,
-  readGitMetadataFile,
-} from "../../infra/git-root.js";
+import { requireGitCommandOutput } from "../../infra/git-exec.js";
+import { readGitMetadataDirectories } from "../../infra/git-root.js";
 import { gitFilesystemEnvironmentRevision } from "../../infra/git-worker-context.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { WorktreeRepositoryError } from "./errors.js";
@@ -17,6 +13,7 @@ import type { ManagedWorktreeBranch, ManagedWorktreeBranchesResult } from "./typ
 
 const BRANCH_INVENTORY_MAX_OUTPUT_BYTES = 256 * 1024;
 const BRANCH_SUGGESTIONS_PER_KIND = 100;
+const BRANCH_INVENTORY_FRESHNESS_MS = 30_000;
 
 type RepositoryBranchRef = {
   ref: string;
@@ -26,25 +23,21 @@ type RepositoryBranchRef = {
   current?: boolean;
 };
 
-// Git proves commit integrity; each reuse proves that its inputs and object storage are unchanged.
+// Suggestions observe ref changes immediately; config/object damage is noticed on refresh.
+// Creation still validates the selected ref through Git before changing any checkout.
 const branchInventories = new Map<
   string,
   {
     revision: string;
     requested: string;
-    environment: string;
-    configPaths: string[];
+    refreshedAt: number;
     result: ManagedWorktreeBranchesResult;
   }
 >();
 
-function branchInventoryRevision(
-  repoRoot: string,
-  requested: string,
-  configPaths: string[],
-): { revision: string; head: string } | undefined {
+function branchInventoryRevision(repoRoot: string): string | undefined {
   const environment = gitFilesystemEnvironmentRevision();
-  if (environment === undefined || configPaths.some((file) => !path.isAbsolute(file))) {
+  if (environment === undefined) {
     return undefined;
   }
   try {
@@ -67,24 +60,7 @@ function branchInventoryRevision(
       return undefined;
     }
     const { gitDir, commonDir: common } = directories;
-    for (let directory = requested; directory !== repoRoot; directory = path.dirname(directory)) {
-      if (directory === path.dirname(directory) || !stamp(directory)?.isDirectory()) {
-        return undefined;
-      }
-    }
-    const head = readGitHead(repoRoot, { maxDepth: 1 })?.value;
-    const objects = path.join(common, "objects");
-    if (
-      !head ||
-      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(head) ||
-      ["reftable", "refs/replace", "info/grafts", "objects/info/alternates"].some((name) =>
-        fsSync.existsSync(path.join(common, name)),
-      ) ||
-      (fsSync.existsSync(path.join(common, "packed-refs")) &&
-        readGitMetadataFile(path.join(common, "packed-refs"), Number.MAX_SAFE_INTEGER)
-          .toString("utf8")
-          .includes("refs/replace/"))
-    ) {
+    if (fsSync.existsSync(path.join(common, "reftable"))) {
       return undefined;
     }
     for (const file of [
@@ -94,39 +70,8 @@ function branchInventoryRevision(
       path.join(gitDir, "HEAD"),
       path.join(gitDir, "commondir"),
       path.join(common, "packed-refs"),
-      path.join(common, "shallow"),
-      objects,
-      path.join(objects, head.slice(0, 2)),
-      path.join(objects, head.slice(0, 2), head.slice(2)),
     ]) {
       stamp(file);
-    }
-    for (const file of [
-      ...configPaths,
-      path.join(common, "config"),
-      path.join(gitDir, "config.worktree"),
-    ]) {
-      const stat = stamp(file);
-      if (
-        stat &&
-        (!stat.isFile() ||
-          stat.size > 1024 * 1024 ||
-          /include/iu.test(
-            readGitMetadataFile(file)
-              .toString("utf8")
-              .replace(/\\\r?\n/gu, ""),
-          ))
-      ) {
-        return undefined;
-      }
-    }
-    const packs = path.join(objects, "pack");
-    if (stamp(packs)?.isDirectory()) {
-      for (const name of fsSync.readdirSync(packs).toSorted()) {
-        if (name.endsWith(".promisor") || !stamp(path.join(packs, name))?.isFile()) {
-          return undefined;
-        }
-      }
     }
     const visit = (directory: string, depth = 0) => {
       if (depth > 32 || !stamp(directory)?.isDirectory()) {
@@ -145,7 +90,7 @@ function branchInventoryRevision(
     if (common !== gitDir && stamp(worktreeRefs)?.isDirectory()) {
       visit(worktreeRefs);
     }
-    return { revision: JSON.stringify([environment, head, stamps.digest("hex")]), head };
+    return JSON.stringify([environment, stamps.digest("hex")]);
   } catch {
     return undefined;
   }
@@ -206,7 +151,6 @@ export async function readRepositoryBranches(
   let sourceRoot: string;
   let requested: string;
   let snapshot: ReturnType<typeof branchInventoryRevision>;
-  let configPaths: string[] = [];
   const environment = gitFilesystemEnvironmentRevision();
   try {
     requested = await fs.realpath(repoRoot).catch(() => {
@@ -223,21 +167,12 @@ export async function readRepositoryBranches(
     const candidate = findGitCheckoutRoot(requested);
     const cached = candidate ? branchInventories.get(candidate) : undefined;
     if (candidate && environment !== undefined) {
-      if (cached?.environment === environment) {
-        configPaths = cached.configPaths;
-      } else {
-        // Git owns system/global config discovery, including files not created yet.
-        const variables = await runGit(requested, ["var", "-l"]);
-        if (variables.code === 0) {
-          configPaths = [
-            ...variables.stdout.matchAll(/^GIT_CONFIG_(?:SYSTEM|GLOBAL)=(.+)$/gmu),
-          ].map((match) => normalizeGitPathForFilesystem(match[1]!));
-        }
-      }
-      snapshot = configPaths.length
-        ? branchInventoryRevision(candidate, requested, configPaths)
-        : undefined;
-      if (cached?.requested === requested && snapshot?.revision === cached.revision) {
+      snapshot = branchInventoryRevision(candidate);
+      if (
+        cached?.requested === requested &&
+        snapshot === cached.revision &&
+        Date.now() - cached.refreshedAt < BRANCH_INVENTORY_FRESHNESS_MS
+      ) {
         branchInventories.delete(candidate);
         branchInventories.set(candidate, cached);
         return {
@@ -248,8 +183,7 @@ export async function readRepositoryBranches(
     }
     const admitted = await resolveCheckoutRootFromRealPath(requested, repoRoot);
     sourceRoot = admitted.root;
-    // A tag HEAD can peel through other loose objects; that graph stays Git-owned.
-    if (candidate !== sourceRoot || snapshot?.head !== admitted.commit) {
+    if (candidate !== sourceRoot) {
       snapshot = undefined;
     }
   } catch (error) {
@@ -349,18 +283,11 @@ export async function readRepositoryBranches(
     ...(headEntry ? { headBranch: headEntry.branch.name } : {}),
     ...(branchesUnavailable ? { branchesUnavailable: true } : {}),
   };
-  // Never publish under a newer revision if refs changed while Git was running.
-  if (
-    !branchesUnavailable &&
-    environment !== undefined &&
-    snapshot !== undefined &&
-    snapshot.revision === branchInventoryRevision(sourceRoot, requested, configPaths)?.revision
-  ) {
+  if (!branchesUnavailable && environment !== undefined && snapshot !== undefined) {
     branchInventories.set(sourceRoot, {
-      revision: snapshot.revision,
+      revision: snapshot,
       requested,
-      environment,
-      configPaths,
+      refreshedAt: Date.now(),
       result,
     });
     pruneMapToMaxSize(branchInventories, 64);

@@ -101,6 +101,8 @@ const rawSqliteAllowPathGroups = {
   "backup snapshot maintenance": [
     "src/commands/backup-verify.ts",
     "src/infra/backup-create.ts",
+    // The scoped archive preserves native cell types, rowids, and SQLite schema SQL.
+    "src/infra/sqlite-migration-scoped-snapshot.ts",
     "src/snapshot/git-backup-codec.ts",
     "src/snapshot/local-repository.ts",
   ],

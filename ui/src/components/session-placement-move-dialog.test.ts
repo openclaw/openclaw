@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { showSessionPlacementTargetDialog } from "./session-placement-move-dialog.ts";
+import { showSessionPlacementTargetDialog } from "./session-placement-move-dialog.tsx";
 
 let restoreDialogPolyfill: () => void;
 
@@ -221,5 +221,30 @@ it("moves with the selected OS and limits machine choices to that OS", async () 
   } finally {
     modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
     await result;
+  }
+});
+
+it("does not select or submit a disabled default Gateway target", async () => {
+  const result = showSessionPlacementTargetDialog({
+    mode: "move",
+    sessionLabel: "Example session",
+    activeRun: false,
+    gatewayDisabledReason: "Gateway unavailable",
+    loadCatalog: async () => ({ profiles: [], devices: [] }),
+  });
+  flush();
+  const { modal } = await getRenderedModalDialog(document.body);
+  try {
+    expect(modal.querySelector<HTMLButtonElement>('[data-value="gateway"]')!.disabled).toBe(true);
+    expect(modal.querySelector('[data-value="gateway"]')?.getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    expect(modal.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
+    modal.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    flush();
+    expect(modal.isConnected).toBe(true);
+  } finally {
+    modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+    await expect(result).resolves.toBeNull();
   }
 });

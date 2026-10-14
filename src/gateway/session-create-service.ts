@@ -10,7 +10,7 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/active-run-projections.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,

@@ -240,8 +240,8 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           );
           for (const compiler of compilers) {
             expect(compiler).toMatchObject({
-              inputs: 2,
-              outputs: 2,
+              inputs: 3,
+              outputs: 3,
               processStartTime: expect.any(Number),
               isMainThread: true,
             });

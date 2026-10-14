@@ -12,7 +12,6 @@ import {
 } from "../../lit/subscriptions-controller.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
-import "../../components/web-awesome-popover.ts";
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
 import {

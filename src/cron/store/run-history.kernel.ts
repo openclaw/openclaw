@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -21,7 +21,7 @@ import { publishCronRunHistoryChange } from "./run-history-changes.js";
 import type { CronRunHistoryWrite, CronRunRecord } from "./run-history.types.js";
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
-const query = (db: DatabaseSync) =>
+const query = (db: EngineConnection) =>
   getNodeSqliteKysely<
     Pick<DB, "task_runs" | "execution_owner_lifecycle_bindings" | "cron_run_receipts">
   >(db);
@@ -64,7 +64,7 @@ function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
 
 /** Reads only Cron facts from the admitted released table, without restoring Tasks. */
 export function readCronRunRecordsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   jobId?: string,
   runId?: string,
 ): CronRunRecord[] {
@@ -149,7 +149,7 @@ export function readCronRunRecordsInDatabase(
 }
 
 /** Caller owns the exact transaction. History never authorizes execution or receipt adoption. */
-export function recordCronRunInDatabase(db: DatabaseSync, input: CronRunHistoryWrite): void {
+export function recordCronRunInDatabase(db: EngineConnection, input: CronRunHistoryWrite): void {
   const existing = readCronRunRecordsInDatabase(db, input.jobId, input.runId).find(
     (row) =>
       row.runId === input.runId &&
@@ -215,7 +215,7 @@ export function recordCronRunInDatabase(db: DatabaseSync, input: CronRunHistoryW
 
 /** Queue rejection is durable even if the host never receives the commit result. */
 export function recordSkippedCronRequestInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: {
     storeKey: string;
     jobId: string;
@@ -304,7 +304,7 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
 }
 
 function pruneCronRunHistoryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   now: number,
   schema: CronRunReceiptWriteSchema,
   records = readCronRunRecordsInDatabase(db),
@@ -415,7 +415,7 @@ export function planCronRunHistoryMaintenance(
 }
 
 export function applyCronRunHistoryMaintenanceInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   plan: ReturnType<typeof planCronRunHistoryMaintenance>,
   now: number,
   schema: CronRunReceiptWriteSchema,

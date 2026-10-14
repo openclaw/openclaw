@@ -7,6 +7,7 @@ import { filterStringEntries } from "@openclaw/normalization-core/string-normali
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   publishTranscriptUpdate,
+  type SessionTranscriptRuntimeTarget,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
@@ -17,6 +18,7 @@ import {
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { rewritePreparedAssistantTranscriptMessageForRun } from "../../config/sessions/session-message-rewrite.js";
 import { withPreparedTranscriptCorrection } from "../../config/sessions/session-transcript-correction.js";
+import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -325,6 +327,7 @@ function findSourceReplyTranscriptMirrorByMetadataInEvents(
 export async function persistAbortedPartials(params: {
   context: { logGateway: { warn: (message: string) => void } };
   snapshots: AbortedPartialSnapshot[];
+  missingToolResultText?: string;
 }): Promise<string | undefined> {
   let warning: string | undefined;
   for (const snapshot of params.snapshots) {
@@ -332,7 +335,7 @@ export async function persistAbortedPartials(params: {
       continue;
     }
     try {
-      warning = (await persistAbortedPartial({ context: params.context, snapshot })) ?? warning;
+      warning = (await persistAbortedPartial({ ...params, snapshot })) ?? warning;
     } catch (error) {
       throw abortedPartialPersistenceError(error, warning);
     }
@@ -344,10 +347,37 @@ export async function persistAbortedPartial(params: {
   context: { logGateway: { warn: (message: string) => void } };
   snapshot: AbortedPartialSnapshot;
   producerSettled?: true;
+  missingToolResultText?: string;
 }): Promise<string | undefined> {
   const { snapshot } = params;
   if (!snapshot.ok) {
     throw snapshot.error;
+  }
+  if (params.missingToolResultText) {
+    const [{ SessionManager }, { repairToolUseResultPairing }] = await Promise.all([
+      import("../../agents/sessions/session-manager.js"),
+      import("../../agents/session-transcript-repair.js"),
+    ]);
+    const target: SessionTranscriptRuntimeTarget & SessionTranscriptWriteScope = {
+      ...snapshot.value,
+      expectedWriterRunId: snapshot.runId,
+      expectedLifecycleRevision: snapshot.value.expectedLifecycleRevision ?? undefined,
+      expectedOwner: {
+        lifecycleRevision: snapshot.value.expectedLifecycleRevision ?? undefined,
+        activeWriterRunId: snapshot.runId,
+      },
+    };
+    const manager = await withoutSessionTranscriptReadFence(() => SessionManager.openAsync(target));
+    const messages = manager.buildSessionContext().messages;
+    const start = messages.findLastIndex((message) => message.role === "user");
+    for (const result of repairToolUseResultPairing(messages.slice(Math.max(0, start)), {
+      missingToolResultText: params.missingToolResultText,
+    }).added) {
+      await manager.appendMessageAsync(result);
+    }
+    if (!snapshot.value.message.trim()) {
+      return undefined;
+    }
   }
   const appended = await appendInjectedAssistantMessageToTranscript({
     ...snapshot.value,

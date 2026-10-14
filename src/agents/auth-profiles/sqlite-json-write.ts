@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withAuthProfileCredentialWrite } from "../../state/user-model-account-authority.js";
 import {
   AGENT_AUTH_CELLS,
@@ -12,7 +12,7 @@ import { recordAuthProfileNativeCommit } from "./store-update-commit.js";
 
 /** Write one canonical auth cell on the caller's admitted transaction connection. */
 export function writeAuthProfileJsonCell(
-  database: DatabaseSync,
+  database: EngineConnection,
   target: "store" | "state",
   kind: "agent" | "shared-state",
   payload: unknown,
@@ -54,7 +54,7 @@ export function writeAuthProfileJsonCell(
 }
 
 export function deleteAuthProfileJsonCell(
-  database: DatabaseSync,
+  database: EngineConnection,
   target: "store" | "state",
   kind: "agent" | "shared-state",
 ): void {

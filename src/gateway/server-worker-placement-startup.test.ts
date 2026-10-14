@@ -128,6 +128,7 @@ describe("worker placement startup health lifetime", () => {
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
+      beginClose: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const warn = vi.fn();
@@ -225,6 +226,7 @@ describe("worker placement startup health lifetime", () => {
         subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
         installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
         start: vi.fn(),
+        beginClose: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
       };
       const runtime = createGatewayWorkerPlacementRuntime({
@@ -314,7 +316,7 @@ describe("worker placement startup health lifetime", () => {
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
-      stopNodeEnrollmentWaits: vi.fn(),
+      beginClose: vi.fn(),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
       initialPlacements: [],
@@ -355,7 +357,7 @@ describe("worker placement startup health lifetime", () => {
 
       await Promise.resolve();
       expect(repeatedStop).toBe(stopping);
-      expect(environments.stopNodeEnrollmentWaits).toHaveBeenCalledOnce();
+      expect(environments.beginClose).toHaveBeenCalledOnce();
       expect(environments.stop).not.toHaveBeenCalled();
       evidence.resolve("absent");
       await Promise.all([stopping, repeatedStop]);
@@ -381,6 +383,7 @@ describe("worker placement startup health lifetime", () => {
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
+      beginClose: vi.fn(),
       stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
@@ -475,6 +478,7 @@ describe("worker placement startup health lifetime", () => {
                 return vi.fn();
               }),
               start: vi.fn(),
+              beginClose: vi.fn(),
               stop: vi.fn().mockResolvedValue(undefined),
             };
             const runtime = createGatewayWorkerPlacementRuntime({
@@ -594,11 +598,12 @@ describe("worker placement startup health lifetime", () => {
       }),
       start: vi.fn(),
       isStopping: () => environmentStopping,
-      stopNodeEnrollmentWaits: vi.fn(() => {
+      beginClose: vi.fn(() => {
         expect(dispatchOptions.isShuttingDown?.()).toBe(true);
         expect(environmentStopping).toBe(false);
         expect(environments.stop).not.toHaveBeenCalled();
-        events.push("enrollment:cancel");
+        environmentStopping = true;
+        events.push("environments:begin-close");
       }),
       stop: vi.fn(async () => {
         environmentStopping = true;
@@ -668,7 +673,7 @@ describe("worker placement startup health lifetime", () => {
     await Promise.all([guardedRecovery, stopping]);
     expect(events).toEqual([
       "recovery:start",
-      "enrollment:cancel",
+      "environments:begin-close",
       "environments:stop",
       "reconcile:core",
       "recovery:end",

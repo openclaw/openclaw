@@ -79,7 +79,7 @@ type DiagnosticToolStartedActivityEvent = Pick<
 type ModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
   "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "callId" | "observationUnit"
-> & { seq?: number };
+> & { seq?: number; ts?: number };
 
 type RunProgressEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
@@ -252,6 +252,10 @@ function recordModelStarted(
       sessionKey: event.sessionKey,
       sequence: event.seq,
       requestTimeoutMs: provenance.requestTimeoutMs,
+      deadlineAtMs:
+        provenance.requestTimeoutMs === undefined
+          ? undefined
+          : (event.ts ?? Date.now()) + provenance.requestTimeoutMs,
     });
     activity.activeCoreModelCalls.set(provenance.generation, calls);
     touchSessionActivity(activity, "model_call:started");

@@ -137,8 +137,8 @@ describe("installSkillFromSource", () => {
     },
   );
 
-  it.each(["unfenced", "oversized"] as const)(
-    "rejects an %s SKILL.md before copying it",
+  it.each(["unfenced", "oversized", "comment-only", "indented-comment-only"] as const)(
+    "rejects %s SKILL.md before copying it",
     async (kind) => {
       await withTestDir({ prefix: "openclaw-skill-source-invalid-" }, async (root) => {
         const workspaceDir = path.join(root, "workspace");
@@ -150,20 +150,26 @@ describe("installSkillFromSource", () => {
             path.join(sourceDir, "SKILL.md"),
             "name: probe-x\nversion: 1.0.0\ndescription: probe\n\n---\n\nUse when testing.\n",
           );
+        } else if (kind === "comment-only" || kind === "indented-comment-only") {
+          await writeSkill(sourceDir, {
+            name: slug,
+            description:
+              kind === "comment-only" ? "# Add a description here" : "\n  # Add a description here",
+          });
         } else {
           await writeSkill(sourceDir, { name: slug, description: "x".repeat(80) });
         }
         const result = await installSkillFromSource({
           workspaceDir,
           spec: sourceDir,
-          ...(kind === "unfenced"
-            ? { slug }
-            : { config: { skills: { limits: { maxSkillFileBytes: 64 } } } }),
+          ...(kind === "oversized"
+            ? { config: { skills: { limits: { maxSkillFileBytes: 64 } } } }
+            : { slug }),
         });
         expect(result).toMatchObject({
           ok: false,
           error: expect.stringContaining(
-            kind === "unfenced" ? "description is required" : "File exceeds 64 bytes",
+            kind === "oversized" ? "File exceeds 64 bytes" : "description is required",
           ),
         });
         if (kind === "oversized") {

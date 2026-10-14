@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { required, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { query, turnClaimValues } from "./placement-row-codec.js";
 import { publishPlacementTurnClaimCleared } from "./placement-turn-authority.js";
@@ -13,7 +13,7 @@ export type WorkerSessionPlacementRetirement = {
 };
 
 export function retireWorkerSessionPlacement(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: WorkerSessionPlacementRetirement,
   options: { onlyIfCurrent?: boolean } = {},
 ): WorkerSessionPlacementIdentity | undefined {

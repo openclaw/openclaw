@@ -138,10 +138,14 @@ export const authProfileOperations = {
         const previous = profile.usageStats;
         const next =
           input.reduction.kind === "success"
-            ? resetAuthProfileFailureState(previous ?? {}, {
-                lastUsed: input.reduction.lastUsed,
-                lastProbeAt: now,
-              })
+            ? resetAuthProfileFailureState(
+                previous ?? {},
+                {
+                  lastUsed: input.reduction.lastUsed,
+                  lastProbeAt: now,
+                },
+                input.reduction.modelId,
+              )
             : reduceAuthProfileFailure(profile.credential, previous, input.reduction, now);
         if (!next) {
           return false;

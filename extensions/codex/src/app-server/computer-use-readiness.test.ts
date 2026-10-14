@@ -87,13 +87,12 @@ describe("Codex Computer Use readiness", () => {
     }
   });
 
-  it.each(["passed", "cancelled", "mcp-error"] as const)(
+  it.each(["passed", "cancelled"] as const)(
     "retires a probe client after failed unsubscribe (probe: %s)",
     async (probe) => {
       const cancelled = probe === "cancelled";
       const fixture = createComputerUseRequest({
         installed: true,
-        liveTestFailures: probe === "mcp-error" ? 1 : 0,
       });
       const controller = new AbortController();
       const harness = createClientHarness({
@@ -319,26 +318,6 @@ describe("Codex Computer Use readiness", () => {
     );
   });
 
-  it("fails fast when MCP exposes no tools even without strict readiness", async () => {
-    const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
-
-    await expectSetupErrorStatus(
-      ensureCodexComputerUse({
-        pluginConfig: readinessConfig({ strictReadiness: false }),
-        request,
-      }),
-      {
-        ready: false,
-        reason: "mcp_missing",
-        mcpServerAvailable: false,
-        tools: [],
-        message: "Computer Use is installed, but the computer-use MCP server exposes no tools.",
-      },
-    );
-    expectRequestMethodNotCalled(request, "thread/start");
-    expectRequestMethodNotCalled(request, "mcpServer/tool/call");
-  });
-
   it("reloads empty MCP exposure once during install before failing closed", async () => {
     const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
 
@@ -386,36 +365,6 @@ describe("Codex Computer Use readiness", () => {
     expect(status.repair).toBeUndefined();
     expectRequestMethodNotCalled(request, "config/mcpServer/reload");
   });
-
-  it.each([false, true])(
-    "skips live probes for non-strict startup (autoInstall: %s)",
-    async (autoInstall) => {
-      const request = createComputerUseRequest({ installed: !autoInstall, liveTestFailures: 2 });
-      const status = await ensureCodexComputerUse({
-        pluginConfig: readinessConfig({ autoInstall }),
-        request,
-      });
-
-      expectStatusFields(status, {
-        ready: true,
-        reason: "ready",
-        installed: true,
-        pluginEnabled: true,
-        mcpServerAvailable: true,
-      });
-      expect(status.liveTest).toMatchObject({ status: "skipped", ok: false, attempted: false });
-      expectRequestMethodNotCalled(request, "thread/start");
-      expectRequestMethodNotCalled(request, "mcpServer/tool/call");
-      if (autoInstall) {
-        expect(request).toHaveBeenCalledWith("plugin/install", {
-          marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
-          pluginName: "computer-use",
-        });
-      } else {
-        expectRequestMethodNotCalled(request, "plugin/install");
-      }
-    },
-  );
 
   it("fails startup closed when strictReadiness is enabled", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });

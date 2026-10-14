@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   AdmittedRunOperatorAuthority,
@@ -16,6 +15,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import {
@@ -624,7 +624,7 @@ export function prepareWorkerTurnClaimClosed(
 }
 
 export function deferWorkerTurnClaimClosed(
-  db: DatabaseSync,
+  db: EngineConnection,
   path: string,
   claim: WorkerSessionTurnClaim,
 ): void {
@@ -633,7 +633,7 @@ export function deferWorkerTurnClaimClosed(
   }
 }
 
-export function deferTurnClaimRelease(db: DatabaseSync, path: string, sessionId: string): void {
+export function deferTurnClaimRelease(db: EngineConnection, path: string, sessionId: string): void {
   if (!deferSqlitePostCommitPublication(db, () => signalTurnClaimRelease(path, sessionId))) {
     throw new Error("Worker turn release requires its owning transaction");
   }

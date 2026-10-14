@@ -109,11 +109,11 @@ function hasCustomTargetsMatch<TTarget>(
   return typeof params.targetsMatch === "function";
 }
 
-/** @deprecated Use createChannelNativeOriginTargetResolverAsync for worker-owned session reads. */
+/** @deprecated Use createChannelNativeOriginTargetResolverAsync for worker-owned session reads. Final compatibility day: 2026-12-31. */
 export function createChannelNativeOriginTargetResolver<TTarget extends NativeApprovalTarget>(
   params: NativeOriginResolverParams<TTarget>,
 ): (input: ApprovalResolverParams) => TTarget | null;
-/** @deprecated Use createChannelNativeOriginTargetResolverAsync for worker-owned session reads. */
+/** @deprecated Use createChannelNativeOriginTargetResolverAsync for worker-owned session reads. Final compatibility day: 2026-12-31. */
 export function createChannelNativeOriginTargetResolver<TTarget>(
   params: CustomOriginResolverParams<TTarget>,
 ): (input: ApprovalResolverParams) => TTarget | null;
@@ -134,7 +134,7 @@ export function createChannelNativeOriginTargetResolver<TTarget>(
   });
 }
 
-/** @deprecated Use createChannelApproverDmTargetResolverAsync with awaited account eligibility. */
+/** @deprecated Use createChannelApproverDmTargetResolverAsync with awaited account eligibility. Final compatibility day: 2026-12-31. */
 export function createChannelApproverDmTargetResolver<
   TApprover,
   TTarget extends NativeApprovalTarget = NativeApprovalTarget,

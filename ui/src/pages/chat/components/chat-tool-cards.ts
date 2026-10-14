@@ -1,22 +1,16 @@
-import { html, nothing } from "lit";
+import { html } from "lit";
 import {
   browserRouteKey,
   browserTabKey,
   type BrowserTabSelection,
 } from "../../../components/browser/browser-target.ts";
 import { browserTabCardRevision } from "../../../lib/chat/browser-tab-preview.ts";
-import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
-import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
 import type { WorkGroupRenderItem } from "../chat-thread-grouping.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
-import type { ToolCardOptions } from "./chat-tool-cards.solid.tsx";
-import { type ToolRenderOptions, toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { renderToolPreview } from "./widget-card.ts";
-export {
-  resolveCollapsedToolDetail,
-  syncToolDisclosureOverflow,
-} from "./chat-tool-cards.solid.tsx";
+export { resolveCollapsedToolDetail } from "./chat-tool-cards.solid.tsx";
 
 export function renderBrowserTabPreviews(
   groups: readonly MessageGroup[],
@@ -93,24 +87,6 @@ export function renderWorkGroupBrowserTabPreviews(
   return byAnchor;
 }
 
-// Lit callers retain their plugin slot; Solid owns the fallback card and its children.
-// The stable child subtree carries Lit updates while Solid parks it collapsed.
-export function renderToolCard(card: ToolCard, options: ToolCardOptions & { children?: unknown }) {
-  return renderPluginToolResult(
-    card,
-    options,
-    html`<openclaw-chat-tool-card
-      style="display: contents"
-      .card=${card}
-      .options=${options}
-      .hasChildren=${Boolean(options.children)}
-      ><div style="display: contents">
-        ${options.expanded ? options.children : nothing}
-      </div></openclaw-chat-tool-card
-    >`,
-  );
-}
-
 export function renderToolIcon(
   name: string,
   tool?: { toolName: string; pluginToolIcons?: PluginToolIcons },
@@ -120,27 +96,4 @@ export function renderToolIcon(
     .name=${name}
     .tool=${tool}
   ></openclaw-chat-tool-icon>`;
-}
-
-export function renderToolApprovalReviews(card: ToolCard) {
-  return html`<openclaw-chat-tool-reviews
-    style="display: contents"
-    .card=${card}
-  ></openclaw-chat-tool-reviews>`;
-}
-
-export function renderPluginToolResult(
-  card: ToolCard | null | undefined,
-  opts: ToolRenderOptions & { expanded: boolean },
-  defaultView: unknown,
-) {
-  if (!card) {
-    return defaultView;
-  }
-  return renderPluginSurface(
-    "tool-result",
-    toolResultSurfaceProps(card, opts),
-    defaultView,
-    opts.presented ?? true,
-  );
 }

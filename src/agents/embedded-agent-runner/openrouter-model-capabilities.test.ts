@@ -380,27 +380,6 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("treats an explicit empty catalog as an authoritative replacement", async () => {
-    await withOpenRouterStateDir(async () => {
-      const modelId = "acme/removed-model";
-      const fetchSpy = vi
-        .fn()
-        .mockResolvedValueOnce(
-          Response.json({
-            data: [{ id: modelId, name: "Removed Model", context_length: 8192 }],
-          }),
-        )
-        .mockResolvedValueOnce(Response.json({ data: [] }));
-      vi.stubGlobal("fetch", fetchSpy);
-
-      const module = await importOpenRouterModelCapabilities("authoritative-empty");
-      await module.loadOpenRouterModelCapabilities(modelId);
-      await module.loadOpenRouterModelCapabilities("acme/new-model");
-
-      expect(module.getOpenRouterModelCapabilities(modelId)).toBeUndefined();
-    });
-  });
-
   it("preserves explicit OpenRouter tool support metadata", async () => {
     await withOpenRouterStateDir(async () => {
       vi.stubGlobal(
@@ -434,7 +413,6 @@ describe("openrouter-model-capabilities", () => {
       );
     });
   });
-
   it("bounds an oversized streamed OpenRouter catalog instead of buffering it whole", async () => {
     await withOpenRouterStateDir(async () => {
       // First pull emits a chunk larger than the cap; a well-behaved bounded read

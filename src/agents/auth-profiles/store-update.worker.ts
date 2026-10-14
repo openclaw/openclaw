@@ -1,7 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { MessageChannel } from "node:worker_threads";
-import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -73,7 +72,7 @@ export type AuthStoreUpdateResponse =
 
 /** A definite mismatch needs no write lock; possible matches reread inside the transaction. */
 export function authProfilePeerGenerationMayMatch(
-  database: DatabaseSync,
+  database: EngineConnection,
   input: AuthStoreUpdateInput,
 ): boolean {
   const peer = input.peerGeneration;
@@ -107,7 +106,7 @@ export function authProfilePeerGenerationMayMatch(
 
 /** Run under the owning transaction: callbacks see its current rows exactly once. */
 export function updateAuthProfileStoreInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   kind: "agent" | "shared-state",
   input: AuthStoreUpdateInput,
 ): void {

@@ -76,6 +76,17 @@ describe("prepared worker intent admission", () => {
     };
   }
 
+  it("keeps empty workspaces cold on providers with only setup commands", async () => {
+    const f = await fixture();
+    f.provider.supportsProjectPreparation = () => false;
+    f.provider.runSetupCommand = async () => undefined;
+    const intent = await f.owner.prepareIntent("development", { emptyWorkspace: true });
+    expect(intent.profileSnapshot).not.toHaveProperty("project");
+    expect(intent.profileSnapshot).not.toHaveProperty("runtimePreparation");
+    expect(intent.preparationKey).toBeUndefined();
+    expect(f.prepareNodeArtifacts).not.toHaveBeenCalled();
+  });
+
   it("admits exact local source and OS without allocating, and retains reusable facts after caller abort", async () => {
     const f = await fixture();
     const controller = new AbortController();

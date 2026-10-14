@@ -632,24 +632,97 @@ describe("killProcessTree", () => {
   it("on Unix keeps an attached descendant snapshot after its root exits", async () => {
     const { rootPid, childPid } = createAttachedTreeFixture();
     let rootAlive = true;
-    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
-      if (signal === 0 && pid === rootPid && !rootAlive) {
+    let childAlive = true;
+    killSpy.mockImplementation((pid, signal) => {
+      if (signal === 0 && ((pid === rootPid && !rootAlive) || (pid === childPid && !childAlive))) {
         throw new Error("ESRCH");
       }
       return true;
-    }) as typeof process.kill);
+    });
     mockProcTree({
       [rootPid]: { starttime: "100", children: [childPid] },
       [childPid]: { starttime: "101", ppid: rootPid },
     });
     await withMockedPlatform("linux", async () => {
-      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      const termination = killProcessTree(rootPid, { graceMs: 10, detached: false });
       rootAlive = false;
+      expect(termination?.exited()).toBe(false);
       await vi.advanceTimersByTimeAsync(10);
       expect(killSpy).toHaveBeenCalledWith(childPid, "SIGKILL");
       expect(killSpy).not.toHaveBeenCalledWith(rootPid, "SIGKILL");
+      childAlive = false;
+      expect(termination?.exited()).toBe(true);
     });
   });
+
+  it("retires attached-tree escalation once the root and child exit after SIGTERM", async () => {
+    const { rootPid, childPid } = createAttachedTreeFixture();
+    const deadPids = new Set<number>();
+    killSpy.mockImplementation((pid, signal) => {
+      if (signal === 0 && deadPids.has(pid)) {
+        throw new Error("ESRCH");
+      }
+      return true;
+    });
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: [childPid] },
+      [childPid]: { starttime: "101", ppid: rootPid },
+    });
+    await withMockedPlatform("linux", async () => {
+      const termination = killProcessTree(rootPid, { graceMs: 10, detached: false });
+      deadPids.add(rootPid);
+      expect(termination?.exited()).toBe(false);
+      deadPids.add(childPid);
+      expect(termination?.exited()).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      // Even reused numbers cannot revive the retired escalation.
+      deadPids.clear();
+      expect(termination?.exited()).toBe(true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      termination?.force();
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [childPid, "SIGTERM"],
+        [rootPid, "SIGTERM"],
+      ]);
+    });
+  });
+
+  it.each(["recycled", "unreadable"] as const)(
+    "keeps completion and signaling safe when a captured child identity is %s",
+    async (mode) => {
+      const { rootPid, childPid } = createAttachedTreeFixture();
+      let rootAlive = true;
+      let childIdentityChanged = false;
+      killSpy.mockImplementation((pid, signal) => {
+        if (signal === 0 && pid === rootPid && !rootAlive) {
+          throw new Error("ESRCH");
+        }
+        return true;
+      });
+      mockProcTree({
+        [rootPid]: { starttime: "100", children: [childPid] },
+        [childPid]: {
+          ppid: rootPid,
+          starttime: () => {
+            if (childIdentityChanged && mode === "unreadable") {
+              throw new Error("process identity unavailable");
+            }
+            return childIdentityChanged ? "999" : "101";
+          },
+        },
+      });
+      await withMockedPlatform("linux", async () => {
+        const termination = killProcessTree(rootPid, { graceMs: 10, detached: false });
+        rootAlive = false;
+        childIdentityChanged = true;
+        expect(termination?.exited()).toBe(mode === "recycled");
+        await vi.advanceTimersByTimeAsync(10);
+        expect(termination?.exited()).toBe(mode === "recycled");
+        expect(killSpy).not.toHaveBeenCalledWith(childPid, "SIGKILL");
+        expect(killSpy).not.toHaveBeenCalledWith(rootPid, "SIGKILL");
+      });
+    },
+  );
 
   it("on Unix force-kills only the verified root when attached descendants cannot be enumerated", async () => {
     killSpy.mockImplementation(() => true);

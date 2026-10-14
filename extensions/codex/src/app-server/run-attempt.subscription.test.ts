@@ -19,7 +19,6 @@ import {
   assistantMessage,
   createParams,
   createStartedThreadHarness,
-  fastWait,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
@@ -43,6 +42,8 @@ setupRunAttemptTestHooks();
 
 describe("Codex attempt subscription recovery", () => {
   it("revokes native submission custody when an unstamped parent session is replaced", async () => {
+    // Worker preparation must not race this authority check's execution deadline.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const params = createParams(path.join(tempDir, "unstamped-parent.jsonl"), tempDir);
     const target = {
       agentId: "main",
@@ -308,7 +309,8 @@ describe("Codex attempt subscription recovery", () => {
       });
 
       const retry = runCodexAppServerAttempt({ ...params, runId: "run-retry" });
-      await vi.waitFor(() => expect(turnCount).toBe(2), fastWait);
+      await retry.waitForTurnAccepted();
+      expect(turnCount).toBe(2);
       await harness.completeTurn({ threadId, turnId: "turn-2" });
       await retry;
       expect(

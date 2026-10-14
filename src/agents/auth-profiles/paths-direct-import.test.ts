@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../commands/doctor-auth-legacy-paths.js";
+import { AuthStorage } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -13,11 +14,7 @@ import { withEnv } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
-import {
-  withPreparedAuthStorePathForDisplay,
-  resolveAuthStorePathForDisplay,
-  resolveAuthStorePathForDisplayAsync,
-} from "./paths.js";
+import { withPreparedAuthStorePathForDisplay, resolveAuthStorePathForDisplay } from "./paths.js";
 import * as sqliteRead from "./sqlite-read.js";
 import { closeAuthProfileReadPool } from "./sqlite.js";
 
@@ -87,7 +84,7 @@ it.each(["shared", "missing", "missing-row", "empty", "present", "unreadable"] a
       sql.calibrate();
       let displayPath: string;
       try {
-        displayPath = await resolveAuthStorePathForDisplayAsync(
+        displayPath = await AuthStorage.resolvePathForDisplayAsync(
           mode === "shared" ? undefined : agentDir,
           state.env,
         );

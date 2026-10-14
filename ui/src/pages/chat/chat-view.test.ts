@@ -52,6 +52,7 @@ import * as chatProgress from "./chat-progress.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   appendChatBubble,
@@ -79,7 +80,6 @@ import {
   getThinkingSliderValues,
   itemAt,
 } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.tsx";

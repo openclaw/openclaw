@@ -58,7 +58,7 @@ export class ModelProviderLoginController {
   private mutationActive = false;
   private refreshWarning: string | null = null;
   private message: ModelProviderRowMessage | undefined;
-  private mode: "auth" | "activate" = "auth";
+  private mode: "auth" | "activate" | "access" = "auth";
   private readonly runner: ModelSetupWizardRunner;
   private readonly wizard: WizardLoginController;
 
@@ -193,7 +193,6 @@ export class ModelProviderLoginController {
       providers,
       authStatus,
       allowQuickApiKey: Boolean(this.options.onApiKey),
-      allowSetup,
       manualProviders:
         allowSetup && this.options.onManualProvider
           ? this.options.getManualProviders?.()
@@ -318,7 +317,7 @@ export class ModelProviderLoginController {
 
   get wizardViewProps() {
     return this.wizard.viewProps({
-      mode: this.mode,
+      mode: this.mode === "access" ? "auth" : this.mode,
       busy: this.mutationActive,
       refreshWarning: this.refreshWarning,
     });
@@ -381,7 +380,9 @@ export class ModelProviderLoginController {
         ? t("modelProviders.login.useAccountDescription", { model: recovery.model })
         : picker.allowSetup
           ? t("modelProviders.login.setupDescription")
-          : t("modelProviders.login.description"),
+          : provider?.choices.some((choice) => choice.requiresSetup)
+            ? t("modelProviders.login.nativeDescription")
+            : t("modelProviders.login.description"),
       onClose: () => this.reset(),
       onQuery: (value: string) => {
         picker.query = value;
@@ -405,10 +406,17 @@ export class ModelProviderLoginController {
           return;
         }
         this.picker = null;
-        this.mode = selected.requiresSetup ? "activate" : "auth";
+        const selectingModel = picker.allowSetup && selected.requiresSetup;
+        this.mode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
         this.refreshWarning = null;
         this.runner.prepareSignIn(selected.kind, selected.label);
-        void this.run(() => this.runner.start(selected.id, "models.authLogin"));
+        void this.run(() =>
+          this.runner.start(
+            selected.id,
+            "models.authLogin",
+            selectingModel ? { selectModel: true } : {},
+          ),
+        );
       },
       onApiKey: () => {
         if (!canSelect() || !provider?.apiKeyProvider) {
@@ -453,7 +461,16 @@ export class ModelProviderLoginController {
       kind: "success",
       text: activating
         ? t("modelProviders.login.activated")
-        : [label, t("modelProviders.login.done")].filter(Boolean).join(": "),
+        : [
+            label,
+            t(
+              this.mode === "access"
+                ? "modelProviders.login.nativeDone"
+                : "modelProviders.login.done",
+            ),
+          ]
+            .filter(Boolean)
+            .join(": "),
       warning:
         [
           completion.modelActivation?.gatewayRestartRequired ? t("labsPage.restartRequired") : null,

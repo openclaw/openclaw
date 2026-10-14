@@ -8,10 +8,16 @@ import {
   runSqliteImmediateTransactionSync,
   runSqliteReadSnapshotSync,
 } from "../sqlite-transaction.js";
-import type { DatabaseEngineInput } from "./config.js";
 import type { DatabaseEngineAdapter, DatabaseErrorKind } from "./contract.js";
 import { observeConnection } from "./observation.js";
 import { POSTGRES_LOCK_TIMEOUT_MS, POSTGRES_STATEMENT_TIMEOUT_MS } from "./policy.js";
+import {
+  postgresSchemaSql,
+  verifyAndRecordPostgresSchema,
+  readPostgresSchema,
+  verifyPostgresSchema,
+} from "./postgres-schema.js";
+import type { DatabaseEngineInput } from "./types.js";
 
 function classifyError(error: unknown): DatabaseErrorKind {
   if (!(error instanceof Error)) {
@@ -96,15 +102,49 @@ export const databaseEngineAdapters: {
         if (!store.schema.postgres) {
           throw new Error("Store has no PostgreSQL schema");
         }
-        db.exec(store.schema.postgres);
+        db.exec(postgresSchemaSql(store.schema));
         db.prepare(
           "INSERT INTO openclaw_schema_meta (store, version, store_id) VALUES (?, ?, ?)",
         ).run(store.schema.id, store.schema.version, store.storeId!);
       },
-      migrate: (store, from) => {
-        throw new Error(
-          `PostgreSQL ${store.schema.id} schema version mismatch: expected ${store.schema.version}, found ${from}; PostgreSQL migrations are not supported yet. Use a matching OpenClaw version or restore a matching backup.`,
-        );
+      migrate: (store, from, db) => {
+        if (from > store.schema.version) {
+          throw new Error(
+            `PostgreSQL ${store.schema.id} schema ${from} is newer than this build (expected ${store.schema.version}); use a compatible binary, or reverse-port with a compatible binary before downgrading.`,
+          );
+        }
+        for (let version = from + 1; version <= store.schema.version; version++) {
+          const migration = store.schema.postgresMigrations?.find(
+            (step) => step.version === version,
+          );
+          if (!migration) {
+            throw new Error(
+              `Missing PostgreSQL ${store.schema.id} migration to version ${version}; use a compatible binary or restore a matching backup.`,
+            );
+          }
+          verifyPostgresSchema(
+            db,
+            store.namespace!,
+            {
+              ...store.schema,
+              version: version - 1,
+              postgres: migration.fromSchema.postgres,
+              postgresFragments: migration.fromSchema.postgresFragments,
+            },
+            readPostgresSchema(db, store.namespace!, store.schema.id),
+          );
+          db.exec(migration.sql);
+          db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
+            version,
+            store.schema.id,
+          );
+          verifyAndRecordPostgresSchema(db, store.namespace!, {
+            ...store.schema,
+            version,
+            postgres: migration.schema.postgres,
+            postgresFragments: migration.schema.postgresFragments,
+          });
+        }
       },
     },
     classifyError,

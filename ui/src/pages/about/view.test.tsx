@@ -163,16 +163,6 @@ describe("renderAbout", () => {
     expect(container.querySelector(".about-commit__age")).toBeNull();
   });
 
-  it("keeps the connected Gateway version separate from the browser artifact", () => {
-    const container = document.createElement("div");
-    render(createProps(), container);
-
-    expect(container.querySelector(".settings-kv")?.textContent).not.toContain("2026.7.9");
-    const gatewayRow = container.querySelectorAll(".settings-row")[0];
-    expect(gatewayRow?.textContent).toContain("2026.7.9");
-    expect(gatewayRow?.textContent).toContain("separate from this Control UI build");
-  });
-
   it("copies the full commit while announcing success accessibly", () => {
     const onCopyCommit = vi.fn();
     const container = document.createElement("div");

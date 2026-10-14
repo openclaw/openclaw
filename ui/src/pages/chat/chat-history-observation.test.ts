@@ -38,7 +38,7 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { renderChat } from "./chat-view.tsx";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   installTranscriptDomMocks,

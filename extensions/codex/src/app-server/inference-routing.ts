@@ -647,7 +647,7 @@ export function bindCodexInferenceThread(
   owner.threads.set(threadId, { route, providers: projected, qualification });
 }
 
-export function forgetCodexInferenceThread(client: CodexAppServerClient, threadId: string): void {
+function forgetCodexInferenceThread(client: CodexAppServerClient, threadId: string): void {
   const owner = owners.get(client);
   owner?.threads.get(threadId)?.route.context.forget(threadId);
   owner?.threads.delete(threadId);

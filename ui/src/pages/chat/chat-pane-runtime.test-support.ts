@@ -4,7 +4,7 @@ import { vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { ChatPaneRuntimeView } from "./chat-pane.tsx";
+import { ChatPaneRuntimeView } from "./chat-pane-runtime-view.tsx";
 
 export type PaneRuntimeConstructor<R extends ChatPaneRuntime> = new (
   element: HTMLElement,

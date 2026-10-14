@@ -52,11 +52,7 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
           aria-label={t("newSession.folder")}
           placeholder={props.params.label}
           value={props.params.browser.draft}
-          onInput={(event: Event) => {
-            if (event.currentTarget instanceof HTMLInputElement) {
-              props.params.browser.setDraft(event.currentTarget.value);
-            }
-          }}
+          onInput={(event) => props.params.browser.setDraft(event.currentTarget.value)}
           ref={nativeListener("keydown", (event: KeyboardEvent) => {
             switch (event.key) {
               case "ArrowDown":
@@ -116,36 +112,31 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
             )}
           </div>
         ) : undefined}
-        {
-          <For each={view().entries} keyed={(entry) => entry.path}>
-            {(entry, index) => (
-              <button
-                type="button"
-                role="option"
-                id={`${props.params.id}-option-${index()}`}
-                aria-selected={index() === props.params.browser.activeIndex ? "true" : "false"}
-                class={[
-                  "new-session-page__browser-entry",
-                  {
-                    "new-session-page__browser-entry--active":
-                      index() === props.params.browser.activeIndex,
-                    "new-session-page__browser-entry--hidden": entry().hidden,
-                  },
-                ]}
-                title={entry().hidden ? t("newSession.hiddenFolder") : undefined}
-                ref={nativeListener(
-                  "click",
-                  () => void props.params.browser.navigate(entry().path),
-                )}
-              >
-                <span class="new-session-page__target-icon" aria-hidden="true">
-                  <Icon name="folder" />
-                </span>
-                <span>{entry().name}</span>
-              </button>
-            )}
-          </For>
-        }
+        <For each={view().entries} keyed={(entry) => entry.path}>
+          {(entry, index) => (
+            <button
+              type="button"
+              role="option"
+              id={`${props.params.id}-option-${index()}`}
+              aria-selected={index() === props.params.browser.activeIndex ? "true" : "false"}
+              class={[
+                "new-session-page__browser-entry",
+                {
+                  "new-session-page__browser-entry--active":
+                    index() === props.params.browser.activeIndex,
+                  "new-session-page__browser-entry--hidden": entry().hidden,
+                },
+              ]}
+              title={entry().hidden ? t("newSession.hiddenFolder") : undefined}
+              ref={nativeListener("click", () => void props.params.browser.navigate(entry().path))}
+            >
+              <span class="new-session-page__target-icon" aria-hidden="true">
+                <Icon name="folder" />
+              </span>
+              <span>{entry().name}</span>
+            </button>
+          )}
+        </For>
       </div>
       <div class="new-session-page__browser-actions">
         {props.params.registerProjectPath ? (

@@ -370,12 +370,17 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(2);
     leave(anchor);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(card()).toBeNull();
+    Object.assign(provider.client!, { connected: true });
+    const signal = new AbortController().signal;
+    // Fill the same cache without creating 100 disposable hovercard portals.
     for (let index = 1; index <= 100; index++) {
-      anchor.href = "https://github.com/openclaw/openclaw/issues/" + index;
-      await hover(anchor);
-      leave(anchor);
+      await provider.prefetch(
+        { href: "https://github.com/openclaw/openclaw/issues/" + index, reader: github },
+        signal,
+      );
     }
-    anchor.href = href;
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(103);
   });

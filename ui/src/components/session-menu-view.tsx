@@ -489,6 +489,19 @@ export function useSessionMenuView(
           shortcut="c"
         />
       </Show>
+      <Show when={!batch() && state.session.placementAction}>
+        <Item
+          kind="move-session"
+          label={t(
+            state.session.placementAction === "dispatch"
+              ? "sessionsView.moveToCloud"
+              : state.session.placementAction === "retry"
+                ? "sessionsView.retrySessionMove"
+                : "sessionsView.moveSession",
+          )}
+          icon="cloud"
+        />
+      </Show>
       <Show when={batch()}>
         <Archive />
       </Show>

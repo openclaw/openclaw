@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
 import {
@@ -47,7 +48,7 @@ import {
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
 
-const transcriptContextVersionQuery = createSqliteQueryCache((database) => {
+const transcriptContextVersionQuery = createSqliteQueryCache((database: DatabaseSync) => {
   const db = getSessionKysely(database);
   return prepareSqliteQueryTakeFirstSync<
     string,
@@ -419,7 +420,7 @@ export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId
 }
 
 // Only compilation is retained; writer transactions must see their latest mutation fences.
-const transcriptMutationStateQuery = createSqliteQueryCache((database) => {
+const transcriptMutationStateQuery = createSqliteQueryCache((database: DatabaseSync) => {
   const db = getSessionKysely(database);
   return prepareSqliteQueryTakeFirstSync<
     string,

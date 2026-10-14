@@ -9,15 +9,19 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it, vi, type MockInstance } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
 import * as sqliteRuntime from "./bun-sqlite-library.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
-import { createSqliteReadOnlyWorkerPool } from "./sqlite-readonly-worker-session.js";
+import { createSqliteReadOnlyWorkerPool } from "./sqlite-readonly-worker-pool.js";
 import {
   captureSqliteReadOnlyWorkerLaunch,
+  closeSqliteReadOnlyWorkersForBroker,
   createScopedSqliteReadOnlyWorker,
   createSqliteReadOnlyWorkerScope,
   runSqliteReadOnlyOperation,
@@ -450,7 +454,7 @@ it("quarantines failed cleanup without poisoning healthy capacity or launching a
   const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
   const start = vi.mocked(spawn).mock.calls.length;
   const readSmall = () =>
-    readPool(
+    readPool.run(
       source,
       {
         mode: "operation",
@@ -507,7 +511,7 @@ it.skipIf(process.platform !== "linux")(
     try {
       for (const request of warmers) {
         await request.run(() =>
-          readPool(
+          readPool.run(
             source,
             {
               mode: "operation",
@@ -523,7 +527,7 @@ it.skipIf(process.platform !== "linux")(
           ),
         );
       }
-      const waiting = readPool(
+      const waiting = readPool.run(
         source,
         {
           mode: "operation",
@@ -654,6 +658,59 @@ it.skipIf(process.platform !== "linux")(
       ]);
     } finally {
       await Promise.all([...warmers, waiting, aborting].map((request) => request.close()));
+    }
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "retires idle readers through IPC without waiting for broker termination grace",
+  async () => {
+    const first = createSpawnBrokerHost();
+    const second = createSpawnBrokerHost();
+    const readerScope = createSqliteReadOnlyWorkerScope();
+    const readSmall = () =>
+      readerScope.run(() =>
+        runSqliteReadOnlyOperation(
+          source,
+          { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["small"] } },
+          { source: "canonical", expectedIdentity, env },
+        ),
+      );
+    const firstSpawn = vi.spyOn(first, "spawn");
+    const secondSpawn = vi.spyOn(second, "spawn");
+    try {
+      await Promise.all([first.ready(), second.ready()]);
+      await runWithSpawnBroker(second, readSmall);
+      await runWithSpawnBroker(first, readSmall);
+      const firstChild = firstSpawn.mock.results[0]!.value;
+      const secondChild = secondSpawn.mock.results[0]!.value;
+      expect(firstChild.exitCode).toBeNull();
+      expect(secondChild.exitCode).toBeNull();
+
+      const started = performance.now();
+      await closeSqliteReadOnlyWorkersForBroker(first);
+      await first.close();
+      expect(performance.now() - started).toBeLessThan(GRACEFUL_CANCEL_TIMEOUT_MS);
+      expect(firstChild.exitCode).toBe(0);
+      expect(firstChild.connected).toBe(false);
+      expect(secondChild.exitCode).toBeNull();
+      await expect(runWithSpawnBroker(second, readSmall)).resolves.toEqual([
+        { pluginId: "small", contents: "small catalog" },
+      ]);
+      expect(secondSpawn).toHaveBeenCalledTimes(1);
+      await expect(runWithSpawnBroker(first, readSmall)).rejects.toThrow("broker is closing");
+    } finally {
+      try {
+        await readerScope.close();
+        await Promise.all([
+          closeSqliteReadOnlyWorkersForBroker(first),
+          closeSqliteReadOnlyWorkersForBroker(second),
+        ]);
+      } finally {
+        await Promise.all([first.close(), second.close()]);
+        firstSpawn.mockRestore();
+        secondSpawn.mockRestore();
+      }
     }
   },
 );

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
@@ -23,6 +22,7 @@ import {
   recordDeferredPluginMigrations,
 } from "./deferred-plugin-migrations.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -395,14 +395,14 @@ describe("Telegram registered SQLite offset repair", () => {
       expiresAt: 8_000_000_000_000,
     },
   ];
-  function seed(db: DatabaseSync) {
+  function seed(db: EngineConnection) {
     for (const row of originals) {
       db.prepare(
         "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
       ).run("telegram", namespace, row.key, row.raw, row.createdAt, row.expiresAt);
     }
   }
-  function rows(db: DatabaseSync) {
+  function rows(db: EngineConnection) {
     return db
       .prepare(
         "SELECT entry_key, value_json, created_at, expires_at FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key",

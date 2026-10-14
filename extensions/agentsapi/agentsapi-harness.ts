@@ -115,6 +115,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     id: "agentsapi",
     label: "OpenAI Agents API (MVP)",
     autoSelection: { providerIds: [] },
+    contextManagement: "native",
     deliveryDefaults: { visibleReplies: "automatic" },
     conversationToolPolicySupport: "exact",
     conversationToolPolicyNativeTools: AGENTS_API_NATIVE_TOOL_REQUIREMENTS,

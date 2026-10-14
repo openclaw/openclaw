@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import {
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
 } from "../infra/gateway-state-owner.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   isSqliteCorruptionError,
   isSqliteLockError,
@@ -70,12 +71,12 @@ const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
   Symbol.for("openclaw.stateDatabaseLifecycle"),
   () => ({
     cachedDatabases: new Map<string, CachedOpenClawStateDatabase>(),
-    retainedDatabaseHandles: new Map<DatabaseSync, StateDatabaseHandle>(),
+    retainedDatabaseHandles: new Map<EngineConnection, StateDatabaseHandle>(),
     idleTimers: new WeakMap(),
     idleReferences: new WeakMap(),
     unregisterRetainedExitClose: undefined,
-    databaseIdentities: new WeakMap<DatabaseSync, DatabasePathIdentity>(),
-    borrowers: new WeakMap<DatabaseSync, StateDatabaseBorrowers>(),
+    databaseIdentities: new WeakMap<EngineConnection, DatabasePathIdentity>(),
+    borrowers: new WeakMap<EngineConnection, StateDatabaseBorrowers>(),
     databaseLifecycleListeners: new Set<(event: OpenClawStateDatabaseLifecycleEvent) => void>(),
     terminalOpenLatch: createSqliteTerminalOpenLatch({
       closeByPath: (pathname, error) => cacheAdmission.closeTerminalFailure(pathname, error),
@@ -276,7 +277,9 @@ function closeOpenClawStateDatabaseHandle(
 }
 
 function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {
-  invalidateOpenClawStateRuntimeIntegrity(database.db);
+  if (!isPostgresSqlConnection(database.db)) {
+    invalidateOpenClawStateRuntimeIntegrity(database.db);
+  }
   if (cachedDatabases.get(database.path) !== database) {
     return false;
   }
@@ -315,12 +318,14 @@ function publishOpenClawStateDatabase(
   openClawStateSnapshotOwners.register(database, () => cachedDatabases.get(pathname));
   ownMaintenanceStateDatabaseHandle(database);
   notifyOpenClawStateDatabaseLifecycle({ kind: "opened", database, identity });
-  registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
-    // Write transactions own rollback and evict at their outer boundary.
-    if (!db.isTransaction && isSqliteCorruptionError(error)) {
-      evictCachedOpenClawStateDatabase(database);
-    }
-  });
+  if (!isPostgresSqlConnection(db)) {
+    registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
+      // Write transactions own rollback and evict at their outer boundary.
+      if (!db.isTransaction && isSqliteCorruptionError(error)) {
+        evictCachedOpenClawStateDatabase(database);
+      }
+    });
+  }
   terminalOpenLatch.clear(pathname);
   return database;
 }
@@ -626,7 +631,7 @@ export const openClawStateDatabaseCache = {
   evictOpenClawStateDatabaseAfterCorruption,
   getCachedOpenClawStateDatabase,
   // Identity only: re-enter retained transaction custody before ordinary access admission.
-  peekOpenClawStateDatabaseConnection: (pathname: string): DatabaseSync | undefined =>
+  peekOpenClawStateDatabaseConnection: (pathname: string): EngineConnection | undefined =>
     cachedDatabases.get(resolveDatabasePath({ path: pathname }))?.db,
   withCachedOpenClawStateDatabase,
   getOpenClawStateDatabaseRecordedFailure: terminalOpenLatch.peek,
@@ -747,7 +752,7 @@ function retainSqliteDatabaseRemovalExclusion(
 }
 
 /** Reconfirm an advisory worker failure on the live owner connection. */
-export async function confirmOpenClawStateDatabaseIntegrity(
+export async function confirmCachedOpenClawStateDatabaseIntegrity(
   pathname: string,
 ): Promise<SqliteIntegrityConfirmation> {
   const resolvedPath = resolveDatabasePath({ path: pathname });

@@ -78,6 +78,13 @@ jobs:
               "scripts/lint-swift.sh",
               "scripts/run-swiftlint.mts",
               "scripts/lib/check-limits.mts",
+              ":(exclude)apps/ios/README.md",
+              ":(exclude)apps/ios/AGENTS.md",
+              ":(exclude)apps/ios/DESIGN.md",
+              ":(exclude)apps/ios/CHANGELOG.md",
+              ":(exclude)apps/ios/VERSIONING.md",
+              ":(exclude)apps/ios/fastlane/SETUP.md",
+              ":(exclude)apps/ios/fastlane/metadata/README.md",
             ], { ignoreReturnCode: true, silent: true });
             if (result.exitCode !== 0 && result.exitCode !== 1) {
               throw new Error(`git diff failed with exit code ${result.exitCode}`);

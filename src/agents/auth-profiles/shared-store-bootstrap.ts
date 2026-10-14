@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
 import { registerListener } from "../../shared/listeners.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
@@ -213,7 +214,7 @@ export function hasPendingSharedAuthCleanup(
 }
 
 export function hasPendingSharedAuthCleanupInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   sourcePath: string,
 ): boolean {
   const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);

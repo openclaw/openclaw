@@ -39,10 +39,10 @@ import {
 import { ReefInboxConnection, ReefTransportClient } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
 
-const legacyDispatch = vi.hoisted(() => vi.fn(async (_params: unknown) => {}));
+const dispatchInbound = vi.hoisted(() => vi.fn(async (_params: unknown) => {}));
 // mock-isolation: A released dispatcher ignores host hooks; Reef must guard its own handoff.
 vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
-  dispatchInboundDirectDm: legacyDispatch,
+  dispatchInboundDirectDm: dispatchInbound,
   recordChannelBotPairLoopAndCheckSuppression: () => ({ suppressed: false }),
 }));
 
@@ -269,7 +269,7 @@ describe("Reef gateway account ownership", () => {
   let stateDir = "";
 
   beforeEach(async () => {
-    legacyDispatch.mockClear();
+    dispatchInbound.mockClear();
     resetPluginStateStoreForTests();
     inboxStarted = createDeferred<void>();
     activeReefSlot.clearRuntime();
@@ -373,7 +373,7 @@ describe("Reef gateway account ownership", () => {
   }
 
   it.each([false, true])(
-    "rejects inbound trust revocation after delivered lookup before legacy dispatch (revoked=%s)",
+    "rejects inbound trust revocation after delivered lookup before dispatch (revoked=%s)",
     async (revoked) => {
       await startAccount().ready;
       const { flow } = getActiveReef();
@@ -416,13 +416,13 @@ describe("Reef gateway account ownership", () => {
       } else {
         await result;
       }
-      expect(legacyDispatch).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      expect(dispatchInbound).toHaveBeenCalledTimes(revoked ? 0 : 1);
       expect(acknowledge).toHaveBeenCalledTimes(revoked ? 0 : 1);
     },
   );
 
   it.each([false, true])(
-    "rechecks rejection trust at the legacy host handoff after reservation (revoked=%s)",
+    "rechecks rejection trust at the host handoff after reservation (revoked=%s)",
     async (revoked) => {
       await startAccount().ready;
       const { flow } = getActiveReef();
@@ -431,15 +431,18 @@ describe("Reef gateway account ownership", () => {
       await trust.set("molty", peerTrust(peer));
       const id = "01JZ0000000000000000000171";
       const bodyHash = "a".repeat(64);
-      const prepared = (await trust.prepareOutboundDelivery("molty", id))!;
-      await prepared.record({
-        bodyHash,
-        recipient: {
-          ed25519PublicKey: peer.signing.publicKey,
-          x25519PublicKey: peer.encryption.publicKey,
-          keyEpoch: 1,
+      await trust.operationState.deliveries.register(
+        `${trust.operationState.identityScope}:molty:${id}`,
+        {
+          bodyHash,
+          sentAt: Date.now(),
+          recipient: {
+            ed25519PublicKey: peer.signing.publicKey,
+            x25519PublicKey: peer.encryption.publicKey,
+            keyEpoch: 1,
+          },
         },
-      });
+      );
       let reserved = false;
       const read = trust.readOutboundDelivery.bind(trust);
       vi.spyOn(trust, "readOutboundDelivery").mockImplementationOnce(async (...args) => {
@@ -479,7 +482,7 @@ describe("Reef gateway account ownership", () => {
         });
       await inboxConnections[0]!.poll();
       expect(reserved).toBe(true);
-      expect(legacyDispatch).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      expect(dispatchInbound).toHaveBeenCalledTimes(revoked ? 0 : 1);
       const remaining = await read("molty", id);
       if (revoked) {
         expect(remaining?.delivery.rejection?.notice).toBeDefined();
