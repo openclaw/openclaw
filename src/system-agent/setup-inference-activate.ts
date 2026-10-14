@@ -39,6 +39,7 @@ import {
   type StageContext,
   type StageFailure,
   type ActivateSetupInferenceResult,
+  describeSetupInferenceError,
   invalidSetupConfigError,
   parseInferenceRef,
   resolveSetupModel,
@@ -63,6 +64,7 @@ import {
   stageProviderAutoCandidate,
   stageSavedAuthCandidate,
 } from "./setup-inference-credentials.js";
+import { verifySetupHarness, type SetupHarnessVerification } from "./setup-inference-harness.js";
 import {
   commitSetupInferenceActivation,
   captureSetupInferenceFileUndo,
@@ -443,27 +445,48 @@ async function verifyAndActivateCandidate(
   params.onPreparationComplete?.();
   throwIfSetupInferenceCancelled(params);
   const progress = params.prompter?.progress("Testing your AI connection…");
-  const turn = await withGeneration(() =>
-    runSetupInferenceTurn({
-      route,
-      deps,
-      requireExecutionOwner: true,
-      signal: params.signal,
-      runtime: params.runtime,
-    }),
-  ).finally(() => progress?.stop());
+  let nativeVerification: SetupHarnessVerification | undefined;
+  const turn = await withGeneration(async () => {
+    try {
+      nativeVerification = await verifySetupHarness({
+        route,
+        deps,
+        cache,
+        signal: params.signal,
+        assertCurrent: () => throwIfSetupInferenceCancelled(params),
+      });
+      if (nativeVerification) {
+        return undefined;
+      }
+      return await runSetupInferenceTurn({
+        route,
+        deps,
+        requireExecutionOwner: true,
+        signal: params.signal,
+        runtime: params.runtime,
+      });
+    } catch (error) {
+      return { ok: false as const, ...describeSetupInferenceError(error, route) };
+    }
+  }).finally(() => progress?.stop());
   throwIfSetupInferenceCancelled(params);
-  if (!turn.ok) {
-    return failure(turn);
+  if (turn) {
+    if (!turn.ok) {
+      return failure(turn);
+    }
+    const ownerFailure = validateSetupInferenceOwnerEvidence({
+      runner: route.runner,
+      configuredHarnessId:
+        route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
+      auth: turn.auth,
+    });
+    if (ownerFailure) {
+      return failure(ownerFailure);
+    }
   }
-  const ownerFailure = validateSetupInferenceOwnerEvidence({
-    runner: route.runner,
-    configuredHarnessId:
-      route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
-    auth: turn.auth,
-  });
-  if (ownerFailure) {
-    return failure(ownerFailure);
+  const successfulVerification = nativeVerification ?? turn;
+  if (!successfulVerification) {
+    throw new Error("Setup did not produce a verification result.");
   }
   const savedCredential = staged.authProfileId
     ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
@@ -487,8 +510,36 @@ async function verifyAndActivateCandidate(
     }
     throwIfSetupInferenceCancelled(params);
   }
-  const revalidateOwner = (candidateRoute: SystemAgentConfiguredRoute) =>
-    withGeneration(() =>
+  const revalidateOwner = async (candidateRoute: SystemAgentConfiguredRoute) => {
+    if (nativeVerification) {
+      let current: SetupHarnessVerification | undefined;
+      try {
+        current = await withGeneration(() =>
+          verifySetupHarness({
+            route: candidateRoute,
+            deps,
+            cache,
+            signal: params.signal,
+            assertCurrent: () => throwIfSetupInferenceCancelled(params),
+          }),
+        );
+      } catch (error) {
+        throw new SetupInferenceOwnerDriftError(
+          `The native connection changed before activation. Retry setup. (${formatErrorMessage(error)})`,
+          { cause: error },
+        );
+      }
+      if (!current || !isDeepStrictEqual(current.binding, nativeVerification.binding)) {
+        throw new SetupInferenceOwnerDriftError(
+          "The native setup verification owner changed before activation. Retry setup.",
+        );
+      }
+      return;
+    }
+    if (!turn?.ok) {
+      throw new SetupInferenceOwnerDriftError("Setup has no verified inference owner.");
+    }
+    await withGeneration(() =>
       revalidateStableSetupInferenceOwner({
         route: candidateRoute,
         auth: turn.auth,
@@ -496,6 +547,7 @@ async function verifyAndActivateCandidate(
         deps,
       }),
     );
+  };
   const revalidate = async (currentSnapshot: ConfigFileSnapshot) => {
     const config = currentSnapshot.runtimeConfig ?? currentSnapshot.config;
     const sourceConfig = currentSnapshot.sourceConfig;
@@ -623,7 +675,7 @@ async function verifyAndActivateCandidate(
     ok: true,
     modelRef: staged.modelRef,
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
-    latencyMs: turn.latencyMs,
+    latencyMs: successfulVerification.latencyMs,
     lines,
   };
 }

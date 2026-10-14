@@ -218,6 +218,30 @@ set this capability on a harness that only sometimes owns authentication.
 This static bootstrap capability is distinct from ownership of an already-bound
 native session's model and connection.
 
+### Native setup verification
+
+A harness with `authBootstrap: "harness"` may implement
+`verifySetup(ctx): Promise<void>` to verify a profileless candidate during
+Model Setup activation without generating a reply. Import
+`AgentHarnessSetupVerificationContext` from
+`openclaw/plugin-sdk/agent-harness` or `openclaw/plugin-sdk/agent-harness-runtime`.
+
+The context contains the candidate `config`, `provider`, `modelId`,
+`workspaceDir`, a bounded `signal`, and `assertCurrent()`. Check current
+authority after awaited work and before native I/O. Resolve only after the
+native service confirms access to the selected model; throw an actionable
+error on authentication, entitlement, or transport failure. Close native
+connections in `finally`. A bundled or cached model list alone is not proof
+of authenticated access.
+
+The hook returns no credentials or execution proof. Core binds its result to
+the selected harness and installed plugin artifacts, then calls it again before
+committing activation. Retained assertions fail after each invocation closes.
+Routes with an OpenClaw auth profile, harnesses without this hook, ordinary
+connection checks, and user-requested completions retain the bounded inference
+turn. This hook does not run during normal model execution or grant a direct
+provider route access to the harness's native credentials.
+
 ### Bound native session ownership
 
 The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,

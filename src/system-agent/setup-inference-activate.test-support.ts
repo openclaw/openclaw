@@ -354,5 +354,6 @@ export async function fixture(
     login,
     prompter,
     deps,
+    pluginRegistry,
   };
 }

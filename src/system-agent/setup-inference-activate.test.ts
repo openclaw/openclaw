@@ -157,6 +157,7 @@ describe("setup activation credentials and configuration", () => {
       });
       expect(result).toMatchObject({ ok: true });
       expect(setup.login).not.toHaveBeenCalled();
+      expect(setup.run).toHaveBeenCalledOnce();
       expect(readNativeKey).not.toHaveBeenCalled();
       expect(setup.readProfile()).toBeUndefined();
       expect(

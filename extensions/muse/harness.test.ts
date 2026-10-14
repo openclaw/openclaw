@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +41,7 @@ const readHistory = vi.spyOn(SessionManager, "openModelContextAsync");
 beforeEach(() => {
   approvals.load.mockResolvedValue({ version: 1, agents: {} });
   readHistory.mockResolvedValue(SessionManager.inMemory());
+  vi.stubEnv("OPENCLAW_STATE_DIR", join(workspace, "state"));
 });
 
 let workspace: string;
@@ -50,9 +51,11 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await rm(workspace, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 function setup() {
+  vi.stubEnv("OPENCLAW_STATE_DIR", join(workspace, "state"));
   const bindings = new Map<string, MuseSessionBinding>();
   const sessionStore = {
     lookup: async (key: string) => bindings.get(key),
@@ -845,6 +848,38 @@ describe("Muse native MSP harness", () => {
       expect(result.assistantTexts).toEqual(["credential:cli-login"]);
     } finally {
       await login.harness.dispose?.();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("starts Muse with the managed credential home used by browser sign-in", async () => {
+    const setupResult = setup();
+    const { params, sessionStore } = setupResult;
+    const log = join(workspace, `${params.runId}.jsonl`);
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(workspace, "state"));
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
+    const managedHome = join(workspace, "state", "muse", "muse");
+    await mkdir(managedHome, { recursive: true });
+    await writeFile(join(managedHome, "auth.json"), JSON.stringify({ providers: { meta: {} } }));
+    const harness = createMuseAgentHarness({
+      binaryPath: fixture,
+      sessionStore,
+    });
+    try {
+      expect(terminal(await harness.runAttempt(params))).toMatchObject({ kind: "ok" });
+      const spawn = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .find((event) => event.event === "spawn");
+      expect(spawn).toMatchObject({
+        credentialBackend: "file",
+        configHome: join(workspace, "state", "muse"),
+      });
+    } finally {
+      await harness.dispose?.();
+      await setupResult.harness.dispose?.();
+      await rm(managedHome, { recursive: true, force: true });
       vi.unstubAllEnvs();
     }
   });

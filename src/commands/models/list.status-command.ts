@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import {
   resolveAgentNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
@@ -84,6 +85,11 @@ import {
 } from "./list.auth-overview.js";
 import { groupByProvider, isRich } from "./list.format.js";
 import type { AuthProbeSummary } from "./list.probe.js";
+import {
+  buildStatusRuntimeAuthRouteEntries,
+  collectStatusNativeRuntimeAuthUsages,
+  type StatusRuntimeAuthRoute,
+} from "./list.runtime-auth.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -125,28 +131,6 @@ function resolveStatusProviderUseIncompatibility(usage: StatusProviderUse) {
   const routeResolution = usage.evaluation.routeResolution;
   return routeResolution?.kind === "incompatible" ? routeResolution : usage.runtimeIncompatibility;
 }
-
-type StatusRuntimeAuthStatus = "usable" | "missing" | "indeterminate";
-
-type StatusRuntimeAuthRouteBase = {
-  provider: string;
-  runtime: string;
-  authProvider: string;
-  effective: ProviderAuthOverview["effective"];
-};
-
-type StatusRuntimeAuthRoute =
-  | (StatusRuntimeAuthRouteBase & {
-      status: StatusRuntimeAuthStatus;
-    })
-  | (StatusRuntimeAuthRouteBase & {
-      status: "unavailable";
-      authStatus: StatusRuntimeAuthStatus;
-      runtimeStatus: "unavailable";
-      runtimeReason: Extract<AgentHarnessRuntimeAvailability, { status: "unavailable" }>["reason"];
-      runtimeDetail: string;
-      runtimePluginIds: string[];
-    });
 
 type StatusModelRouteIssue = {
   provider: string;
@@ -483,7 +467,8 @@ export async function modelsStatusCommand(
       );
       const createStatusAuthResolver = (
         authStore: Parameters<typeof createModelAuthAvailabilityResolver>[0]["authStore"],
-        nativeMode?: "api_key" | "oauth" | "token",
+        nativeModes: PreparedAgentCredentialModes = {},
+        nativeAuthComplete = false,
       ) =>
         createModelAuthAvailabilityResolver({
           cfg,
@@ -494,9 +479,8 @@ export async function modelsStatusCommand(
           env: process.env,
           // Native mode chooses a harness route without becoming a host credential.
           syntheticAuthProviderRefs: [...syntheticAuthProviderRefs],
-          preparedRuntimeAuthModes: nativeMode
-            ? { codex: { source: "native", mode: nativeMode } }
-            : {},
+          preparedRuntimeAuthModes: nativeModes,
+          preparedSyntheticAuthComplete: nativeAuthComplete,
           metadataSnapshot,
         });
       let authResolver = createStatusAuthResolver(store);
@@ -658,6 +642,14 @@ export async function modelsStatusCommand(
         })
         .filter((usage): usage is NonNullable<typeof usage> => Boolean(usage));
 
+      const nativeRuntimeAuthUsages = collectStatusNativeRuntimeAuthUsages({
+        config: cfg,
+        agentId: workspaceAgentId,
+        providerUses,
+        cliRuntimeAuthUsages,
+        syntheticAuthProviderRefs,
+      });
+
       const providers = Array.from(
         new Set([
           ...providersFromStore,
@@ -665,6 +657,7 @@ export async function modelsStatusCommand(
           ...providersFromModels,
           ...providersFromEnv,
           ...cliRuntimeAuthUsages.map((usage) => usage.runtime),
+          ...nativeRuntimeAuthUsages.map((usage) => usage.runtime),
         ]),
       )
         .map((p) => normalizeOptionalString(p) ?? "")
@@ -681,6 +674,7 @@ export async function modelsStatusCommand(
         syntheticProvidersToProbe.add(codexProviderAlias);
         syntheticProvidersToProbe.add("codex");
       }
+      const nativeModes: Record<string, PreparedAgentCredentialModes[string]> = {};
       for (const provider of syntheticProvidersToProbe) {
         const normalized = normalizeProviderId(provider);
         if (!syntheticAuthProviderRefs.has(normalized)) {
@@ -706,11 +700,17 @@ export async function modelsStatusCommand(
           mode: resolvedLocal.mode,
           expiresAt: resolvedLocal.expiresAt,
         };
+        if (resolvedLocal.nativeAuth) {
+          const native = resolvedLocal.nativeAuth;
+          nativeModes[native.runtime] = {
+            source: "native",
+            mode: native.mode === "api-key" ? "api_key" : native.mode,
+          };
+        }
         syntheticAuthByProvider.set(normalized, syntheticAuth);
-        // The generic Codex token authenticates the local harness, not an
-        // OpenAI model route. Only provider-owned synthetic credentials may
-        // become concrete evaluator profiles.
-        if (normalized !== "codex") {
+        // Native runtime markers describe login presence, never provider bearer credentials.
+        // Only provider-owned synthetic credentials may become evaluator profiles.
+        if (normalized !== "codex" && !resolvedLocal.nativeAuth) {
           runtimeSyntheticAuthByProvider.set(normalized, syntheticAuth);
         }
         if (normalized !== "codex" && normalized === codexProviderAlias) {
@@ -723,23 +723,28 @@ export async function modelsStatusCommand(
           .filter((entry): entry is readonly [string, AuthProfileCredential] => Boolean(entry[1])),
       );
       const nativeCodexMode = syntheticAuthByProvider.get("codex")?.mode;
-      if (runtimeCredentialsByProvider.size > 0 || nativeCodexMode) {
-        const syntheticProfiles = Object.fromEntries(
-          Array.from(runtimeCredentialsByProvider.entries()).map(([provider, credential]) => [
-            `${provider}:runtime-synthetic`,
-            credential,
-          ]),
-        );
-        authResolver = createStatusAuthResolver(
-          {
-            ...store,
-            profiles: { ...store.profiles, ...syntheticProfiles },
-          },
-          nativeCodexMode === "api-key" ? "api_key" : nativeCodexMode,
-        );
-        providerUses = await resolveProviderUses(authResolver);
-        codexRuntimeAuthUsages = providerUses.filter((usage) => usage.usesCodexRuntimeAuth);
+      if (nativeCodexMode) {
+        nativeModes.codex = {
+          source: "native",
+          mode: nativeCodexMode === "api-key" ? "api_key" : nativeCodexMode,
+        };
       }
+      const syntheticProfiles = Object.fromEntries(
+        Array.from(runtimeCredentialsByProvider.entries()).map(([provider, credential]) => [
+          `${provider}:runtime-synthetic`,
+          credential,
+        ]),
+      );
+      authResolver = createStatusAuthResolver(
+        {
+          ...store,
+          profiles: { ...store.profiles, ...syntheticProfiles },
+        },
+        nativeModes,
+        nativeRuntimeAuthUsages.length > 0,
+      );
+      providerUses = await resolveProviderUses(authResolver);
+      codexRuntimeAuthUsages = providerUses.filter((usage) => usage.usesCodexRuntimeAuth);
 
       const applied = getShellEnvAppliedKeys();
       const shellFallbackEnabled =
@@ -908,24 +913,11 @@ export async function modelsStatusCommand(
               : base;
           return [`${provider}:codex:${codexProvider}`, route] as const;
         }),
-        ...cliRuntimeAuthUsages.map((usage) => {
-          const evaluation = authResolver.evaluateModelAuth(usage.runtime);
-          const effective = resolveRuntimeAuthRouteEffective(usage.runtime, evaluation);
-          return [
-            `${usage.provider}:${usage.runtime}:${usage.runtime}`,
-            {
-              provider: usage.provider,
-              runtime: usage.runtime,
-              authProvider: usage.runtime,
-              status:
-                evaluation.availability === true
-                  ? "usable"
-                  : evaluation.availability === false
-                    ? "missing"
-                    : "indeterminate",
-              effective,
-            },
-          ] as const;
+        ...buildStatusRuntimeAuthRouteEntries({
+          nativeUsages: nativeRuntimeAuthUsages,
+          cliUsages: cliRuntimeAuthUsages,
+          resolver: authResolver,
+          resolveEffective: resolveRuntimeAuthRouteEffective,
         }),
       ];
       const runtimeAuthRoutes = Array.from(

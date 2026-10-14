@@ -8,6 +8,7 @@ import {
 } from "@muse-code/sdk";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import musePackage from "../package.json" with { type: "json" };
+import { museEnvironment } from "./environment.js";
 
 export type MuseOpenSession = {
   sessionId?: string;
@@ -33,16 +34,6 @@ export type MuseRuntime = {
   close: () => Promise<void>;
 };
 type MuseLease = { runtime: MuseRuntime; release: () => void };
-
-function museEnvironment(apiKey?: string): NodeJS.ProcessEnv {
-  // Without an OpenClaw-selected key, Muse applies its own documented order:
-  // META_API_KEY, then a stored key, then a browser sign-in.
-  return {
-    ...process.env,
-    MUSE_NO_AUTO_UPDATE: "1",
-    ...(apiKey ? { META_API_KEY: apiKey } : {}),
-  };
-}
 
 export function credentialFingerprint(apiKey?: string): string {
   return apiKey ? createHash("sha256").update(apiKey).digest("hex") : "cli-login";
@@ -157,11 +148,15 @@ export class MusePool {
     apiKey: string | undefined,
     readOnly: boolean,
   ): Promise<MuseRuntime> {
+    const env = await museEnvironment(apiKey);
+    if (this.disposed) {
+      throw new Error("Muse runtime was disposed during environment preparation");
+    }
     const handshake = spawnMspConnection({
       command: this.binaryPath,
       args: ["serve", ...(readOnly ? ["--disable-shell", "--disable-write"] : [])],
       cwd: workspace,
-      env: museEnvironment(apiKey),
+      env,
       shutdownTimeoutMs: 1000,
     });
     const startup = setTimeout(() => {

@@ -76,6 +76,97 @@ describe("native Codex model auth", () => {
   });
 });
 
+describe("native Muse model auth", () => {
+  it("satisfies only Muse-routed Meta models without a persisted credential", () => {
+    const store = { version: 1, profiles: {} };
+    const auth = createModelAuthAvailabilityResolver({
+      cfg: {
+        agents: {
+          defaults: {
+            models: { "meta/muse-spark-1.3": { agentRuntime: { id: "muse" } } },
+          },
+        },
+      },
+      env: {},
+      authStore: store,
+      syntheticAuthProviderRefs: ["muse"],
+      preparedRuntimeAuthModes: { muse: { source: "native", mode: "oauth" } },
+      preparedSyntheticAuthComplete: true,
+    });
+    expect(auth.evaluateRuntimeModelAuth("meta", { modelId: "muse-spark-1.3" })).toMatchObject({
+      availability: true,
+      runtimeAuth: { id: "muse", source: "native" },
+      selectedAuthMode: "oauth",
+    });
+    expect(
+      auth.evaluateRuntimeModelAuth("meta", {
+        modelId: "muse-spark-1.3",
+        runtimeId: "openclaw",
+      }).availability,
+    ).not.toBe(true);
+    expect(auth.evaluateModelAuth("meta", { modelId: "muse-spark-1.3" }).availability).not.toBe(
+      true,
+    );
+    expect(
+      auth.evaluateRuntimeModelAuth("anthropic", {
+        modelId: "claude-sonnet-4-5",
+        runtimeId: "muse",
+      }).availability,
+    ).not.toBe(true);
+    expect(
+      auth.evaluateRuntimeModelAuth("meta", {
+        modelId: "muse-spark-1.3",
+        runtimeId: "muse",
+        pinnedProfileId: "meta:missing",
+      }).availability,
+    ).not.toBe(true);
+    expect(store.profiles).toEqual({});
+  });
+
+  it.each([true, false])(
+    "distinguishes logout from unfinished native discovery (%s)",
+    (complete) => {
+      const auth = createModelAuthAvailabilityResolver({
+        cfg: {},
+        env: {},
+        authStore: { version: 1, profiles: {} },
+        syntheticAuthProviderRefs: ["muse"],
+        preparedRuntimeAuthModes: {},
+        preparedSyntheticAuthComplete: complete,
+      });
+      expect(
+        auth.evaluateRuntimeModelAuth("meta", {
+          modelId: "muse-spark-1.3",
+          runtimeId: "muse",
+        }).availability,
+      ).toBe(complete ? false : undefined);
+    },
+  );
+
+  it("keeps direct Meta credentials usable independently of native login", () => {
+    const auth = createModelAuthAvailabilityResolver({
+      cfg: {},
+      env: {},
+      authStore: createAuthProfileStoreFixture({
+        "meta:direct": createApiKeyCredential("meta", "synthetic-meta-key"),
+      }),
+      preparedSyntheticAuthComplete: true,
+    });
+    expect(
+      auth.evaluateRuntimeModelAuth("meta", {
+        modelId: "muse-spark-1.3",
+        runtimeId: "openclaw",
+      }).availability,
+    ).toBe(true);
+    expect(
+      auth.evaluateRuntimeModelAuth("meta", {
+        modelId: "muse-spark-1.3",
+        runtimeId: "muse",
+      }).availability,
+    ).toBe(true);
+  });
+});
+
 describe("OAuth inference grants", () => {
   it.each([
     { authFlow: "chatgpt-token-sharing", profileId: "openai:shared", availability: true },

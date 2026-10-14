@@ -34,6 +34,7 @@ import { createApprovalHandler } from "./src/approvals.js";
 import { prepareMuseSessionContext } from "./src/context.js";
 import { consumeTurn } from "./src/events.js";
 import { credentialFingerprint, MusePool, openMuseSession } from "./src/runtime.js";
+import { verifyMuseSetup } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
@@ -476,6 +477,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
     autoSelection: { providerIds: [] },
     authBootstrap: "harness",
     executionEnvironment: "host-only",
+    verifySetup: verifyMuseSetup,
     conversationToolPolicyNativeTools: ["exec", "read", "write", "edit"],
     supports: (ctx) =>
       ctx.requestedRuntime === "muse" &&

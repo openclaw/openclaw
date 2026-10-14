@@ -125,6 +125,7 @@ export type {
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
   AgentHarnessRuntimeArtifactBinding,
+  AgentHarnessSetupVerificationContext,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionParamsV2,
   AgentHarnessSideQuestionResult,

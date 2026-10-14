@@ -155,7 +155,7 @@ describe("models.authLogin ownership", () => {
   });
 
   it.each([
-    { ...choice, credentialOnly: false },
+    { ...choice, credentialOnly: false, appGuidedAuth: undefined },
     { ...choice, pluginId: "replacement" },
   ])("rejects an unavailable choice before login", async (unavailable) => {
     const h = harness();

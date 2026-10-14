@@ -2,12 +2,14 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMuseAgentHarness, type MuseSessionBinding } from "./harness.js";
+import museProviderDiscovery from "./provider-discovery.js";
 
 export default definePluginEntry({
   id: "muse",
   name: "Muse Code agent runtime",
   description: "Runs Meta models through the Muse Code CLI.",
   register(api) {
+    api.registerProvider(museProviderDiscovery);
     if (!["full", "discovery", "tool-discovery"].includes(api.registrationMode)) {
       return;
     }

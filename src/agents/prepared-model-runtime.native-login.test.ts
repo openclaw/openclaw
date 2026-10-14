@@ -60,6 +60,7 @@ async function fixture(
     retirement: AbortController;
   }) => Promise<void>,
   savedNativeProfile = false,
+  runtimeKind: "cli" | "harness" = "cli",
 ) {
   await using cache = createPluginCache();
   const metadata = createPluginMetadataSnapshotFixture({
@@ -67,13 +68,20 @@ async function fixture(
       {
         id: native.id,
         providers: [native.id],
-        cliBackends: [native.id],
+        cliBackends: runtimeKind === "cli" ? [native.id] : [],
         syntheticAuthRefs: [native.id],
       },
       { id: "unrelated-cli", providers: ["unrelated-cli"], syntheticAuthRefs: ["unrelated-cli"] },
       { id: "shared", providers: ["shared"] },
     ],
   });
+  if (runtimeKind === "harness") {
+    for (const plugin of metadata.index.plugins) {
+      if (plugin.pluginId === native.id) {
+        plugin.startup.agentHarnesses = [native.id];
+      }
+    }
+  }
   metadata.index.plugins[0]!.syntheticAuthRefs = [native.id];
   metadata.index.plugins[1]!.syntheticAuthRefs = ["unrelated-cli"];
   bindPluginMetadataSnapshotCache(metadata, cache);
@@ -152,44 +160,51 @@ async function tick(recheck: () => void) {
   await vi.advanceTimersByTimeAsync(0);
 }
 
-it("publishes native login changes while unchanged reads reuse paired auth without worker discovery", async () => {
-  await fixture(async ({ recheck, readAuth, publish, refreshAuth }) => {
-    recheck();
-    expect(native.probe).not.toHaveBeenCalled();
-    await tick(recheck);
-    expect(refreshAuth).not.toHaveBeenCalled();
-    expect(native.probe).toHaveBeenCalledOnce();
-    expect(publish).not.toHaveBeenCalled();
+it.each(["cli", "harness"] as const)(
+  "publishes %s native login changes without worker discovery",
+  async (runtimeKind) => {
+    await fixture(
+      async ({ recheck, readAuth, publish, refreshAuth }) => {
+        recheck();
+        expect(native.probe).not.toHaveBeenCalled();
+        await tick(recheck);
+        expect(refreshAuth).not.toHaveBeenCalled();
+        expect(native.probe).toHaveBeenCalledOnce();
+        expect(publish).not.toHaveBeenCalled();
 
-    native.probe.mockResolvedValue(nativeLogin);
-    await tick(recheck);
-    expect(publish).toHaveBeenCalledOnce();
-    expect(readAuth().authModes).toEqual({
-      shared: "api_key",
-      "fixture-cli": { source: "native", mode: "oauth" },
-    });
-    expect(readAuth().credentials?.[native.id]).toEqual({
-      type: "api_key",
-      key: "synthetic-native-presence",
-      nativeAuth: { runtime: "fixture-cli", mode: "oauth" },
-    });
-    await tick(recheck);
-    expect(publish).toHaveBeenCalledOnce();
+        native.probe.mockResolvedValue(nativeLogin);
+        await tick(recheck);
+        expect(publish).toHaveBeenCalledOnce();
+        expect(readAuth().authModes).toEqual({
+          shared: "api_key",
+          "fixture-cli": { source: "native", mode: "oauth" },
+        });
+        expect(readAuth().credentials?.[native.id]).toEqual({
+          type: "api_key",
+          key: "synthetic-native-presence",
+          nativeAuth: { runtime: "fixture-cli", mode: "oauth" },
+        });
+        await tick(recheck);
+        expect(publish).toHaveBeenCalledOnce();
 
-    native.probe.mockResolvedValue(undefined);
-    await tick(recheck);
-    expect(publish).toHaveBeenCalledTimes(2);
-    expect(readAuth().authModes).toEqual({ shared: "api_key" });
-    expect(readAuth().credentials).toEqual({
-      shared: { type: "api_key", key: "synthetic-shared-key" },
-    });
-    expect(readAuth().authStore.profiles).toEqual({
-      "shared:account": { type: "api_key", provider: "shared", key: "synthetic-shared-key" },
-    });
-    expect(native.unrelatedProbe).not.toHaveBeenCalled();
-    expect(refreshAuth).not.toHaveBeenCalled();
-  });
-});
+        native.probe.mockResolvedValue(undefined);
+        await tick(recheck);
+        expect(publish).toHaveBeenCalledTimes(2);
+        expect(readAuth().authModes).toEqual({ shared: "api_key" });
+        expect(readAuth().credentials).toEqual({
+          shared: { type: "api_key", key: "synthetic-shared-key" },
+        });
+        expect(readAuth().authStore.profiles).toEqual({
+          "shared:account": { type: "api_key", provider: "shared", key: "synthetic-shared-key" },
+        });
+        expect(native.unrelatedProbe).not.toHaveBeenCalled();
+        expect(refreshAuth).not.toHaveBeenCalled();
+      },
+      false,
+      runtimeKind,
+    );
+  },
+);
 
 it("keeps saved profile credentials authoritative across native login and logout", async () => {
   await fixture(async ({ recheck, readAuth, publish, refreshAuth }) => {
