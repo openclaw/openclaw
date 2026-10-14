@@ -275,7 +275,7 @@ describe("forwarded message attribution", () => {
         ".chat-group--forwarded .chat-reply-attribution a",
       );
       expect(retained?.textContent).toBe("Main session");
-      expect(retained?.title).toBe("agent:main:main");
+      expect(retained?.hasAttribute("title")).toBe(false);
     },
   );
 

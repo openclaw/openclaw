@@ -105,7 +105,8 @@
   overscroll-behavior: auto;
 }
 
-:root[data-theme-mode="light"] .session-progress-card--composer {
+:root[data-theme-mode="light"]
+  .session-progress-card--composer:not(.session-progress-card--details) {
   border-color: var(--chat-composer-light-outline);
 }
 

@@ -138,7 +138,7 @@ async function readCredential(params: {
   const { json, previous, clientId, owner } = params;
   const access = normalizeOptionalString(json.access_token);
   const refresh = normalizeOptionalString(json.refresh_token) ?? previous?.refresh;
-  const expires = resolveOAuthTokenExpiresAt(json.expires_in);
+  let expires = resolveOAuthTokenExpiresAt(json.expires_in);
   const idToken = normalizeOptionalString(json.id_token) ?? previous?.idToken;
   if (
     !access ||
@@ -149,6 +149,19 @@ async function readCredential(params: {
     json.token_type.toLowerCase() !== "bearer"
   ) {
     throw new Error("ChatGPT did not return a complete renewable credential. Start sign-in again.");
+  }
+  try {
+    const exp = decodeJwt(access).exp;
+    if (
+      typeof exp === "number" &&
+      Number.isSafeInteger(exp) &&
+      exp > 0 &&
+      Number.isSafeInteger(exp * 1000)
+    ) {
+      expires = Math.min(expires, exp * 1000);
+    }
+  } catch {
+    // Opaque access tokens retain expires_in; JWT claims can only shorten their lifetime.
   }
   // Initial identity is signature-verified; refresh may omit its unchanged ID token.
   const identity =

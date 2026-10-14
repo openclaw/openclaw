@@ -67,6 +67,16 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
+Title generation requests thinking off where supported. Custom OpenAI-compatible
+endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default
+unless an explicit thinking format, supported off effort, or reasoning-effort mapping
+declares the contract.
+This avoids rejected requests on always-thinking GLM models. Other thinking formats
+retain their existing off controls; explicit compatibility settings remain authoritative.
+Failed title attempts log a warning naming the provider/model and suggesting that
+you check its configuration or choose another `utilityModel`, at most once per
+provider/model per minute. The warning excludes source text and raw provider errors.
+
 Utility tasks request thinking off so their bounded output budgets go to the
 title, observer digest, or summary rather than hidden reasoning. This also
 overrides configured native Ollama `think`/`thinking` and OpenAI-compatible

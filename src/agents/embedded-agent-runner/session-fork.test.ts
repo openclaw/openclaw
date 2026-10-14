@@ -11,6 +11,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimpleOpenAICodexResponses } from "../../../packages/ai/src/providers/openai-chatgpt-responses.js";
+import {
+  modelRequestBodyState,
+  prepareModelRequestBody,
+  serializeModelRequestBody,
+} from "../../../packages/ai/src/transports/model-request-body.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
 import * as undiciRuntime from "../../infra/net/undici-runtime.js";
 import "../ai-transport-runtime-host.js";
@@ -119,6 +124,87 @@ function responsesBody(): string {
 }
 
 describe("prepared session fork provider boundary", () => {
+  it.each(["unencoded", "encoded", "continuation"] as const)(
+    "releases the %s prepared payload while the parent options remain live",
+    async (boundary) => {
+      const references: WeakRef<object>[] = [];
+      const liveOptions: NonNullable<Parameters<StreamFn>[2]>[] = [];
+      const replayPayloads: Record<string, unknown>[] = [];
+      const replay = transport(replayPayloads, []);
+      const parent = wrapStreamFnWithSessionFork(async (requestModel, requestContext, options) => {
+        if (liveOptions.length > 0) {
+          return replay(requestModel, requestContext, options);
+        }
+        liveOptions.push(options!);
+        modelRequestBodyState(options!).encode = async (payload) => {
+          const encoded = serializeModelRequestBody(payload);
+          references.push(new WeakRef(encoded.body.buffer));
+          return encoded;
+        };
+        const encode = boundary === "unencoded" ? undefined : prepareModelRequestBody(options);
+        const payload = {
+          model: model.id,
+          input: [{ role: "user", content: "Prepared parent prefix" }],
+          stream: true,
+        };
+        references.push(new WeakRef(payload));
+        await options?.onPayload?.(payload, requestModel);
+        await encode?.(
+          boundary === "continuation"
+            ? { ...payload, input: [], previous_response_id: "resp_parent" }
+            : payload,
+        );
+        return createAssistantMessageEventStream();
+      }, identity);
+
+      await parent(model, context, {});
+      const control = new WeakRef({ unowned: true });
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+      expect(liveOptions[0]?.onPayload).toBeTypeOf("function");
+      await expect(fork()).resolves.toBe("Answer");
+      expect(JSON.stringify(replayPayloads[0]?.input)).toContain("Prepared parent prefix");
+    },
+  );
+
+  it("keeps a captured prefix across suffix retries and replaces it after full-history recovery", async () => {
+    const liveOptions: NonNullable<Parameters<StreamFn>[2]>[] = [];
+    const replayPayloads: Record<string, unknown>[] = [];
+    const replay = transport(replayPayloads, []);
+    const parent = wrapStreamFnWithSessionFork(async (requestModel, requestContext, options) => {
+      if (liveOptions.length > 0) {
+        return replay(requestModel, requestContext, options);
+      }
+      liveOptions.push(options!);
+      return createAssistantMessageEventStream();
+    }, identity);
+    await parent(model, context, {});
+    const options = liveOptions[0]!;
+    const encode = prepareModelRequestBody(options);
+    await options.onPayload?.(
+      { input: [{ role: "user", content: "Original full prefix" }], stream: true },
+      model,
+    );
+    const suffix = { input: [], previous_response_id: "resp_parent", stream: true };
+    await encode(suffix);
+    await encode({ ...suffix, service_tier: "default" });
+    await expect(fork()).resolves.toBe("Answer");
+    expect(JSON.stringify(replayPayloads.at(-1)?.input)).toContain("Original full prefix");
+
+    const rebuilt = {
+      input: [{ role: "user", content: "Recovered full history" }],
+      stream: true,
+    };
+    await options.onPayload?.(rebuilt, model);
+    await encode(rebuilt);
+    await expect(fork()).resolves.toBe("Answer");
+    const recovered = JSON.stringify(replayPayloads.at(-1)?.input);
+    expect(recovered).toContain("Recovered full history");
+    expect(recovered).not.toContain("Original full prefix");
+  });
+
   it("keeps fork snapshots without retaining completed parent contexts or payload hooks", async () => {
     const callers = new AsyncLocalStorage<object>();
     const references: WeakRef<object>[] = [];

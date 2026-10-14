@@ -956,10 +956,11 @@ describe("anthropic provider replay hooks", () => {
 
   it.each([
     { status: "available", authenticated: true },
-    { status: "unreadable", authenticated: false },
-    { status: "timeout", authenticated: false },
+    { status: "unreadable", authenticated: true },
+    { status: "timeout", authenticated: true },
+    { status: "missing", authenticated: false },
   ] as const)(
-    "publishes native Claude auth only when its CLI reports $status",
+    "publishes native Claude auth unless its CLI confirms logout: $status",
     async ({ status, authenticated }) => {
       probeClaudeCliAuthStatusMock.mockResolvedValue({ status });
       const provider = await registerSingleProviderPlugin(anthropicPlugin);

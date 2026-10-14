@@ -40,7 +40,7 @@ export type StagedAdmissionFact = Pick<AdmissionFact, "value" | "revision" | "sc
 export type ScopedWriteRevision = {
   identity: string;
   // The revision and retirement flag share custody across all admission snapshots.
-  state: SharedArrayBuffer;
+  state: Int32Array<SharedArrayBuffer>;
 };
 
 export type Admission = {
@@ -334,7 +334,7 @@ export class SqliteDatabaseAdmissionRegistry {
         }
       }
       for (const [key, revision] of current.writeScopes) {
-        if (Atomics.load(new Int32Array(revision.state), 1) !== 0) {
+        if (Atomics.load(revision.state, 1) !== 0) {
           current.writeScopes.delete(key);
           changed = true;
         }
@@ -437,14 +437,14 @@ export class SqliteDatabaseAdmissionRegistry {
         }
       }
       for (const [key, revision] of incoming.writeScopes) {
-        if (Atomics.load(new Int32Array(revision.state), 1) !== 0) {
+        if (Atomics.load(revision.state, 1) !== 0) {
           continue;
         }
         // The host selects one shared incarnation for concurrent discoveries of the same key.
         const previous = record.writeScopes.get(key);
         if (
           previous?.identity === revision.identity ||
-          (threadId === 0 && previous && Atomics.load(new Int32Array(previous.state), 1) === 0)
+          (threadId === 0 && previous && Atomics.load(previous.state, 1) === 0)
         ) {
           continue;
         }

@@ -206,28 +206,21 @@ describe("compatible context-capped responses", () => {
   });
 
   it("falls back to ordinary length after the raw UTF-8 byte bound", async () => {
-    vi.useFakeTimers();
-    try {
-      const controls = [makeCompletionsChunk({}, null, { opaque: "界".repeat(1_400_000) })];
-      const response = runResponse({
-        chunks: [
-          makeCompletionsChunk({ content: "before" }),
-          ...controls,
-          makeCompletionsChunk({ content: "after" }, "length", { usage }),
-        ],
-      });
-      await vi.runAllTimersAsync();
-      const { result, events, activity } = await response;
-      expect(result.stopReason).toBe("length");
-      expect(isContextOverflow(result, contextWindow)).toBe(false);
-      expect(
-        events.filter((event) => event.type === "text_delta").map((event) => event.delta),
-      ).toEqual(["before", "after"]);
-      expect(events.filter((event) => event.type === "start")).toHaveLength(1);
-      expect(events.at(-1)).toMatchObject({ type: "done", reason: "length" });
-      expect(activity).toEqual([true, ...controls.map(() => false), true]);
-    } finally {
-      vi.useRealTimers();
-    }
+    const controls = [makeCompletionsChunk({}, null, { opaque: "界".repeat(1_400_000) })];
+    const { result, events, activity } = await runResponse({
+      chunks: [
+        makeCompletionsChunk({ content: "before" }),
+        ...controls,
+        makeCompletionsChunk({ content: "after" }, "length", { usage }),
+      ],
+    });
+    expect(result.stopReason).toBe("length");
+    expect(isContextOverflow(result, contextWindow)).toBe(false);
+    expect(
+      events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+    ).toEqual(["before", "after"]);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "done", reason: "length" });
+    expect(activity).toEqual([true, ...controls.map(() => false), true]);
   });
 });

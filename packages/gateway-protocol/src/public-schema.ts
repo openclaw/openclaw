@@ -636,6 +636,8 @@ export {
   TickEventSchema,
   ShutdownEventSchema,
   ProjectRecentSchema,
+  ProjectsCheckoutOptionsParamsSchema,
+  ProjectsCheckoutOptionsResultSchema,
   ProjectsListParamsSchema,
   ProjectsListResultSchema,
   ProjectsRegisterParamsSchema,
