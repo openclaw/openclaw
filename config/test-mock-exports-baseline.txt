@@ -7749,7 +7749,6 @@
 ["src/gateway/talk/handlers/client.test.ts","../../../plugins/runtime/index.js","7e5bf7d95ffee2137084e827bd72d085a6212f31db1c693038e05064355e3af8",1]
 ["src/gateway/talk/handlers/client.test.ts","../../../talk/agent-consult-runtime.js","1d6d7176edcdb3f54b3df5f4d63bb90b5e2482ffc700285e50a01758ae76b9ba",1]
 ["src/gateway/talk/handlers/index.test.ts","../../../agents/realtime-bootstrap-context.js","38772f77209fa682009937c9a3be41e2c0c1ab8e3a74051f13ea811af54c0370",1]
-["src/gateway/talk/handlers/index.test.ts","../../../config/config.js","cb2ced8434075af41df663a973b6c8ba57b5fb46bc745921dc8450bde61574d3",1]
 ["src/gateway/talk/handlers/index.test.ts","../../../plugins/runtime/index.js","98765d083f5b19b6b2df8bb46064347d72b2b5e3f2e2aabeede87bd75adda8f2",1]
 ["src/gateway/talk/handlers/index.test.ts","../../../realtime-transcription/provider-registry.js","f9fcf8c2c05ab31e690435f43cf479c94609cd6161ad6f74b69187de040edcba",1]
 ["src/gateway/talk/handlers/index.test.ts","../../../talk/agent-run-control.js","64cc26f1e3bbc2b554fb18fa43074fd1a4705beabd841d7b7d87c93ea923b1f4",1]

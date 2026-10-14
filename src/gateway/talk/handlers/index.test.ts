@@ -157,7 +157,8 @@ const mocks = vi.hoisted(() => ({
   agentRuntime: {},
 }));
 
-vi.mock("../../../config/config.js", () => ({
+vi.mock("../../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/config.js")>()),
   projectConfigOntoRuntimeSourceSnapshot: mocks.projectConfigOntoRuntimeSourceSnapshot,
 }));
 
