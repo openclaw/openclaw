@@ -405,6 +405,8 @@ it.each(["rollback", "unknown", "later rollback"] as const)(
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
     const published = vi.fn();
     observeSqliteWorkerCommittedFacts(admission, published);
+    const projected = vi.fn();
+    observeSqliteWorkerCommittedFacts(admission, projected);
     const owner: SqliteWorkerOperationContext = { port: admission.port };
     try {
       const write = (value: number, rollback = false) =>
@@ -451,9 +453,9 @@ it.each(["rollback", "unknown", "later rollback"] as const)(
       );
       admission.finish();
       expect(admission.committed).toEqual(committed);
-      expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(
-        outcome === "rollback" ? [] : [{ value: 1 }],
-      );
+      const expectedFacts = outcome === "rollback" ? [] : [{ value: 1 }];
+      expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(expectedFacts);
+      expect(projected.mock.calls.map(([receipt]) => receipt.facts)).toEqual(expectedFacts);
     } finally {
       admission.finish();
       db.close();

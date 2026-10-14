@@ -9,7 +9,7 @@ import {
   normalizeConfigMachineStateKey,
   publishConfigMachineStateRow,
   type ConfigMachineStateDatabase,
-} from "./config-machine-state.js";
+} from "./config-machine-state-row.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,

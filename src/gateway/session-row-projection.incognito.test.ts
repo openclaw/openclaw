@@ -155,6 +155,7 @@ it("keeps archived incognito rows private and retires captures when their sessio
         touchSessionEntry: false,
       },
     );
+    const viewer = identifiedClient("incognito-observer");
     const projection = await createSessionRowProjection({ cfg, getModelCatalog: async () => [] });
     try {
       const original = projection.capture(query)!;
@@ -189,7 +190,6 @@ it("keeps archived incognito rows private and retires captures when their sessio
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
       expect(projection.selectEntries()).toEqual([]);
-      const viewer = identifiedClient("incognito-observer");
       await projection.withPreparedExactRows(
         () => [query],
         (read) => {

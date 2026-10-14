@@ -11,9 +11,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 describe("persistAgentSessionPhase", () => {
   it("sandboxes a new synthetic run using its host-minted operator identity", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const profile = ensureProfileForEmail("synthetic-sandbox-creator@example.com");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:synthetic-sandbox";
@@ -105,7 +107,7 @@ describe("persistAgentSessionPhase", () => {
   it.each([false, true])(
     "surfaces creation denial before lifecycle rotation (revoked during preparation: %s)",
     async (revokeDuringPreparation) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withOpenClawTestState(profileState, async (state) => {
         const sessionKey = "agent:main:role-denied";
         const runId = "role-denied-run";
         const profile = ensureProfileForEmail("role-denied-creator@example.com");
@@ -134,7 +136,11 @@ describe("persistAgentSessionPhase", () => {
                 roles: {
                   default: "restricted",
                   definitions: {
-                    restricted: { sessions: { others: "none" }, agents: allowedAgents, scopes: [] },
+                    restricted: {
+                      sessions: { others: "none" },
+                      agents: allowedAgents,
+                      scopes: [],
+                    },
                   },
                 },
               },

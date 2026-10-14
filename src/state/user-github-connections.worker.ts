@@ -14,7 +14,6 @@ import {
   parseUserGitHubConnection,
   readUserGitHubConnectionInDatabase,
   readCanonicalUserGitHubConnectionInDatabase,
-  resolvePersonalGitHubOwnerInDatabase,
   writeUserGitHubConnectionInDatabase,
 } from "./user-github-connections.kernel.js";
 import type {
@@ -190,8 +189,8 @@ function mutate<T>(
 export const userGitHubConnectionOperations = {
   "userGitHubConnections.read": ({ owner }: { owner: string }, { open }) =>
     readUserGitHubConnectionInDatabase(open().db, owner),
-  "userGitHubConnections.resolveOwner": ({ profile }: { profile: string }, { open }) =>
-    resolvePersonalGitHubOwnerInDatabase(profile, open().db),
+  "userGitHubConnections.readCanonical": ({ profile }: { profile: string }, { open }) =>
+    readCanonicalUserGitHubConnectionInDatabase(open().db, profile),
   "userGitHubConnections.list": (_input: undefined, { open }) =>
     listUserGitHubConnections(open().db),
   "userGitHubConnections.mutate": (

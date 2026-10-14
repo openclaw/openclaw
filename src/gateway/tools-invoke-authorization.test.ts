@@ -189,7 +189,8 @@ describe.each(["HTTP", "WebSocket"] as const)(
     ];
 
     it.each(cases)("$label", async (testCase) => {
-      await withOpenClawTestState({ label: "standalone-tool-role" }, async () => {
+      const stateOptions = { label: "standalone-tool-role", prepareProfileCatalog: true };
+      await withOpenClawTestState(stateOptions, async () => {
         const email = "standalone-operator@example.test";
         const profile = ensureProfileForEmail(email);
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };

@@ -149,32 +149,28 @@ export async function prepareBundledDiscoveryMode(
     ? readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options))
     : undefined;
   if (snapshot) {
-    const signal = getPluginCacheRetirementSignal(owner);
-    // Private policy never replaces the live memo and retains this exact snapshot.
-    const assertCurrent = () => {
-      signal.throwIfAborted();
-      if (
-        readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options)) !==
-        snapshot
-      ) {
-        throw new PluginCacheFactInvalidatedError(
-          "Plugin discovery snapshot changed during preparation; retry the operation.",
-        );
-      }
-    };
-    assertCurrent();
-    let prepared = discoveryState.snapshotModes.get(snapshot);
-    if (!prepared) {
+    const existing = discoveryState.snapshotModes.get(snapshot);
+    if (existing) {
+      return () => discoveryState.snapshotModes.set(snapshot, existing);
+    }
+    // The read worker retains these snapshot bytes; derivation consumes its result locally.
+    let value: BundledDiscoveryMode;
+    try {
       const row = readPreparedRow
         ? await readPreparedRow(resolveBundledDiscoveryMemoKey(env))
         : await readPluginMetadataStateRow("bundled-discovery", options);
-      prepared = { value: parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined) };
-      assertCurrent();
+      value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
+    } catch (error) {
+      if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+        throw new PluginCacheFactInvalidatedError(
+          "Plugin discovery read admission changed during preparation; retry the operation.",
+          { cause: error },
+        );
+      }
+      throw error;
     }
     const activate = () => {
-      assertCurrent();
-      // A lifecycle clear while inventory preparation awaits must not trigger a native reread.
-      discoveryState.snapshotModes.set(snapshot, prepared);
+      discoveryState.snapshotModes.set(snapshot, { value });
     };
     activate();
     return activate;

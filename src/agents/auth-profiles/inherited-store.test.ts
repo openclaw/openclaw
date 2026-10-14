@@ -19,6 +19,7 @@ import {
   readRuntimeAuthProfileStoreFromSnapshots,
 } from "./inherited-store.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -97,6 +98,7 @@ it.each([
   const workerDir = path.join(root, "agents/worker/agent");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_AGENT_DIR", mainDir);
+  prepareSharedAuthStoreOwnershipForNative();
   const local = createStore("custom:local", "local-fixture");
   const inherited = createStore("custom:shared", "inherited-fixture");
   const main = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -224,6 +226,7 @@ it.each(["explicit empty ids", "authoritative empty", "no overlay", "published o
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     writePersistedAuthProfileStoreRaw(durable, agentDir, database);
     if (published) {
+      prepareSharedAuthStoreOwnershipForNative();
       setRuntimeAuthProfileStoreSnapshot(published, agentDir);
     }
     if (emptyOverlay) {

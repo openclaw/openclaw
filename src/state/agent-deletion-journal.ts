@@ -16,6 +16,10 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
+import {
+  agentDeletionJournalPublication,
+  observeAgentDeletionJournal,
+} from "./agent-deletion-journal-publication.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
 import { publishAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
 import { parseAgentDeletionDatabasePaths } from "./agent-deletion-journal.read.js";
@@ -387,7 +391,7 @@ export function beginAgentDeletionJournalInDatabase(
         .where("agent_id", "=", normalized.agentId),
     );
     publishAgentDeletionJournalStatus(database.db, normalized.agentId, "pending");
-    return {
+    const result = {
       previousEntry: previous,
       entry: {
         ...previous,
@@ -398,6 +402,14 @@ export function beginAgentDeletionJournalInDatabase(
         deleteFiles: normalized.deleteFiles,
       },
     };
+    agentDeletionJournalPublication.stagePostimages(database.db, [
+      {
+        agentId: result.entry.agentId,
+        operationId: result.entry.operationId,
+        cleanupCompleted: result.entry.cleanupCompleted,
+      },
+    ]);
+    return result;
   }
   const createdAt = Date.now();
   executeSqliteQuerySync(
@@ -417,9 +429,17 @@ export function beginAgentDeletionJournalInDatabase(
     }),
   );
   publishAgentDeletionJournalStatus(database.db, normalized.agentId, "pending");
-  return {
+  const result = {
     entry: { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false },
   };
+  agentDeletionJournalPublication.stagePostimages(database.db, [
+    {
+      agentId: result.entry.agentId,
+      operationId: result.entry.operationId,
+      cleanupCompleted: result.entry.cleanupCompleted,
+    },
+  ]);
+  return result;
 }
 
 export function updateAgentDeletionJournalPathsInDatabase(
@@ -467,6 +487,13 @@ export function handoffAgentDeletionJournalInDatabase(
   );
   const handedOff = result.numAffectedRows === 1n;
   if (handedOff) {
+    agentDeletionJournalPublication.stagePostimages(database.db, [
+      {
+        agentId: normalizeAgentId(agentId),
+        operationId: retryOperationId,
+        cleanupCompleted: false,
+      },
+    ]);
     sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   }
   return handedOff;
@@ -495,6 +522,13 @@ export function completeAgentDeletionJournalInDatabase(
   // partial cleanup, and remove it only when this exact deletion owner completes.
   if (completed) {
     publishAgentDeletionJournalStatus(database.db, id, "complete");
+    agentDeletionJournalPublication.stagePostimages(database.db, [
+      {
+        agentId: id,
+        operationId,
+        cleanupCompleted: true,
+      },
+    ]);
     resolveAgentDeletionRecoveryHolds(
       database,
       id,
@@ -527,6 +561,7 @@ export function deleteAgentDeletionJournalInDatabase(
   const removed = Number(result.numAffectedRows ?? 0) > 0;
   if (removed) {
     publishAgentDeletionJournalStatus(database.db, id, "absent");
+    agentDeletionJournalPublication.stageDeletions(database.db, [id]);
     sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   }
   return removed;
@@ -550,6 +585,39 @@ export async function readAgentDeletionJournalAsync(
   );
   context.admission.assertCurrent();
   return result;
+}
+
+/** Keep an effect-boundary journal assertion current through committed owner writes. */
+export async function prepareAgentDeletionJournalObservation(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const observation = observeAgentDeletionJournal(agentId, context);
+  try {
+    const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+    const entry = await runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({
+          type: "agentDeletion.read",
+          input: { agentId: normalizeAgentId(agentId) },
+        }),
+      { existingOnly: true },
+    );
+    observation.seed(entry);
+    return {
+      entry,
+      assertCurrent: (operationId: string) => observation.assertCurrent(operationId),
+      release: observation.release,
+    };
+  } catch (error) {
+    observation.release();
+    throw error;
+  }
 }
 
 /** Committed-state read; deletion owners recheck pending entries under write authority. */

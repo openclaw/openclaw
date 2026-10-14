@@ -21,7 +21,11 @@ describe("Gateway connection transport", () => {
     "owns admission and cleanup without WebSocket internals (hello %s)",
     async (delivery) => {
       await withOpenClawTestState(
-        { label: "gateway-connection-transport", layout: "state-only" },
+        {
+          label: "gateway-connection-transport",
+          layout: "state-only",
+          prepareProfileCatalog: true,
+        },
         async () => {
           setRuntimeConfigSnapshot({});
           const incoming = new EventEmitter();

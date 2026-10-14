@@ -74,8 +74,9 @@ vi.mock("../../session-row-projection-access.js", async (importOriginal) => ({
   getSessionRowProjection: getSessionRowProjectionMock,
 }));
 
-vi.mock("../../../state/user-profiles.js", () => ({
-  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+vi.mock("../../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
