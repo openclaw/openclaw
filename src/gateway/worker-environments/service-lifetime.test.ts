@@ -765,7 +765,7 @@ describe("worker environment service", () => {
       const workerService = support.createService(provider, {
         ensureNodeWorkerBundle: async ({ signal }) => {
           await holdProducer(signal);
-          signal.throwIfAborted();
+          signal?.throwIfAborted();
           return support.BOOTSTRAP_RECEIPT;
         },
       });
