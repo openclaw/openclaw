@@ -175,6 +175,10 @@ updates the sidebar without renaming an existing branch.
 
 ## New-session preferences and recents
 
+Changing agents or handing a draft to its new session closes the draft's open
+menus. In the command palette's session settings, Escape closes the nested agent
+menu first and returns focus to its trigger.
+
 In **Project → Browse**, keyboard focus moves to the folder path. Escape returns
 focus to **Browse**. Loading and folder errors are announced without moving focus
 away from the path field.
