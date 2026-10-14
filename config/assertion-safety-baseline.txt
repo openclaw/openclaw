@@ -2068,7 +2068,6 @@ src/infra/channel-summary.ts	1
 src/infra/channels-status-issues.ts	2
 src/infra/clawhub-client.ts	2
 src/infra/clawhub-install-trust.ts	2
-src/infra/control-ui-assets.ts	1
 src/infra/delivery-queue-sqlite-bound.ts	2
 src/infra/delivery-recovery.shared.ts	4
 src/infra/diagnostic-events.ts	2
@@ -2178,7 +2177,6 @@ src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	1
 src/infra/state-migrations.workspace-setup.ts	1
-src/infra/system-presence.ts	1
 src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
