@@ -6,6 +6,7 @@ import {
   prepareRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import * as agentIdentity from "../agents/identity.js";
+import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
@@ -26,11 +27,14 @@ import {
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearAgentRunContext,
   recordAgentRunModel,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
@@ -47,6 +51,7 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import * as listFilters from "./session-list-filters.js";
 import * as projectionWork from "./session-projection-work.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
@@ -56,6 +61,94 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses resident rows across plugin reloads while adopting changed model normalization", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const baseConfig: OpenClawConfig = {
+      agents: { entries: { main: {} }, defaults: { model: "example/list-alias" } },
+      plugins: { entries: { "synthetic-hooks": { enabled: true } } },
+    };
+    let cfg = baseConfig;
+    setRuntimeConfigSnapshot(cfg);
+    const keys = Array.from({ length: 4 }, (_, index) => `agent:main:plugin-reload-${index}`);
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: `plugin-reload-${index}`, updatedAt: index + 1, visibility: "shared" },
+      );
+    }
+    const view = (model: string) =>
+      new Map([
+        [
+          "main",
+          createPreparedGatewayModelCatalog({
+            config: cfg,
+            entries: [
+              { provider: "example", id: "original", name: "Original" },
+              { provider: "example", id: "replacement", name: "Replacement" },
+            ],
+            pluginRegistry: createEmptyPluginRegistry(),
+            metadataSnapshot: createPluginMetadataSnapshotFixture({
+              plugins: [
+                { id: "synthetic-hooks", hooks: ["before_prompt_build"] },
+                {
+                  id: "model-owner",
+                  modelIdNormalization: {
+                    providers: { example: { aliases: { "list-alias": model } } },
+                  },
+                },
+              ],
+            }),
+          }),
+        ],
+      ]);
+    let catalog = view("original");
+    const release = projectionWork.retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({
+      cfg,
+      getConfig: () => cfg,
+      getModelCatalog: async () => catalog,
+    });
+    const list = () => listProjectedSessions({ projection, opts: {} });
+    const sequences = () =>
+      keys.map((key) => projection.capture({ agentId: "main", key })?.materializedSequence);
+    try {
+      const original = await list();
+      await projection.ensureMaterialized();
+      expect(original.sessions.map((row) => row.model)).toEqual(Array(4).fill("original"));
+      const materialized = sequences();
+      for (const entry of [
+        { enabled: true, hooks: { allowPromptInjection: false } },
+        { enabled: false },
+        { enabled: true },
+      ]) {
+        cfg = { ...baseConfig, plugins: { entries: { "synthetic-hooks": entry } } };
+        setRuntimeConfigSnapshot(cfg);
+        expect(projection.dirtyRowCount).toBe(0);
+        catalog = view("original");
+        notifyPreparedModelRuntimePublication({ phase: "published" });
+        const concurrent = await Promise.all(Array.from({ length: 8 }, list));
+        await projection.ensureMaterialized();
+        expect(
+          concurrent.every((result) => result.sessions.every((row) => row.model === "original")),
+        ).toBe(true);
+        expect(sequences()).toEqual(materialized);
+        expect(projection.dirtyRowCount).toBe(0);
+      }
+      // A manifest policy edit still changes rows even when catalog entries stay identical.
+      catalog = view("replacement");
+      notifyPreparedModelRuntimePublication({ phase: "published" });
+      await projection.ensureMaterialized();
+      expect((await list()).sessions.map((row) => row.model)).toEqual(Array(4).fill("replacement"));
+      expect(sequences()).not.toEqual(materialized);
+    } finally {
+      await projection.ensureMaterialized();
+      projection.dispose();
+      release();
+      resetConfigRuntimeState();
+    }
+  });
+});
 
 it("reuses descendants after parent progress while keeping inherited models current", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

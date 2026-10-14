@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { registerPreparedModelRuntimePublicationListener } from "../agents/prepared-model-runtime.publication-events.js";
-import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
+import { readPreparedGatewaySessionRowPolicy } from "./server-model-catalog-view.js";
 import type { Inputs } from "./session-row-projection-record.js";
 
 function changedModelAgents(previous: Inputs["modelCatalog"], next: Inputs["modelCatalog"]) {
@@ -16,20 +16,21 @@ function changedModelAgents(previous: Inputs["modelCatalog"], next: Inputs["mode
   const changed = new Set<string>();
   for (const [agentId, catalog] of previous) {
     const replacement = next.get(agentId);
-    const metadata = readPreparedGatewayModelCatalogMetadata(catalog);
     if (
       catalog === undefined ||
       replacement === undefined ||
-      catalog.pluginRegistry === undefined ||
-      metadata === undefined ||
-      catalog.pluginRegistry !== replacement.pluginRegistry ||
-      metadata !== readPreparedGatewayModelCatalogMetadata(replacement)
+      readPreparedGatewaySessionRowPolicy(catalog) === undefined ||
+      readPreparedGatewaySessionRowPolicy(replacement) === undefined
     ) {
       return undefined;
     }
     if (
       !isDeepStrictEqual(catalog.entries, replacement.entries) ||
-      !isDeepStrictEqual(catalog.routeVariants, replacement.routeVariants)
+      !isDeepStrictEqual(catalog.routeVariants, replacement.routeVariants) ||
+      !isDeepStrictEqual(
+        readPreparedGatewaySessionRowPolicy(catalog),
+        readPreparedGatewaySessionRowPolicy(replacement),
+      )
     ) {
       changed.add(agentId);
     }

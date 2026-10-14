@@ -96,7 +96,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     expect(catalog.current).toBe(next);
 
     const replacementRegistry = createEmptyPluginRegistry();
-    // First replace the policy owner, then its metadata; both retire global fallback facts.
+    // Registry and metadata identities alone do not change row policy.
     for (const nextMetadata of [metadataSnapshot, createPluginMetadataSnapshotFixture()]) {
       next = new Map([
         [
@@ -110,8 +110,37 @@ it("retains completed catalog facts during runtime replacement and adopts comple
       ]);
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
       await catalog.refresh();
-      expect(refreshed).toHaveBeenLastCalledWith(undefined);
+      expect(refreshed).toHaveBeenLastCalledWith(new Set());
       expect(catalog.current).toBe(next);
+    }
+    const harnessMetadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "unregistered-harness",
+          origin: "global",
+          activation: { onAgentHarnesses: ["synthetic"] },
+        },
+      ],
+    });
+    for (const config of [
+      {},
+      { plugins: { entries: { "unregistered-harness": { enabled: false } } } },
+    ]) {
+      next = new Map([
+        [
+          "other",
+          createPreparedGatewayModelCatalog({
+            entries: other.entries,
+            pluginRegistry: replacementRegistry,
+            metadataSnapshot: harnessMetadata,
+            config,
+          }),
+        ],
+      ]);
+      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+      await catalog.refresh();
+      // Config still controls an unloaded harness even with identical index and registrations.
+      expect(refreshed).toHaveBeenLastCalledWith(new Set(["other"]));
     }
   } finally {
     catalog.dispose();
