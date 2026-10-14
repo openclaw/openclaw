@@ -192,7 +192,9 @@ describe("Telegram durable ingress coalescing", () => {
     return resources;
   }
 
-  it("keeps a timed-out update retryable while its original middleware is still waiting", async () => {
+  it("keeps a timed-out update retryable while its original middleware is still waiting", async ({
+    signal,
+  }) => {
     // The monitor captures Date.now at construction, so install the clock first.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const enteredBlocker = createDeferred<void>();
@@ -210,39 +212,51 @@ describe("Telegram durable ingress coalescing", () => {
     const blocker = bot.handleUpdate(
       textUpdate({ updateId: 801, messageId: 1, text: "busy turn" }),
     );
-    await enteredBlocker.promise;
-    const handleUpdate = vi.spyOn(bot, "handleUpdate");
-    const queued = textUpdate({ updateId: 802, messageId: 2, text: "deliver this later" });
-    const tail = textUpdate({ updateId: 803, messageId: 3, text: "deliver after the retry" });
-    const eventId = telegramQueueEventId(802);
-    const queue = openTelegramIngressQueue({ stateDir });
-    monitor.start();
-
     try {
-      await monitor.admit(queued);
-      await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(300_000);
-      await vi.waitFor(async () => {
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: eventId, attempts: 1, lastError: expect.stringContaining("handler-timeout") },
-        ]);
-      });
+      await withinTest(enteredBlocker.promise, signal);
+      const handleUpdate = vi.spyOn(bot, "handleUpdate");
+      const queued = textUpdate({ updateId: 802, messageId: 2, text: "deliver this later" });
+      const tail = textUpdate({ updateId: 803, messageId: 3, text: "deliver after the retry" });
+      const eventId = telegramQueueEventId(802);
+      const queue = openTelegramIngressQueue({ stateDir });
+      monitor.start();
 
-      await monitor.admit(tail);
-      await vi.advanceTimersByTimeAsync(1_000);
+      await withinTest(monitor.admit(queued), signal);
+      await withinTest(
+        vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1)),
+        signal,
+      );
+      await withinTest(vi.advanceTimersByTimeAsync(300_000), signal);
+      await withinTest(
+        vi.waitFor(async () => {
+          expect(await queue.listPending({ limit: "all" })).toMatchObject([
+            { id: eventId, attempts: 1, lastError: expect.stringContaining("handler-timeout") },
+          ]);
+        }),
+        signal,
+      );
+
+      await withinTest(monitor.admit(tail), signal);
+      await withinTest(vi.advanceTimersByTimeAsync(1_000), signal);
       monitor.requestDrain();
-      await vi.waitFor(() => {
-        expect(handleUpdate.mock.calls.filter(([update]) => update.update_id === 802)).toHaveLength(
-          2,
-        );
-      });
+      await withinTest(
+        vi.waitFor(() => {
+          expect(
+            handleUpdate.mock.calls.filter(([update]) => update.update_id === 802),
+          ).toHaveLength(2);
+        }),
+        signal,
+      );
       // A pending duplicate must not let its same-lane follower overtake it.
-      await vi.waitFor(async () => {
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: eventId, attempts: 2, payload: { update: queued } },
-          { id: telegramQueueEventId(803), attempts: 0 },
-        ]);
-      });
+      await withinTest(
+        vi.waitFor(async () => {
+          expect(await queue.listPending({ limit: "all" })).toMatchObject([
+            { id: eventId, attempts: 2, payload: { update: queued } },
+            { id: telegramQueueEventId(803), attempts: 0 },
+          ]);
+        }),
+        signal,
+      );
       expect(downstreamTurns).toHaveBeenCalledTimes(1);
 
       finishBlocker.resolve();
