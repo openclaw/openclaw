@@ -1,11 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Kysely } from "kysely";
-import type { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import type { SqlConnection } from "../sql-connection.js";
 import type { DatabaseEngineInput } from "./config.js";
 import type { DatabaseEngineId } from "./registry.js";
 
-export type EngineConnection = DatabaseSync | PostgresSyncConnection;
+export type { EngineConnection } from "../sql-connection.js";
 
 export type DatabaseErrorKind =
   | "constraint"

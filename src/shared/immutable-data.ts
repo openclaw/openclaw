@@ -21,6 +21,9 @@ function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true)
   if (deeplyFrozenPlainData.has(value)) {
     return true;
   }
+  if (!freeze && requireFrozen && (isProxy(value) || !Object.isFrozen(value))) {
+    return false;
+  }
   let plain = true;
   const inspected = new Set<object>();
   const pending = [value];
@@ -43,19 +46,16 @@ function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true)
     // Direct members disprove the container before queued child graphs are inspected.
     for (const key of Reflect.ownKeys(candidate)) {
       const descriptor = Object.getOwnPropertyDescriptor(candidate, key)!;
-      if (!("value" in descriptor) || typeof descriptor.value === "function") {
+      const member: unknown = descriptor.value;
+      if (!("value" in descriptor) || typeof member === "function") {
         if (!freeze) {
           return false;
         }
         plain = false;
         continue;
       }
-      if (
-        descriptor.value &&
-        typeof descriptor.value === "object" &&
-        !deeplyFrozenPlainData.has(descriptor.value)
-      ) {
-        pending.push(descriptor.value);
+      if (member && typeof member === "object" && !deeplyFrozenPlainData.has(member)) {
+        pending.push(member);
       }
     }
     if (freeze) {
@@ -63,14 +63,11 @@ function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true)
     }
   }
   // A cycle is proven only when every reachable member passes, not on a back edge.
-  if (plain && (freeze || requireFrozen)) {
-    if (freeze) {
-      // Freezing publishes a root; admission can memoize descendants when they are consumed.
-      deeplyFrozenPlainData.add(value);
-    } else {
-      for (const candidate of inspected) {
-        deeplyFrozenPlainData.add(candidate);
-      }
+  if (plain && freeze) {
+    deeplyFrozenPlainData.add(value);
+  } else if (plain && requireFrozen) {
+    for (const candidate of inspected) {
+      deeplyFrozenPlainData.add(candidate);
     }
   }
   return plain;

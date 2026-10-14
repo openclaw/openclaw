@@ -1,7 +1,6 @@
 // SQLite row mapping for device pairing and bootstrap-token snapshots.
 // The worker owns runtime mutations; native callers hold offline or boot custody.
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { resolvePairingSetupAccess } from "../shared/device-bootstrap-profile.js";
 import {
   ensureDevicePairSetupBootstrapSchema,
@@ -52,6 +51,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
@@ -94,7 +94,7 @@ export function withDevicePairingStoreDatabase<T>(
   return boundDatabase.run({ database, paired }, operate);
 }
 
-function transactionPairedRecords(db: DatabaseSync): Record<string, PairedDevice> | undefined {
+function transactionPairedRecords(db: EngineConnection): Record<string, PairedDevice> | undefined {
   const bound = boundDatabase.getStore();
   return bound?.database.db === db ? bound.paired : undefined;
 }
@@ -134,7 +134,9 @@ function runDevicePairingStoreMutation<T>(
   );
 }
 
-export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): DevicePairingStoreState {
+export function readDevicePairingStoreStateFromDatabase(
+  db: EngineConnection,
+): DevicePairingStoreState {
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const pendingById: Record<string, DevicePairingPendingRecord> = {};
   for (const row of executeSqliteQuerySync(
@@ -147,7 +149,7 @@ export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): Devic
 }
 
 export function readPairedDevicePairingRecordsFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): Record<string, PairedDevice> {
   const paired = transactionPairedRecords(db);
   if (paired) {
@@ -301,7 +303,7 @@ export function loadDeviceBootstrapTokenRecords(
 }
 
 export function readDeviceBootstrapTokenRecordsFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): Record<string, DeviceBootstrapTokenRecord> {
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const state: Record<string, DeviceBootstrapTokenRecord> = {};
@@ -490,7 +492,7 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
 
 /** The host retains this deadline until a shared-state writer receipt changes. */
 export function readDevicePairSetupCompletionExpiryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): number | undefined {
   if (!tableExists(db, "device_pair_setup_completions")) {
     return undefined;
@@ -507,7 +509,7 @@ export function readDevicePairSetupCompletionExpiryInDatabase(
 
 /** The maintenance command owns the write transaction and its live admission. */
 export function pruneExpiredDevicePairSetupCompletionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   nowMs: number,
 ): number {
   if (!tableExists(db, "device_pair_setup_completions")) {

@@ -1,7 +1,6 @@
 // Connection-bound capture operations retain their caller's synchronous write admission.
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -10,6 +9,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -46,7 +46,7 @@ export const DEBUG_PROXY_CAPTURE_DIR_MODE = 0o700;
 export const DEBUG_PROXY_CAPTURE_FILE_MODE = 0o600;
 
 export type DebugProxyCaptureKernelOptions = {
-  db: DatabaseSync;
+  db: EngineConnection;
   dbPath: string;
   blobDir: string;
   pathBased?: { blobDir: string };
@@ -54,7 +54,7 @@ export type DebugProxyCaptureKernelOptions = {
 };
 
 export class DebugProxyCaptureKernel {
-  readonly db: DatabaseSync;
+  readonly db: EngineConnection;
   readonly dbPath: string;
   readonly blobDir: string;
   private readonly capturePathBased?: { blobDir: string };

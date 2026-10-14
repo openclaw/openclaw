@@ -12,6 +12,7 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
@@ -361,7 +362,9 @@ it("restores the cached connection timeout after preparation fails during schema
     let preparedBusyTimeoutMs: number | undefined;
     const unregister = registerOpenClawStateDatabaseLifecycleListener((event) => {
       if (event.kind === "opened" && event.database.path === database.path) {
-        preparedBusyTimeoutMs = readSqliteBusyTimeout(event.database.db);
+        preparedBusyTimeoutMs = readSqliteBusyTimeout(
+          requireNativeSqliteDatabase(event.database.db),
+        );
         writer = new DatabaseSync(database.path);
         writer.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
       }
@@ -382,9 +385,11 @@ it("restores the cached connection timeout after preparation fails during schema
         writer.exec("ROLLBACK");
         writer.close();
       }
-      expect(readSqliteBusyTimeout(openOpenClawStateDatabase({ env: state.env }).db)).toBe(
-        OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-      );
+      expect(
+        readSqliteBusyTimeout(
+          requireNativeSqliteDatabase(openOpenClawStateDatabase({ env: state.env }).db),
+        ),
+      ).toBe(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
     } finally {
       unregister();
       if (writer?.isOpen) {

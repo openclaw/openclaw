@@ -354,7 +354,9 @@ src/config/zod-schema.database.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
+src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
+src/infra/database-engine/postgres-catalog.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts

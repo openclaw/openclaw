@@ -127,19 +127,19 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
     const isResult = openMatch[1]?.toUpperCase() === "RESULT";
     const closeRe = isResult ? /\[\s*\/\s*TOOL_RESULT\s*\]/gi : /\[\s*\/\s*TOOL_CALL\s*\]/gi;
     closeRe.lastIndex = payloadStart;
-    const closeMatch = closeRe.exec(text);
-    const closeStart =
-      closeMatch && !isInsideCode(closeMatch.index, codeRegions) ? closeMatch.index : -1;
-    const payload = text.slice(payloadStart, closeStart >= 0 ? closeStart : text.length);
-    if (
-      !(isResult
-        ? isLegacyBracketToolResultPayload(payload)
-        : isLegacyBracketToolCallPayload(payload))
-    ) {
+    let closeMatch = closeRe.exec(text);
+    while (closeMatch && isInsideCode(closeMatch.index, codeRegions)) {
+      closeMatch = closeRe.exec(text);
+    }
+    const payload = text.slice(payloadStart, closeMatch?.index);
+    const isToolPayload = isResult
+      ? isLegacyBracketToolResultPayload(payload)
+      : isLegacyBracketToolCallPayload(payload);
+    if (!isToolPayload) {
       continue;
     }
     result += text.slice(cursor, openStart);
-    cursor = closeStart >= 0 ? closeStart + (closeMatch?.[0].length ?? 0) : text.length;
+    cursor = closeMatch ? closeMatch.index + closeMatch[0].length : text.length;
     if (cursor === text.length) {
       break;
     }
