@@ -154,7 +154,12 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
                 message,
                 session: { key: query.key, sessionId: "publication-session" },
               },
-              { prepareSessionProjection: prepareSessionEventProjection(projection, read) },
+              {
+                prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+                  ancestors: projection.ancestorRows(record, read),
+                  encodeMessage: true,
+                }),
+              },
             );
             for (const [index, { send }] of peers.entries()) {
               const visible = index % 2 === 0 || restriction === "child and swarm links";

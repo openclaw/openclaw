@@ -11,7 +11,11 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 export function prepareSessionEventProjection(
   projection: SessionRowProjection,
   read?: SessionRowReadView,
-  prepared?: { ancestors: ReturnType<SessionRowProjection["ancestorRows"]> },
+  prepared?: {
+    ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
+    /** The transcript publisher owns the message graph for synchronous fanout. */
+    encodeMessage?: true;
+  },
 ): PrepareSessionEventProjection {
   return (event, payload, eventScope, connection) => {
     if (!connection.isCurrentProjection(projection)) {
@@ -65,7 +69,7 @@ export function prepareSessionEventProjection(
     // Transcript producers publish one message; only the recipient envelope varies.
     let messageBytes: Buffer | undefined;
     const serializeMessage =
-      event === "session.message"
+      event === "session.message" && prepared?.encodeMessage
         ? () => {
             if (!messageBytes) {
               const field = JSON.stringify({ message: base.message }).slice(1, -1);

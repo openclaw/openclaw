@@ -62,7 +62,7 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
 function serializeFrameField(
   name: "payload",
   value: unknown,
-  serializeSession?: () => string,
+  serializeSession: (() => string) | undefined,
   serializeMessage?: () => Buffer,
 ): string | Buffer[];
 function serializeFrameField(
@@ -72,10 +72,15 @@ function serializeFrameField(
   serializeMessage?: () => Buffer,
 ): string | Buffer[] {
   // The projection owns a fresh envelope; encode its large fields separately.
-  const shareSession = serializeSession !== undefined;
+  // SAFETY: serializeSession certifies a fresh, mutable record envelope.
+  const shareSession =
+    serializeSession !== undefined &&
+    !("toJSON" in (value as object)) &&
+    !("toJSON" in Object.prototype);
+  // SAFETY: the same projection contract owns this record during synchronous encoding.
   const projected = shareSession ? (value as Record<string, unknown>) : undefined;
-  const sessionJSON = serializeSession?.();
-  const messageBytes = serializeMessage?.();
+  const sessionJSON = shareSession ? serializeSession() : undefined;
+  const messageBytes = shareSession ? serializeMessage?.() : undefined;
   const session = projected?.session;
   const message = projected?.message;
   if (projected) {

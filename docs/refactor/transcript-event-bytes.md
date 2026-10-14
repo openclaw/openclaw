@@ -64,12 +64,14 @@ Ancestor receipts and backpressure settlement remain connection-owned.
 
 ## First slice and remaining work
 
-The recipient projection lazily encodes the `message` field into UTF-8 once for a
-synchronous `session.message` publication. Broadcast omits that object from its
+The transcript publisher certifies ownership of the message graph for synchronous
+fanout. Its recipient projection lazily encodes the `message` field into UTF-8 once
+for that `session.message` publication. Broadcast omits that object from its
 fresh envelope and inserts the encoded field while assembling a text WebSocket
 frame. This removes the recursive stringify replacer, long-string map, and
 per-recipient traversal/escaping of message contents. Ordinary broadcasts and
-custom projections retain their ordinary JSON semantics. The encoding expires
+custom projections retain their ordinary JSON semantics, including getters,
+mutations between recipients, and `toJSON`. The encoding expires
 with the publication, so there is no invalidation policy to maintain.
 
 This slice still encodes the message independently of SQLite and copies bytes
