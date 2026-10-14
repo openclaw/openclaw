@@ -10,6 +10,8 @@ import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { parse as parseYaml } from "yaml";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/categories.ts";
+import { loadPluginControlUiDeclaration } from "../../src/plugins/control-ui-build-manifest.ts";
+import { createPluginCache, withPluginCache } from "../../src/plugins/plugin-cache.ts";
 import {
   generateNpmPackageLock,
   packageJsonForNpmLock,
@@ -1073,16 +1075,29 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
       ? mapPluginCatalogEntries(publicationManifest, (entry: string) =>
           toPackageRuntimeEntry(entry, runtimePlan.runtimeFormat),
         )
-      : publicationManifest,
+      : { ...publicationManifest },
     generatedChannelConfigs,
   );
+  const controlUi = withPluginCache(createPluginCache(), () =>
+    loadPluginControlUiDeclaration({
+      rootDir: packageDir,
+      controlUi: manifest.controlUi,
+      rejectHardlinks: false,
+    }),
+  );
+  if (!controlUi.ok) {
+    throw new Error(`${manifestPath}: ${controlUi.error}`);
+  }
+  if (controlUi.value) {
+    augmentedManifest.controlUi = controlUi.value;
+  }
   const changed = JSON.stringify(augmentedManifest) !== JSON.stringify(manifest);
   return {
     manifestPath,
     pluginId,
     changed,
     manifest: augmentedManifest,
-    reason: changed ? "generated-channel-configs" : "unchanged",
+    reason: changed ? "generated-plugin-metadata" : "unchanged",
   };
 }
 

@@ -101,6 +101,22 @@ function indexCommands(calls: unknown[][]): string[] {
   });
 }
 
+function recordIndexCommands(prototype: Pick<Worker, "postMessage">) {
+  const commands: string[] = [];
+  const nativePost = prototype.postMessage;
+  const posts = vi.spyOn(prototype, "postMessage").mockImplementation(function (
+    this: MessagePort | Worker,
+    message: unknown,
+    transferList,
+  ) {
+    // Decode before the native transfer detaches the sender's command buffer.
+    const dispatched = indexCommands([[message]]);
+    nativePost.call(this, message, transferList);
+    commands.push(...dispatched);
+  });
+  return { commands, restore: () => posts.mockRestore() };
+}
+
 it("retains session entry facts across memory publication and refreshes after a session write", async () => {
   await withPublishedIndex(async (database) => {
     const target = {
@@ -159,7 +175,7 @@ it("retains published memory facts across session and embedding-cache writes", a
   await withPublishedIndex(async (database) => {
     await database.writeMetadata(metadata);
     const facts = database.facts;
-    const messages = vi.spyOn(MessagePort.prototype, "postMessage");
+    const messages = recordIndexCommands(MessagePort.prototype);
     try {
       await upsertSessionEntry({
         agentId: "main",
@@ -184,14 +200,14 @@ it("retains published memory facts across session and embedding-cache writes", a
       );
       await database.refreshFacts();
       expect(database.facts).toBe(facts);
-      expect(indexCommands(messages.mock.calls)).not.toContain("index.facts");
+      expect(messages.commands).not.toContain("index.facts");
 
       await database.writeMetadata({ ...metadata, model: "updated-model" });
       await database.refreshFacts();
       expect(database.facts.meta?.model).toBe("updated-model");
-      expect(indexCommands(messages.mock.calls)).not.toContain("index.facts");
+      expect(messages.commands).not.toContain("index.facts");
     } finally {
-      messages.mockRestore();
+      messages.restore();
     }
   });
 });
@@ -333,7 +349,7 @@ it("refreshes facts once after another in-process writer commits", async () => {
       db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
     });
     const sql = observeHostDataSql();
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    const messages = recordIndexCommands(Worker.prototype);
     try {
       for (let turn = 0; turn < 3; turn++) {
         await database.refreshFacts();
@@ -349,9 +365,9 @@ it("refreshes facts once after another in-process writer commits", async () => {
         });
       }
       expect(sql.queries).toEqual([]);
-      expect(indexCommands(messages.mock.calls)).toEqual(["index.facts"]);
+      expect(messages.commands).toEqual(["index.facts"]);
     } finally {
-      messages.mockRestore();
+      messages.restore();
       sql.restore();
     }
   });

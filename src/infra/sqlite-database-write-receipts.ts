@@ -33,7 +33,6 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
-  exchange(this: void, record: Admission): void;
   publish(this: void, record: Admission): void;
 }) {
   /** A typed owner certifies all session keys affected by this synchronous kernel. */
@@ -54,13 +53,6 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       return value;
     }
     const keys = normalizedWriteScopes(scope);
-    if (
-      record &&
-      record.writeScopeRevision !== readSqliteDatabaseGeneration(record, "writeScopeRevision")
-    ) {
-      // Scope registration and retirement use the existing cold metadata exchange.
-      owner.exchange(record);
-    }
     const previous = state.writeScopes.get(database);
     state.writeScopes.set(database, keys);
     try {
