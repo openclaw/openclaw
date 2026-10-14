@@ -5,6 +5,7 @@ import type { SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   groupSidebarSessionRows,
   type SidebarSessionSection,
@@ -32,7 +33,6 @@ import {
   type SessionDataControllerHost,
 } from "./session-data-controller-catalog.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { resolveSidebarSessionSubtitle } from "./session-row-subtitle.ts";
 import { summarizeTeamSessionSlots } from "./solid/session-presentation.tsx";
 
