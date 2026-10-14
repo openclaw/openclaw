@@ -412,6 +412,11 @@ files. In hybrid mode, edits under
 with its new config. Unchanged plugin instances retain their registration
 snapshots. A plugin's narrower reload policy can retain an instance or require a restart.
 
+Plugin config edits keep cached session rows when their model, harness, CLI backend,
+and session-extension facts stay unchanged. Completed model catalog publications
+refresh affected agents when those facts change; unrelated hook settings or
+plugin enablement do not rebuild the entire session list.
+
 Plugin install, update, enable, disable, uninstall, and metadata refresh apply
 through the running Gateway's plugin lifecycle without a Gateway restart.
 Explicit plugin actions also work when passive reload is `off`. Source or
