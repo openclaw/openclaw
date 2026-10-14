@@ -38,7 +38,40 @@ Each lifecycle command supports these forms:
 - An array names the executable and its arguments, without a shell.
 - An object runs its named commands in parallel. Every command must succeed before the phase completes.
 
-`containerEnv` and `remoteEnv` provide literal, non-secret string values for lifecycle commands. `remoteEnv` overrides matching `containerEnv` keys; a `null` value removes the variable for lifecycle commands. These values extend the minimal setup environment; they do not propagate to session processes. Environment-variable substitution and setup secrets are outside this subset. Declared commands should be idempotent: an interrupted first binding can retry before activation records completion.
+`containerEnv` and `remoteEnv` provide literal, non-secret string values for lifecycle commands. `remoteEnv` overrides matching `containerEnv` keys; a `null` value removes the variable for lifecycle commands. These values extend the minimal setup environment; they do not propagate to session processes. Environment-variable substitution is outside this subset. Declared commands should be idempotent: an interrupted first binding can retry before activation records completion.
+
+## Setup secrets
+
+The `secrets` property requests up to 16 POSIX environment names from the selected
+profile's operator-approved `settings.setupSecrets` map:
+
+```jsonc
+{
+  "secrets": {
+    "NPM_TOKEN": { "description": "Private package registry access" },
+  },
+  "updateContentCommand": ["npm", "ci"],
+}
+```
+
+Description and documentation metadata do not grant access. The repository can
+request names, but cannot choose a store entry, plaintext value, or destination.
+Unmapped names produce one actionable error before repository commands run.
+Approved secret and proxy settings take precedence over literal recipe env.
+
+Commands receive opaque sentinels and a temporary public CA bundle. The Gateway
+substitutes secrets only at their exact bound HTTPS hosts, through Crabbox native
+egress on the owned coordinator Linux lease. This covers preparation and
+post-create/start, including cold profiles with snapshots disabled. A known
+machine class is required to prepare the protected repository workspace.
+Crabbox 0.77.0 or newer and its matching helper are required; missing support
+fails visibly with no plaintext fallback. Detached startup processes lose
+protected access when the lifecycle command finishes.
+
+Secrets do not disable snapshots. The image identity includes sorted names and
+store references, with a separate protected-egress identity; values and sentinel
+bytes are excluded. See [setup secrets configuration](/gateway/config-cloud-workers)
+and [job-scoped grants](/gateway/secrets/secret-store-and-egress#job-scoped-setup-grants).
 
 ## Minimal example
 
@@ -58,7 +91,7 @@ The dependency installation can be captured and reused. The build and developmen
 
 ## Ignored properties
 
-Container-specific or unsupported properties never fail preparation. OpenClaw records one concise ignored-properties note, such as `devcontainer image ignored on cloud machines`. This includes `image`, `build`, `dockerComposeFile`, `runArgs`, `mounts`, `remoteUser`, `features`, `hostRequirements`, `secrets`, and `customizations`. OpenClaw does not start a container or install Dev Container Features from this file.
+Container-specific or unsupported properties never fail preparation. OpenClaw records one concise ignored-properties note, such as `devcontainer image ignored on cloud machines`. This includes `image`, `build`, `dockerComposeFile`, `runArgs`, `mounts`, `remoteUser`, `features`, `hostRequirements`, and `customizations`. OpenClaw does not start a container or install Dev Container Features from this file.
 
 ## Built-in detection
 
@@ -71,7 +104,7 @@ With neither a devcontainer file nor an executable fallback script, OpenClaw cho
 | `package-lock.json`       | `npm ci`                                                                                                                                                                                               |
 | `bun.lock` or `bun.lockb` | `bun install --frozen-lockfile` when Bun is on `PATH`; otherwise skip with a note                                                                                                                      |
 
-No recognized lockfile means no dependency setup. Detection does not install Node or Bun.
+No recognized lockfile means no dependency setup. Detection does not install Node or Bun. Detected pnpm and Yarn installs suppress Corepack's download prompt and do not auto-pin `packageManager` in `package.json`.
 
 A failed detected install records a reason and a bounded output tail, skips snapshot capture for that run, and lets the session start cold. A failed declared devcontainer command or fallback script keeps the existing visible dispatch failure.
 

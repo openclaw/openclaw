@@ -187,6 +187,11 @@ const gitBinary = process.env.OPENCLAW_PR_GIT;
 const git = (root, args) => execFileSync(gitBinary, ["-C", root, ...args], {
   encoding: "utf8", timeout: 300_000, stdio: ["ignore", "pipe", "pipe"],
 }).trim();
+// Refresh steps stream instead: a far-behind root's fetch or fast-forward output
+// can overflow the capture buffer after Git has already changed the checkout.
+const gitStreamed = (root, args) => execFileSync(gitBinary, ["-C", root, ...args], {
+  timeout: 300_000, stdio: ["ignore", 2, 2],
+});
 function config(root, key, type = "--path") {
   const result = spawnSync(gitBinary, ["-C", root, "config", type, "--get", key], {
     encoding: "utf8", timeout: 300_000,
@@ -239,10 +244,10 @@ try {
     };
     requireCleanMain();
     console.error(`Refreshing scripts/pr tooling root ${root} (main): fetch origin main, merge --ff-only origin/main, pnpm install --frozen-lockfile.`);
-    git(root, ["fetch", "origin", "main"]);
+    gitStreamed(root, ["fetch", "origin", "main"]);
     // Fetch may run hooks; reread the checkout before changing files.
     requireCleanMain();
-    git(root, ["merge", "--ff-only", "refs/remotes/origin/main"]);
+    gitStreamed(root, ["merge", "--ff-only", "--no-stat", "refs/remotes/origin/main"]);
     // Package-manager Git children must use the same preflighted binary too.
     const bin = join(dirname(destination), ".pr-tooling-bin");
     mkdirSync(bin);

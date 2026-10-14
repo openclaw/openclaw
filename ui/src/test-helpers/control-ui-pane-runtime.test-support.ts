@@ -5,7 +5,7 @@ export function createControlUiPaneRuntimeTestAdapterScript(): string {
 }
 
 /** Keeps the existing private pane probes on their actual owner during the Solid migration. */
-export function installControlUiPaneRuntimeTestAdapter() {
+function installControlUiPaneRuntimeTestAdapter() {
   // SAFETY: The existing opt-in render instrumentation uses this shared hook contract.
   const scope = window as Window & {
     openclawRenderLifecycleTestHook?: typeof notifyRenderLifecycleForTest;

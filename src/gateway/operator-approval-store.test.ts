@@ -18,6 +18,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -361,14 +362,20 @@ describe("operator approval store", () => {
     try {
       writer.exec("BEGIN IMMEDIATE");
       expect(Date.now()).toBeLessThan(expiresAtMs);
-      const result = await withSqliteWriteAdmissionService(database.db, releaseWriter, async () =>
-        operatorApprovalOperations["operatorApprovals.get"](
-          { id: "lock-delayed-clock" },
-          {
-            open: () => database,
-            stateOptions: () => ({ path: database.path, env: databaseOptions.env ?? process.env }),
-          },
-        ),
+      const result = await withSqliteWriteAdmissionService(
+        requireNativeSqliteDatabase(database.db),
+        releaseWriter,
+        async () =>
+          operatorApprovalOperations["operatorApprovals.get"](
+            { id: "lock-delayed-clock" },
+            {
+              open: () => database,
+              stateOptions: () => ({
+                path: database.path,
+                env: databaseOptions.env ?? process.env,
+              }),
+            },
+          ),
       );
 
       expect(releaseWriter).toHaveBeenCalledOnce();
