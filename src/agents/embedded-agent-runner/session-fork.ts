@@ -152,8 +152,7 @@ export function wrapStreamFnWithSessionFork(
         })),
       });
     } catch {
-      // Non-wire tool metadata may be non-JSON; optional replay must not fail the parent.
-      clearEmbeddedSessionForkSnapshot(identity.sessionId);
+      // Skip this capture without revoking running forks; the old snapshot is already forgotten.
       return streamFn(model, context, options);
     }
     const savedModel = structuredClone({ ...model, headers: safeHeaders(model.headers) });

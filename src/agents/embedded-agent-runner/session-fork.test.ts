@@ -242,13 +242,33 @@ describe("prepared session fork provider boundary", () => {
         ],
       };
       const onPayload = vi.fn();
-      const assistant = await (
-        await parent(model, parentContext, { apiKey: "synthetic-key", transport: "sse", onPayload })
-      ).result();
-      expect(assistant.stopReason).toBe("stop");
-      expect(onPayload).toHaveBeenCalledOnce();
-      expect(physicalFetch).toHaveBeenCalledTimes(2);
-      await expect(fork()).rejects.toThrow("requires a parent turn");
+      const forkSent = createDeferredCore();
+      const releaseFork = createDeferredCore();
+      physicalFetch.mockImplementationOnce(async () => {
+        forkSent.resolve();
+        await releaseFork.promise;
+        return new Response(responsesBody(), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      });
+      const runningFork = expect(fork()).resolves.toBe("Answer");
+      try {
+        await forkSent.promise;
+        const assistant = await (
+          await parent(model, parentContext, {
+            apiKey: "synthetic-key",
+            transport: "sse",
+            onPayload,
+          })
+        ).result();
+        expect(assistant.stopReason).toBe("stop");
+        expect(onPayload).toHaveBeenCalledOnce();
+        expect(physicalFetch).toHaveBeenCalledTimes(3);
+        await expect(fork()).rejects.toThrow("requires a parent turn");
+      } finally {
+        releaseFork.resolve();
+        await runningFork;
+      }
     },
   );
 
