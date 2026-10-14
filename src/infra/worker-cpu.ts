@@ -60,6 +60,7 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
   // Node also reports direct plugin/dependency Workers here, without a second registry.
   process.on("worker", trackWorker);
   return {
+    // SAFETY: The optional callback starts unset and only receives the typed observer below.
     gcObserver: undefined as ((samples: GcSample[], thread: string) => void) | undefined,
     revision: 0,
     nextPoolId: 0,

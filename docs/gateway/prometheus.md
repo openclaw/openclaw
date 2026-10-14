@@ -600,7 +600,8 @@ reported by Node.js for the main isolate and instrumented workers. `kind` is
 `weak_processing`, taken from the native entry's `detail.kind`. `thread` is `main`
 or an allowlisted worker script basename; unknown worker scripts use `other`.
 Workers of the same kind share series, without thread IDs or paths. Older SDK
-producers that omit attribution use `kind="unknown",thread="main"`.
+producers that omit attribution use `kind="unknown",thread="main"`. SDK-provided
+unknown kinds and worker names fold into `unknown` and `other` at event emission.
 Each observation is one
 GC entry, not CPU time, allocated bytes, or a guaranteed stop-the-world pause.
 Compare its bucket counts with event-loop window maxima to investigate GC as a

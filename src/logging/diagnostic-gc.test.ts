@@ -4,6 +4,7 @@ import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import {
+  emitTrustedDiagnosticEvent,
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -212,4 +213,34 @@ it("forwards worker GC batches over the existing memory port and follows demand 
     parent.port2.close();
     await worker.terminate();
   }
+});
+
+it("bounds SDK GC attribution once before delivering it to metric consumers", async () => {
+  const labels: unknown[] = [];
+  onInternalDiagnosticEvent(
+    (event) => {
+      if (event.type === "diagnostic.gc") {
+        labels.push([event.kind, event.thread]);
+      }
+    },
+    { include: ["diagnostic.gc"] },
+  );
+  // JavaScript SDK producers are not constrained by the TypeScript kind union.
+  for (const fields of JSON.parse(`[
+    {"kind":"scavenge","thread":"main"},
+    {"kind":"mark_sweep_compact","thread":"sqlite-store.worker.js"},
+    {"kind":"dynamic-123","thread":"worker-123"},
+    {"kind":"dynamic-456","thread":"/private/workers/job-456.js"},
+    {}
+  ]`)) {
+    emitTrustedDiagnosticEvent({ type: "diagnostic.gc", durationMs: 1, ...fields });
+  }
+  await waitForDiagnosticEventsDrained();
+  expect(labels).toEqual([
+    ["scavenge", "main"],
+    ["mark_sweep_compact", "sqlite-store.worker.js"],
+    [undefined, "other"],
+    [undefined, "other"],
+    [undefined, "main"],
+  ]);
 });

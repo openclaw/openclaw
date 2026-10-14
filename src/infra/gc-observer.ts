@@ -30,6 +30,7 @@ export function observeGcSamples(publish: (samples: GcSample[]) => void): (() =>
     }
     const samples: GcSample[] = [];
     for (const entry of list.getEntries()) {
+      // SAFETY: This gc-only observer receives Node entries with detail; Node types are not discriminated.
       const kind = kinds[(entry as PerformanceNodeEntry).detail.kind];
       // A replacement observer can receive native entries queued before activation.
       if (kind && entry.startTime >= activatedAt) {
