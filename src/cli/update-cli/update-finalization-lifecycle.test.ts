@@ -174,6 +174,53 @@ it("records a returned failed outcome without requiring an exception", async () 
   expect(listUpdateRuns()[0]).toMatchObject({ status: "failed", reason: "plugin-update-failed" });
 });
 
+it.each(["failed", "completed"] as const)(
+  "settles a late completion-cache result without hiding its outcome (%s)",
+  async (outcome) => {
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const lifecycle = new UpdateFinalizationLifecycle(true, 1_000, () => {});
+    lifecycle.attachLedger();
+    const entered = createDeferredCore();
+    const work = createDeferredCore<typeof outcome>();
+    const running = withCliProcessScope(() =>
+      lifecycle.run(
+        "completionCache",
+        async () => {
+          entered.resolve();
+          return await work.promise;
+        },
+        (result) => result,
+      ),
+    ).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
+    );
+    await entered.promise;
+    expect(listUpdateRuns()[0]?.status).toBe("running");
+    vi.setSystemTime(Date.now() + 1_001);
+    work.resolve(outcome);
+    const result = await running;
+    if (outcome === "completed") {
+      expect(result.error).toMatchObject({
+        message: expect.stringContaining("timed out in completionCache after 1000ms"),
+      });
+      lifecycle.fail();
+      return;
+    }
+    expect(result.error).toBeUndefined();
+    expect(result.value).toBe("failed");
+    lifecycle.complete(0);
+    expect(writeJson).not.toHaveBeenCalled();
+    expect(listUpdateRuns()[0]).toMatchObject({
+      status: "succeeded",
+      steps: expect.arrayContaining([
+        expect.objectContaining({ step: "finalize:completionCache", status: "failed" }),
+        expect.objectContaining({ step: "warning:finalize:completionCache:deadline" }),
+      ]),
+    });
+  },
+);
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("openclaw-finalize-heartbeat-"));
