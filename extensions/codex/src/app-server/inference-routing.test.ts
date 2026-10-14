@@ -93,6 +93,26 @@ async function prepare(
 }
 
 describe("managed inference route ownership", () => {
+  it.each(["thread/closed", "thread/archived", "thread/deleted"] as const)(
+    "releases bounded thread provenance on %s without revoking peers",
+    async (method) => {
+      const h = harness();
+      ownCodexInferenceClient(h.client);
+      const route = await prepare(h, "apiKey");
+      for (let index = 0; index < 256; index += 1) {
+        bindCodexInferenceThread(h.client, `thread-${index}`, route);
+      }
+      expect(() => bindCodexInferenceThread(h.client, "replacement", route)).toThrow(
+        "thread limit reached",
+      );
+      h.send({ method, params: { threadId: "thread-0" } });
+      expect(getCodexInferenceThread(h.client, "thread-0")).toBeUndefined();
+      expect(getCodexInferenceThread(h.client, "thread-1")).toBe(route);
+      expect(() => bindCodexInferenceThread(h.client, "replacement", route)).not.toThrow();
+      expect(getCodexInferenceThread(h.client, "replacement")).toBe(route);
+    },
+  );
+
   it.each([false, true])(
     "admits only config/account writes and route publications (prepared config=%s)",
     async (preparedConfig) => {
