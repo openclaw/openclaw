@@ -86,10 +86,12 @@ describe("cross-store voice creation authority", () => {
             } satisfies OpenClawConfig;
             fixture.context.getRuntimeConfig = () => config;
             setRuntimeConfigSnapshot(config);
+            const role = roleClient("view", `voice-${revocation}`);
             const client = {
               ...makeClient(fixture.client.connId, "operator", ["operator.read", "operator.write"])
                 .client,
-              ...roleClient("view", `voice-${revocation}`),
+              ...role,
+              authenticatedUserProfile: { ...role.authenticatedUserProfile!, avatarRevision: "" },
             };
             fixture.clients.clear();
             fixture.clients.add(client);
