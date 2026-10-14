@@ -23,7 +23,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as sessionLifecycleProjection from "../../config/sessions/session-lifecycle-projection.js";
 import { SessionEntryLifecycleUpsertConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGatewayHookDispatcher } from "../../gateway/server/hooks.js";
 import {
@@ -198,7 +198,7 @@ it.for([
     error: "ended during restart recovery",
     retryable: false,
   },
-] satisfies Array<{ entry: Partial<SessionEntry>; error: string; retryable: boolean }>)(
+] satisfies Array<{ entry: Partial<InternalSessionEntry>; error: string; retryable: boolean }>)(
   "preserves session event admission policy: $error",
   async ({ entry, error, retryable }, { signal }) => {
     await withOpenClawTestState({ label: "session-event-refusal" }, async (state) => {
