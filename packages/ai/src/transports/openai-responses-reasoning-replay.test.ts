@@ -47,6 +47,32 @@ const responseConverters = [
 
 describe("OpenAI Responses reasoning replay", () => {
   it.each(responseConverters)(
+    "$name omits function item ids when preceding reasoning has no rs_* identity",
+    ({ convert }) => {
+      for (const id of [undefined, null, 42, "msg_wrong"]) {
+        const input = convert({
+          messages: [
+            createAssistant([
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: JSON.stringify({ type: "reasoning", id, summary: [] }),
+              },
+              { type: "toolCall", id: "call_probe|fc_probe", name: "probe", arguments: {} },
+            ]),
+          ],
+        });
+        expect(input.find((item) => item.type === "function_call")).toEqual({
+          type: "function_call",
+          call_id: "call_probe",
+          name: "probe",
+          arguments: "{}",
+        });
+      }
+    },
+  );
+
+  it.each(responseConverters)(
     "$name omits orphan function item ids without changing paired transcript ids",
     ({ convert }) => {
       const reasoning = {

@@ -490,7 +490,9 @@ function convertResponsesMessagesWithStyle(
             }
             output.push(replayableReasoningItem as ResponseInputItem);
             previousReplayItemWasReasoning = true;
-            seenReplayableReasoning = true;
+            seenReplayableReasoning ||=
+              typeof replayableReasoningItem.id === "string" &&
+              replayableReasoningItem.id.startsWith("rs_");
           }
         } else if (block.type === "text") {
           const textSignature = parseOpenAIResponsesTextSignature(block.textSignature);
