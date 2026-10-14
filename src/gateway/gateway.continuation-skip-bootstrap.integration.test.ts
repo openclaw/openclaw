@@ -48,7 +48,9 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
   });
   const claim = await acquireTestPortBlock({ offsets: [0] });
   try {
-    await new Promise<void>((resolve) => endpoint.listen(claim.port, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      endpoint.listen(claim.port, "127.0.0.1", resolve);
+    });
     const address = endpoint.address();
     if (!address || typeof address === "string") {
       throw new Error("Fixture provider did not bind a TCP port");
