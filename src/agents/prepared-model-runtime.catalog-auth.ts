@@ -552,7 +552,7 @@ export function createNativeLoginRecheck(
       return pending;
     }
     if (!providerIds.length || (!options?.force && now - checkedAt < NATIVE_LOGIN_RECHECK_MS)) {
-      return;
+      return undefined;
     }
     checkedAt = now;
     pending = recheck()

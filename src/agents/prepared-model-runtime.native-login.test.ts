@@ -146,15 +146,15 @@ async function fixture(
   }
 }
 
-async function tick(recheck: () => void) {
+async function tick(recheck: () => void | Promise<void>) {
   await vi.advanceTimersByTimeAsync(60_000);
-  recheck();
+  void recheck();
   await vi.advanceTimersByTimeAsync(0);
 }
 
 it("publishes native login recovery on forced admission recheck without waiting for the TTL", async () => {
   await fixture(async ({ recheck, readAuth, publish, refreshAuth }) => {
-    recheck();
+    void recheck();
     expect(native.probe).not.toHaveBeenCalled();
     await tick(recheck);
     expect(refreshAuth).not.toHaveBeenCalled();
