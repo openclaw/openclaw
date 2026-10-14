@@ -119,6 +119,18 @@ describe("Gemma tool-call text recovery", () => {
     expect(output.content).toEqual([{ type: "text", text: content }]);
   });
 
+  it("leaves other model families unchanged", async () => {
+    const other = makeCompletionsModel({ id: "other-model" });
+    const output = createAssistantOutput(other);
+    await processCompletionsStream(
+      streamChunks([makeCompletionsChunk({ content: call }, "stop")]),
+      output,
+      other,
+      { push() {} },
+    );
+    expect(output.content).toEqual([{ type: "text", text: call }]);
+  });
+
   it("does not flush a cancelled call into executable events", async () => {
     const controller = new AbortController();
     const output = createAssistantOutput(model);

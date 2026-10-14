@@ -256,7 +256,7 @@ describe("sidebar layout", () => {
     expect(fitSidebarLayout(resized, 560)).toEqual(resized);
   });
 
-  it.each([true])(
+  it.each([true, false])(
     "migrates a legacy expanded dashboard with open=%s without changing visible content",
     (open) => {
       const layout = normalizeSidebarLayout({
