@@ -4552,12 +4552,18 @@ fallback preparation; it retains current environment and execution-policy checks
 Reads retain the original physical store; admission and initial routing also
 retain a revocable placement observation
 until their caller consumes the facts.
-If a placement publication overlaps read preparation, the owner joins its
-settlement and reads fresh facts from the same physical store. A preceding turn
-finishing or setup advancing cannot reject the next turn merely by superseding
-that read. Only read preparation repeats; consumer effects and writes never do.
-Unknown publication outcomes, cancellation, and store replacement still refuse
-the read, and an observation already handed to its consumer remains revocable.
+Read preparation fails closed. If a same-session placement publication other than
+tool authority commits while the projection read runs, or is still pending when
+it returns, the owner releases the observation and rejects with
+`Session <id> placement authority changed`; it neither waits for settlement nor
+repeats the read. A preceding turn finishing or setup advancing at that moment
+can therefore reject the next turn, which fails visibly and is not retried
+automatically. This is an accepted best-effort tradeoff: the window is a single
+worker read, and admission, file reads, and sandbox preparation recheck the same
+observation while consuming it, so repeating only the read would not remove the
+race. Unknown publication outcomes, cancellation, and store replacement also
+refuse the read, and an observation already handed to its consumer remains
+revocable.
 Chat admission reruns its session, reservation, and caller checks after preparation;
 reply admission rechecks its session and lifecycle after the worker read. Runtime
 selection is a prepared default that tolerates setup and preceding-turn publications;
