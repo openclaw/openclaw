@@ -204,9 +204,9 @@ describe("browser sign-in recovery", () => {
         fetchControlUiResource("/nested/__openclaw__/assistant-media"),
       ).rejects.toThrow();
       await finishRenewal();
-      const { dialog } = await getRenderedModalDialog(document.body);
+      const { dialog: pendingDialog } = await getRenderedModalDialog(document.body);
       await waitForSolid(() =>
-        expect(dialog.querySelector('[role="status"]')?.textContent).toBe(""),
+        expect(pendingDialog.querySelector('[role="status"]')?.textContent).toBe(""),
       );
       signedIn = true;
       window.dispatchEvent(new Event("focus"));
