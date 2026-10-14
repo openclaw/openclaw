@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import type { AuthProfileCredential, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -18,12 +18,20 @@ const credential: AuthProfileCredential = {
   token: "synthetic-contention-token",
 };
 
+/** String-stage entry points keep their loose stage callback. */
 type Admit = (stage: "transaction" | "commit") => void;
+/** updateUserModelAuthProfile revalidates through the structured admission callback. */
+type StructuredAdmit = (
+  operation: { stage: "transaction" } | { stage: "commit"; profile: UserModelAuthProfile },
+) => void;
+
+const stageOf = (admission: string | { stage: "transaction" | "commit" }) =>
+  typeof admission === "string" ? admission : admission.stage;
 
 it.each([
   [
     "credential update",
-    (admit: Admit, _owner: string, profileId: string) =>
+    (admit: StructuredAdmit, _owner: string, profileId: string) =>
       updateUserModelAuthProfile(profileId, () => true, {}, admit),
   ],
   [
@@ -63,16 +71,16 @@ it.each([
     const observed: string[] = [];
     try {
       write(
-        (stage) => {
+        (admission) => {
           try {
             competitor.exec("BEGIN IMMEDIATE");
             competitor.exec("ROLLBACK");
-            observed.push(`${stage}:free`);
+            observed.push(`${stageOf(admission)}:free`);
           } catch (error) {
             if (!isSqliteLockError(error)) {
               throw error;
             }
-            observed.push(`${stage}:held`);
+            observed.push(`${stageOf(admission)}:held`);
           }
         },
         profile.id,
