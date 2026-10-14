@@ -264,7 +264,13 @@ async function ensureLiveProviderApisRegistered(params: {
   config: OpenClawConfig;
   providers: readonly string[] | undefined;
 }): Promise<void> {
-  if (!params.providers?.some((provider) => normalizeProviderId(provider) === "ollama")) {
+  // Ollama Cloud models share the plugin's "ollama" API transport.
+  if (
+    !params.providers?.some((provider) => {
+      const id = normalizeProviderId(provider);
+      return id === "ollama" || id === "ollama-cloud";
+    })
+  ) {
     return;
   }
   // Live Vitest setup installs a stub plugin registry for channel tests; direct
