@@ -10,6 +10,7 @@ import {
   resolveNodeWorkerLaunchToolNames,
 } from "../infra/node-runner-inventory.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
+import { createNodeInvokeResponder } from "./client.js";
 import { startNodeHostConnection } from "./connection.js";
 import * as hostStats from "./host-stats.js";
 
@@ -211,6 +212,48 @@ function startConnectionFixture(
   return { connection, request, publications, writeStderrLine, start, prepared, runtime };
 }
 
+it("sends permission details only while the connected Gateway advertises support", async () => {
+  const { connection, request, start } = startConnectionFixture();
+  const runtimeClient = start.mock.calls[0]![0].client;
+  const response = createNodeInvokeResponder(runtimeClient, {
+    id: "screen-capture",
+    nodeId: "test-mac",
+    command: "system.run",
+  });
+  const failure = {
+    ok: false,
+    error: {
+      code: "PERMISSION_MISSING",
+      message: "PERMISSION_MISSING: screenRecording",
+      details: { capabilities: ["screenRecording"], state: "not-determined" as const },
+    },
+  };
+  const legacyResult = {
+    id: "screen-capture",
+    nodeId: "test-mac",
+    ok: false,
+    error: { code: "PERMISSION_MISSING", message: "PERMISSION_MISSING: screenRecording" },
+  };
+  try {
+    connection.connect({
+      ...gateway,
+      capabilities: [GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS],
+    });
+    await response.send(failure);
+    expect(request).toHaveBeenLastCalledWith("node.invoke.result", {
+      ...legacyResult,
+      error: failure.error,
+    });
+    connection.disconnect();
+    connection.connect(gateway);
+    await vi.advanceTimersByTimeAsync(0);
+    await response.send(failure);
+    expect(request).toHaveBeenLastCalledWith("node.invoke.result", legacyResult);
+  } finally {
+    await connection.close();
+  }
+});
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(hostStats, "sampleNodeHostStats").mockReturnValue(stats);
@@ -270,6 +313,32 @@ it("advertises configured native inference only to a capable Gateway", async () 
       });
       if (!supported) {
         expect(declaration.workerHost).not.toHaveProperty("nativeInference");
+      }
+      expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
+    }
+  } finally {
+    await connection.close();
+  }
+});
+
+it("negotiates assignment prompt context again on each Gateway connection", async () => {
+  const { connection, request, start } = startConnectionFixture(true);
+  try {
+    start.mock.calls[0]?.[0].onRunnerCapacityChanged?.({ total: 1, available: 1 });
+    for (const supported of [false, true, false]) {
+      connection.connect({
+        ...gateway,
+        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT] : [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const declaration = request.mock.calls.findLast(
+        ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      )?.[1];
+      expect(declaration.workerHost.enabled).toBe(true);
+      if (supported) {
+        expect(declaration.workerHost.promptContext).toBe(1);
+      } else {
+        expect(declaration.workerHost).not.toHaveProperty("promptContext");
       }
       expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
     }

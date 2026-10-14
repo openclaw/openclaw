@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { assertAgentReplyContainsMarker } from "../agent-turn-output.mjs";
 import { readTcpPortEnv } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const MODEL = "survivor/gpt-5.6-luna";
 const JOBS = [
@@ -23,10 +24,6 @@ function requiredEnv(name) {
 
 function artifact(name) {
   return path.join(requiredEnv("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"), name);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function writeJson(file, value) {
@@ -511,6 +508,34 @@ export function seedLegacyOperatorGatewayState() {
   );
 }
 
+export function seedLegacyOperatorPendingDelivery() {
+  // Keep the main agent's restored-index specimen and its archived bytes intact.
+  const storePath = path.join(
+    requiredEnv("OPENCLAW_STATE_DIR"),
+    "agents/ops/sessions/sessions.json",
+  );
+  const store = fs.existsSync(storePath) ? readJson(storePath) : {};
+  const sessionKey = "agent:ops:legacy-pending-delivery";
+  assert(!Object.hasOwn(store, sessionKey), "pending-delivery specimen already exists");
+  store[sessionKey] = {
+    sessionId: "legacy-pending-delivery",
+    updatedAt: 1710000001000,
+    pendingFinalDelivery: true,
+    pendingFinalDeliveryText: "Saved July reply",
+    pendingFinalDeliveryCreatedAt: 1710000000000,
+    pendingFinalDeliveryContext: { channel: "telegram", to: "synthetic-recipient" },
+    pendingFinalDeliveryIntentId: "legacy-pending-intent",
+    pendingFinalDeliveryLastAttemptAt: 1710000000500,
+    pendingFinalDeliveryAttemptCount: 2,
+    pendingFinalDeliveryLastError: "synthetic delivery failure",
+  };
+  writeJson(storePath, store);
+  writeJson(artifact("legacy-operator-pending-delivery.json"), {
+    storePath,
+    original: fs.readFileSync(storePath, "utf8"),
+  });
+}
+
 export function assertLegacyOperatorConfig(stage) {
   const config = readJson(requiredEnv("OPENCLAW_CONFIG_PATH"));
   const webhooks = readJson(artifact("legacy-operator-webhooks.json"));
@@ -574,16 +599,13 @@ export function assertLegacyOperatorApprovals(stage) {
   } else {
     const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
     assert(fs.existsSync(dbPath), "legacy operator approvals database missing");
-    const db = new DatabaseSync(dbPath, { readOnly: true });
-    try {
+    readDatabase(dbPath, (db) => {
       const row = db
         .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = ?")
         .get("current");
       assert(row, "legacy operator approvals canonical row missing");
       policy = JSON.parse(row.raw_json);
-    } finally {
-      db.close();
-    }
+    });
   }
   const observed = stage === "baseline" ? baselinePolicy(policy) : authoredPolicy(policy);
   writeJson(artifact(`legacy-operator-${stage}-approvals.json`), observed);
@@ -785,9 +807,11 @@ export function assertLegacyOperatorCronOwners(listing, baseline) {
       expected.agentId,
       `legacy operator cron owner unresolved or changed: ${expected.name}`,
     );
+    // Doctor may pin an ownerless legacy-roster job to its historical owner
+    // (docs/gateway/doctor/state-and-sessions.md); authored owners never move.
     assert.equal(
       after.agentId,
-      before.agentId,
+      before.agentId ?? after.agentId,
       `legacy operator cron explicit owner changed: ${expected.name}`,
     );
   }

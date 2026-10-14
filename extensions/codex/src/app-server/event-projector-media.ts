@@ -17,6 +17,13 @@ import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 
+type GeneratedImageResult = {
+  itemId: string;
+  result: string;
+  revisedPrompt?: string;
+  source: "native" | "raw";
+};
+
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
   private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
@@ -117,12 +124,7 @@ export class CodexGeneratedMediaProjection {
     });
   }
 
-  private async recordImage(params: {
-    itemId: string;
-    result: string;
-    revisedPrompt?: string;
-    source: "native" | "raw";
-  }): Promise<void> {
+  private async recordImage(params: GeneratedImageResult): Promise<void> {
     this.itemIds.add(params.itemId);
     if (this.gatewayMaterializedItemIds.has(params.itemId)) {
       return;
@@ -149,12 +151,7 @@ export class CodexGeneratedMediaProjection {
     }
   }
 
-  private async materializeImage(params: {
-    itemId: string;
-    result: string;
-    revisedPrompt?: string;
-    source: "native" | "raw";
-  }): Promise<void> {
+  private async materializeImage(params: GeneratedImageResult): Promise<void> {
     const maxBytes = resolveGeneratedMediaMaxBytes(this.config, "image");
     const estimatedDecodedBytes = estimateBase64DecodedBytes(params.result);
     if (estimatedDecodedBytes > maxBytes) {

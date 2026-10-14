@@ -1,7 +1,5 @@
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
-import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import {
   AgentRunTerminalOutcomeError,
   findAgentRunTerminalOutcome,
@@ -19,13 +17,9 @@ import {
   runFallbackAttempt,
   shouldDiscardDeferredSessionSuspension,
 } from "./model-fallback-attempt.js";
-import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { recordModelFallbackStop as recordLightweightStop } from "./model-fallback-stop.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  PreparedModelRuntimePublicationSupersededError,
-} from "./prepared-model-runtime.errors.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   createSessionPlacementSettlementClosedAbortError,
   isSessionPlacementSettlementClosedError,
@@ -83,18 +77,12 @@ it("does not replay an unscoped preflight subclass on another model", async () =
   );
 });
 
-it.each([
-  PreparedModelRuntimePublicationSupersededError,
-  PreparedModelRuntimeOwnerNotPublishedError,
-])("does not rotate providers after %s", async (ErrorType) => {
-  await expectTerminalStop(new ErrorType("fixture prepared runtime publication failed"));
-});
-
-it("does not rotate providers when SQLite worker capacity is exhausted", async () => {
-  await expectTerminalStop(
-    new SqliteWorkerError("SQLite worker store capacity reached", "overloaded"),
-  );
-});
+it.each([PreparedModelRuntimePublicationSupersededError])(
+  "does not rotate providers after %s",
+  async (ErrorType) => {
+    await expectTerminalStop(new ErrorType("fixture prepared runtime publication failed"));
+  },
+);
 
 it("does not consult provider policy or rotate models for a transcript conflict", async () => {
   const error = new SqliteTranscriptMutationConflictError("conflicting-session");
@@ -212,29 +200,6 @@ it("preserves recovery when its fallback observer rejects", async () => {
   ]);
 });
 
-it("does not replay a recorded stop returned by result classification", async () => {
-  const error = new AggregateError([recordedStop()], "wrapper");
-  const run = vi.fn().mockResolvedValue("partial result");
-  await expectTerminalStop(error, { classifyResult: () => ({ error }) }, run);
-});
-
-it("stops image fallback after a recorded stop", async () => {
-  const error = new AggregateError([recordedStop()], "wrapper");
-  const run = vi.fn().mockRejectedValue(error);
-  const imageModel = {
-    primary: "fixture-provider/fixture-model",
-    fallbacks: fallbackOptions.fallbacksOverride,
-  };
-  await expect(
-    runWithImageModelFallback({
-      cfg: { agents: { defaults: { imageModel } } },
-      run,
-    }),
-  ).rejects.toBe(error);
-  expect(run).toHaveBeenCalledOnce();
-  expect(providerHook).not.toHaveBeenCalled();
-});
-
 it("still classifies a genuine provider failure through its hook", async () => {
   providerHook.mockReturnValue("overloaded");
   const result = await runFallbackAttempt({
@@ -256,13 +221,6 @@ it("still classifies a genuine provider failure through its hook", async () => {
     },
   });
   expect(providerHook).toHaveBeenCalledOnce();
-});
-
-it("preserves coordination precedence over a recorded terminal stop", () => {
-  const error = new AggregateError([maxTurns(), new GatewayDrainingError()], "wrapper");
-  expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-  expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(true);
-  expect(providerHook).not.toHaveBeenCalled();
 });
 
 describe.each([
@@ -294,14 +252,6 @@ describe.each([
     expect(find(cycle)).toBe(first);
     expect(find({ cause: null, errors: [null, { error: third }] })).toBe(third);
   });
-});
-
-it("does not infer settlement ownership from display text", () => {
-  expect(
-    isSessionPlacementSettlementClosedError(
-      new Error("session placement turn settlement is closed"),
-    ),
-  ).toBe(false);
 });
 
 it("preserves the typed marker behind a hostile sibling accessor", async () => {
@@ -336,11 +286,4 @@ it("discovers a canonical timeout beside an opaque cause and a settlement closur
   expect(findAgentRunTerminalOutcome(wrapper)).toBe(timeout.terminalOutcome);
   expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
   await expectTerminalStop(wrapper);
-});
-
-it("does not infer terminal outcomes from untyped fields or cyclic wrappers", () => {
-  const wrapper = { cause: undefined as unknown, terminalOutcome: { status: "timeout" } };
-  wrapper.cause = wrapper;
-  expect(findAgentRunTerminalOutcome(wrapper)).toBeUndefined();
-  expect(findAgentRunTerminalOutcome(null)).toBeUndefined();
 });

@@ -1,5 +1,6 @@
 import AVFoundation
 import OpenClawKit
+import os
 import ReplayKit
 
 final class ScreenRecordService: @unchecked Sendable {
@@ -42,6 +43,8 @@ final class ScreenRecordService: @unchecked Sendable {
     /// pending start keeps its caller's capture lease until both start and the
     /// one matching stop resolve, so late capture cannot escape into a new owner.
     private final class CaptureStartOperation: @unchecked Sendable {
+        private typealias Completion = (CheckedContinuation<Void, Error>, Result<Void, Error>)
+
         private enum Phase {
             case idle
             case starting
@@ -53,13 +56,10 @@ final class ScreenRecordService: @unchecked Sendable {
         private struct State {
             var phase: Phase = .idle
             var continuation: CheckedContinuation<Void, Error>?
-            var startResult: Result<Void, Error>?
             var stopRequested = false
-            var stopCompleted = false
         }
 
-        private let lock = NSLock()
-        private var state = State()
+        private let state = OSAllocatedUnfairLock(initialState: State())
         private let startAction: @MainActor @Sendable (@escaping CaptureCompletion) -> Void
         private let stopAction: StopCaptureAction
 
@@ -84,7 +84,7 @@ final class ScreenRecordService: @unchecked Sendable {
         }
 
         private func cancel() {
-            self.withLock { state in
+            self.state.withLock { state in
                 switch state.phase {
                 case .idle:
                     state.phase = .cancelled
@@ -98,7 +98,7 @@ final class ScreenRecordService: @unchecked Sendable {
 
         @MainActor
         private func begin(_ continuation: CheckedContinuation<Void, Error>) {
-            let shouldStart = self.withLock { state -> Bool in
+            let shouldStart = self.state.withLock { state -> Bool in
                 switch state.phase {
                 case .idle:
                     state.phase = .starting
@@ -123,23 +123,22 @@ final class ScreenRecordService: @unchecked Sendable {
 
         private func captureDidStart(error: Error?) {
             let result: Result<Void, Error> = error.map(Result.failure) ?? .success(())
-            var shouldStop = false
-            let completion = self.withLock { state -> (CheckedContinuation<Void, Error>, Result<Void, Error>)? in
+            let (completion, shouldStop) = self.state.withLock { state -> (Completion?, Bool) in
                 switch state.phase {
                 case .starting:
                     state.phase = .finished
-                    guard let continuation = state.continuation else { return nil }
+                    guard let continuation = state.continuation else { return (nil, false) }
                     state.continuation = nil
-                    return (continuation, result)
+                    return ((continuation, result), false)
                 case .cancelling:
-                    state.startResult = result
-                    if case .success = result, !state.stopRequested {
-                        state.stopRequested = true
-                        shouldStop = true
+                    if case .failure = result {
+                        return (Self.takeCancellationCompletion(state: &state), false)
                     }
-                    return Self.takeCancellationCompletionIfReady(state: &state)
+                    guard !state.stopRequested else { return (nil, false) }
+                    state.stopRequested = true
+                    return (nil, true)
                 case .idle, .cancelled, .finished:
-                    return nil
+                    return (nil, false)
                 }
             }
             if shouldStop {
@@ -156,29 +155,17 @@ final class ScreenRecordService: @unchecked Sendable {
         }
 
         private func captureStopDidComplete() {
-            let completion = self.withLock { state -> (CheckedContinuation<Void, Error>, Result<Void, Error>)? in
+            let completion = self.state.withLock { state -> Completion? in
                 guard state.phase == .cancelling else { return nil }
-                state.stopCompleted = true
-                return Self.takeCancellationCompletionIfReady(state: &state)
+                return Self.takeCancellationCompletion(state: &state)
             }
             Self.resume(completion)
         }
 
-        private static func takeCancellationCompletionIfReady(
-            state: inout State) -> (CheckedContinuation<Void, Error>, Result<Void, Error>)?
+        private static func takeCancellationCompletion(
+            state: inout State) -> Completion?
         {
-            guard state.phase == .cancelling,
-                  let startResult = state.startResult,
-                  let continuation = state.continuation
-            else { return nil }
-
-            let cleanupComplete: Bool = switch startResult {
-            case .success:
-                state.stopRequested && state.stopCompleted
-            case .failure:
-                true
-            }
-            guard cleanupComplete else { return nil }
+            guard let continuation = state.continuation else { return nil }
 
             state.phase = .finished
             state.continuation = nil
@@ -186,16 +173,10 @@ final class ScreenRecordService: @unchecked Sendable {
         }
 
         private static func resume(
-            _ completion: (CheckedContinuation<Void, Error>, Result<Void, Error>)?)
+            _ completion: Completion?)
         {
             guard let (continuation, result) = completion else { return }
             continuation.resume(with: result)
-        }
-
-        private func withLock<T>(_ body: (inout State) -> T) -> T {
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            return body(&self.state)
         }
     }
 

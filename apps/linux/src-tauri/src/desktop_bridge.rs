@@ -62,23 +62,22 @@ impl Bridge {
     async fn snapshot(&self, route_id: &str) -> fdo::Result<String> {
         let generation = self.generation(route_id)?;
         let gateway = self.app.state::<GatewayClient>();
-        let agents = gateway
-            .desktop_request(generation, DesktopMethod::Agents, json!({}))
-            .await
-            .map_err(fdo::Error::Failed)?;
         let params = json!({"limit":40,"includeDerivedTitles":true,"includeLastMessage":true,"includeGlobal":true});
-        let recent = gateway
-            .desktop_request(generation, DesktopMethod::Sessions, params.clone())
-            .await
-            .map_err(fdo::Error::Failed)?;
-        let mut active_params = params;
+        let mut active_params = params.clone();
         active_params["activeOnly"] = json!(true);
-        let active = gateway
-            .desktop_request(generation, DesktopMethod::Sessions, active_params)
-            .await
-            .map_err(fdo::Error::Failed)?;
+        let mut snapshot = json!({});
+        for (key, method, params) in [
+            ("agents", DesktopMethod::Agents, json!({})),
+            ("recent", DesktopMethod::Sessions, params),
+            ("active", DesktopMethod::Sessions, active_params),
+        ] {
+            snapshot[key] = gateway
+                .desktop_request(generation, method, params)
+                .await
+                .map_err(fdo::Error::Failed)?;
+        }
         self.generation(route_id)?;
-        Ok(json!({"agents":agents,"recent":recent,"active":active}).to_string())
+        Ok(snapshot.to_string())
     }
 
     async fn send_prompt(

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { resolveTypefaces, syncTypefaceStylesheets } from "../../../app/typography.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/startup-layout.css";

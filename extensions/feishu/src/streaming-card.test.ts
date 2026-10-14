@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
 import {
   FeishuStreamingFinalizationError,
   FeishuStreamingSession,
@@ -27,7 +28,6 @@ type LocalServer = {
   stop: () => Promise<void>;
 };
 
-type DispatcherInit = RequestInit & { dispatcher?: unknown };
 type StreamingRequest = {
   url: URL;
   body: string;
@@ -41,14 +41,6 @@ const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 const hermeticPublicLookup: LookupFn = async () => [
   { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
 ];
-
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  let body = "";
-  for await (const chunk of req) {
-    body += String(chunk);
-  }
-  return body;
-}
 
 async function startLocalServer(
   handler: (request: StreamingRequest) => void | Promise<void>,
@@ -82,14 +74,6 @@ async function startLocalServer(
       });
     });
   });
-}
-
-function stripDispatcher(init: RequestInit | undefined): RequestInit | undefined {
-  if (!init || !("dispatcher" in init)) {
-    return init;
-  }
-  const { dispatcher: _dispatcher, ...rest } = init as DispatcherInit;
-  return rest;
 }
 
 function createLocalRedirectFetch(port: number): FeishuStreamingFetch {
@@ -140,48 +124,6 @@ function jsonResponse(payload: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
-}
-
-function writeOversizedJson(
-  res: ServerResponse,
-  totalBytes: number,
-): { bytesPulled: () => number; canceled: () => boolean } {
-  const chunk = Buffer.alloc(1024 * 1024, 0x20);
-  let bytesPulled = 0;
-  let canceled = false;
-  let ended = false;
-  res.writeHead(200, { "content-type": "application/json" });
-  res.on("close", () => {
-    if (!ended && bytesPulled < totalBytes) {
-      canceled = true;
-    }
-  });
-  const prefix = Buffer.from('{"code":0,"msg":"ok","tenant_access_token":"token","padding":"');
-  bytesPulled += prefix.byteLength;
-  res.write(prefix);
-  const sendChunk = () => {
-    if (bytesPulled >= totalBytes) {
-      if (!res.destroyed) {
-        ended = true;
-        res.end('"}');
-      }
-      return;
-    }
-    const remaining = totalBytes - bytesPulled;
-    const size = Math.min(chunk.byteLength, remaining);
-    bytesPulled += size;
-    const ok = res.write(chunk.subarray(0, size));
-    if (ok) {
-      setImmediate(sendChunk);
-      return;
-    }
-    res.once("drain", sendChunk);
-  };
-  setImmediate(sendChunk);
-  return {
-    bytesPulled: () => bytesPulled,
-    canceled: () => canceled || (!ended && bytesPulled < totalBytes),
-  };
 }
 
 function setStreamingSessionInternals(
@@ -510,7 +452,11 @@ describe("FeishuStreamingSession", () => {
       | undefined;
     const deps = await createStreamingFetch(({ url, res }) => {
       if (url.pathname.includes("/auth/")) {
-        streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2);
+        streamState = writeOversizedJson(
+          res,
+          FEISHU_JSON_MAX_BYTES * 2,
+          '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+        );
         return;
       }
       writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
@@ -615,7 +561,11 @@ describe("FeishuStreamingSession", () => {
         });
         return;
       }
-      streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2);
+      streamState = writeOversizedJson(
+        res,
+        FEISHU_JSON_MAX_BYTES * 2,
+        '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+      );
     });
 
     const session = createStreamingSession(
@@ -1060,6 +1010,41 @@ describe("FeishuStreamingSession", () => {
     expect(replaceBodies).toHaveLength(1);
     expect(log).toHaveBeenCalledWith(
       "Final replace failed: Error: Replace card content failed with HTTP 500",
+    );
+  });
+
+  it("reports the final text as not accepted when CardKit rejects the final update after a visible preview", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_600);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    // CardKit closes streaming mode ~10 minutes after it was enabled; every later
+    // content write is rejected while the earlier preview stays visible in the chat.
+    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
+    const log = vi.fn();
+
+    const session = createActiveSession(deps, {
+      cardId: "card_8",
+      messageId: "om_8",
+      text: "working",
+      lastUpdateTime: 3_000,
+      log,
+    });
+
+    await expect(session.closeWithResult("working\n\nfinal answer")).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: {
+        visibleReplySent: true,
+        content: "working",
+        messageId: "om_8",
+        finalTextAccepted: false,
+      },
+    });
+
+    expect(updateBodies).toHaveLength(1);
+    expect(replaceBodies).toHaveLength(0);
+    expect(log).toHaveBeenCalledWith(
+      "Final update failed: Error: Update card content failed with HTTP 500",
     );
   });
 

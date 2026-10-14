@@ -189,9 +189,8 @@ const TUI_COMMAND_ROWS = [
   ],
 ] as const satisfies readonly TuiCommandRow[];
 
-const TUI_COMMAND_ROW_VALUES: readonly TuiCommandRow[] = TUI_COMMAND_ROWS;
-const TUI_COMMAND_DESCRIPTORS: readonly TuiCommandDescriptor[] = TUI_COMMAND_ROW_VALUES.map(
-  ([name, description, help, completions, options]) => {
+const TUI_COMMAND_DESCRIPTORS: readonly TuiCommandDescriptor[] = TUI_COMMAND_ROWS.map(
+  ([name, description, help, completions, options]: TuiCommandRow) => {
     const descriptor: TuiCommandDescriptor = { name, description, help, completions };
     descriptor.aliases = options?.aliases;
     descriptor.scope = options?.scope;

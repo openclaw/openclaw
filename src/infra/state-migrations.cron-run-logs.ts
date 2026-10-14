@@ -7,6 +7,7 @@ import {
   parseCronRunLogEntryObject,
 } from "../cron/run-history-detail.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "./sqlite-number.js";
+import { getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 
 type CronRunLogEntry = import("../cron/run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("../cron/types.js").CronDeliveryStatus;
@@ -54,6 +55,10 @@ type CronRunLogTaskImportResult = {
 };
 
 export function hasLegacyCronRunLogs(db: DatabaseSync): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return schema.tables.has("cron_run_logs");
+  }
   return Boolean(
     db
       .prepare(

@@ -7,9 +7,9 @@ export const REPLY_TOOL_AUTHORITY_COMPAT_RECORD = {
   introduced: "2026-10-04",
   deprecated: "2026-10-04",
   warningStarts: "2026-10-04",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "stable-deprecation-period",
   replacement:
-    "Await the Async reply-operation, fingerprint, and V2 queue companions. Question dispatchers await authority.assertCurrentAsync after transport preparation and assert current authority immediately before I/O. Released synchronous contracts remain until the next Plugin SDK major and explicit breaking-release approval.",
+    "Await the Async reply-operation, fingerprint, and V2 queue companions. Question dispatchers await authority.assertCurrentAsync after transport preparation and assert current authority immediately before I/O. Released synchronous contracts remain until an announced later stable release and explicit breaking-release approval.",
   docsPath: "/plugins/sdk-migration/how-to-migrate#await-reply-tool-authority",
   surfaces: [
     "EmbeddedRunAttemptParams.replyOperation",
@@ -21,7 +21,7 @@ export const REPLY_TOOL_AUTHORITY_COMPAT_RECORD = {
     "AgentQuestionDispatcher.authority.assertCurrent",
   ],
   diagnostics: [
-    "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    "TypeScript @deprecated annotations and bounded warnings on legacy preparation or injection fallbacks; supported prepared projections and live effect assertions remain silent",
   ],
   tests: [
     "src/plugins/compat/registry.test.ts",

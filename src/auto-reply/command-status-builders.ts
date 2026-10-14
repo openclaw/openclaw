@@ -35,11 +35,10 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
     "/verbose on|off|full",
     "/trace on|off|raw",
   ];
-  if (isCommandFlagEnabled(cfg, "config")) {
-    optionParts.push("/config");
-  }
-  if (isCommandFlagEnabled(cfg, "debug")) {
-    optionParts.push("/debug");
+  for (const key of ["config", "debug"] as const) {
+    if (isCommandFlagEnabled(cfg, key)) {
+      optionParts.push(`/${key}`);
+    }
   }
   return [
     "ℹ️ Help",
@@ -157,14 +156,12 @@ export function buildCommandsMessagePaginated(
     ? items.slice(startIndex, startIndex + COMMANDS_PER_PAGE)
     : items;
   const itemLines: string[] = [];
-  let currentLabel: string | null = null;
-  for (const item of pageItems) {
-    if (item.label !== currentLabel) {
+  for (const [index, item] of pageItems.entries()) {
+    if (item.label !== pageItems[index - 1]?.label) {
       if (itemLines.length > 0) {
         itemLines.push("");
       }
       itemLines.push(item.label);
-      currentLabel = item.label;
     }
     itemLines.push(`  ${item.text}`);
   }

@@ -1,7 +1,8 @@
 // Suites load this fixture before the CLI so runtime dependencies see the mocks.
 import { Command } from "commander";
 import { vi } from "vitest";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { applyExecApprovalsUpdate } from "../infra/exec-approvals-mutation.kernel.js";
+import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
 
 const mocks = vi.hoisted(() => {
@@ -123,19 +124,13 @@ vi.mock("../infra/exec-approvals.js", async () => {
   );
   return {
     ...actual,
-    readExecApprovalsSnapshot: () => localSnapshot,
+    readExecApprovalsSnapshotAsync: async () => localSnapshot,
     updateExecApprovals: vi.fn(
-      async ({
-        baseHash,
-        update,
-      }: {
-        baseHash?: string;
-        update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
-      }) => {
+      async ({ baseHash, update }: Parameters<typeof actual.updateExecApprovals>[0]) => {
         if (baseHash !== undefined && baseHash !== localSnapshot.hash) {
           return null;
         }
-        const next = update(structuredClone(localSnapshot.file));
+        const next = applyExecApprovalsUpdate(structuredClone(localSnapshot.file), update);
         if (next !== null) {
           localSnapshot.file = next;
           localSnapshot.raw = JSON.stringify(next);

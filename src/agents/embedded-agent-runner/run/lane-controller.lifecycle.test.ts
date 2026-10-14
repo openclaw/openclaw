@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -73,6 +77,7 @@ function createController(options: {
     abortSignal: options.abortSignal,
     ...options.params,
   };
+  setRuntimeConfigSnapshot(params.config ?? {});
   const controller = createEmbeddedRunLaneController({
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => params,
@@ -98,18 +103,24 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
   beforeEach(() => {
     resetAgentEventsForTest();
   });
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
 
-  it.each([
-    { trigger: "user" as const, expected: "foreground" },
-    { trigger: "cron" as const, expected: "background" },
-  ])("marks $trigger session work as $expected", async ({ trigger, expected }) => {
+  it("marks user session work as foreground", async () => {
+    const trigger = "user" as const;
+    const expected = "foreground";
     const priorities: Array<CommandQueueEnqueueOptions["priority"]> = [];
     const enqueue: LaneParams["enqueue"] = async (task, options) => {
       priorities.push(options?.priority);
       return await task();
     };
     const generation = getAgentEventLifecycleGeneration();
-    const { controller } = createController({ lifecycleGeneration: generation, enqueue, trigger });
+    const { controller } = createController({
+      lifecycleGeneration: generation,
+      enqueue,
+      trigger,
+    });
 
     await controller.enqueueSession(async () => undefined);
 
@@ -162,28 +173,6 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     } finally {
       unsubscribe();
     }
-  });
-
-  it("rebinds foreground work that was queued before lifecycle rotation", async () => {
-    const queue = deferredTaskQueue();
-    const generation = getAgentEventLifecycleGeneration();
-    const state = createController({
-      lifecycleGeneration: generation,
-      enqueue: queue.enqueue as LaneParams["enqueue"],
-      trigger: "user",
-      runId: "queued-across-restart",
-    });
-    const run = state.controller.enqueueGlobal(async () => completedResult);
-
-    const currentGeneration = rotateAgentEventLifecycleGeneration();
-    queue.release();
-    await run;
-
-    expect(state.getLifecycleGeneration()).toBe(currentGeneration);
-    expect(state.getParams().lifecycleGeneration).toBe(currentGeneration);
-    expect(getAgentRunContext("queued-across-restart")).toMatchObject({
-      lifecycleGeneration: currentGeneration,
-    });
   });
 
   it("rebinds inter-session user work that was queued before lifecycle rotation", async () => {

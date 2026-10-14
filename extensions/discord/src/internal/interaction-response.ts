@@ -11,7 +11,7 @@ export function needsComponentsV2Query(body: unknown): boolean {
     body !== null &&
     typeof body === "object" &&
     "flags" in body &&
-    typeof (body as { flags?: unknown }).flags === "number" &&
-    ((body as { flags: number }).flags & MessageFlags.IsComponentsV2) !== 0
+    typeof body.flags === "number" &&
+    (body.flags & MessageFlags.IsComponentsV2) !== 0
   );
 }

@@ -16,11 +16,7 @@ import {
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
-import {
-  switchChatContextWindow,
-  switchChatFastMode,
-  switchChatThinkingLevel,
-} from "./chat-session.ts";
+import { switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
@@ -108,10 +104,10 @@ it.each([
       );
       const connection = sessions.captureConnectionScope();
       expect(connection).not.toBeNull();
-      first = switchChatThinkingLevel(pane.state, "high");
+      first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "high" });
       const previousTail = getPendingChatPickerPatch(pane.state, placeholder.key, "main");
       expect(previousTail).toBeDefined();
-      queued = switchChatThinkingLevel(pane.state, "low");
+      queued = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
       expect(getPendingChatPickerPatch(pane.state, placeholder.key, "main")).not.toBe(previousTail);
       expect(patch).toHaveBeenCalledOnce();
       expect(patch.mock.calls[0]?.[1]).toMatchObject({
@@ -243,15 +239,15 @@ it.each(["unbound", "materialized"] as const)(
         { id: "fixture-model", name: "Fixture model", provider: "fixture", reasoning: true },
       ];
       expect(selectedChatSessionRow(pane.state)).toBeUndefined();
-      first = switchChatThinkingLevel(pane.state, "high");
-      middle = switchChatThinkingLevel(pane.state, "low");
+      first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "high" });
+      middle = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
       const middleReady = getPendingChatPickerPatch(pane.state, key, "main");
       if (lastTarget === "materialized") {
         rows.push(materialized);
         await sessions.refresh({ agentId: "main", force: true });
         expect(selectedChatSessionRow(pane.state)).toMatchObject(materialized);
       }
-      last = switchChatThinkingLevel(pane.state, "medium");
+      last = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "medium" });
       const lastReady = getPendingChatPickerPatch(pane.state, key, "main");
       expect(middleReady).toBeDefined();
       expect(lastReady).toBeDefined();
@@ -410,10 +406,10 @@ it.each([
       const pane = mount(key);
       await refreshPane(pane);
       expect(selectedChatSessionRow(pane.state)?.sessionId).toBeUndefined();
-      first = switchChatThinkingLevel(pane.state, "high");
-      queued.push(switchChatThinkingLevel(pane.state, "low"));
-      queued.push(switchChatFastMode(pane.state, "on"));
-      queued.push(switchChatContextWindow(pane.state, "128k"));
+      first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "high" });
+      queued.push(switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" }));
+      queued.push(switchChatSetting(pane.state, { kind: "fastMode", value: "on" }));
+      queued.push(switchChatSetting(pane.state, { kind: "contextWindow", value: "128k" }));
       expect(patch).toHaveBeenCalledOnce();
       expect(patch.mock.calls[0]?.[1]).toEqual({ key, thinkingLevel: "high" });
       const pendingPreview = {

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Checks channel-agnostic core surfaces for channel-specific coupling.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
@@ -94,10 +93,6 @@ function isChannelLiteralNode(node: ts.Node) {
   return text ? channelIdSet.has(text) : false;
 }
 
-function matchesChannelModuleSpecifier(specifier: string) {
-  return channelSegmentRe.test(specifier.replaceAll("\\", "/"));
-}
-
 const userFacingChannelNameRe =
   /\b(?:discord|telegram|slack|signal|imessage|whatsapp|google\s*chat|irc|line|zalo|matrix|msteams)\b/i;
 const systemMarkLiteral = "⚙️";
@@ -119,7 +114,7 @@ function collectChannelModuleViolations(sourceFile: ts.SourceFile) {
   visitModuleSpecifiers(
     sourceFile,
     ({ kind, node, specifier, specifierNode }) => {
-      if (matchesChannelModuleSpecifier(specifier)) {
+      if (channelSegmentRe.test(specifier.replaceAll("\\", "/"))) {
         const verb =
           kind === "export"
             ? "re-exports"

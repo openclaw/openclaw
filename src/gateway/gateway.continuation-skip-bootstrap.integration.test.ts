@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -7,6 +6,7 @@ import { expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -46,9 +46,9 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
       response.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
+  const claim = await acquireTestPortBlock({ offsets: [0] });
   try {
-    endpoint.listen(0, "127.0.0.1");
-    await once(endpoint, "listening");
+    await new Promise<void>((resolve) => endpoint.listen(claim.port, "127.0.0.1", resolve));
     const address = endpoint.address();
     if (!address || typeof address === "string") {
       throw new Error("Fixture provider did not bind a TCP port");
@@ -78,16 +78,15 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
           skipBootstrap: true,
           contextInjection: "continuation-skip",
           model: { primary: model.modelRef, fallbacks: [] },
-          // The skip is an embedded-runner contract; pin it so the run cannot take a
-          // CLI-backed harness, which does not consult contextInjection at all.
-          models: { [model.modelRef]: { agentRuntime: { id: "openclaw" } } },
           heartbeat: { every: "0m" },
         },
       },
       models: {
         mode: "replace",
         catalogRefresh: { enabled: false },
-        providers: { [model.providerId]: model.config },
+        providers: {
+          [model.providerId]: { ...model.config, agentRuntime: { id: "openclaw" } },
+        },
       },
       hooks: { enabled: false },
     } satisfies OpenClawConfig;
@@ -147,6 +146,7 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
       }
       await Promise.all(providerWork);
     } finally {
+      await claim.release();
       await state.cleanup();
     }
   }

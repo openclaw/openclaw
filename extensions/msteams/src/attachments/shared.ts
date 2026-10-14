@@ -164,9 +164,9 @@ export function resolveMSTeamsMediaKind(params: {
   fileName?: string;
   fileType?: string;
 }): MSTeamsInboundMedia["kind"] {
-  const mime = normalizeLowercaseStringOrEmpty(params.contentType ?? "");
-  const name = normalizeLowercaseStringOrEmpty(params.fileName ?? "");
-  const fileType = normalizeLowercaseStringOrEmpty(params.fileType ?? "");
+  const mime = normalizeLowercaseStringOrEmpty(params.contentType);
+  const name = normalizeLowercaseStringOrEmpty(params.fileName);
+  const fileType = normalizeLowercaseStringOrEmpty(params.fileType);
 
   const looksLikeImage =
     mime.startsWith("image/") || IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(`x.${fileType}`);

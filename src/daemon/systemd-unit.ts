@@ -1,4 +1,3 @@
-/** Renders and parses systemd unit snippets for managed gateway services. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { escape as escapeGlob } from "minimatch";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";

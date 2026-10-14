@@ -10,10 +10,12 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
-import { clearRuntimeConfigSnapshot } from "../../config/io.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
@@ -35,6 +37,8 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import type {
@@ -166,6 +170,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     label: "worker-turn",
     layout: "state-only",
   });
+  await captureRuntimeConfigAsyncReader()();
   root = testState.root;
   database = openOpenClawStateDatabase({ env: testState.env });
   placements = createWorkerSessionPlacementStore({ database });
@@ -185,6 +190,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     skipMaintenance: true,
   });
   await SessionManager.openAsync(sessionTarget);
+  setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
   sessionFile = SESSION_KEY;
 }
 
@@ -195,6 +201,7 @@ export function cleanupWorkerTurnLauncherTest(options: {
 export async function cleanupWorkerTurnLauncherTest(
   options: { reuseReadWorkers?: boolean } = {},
 ): Promise<void> {
+  await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
   cleanupAdmissionSink?.();
   cleanupAdmissionSink = undefined;
   clearRuntimeConfigSnapshot();
@@ -213,25 +220,18 @@ export function setWorkerTurnAdmissionCleanup(cleanup: () => void): void {
   cleanupAdmissionSink = cleanup;
 }
 
-export function abortWorkerTurnClaimWaitOnSignal(signal: AbortSignal) {
-  const waitForClaim = placements.waitForTurnClaimRelease;
-  vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) =>
-    waitForClaim(sessionId, {
-      ...options,
-      signal: options.signal ? AbortSignal.any([options.signal, signal]) : signal,
+export async function createWorkerTurnSessionRuntimeLoader() {
+  await patchSessionEntryCore(
+    sessionTarget,
+    (entry) => ({
+      ...entry,
+      worktree: { id: "workspace", branch: "fixture", repoRoot: root },
     }),
+    { skipMaintenance: true },
   );
-}
-
-export function createWorkerTurnSessionRuntimeLoader() {
-  const entry = {
-    sessionId: SESSION_ID,
-    updatedAt: 1,
-    worktree: { id: "workspace", branch: "fixture", repoRoot: root },
-  };
   return async () => ({
     managedWorktrees: {
-      findLiveByOwner: () => ({
+      findLiveByOwner: async () => ({
         id: "workspace",
         name: "fixture",
         repoFingerprint: "fixture",
@@ -245,14 +245,8 @@ export function createWorkerTurnSessionRuntimeLoader() {
         lastActiveAt: 1,
       }),
     },
-    resolveGatewaySessionStoreTargetWithStore: () => ({
-      storePath: sessionTarget.storePath,
-      canonicalKey: SESSION_KEY,
-      storeKeys: [SESSION_KEY],
-      agentId: "main",
-      store: { [SESSION_KEY]: entry },
-    }),
-    resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+    resolveGatewaySessionStoreTargetInWorker,
+    resolveCanonicalSessionEntryFromStoreKeys,
   });
 }
 

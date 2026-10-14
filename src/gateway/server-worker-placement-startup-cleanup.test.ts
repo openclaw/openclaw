@@ -69,7 +69,7 @@ describe("worker placement startup cleanup ownership", () => {
         recoveryError: "worker admission deadline exceeded",
       });
     }
-    const before = placements.list();
+    const before = await placements.listAsync();
     const environments = workerEnvironmentSupport.createService(
       workerEnvironmentSupport.createProvider(),
     );
@@ -83,13 +83,16 @@ describe("worker placement startup cleanup ownership", () => {
         path: path.join(workerEnvironmentSupport.testState.root, sessionId),
       };
     });
-    const recovery = createPlacementRecoveryActions({
-      placements,
-      environments,
-      failure: createPlacementFailureActions({ placements, environments }),
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace }),
-    });
+    const recovery = createPlacementRecoveryActions(
+      {
+        placements,
+        environments,
+        failure: createPlacementFailureActions({ placements, environments }),
+        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+        ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace }),
+      },
+      before,
+    );
     const starting = recovery.reconcile("startup");
     let sweeping: Promise<void> | undefined;
     try {
@@ -111,7 +114,7 @@ describe("worker placement startup cleanup ownership", () => {
       expect(resolveWorkspace).toHaveBeenCalledTimes(50);
       await recovery.reconcileActive();
       expect(resolveWorkspace).toHaveBeenCalledTimes(50);
-      expect(placements.list()).toEqual(before);
+      expect(await placements.listAsync()).toEqual(before);
     } finally {
       releaseCleanup.resolve();
       await starting;
@@ -182,7 +185,8 @@ describe("worker placement startup cleanup ownership", () => {
         workerEnvironmentSupport.testState.stateDb.db
           .prepare("UPDATE worker_session_placements SET environment_id = ? WHERE session_id = ?")
           .run(environmentId, failed.sessionId);
-        failed = placements.get(failed.sessionId);
+        // This crash-era fixture bypasses receipts, so reload the durable row explicitly.
+        failed = (await placements.getWithMoveAsync(failed.sessionId)).placement;
       } else {
         const starting = await seedStartingPlacement(placements, environmentId, "remote-exec");
         failed = await placements.fail({
@@ -196,7 +200,8 @@ describe("worker placement startup cleanup ownership", () => {
             "UPDATE worker_session_placements SET active_owner_epoch = 1 WHERE session_id = ?",
           )
           .run(failed.sessionId);
-        failed = placements.get(failed.sessionId);
+        // This crash-era fixture bypasses receipts, so reload the durable row explicitly.
+        failed = (await placements.getWithMoveAsync(failed.sessionId)).placement;
       }
       expect(failed).toMatchObject({
         state: "failed",
@@ -212,9 +217,12 @@ describe("worker placement startup cleanup ownership", () => {
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({
         read: vi.fn(),
         version: vi.fn(() => 0),
+        invalidate: vi.fn(),
+        nextSweepAtMs: () => Infinity,
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       const runtime = createGatewayWorkerPlacementRuntime({
+        initialPlacements: await placements.listAsync(),
         scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
@@ -317,9 +325,12 @@ describe("worker placement startup cleanup ownership", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: vi.fn(() => 0),
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => Infinity,
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: await placements.listAsync(),
       scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),

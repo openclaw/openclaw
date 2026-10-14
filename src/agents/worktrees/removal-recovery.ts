@@ -9,9 +9,9 @@ import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { lockState } from "./git-lock.js";
 import { rawPathStat, splitNullBuffer } from "./git-path-inventory.js";
 import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
+import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
 import {
   createWorktreeRemovalClaimsGuard,
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
@@ -21,6 +21,7 @@ import {
   withExactStateGitLocks,
 } from "./removal-git.js";
 import { createRemovalRecoveryInventory } from "./removal-recovery-inventory.js";
+import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { resolveRepository } from "./service-preparation.js";
 import type { WorktreeWorkerAuthority } from "./types.js";
@@ -56,7 +57,11 @@ async function recoverRemovalWithAllocation(params: {
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.snapshot)) {
     throw preserved("Expected a full snapshot commit id");
   }
-  const record = getRegistryWorktree(params.env, params.id);
+  const context = captureWorktreeRunEndContext(params.env);
+  const accept = captureWorktreeRegistryReadGuard(context, "record");
+  const record = await readRegistryWorktree(context, params.id);
+  const assertRecordCurrent = accept(record);
+  params.commitGuard?.();
   if (!record || record.snapshotRef !== `refs/openclaw/snapshots/${params.id}`) {
     throw preserved("Recovery requires an ordinary removal snapshot");
   }
@@ -110,9 +115,7 @@ async function recoverRemovalWithAllocation(params: {
     const assertTerminal = () => {
       params.commitGuard?.();
       assertDirectRefFiles();
-      if (JSON.stringify(getRegistryWorktree(params.env, record.id)) !== JSON.stringify(record)) {
-        throw preserved("Completed removal lifecycle changed");
-      }
+      assertRecordCurrent();
     };
     const options = {
       signal: params.signal,
@@ -176,10 +179,7 @@ async function recoverRemovalWithAllocation(params: {
   const assertRecord = () => {
     params.commitGuard?.();
     params.signal?.throwIfAborted();
-    const current = getRegistryWorktree(params.env, record.id);
-    if (JSON.stringify(current) !== JSON.stringify(record)) {
-      throw preserved("Worktree registry changed during recovery");
-    }
+    assertRecordCurrent();
   };
   assertRecord();
   await claimWorktreeRemoval(params.env, {
@@ -555,15 +555,14 @@ async function recoverRemovalWithAllocation(params: {
         },
       },
     );
-    const finalized = JSON.stringify(getRegistryWorktree(params.env, record.id));
+    const acceptFinalized = captureWorktreeRegistryReadGuard(context, "record");
+    const assertFinalized = acceptFinalized(await readRegistryWorktree(context, record.id));
     await requireGit(record.repoRoot, ["update-ref", "--stdin"], {
       beforeRun: () => {
         params.commitGuard?.();
         assertDirectRefFiles();
         assertClaim();
-        if (JSON.stringify(getRegistryWorktree(params.env, record.id)) !== finalized) {
-          throw preserved("Completed removal lifecycle changed");
-        }
+        assertFinalized();
       },
       env: options.env,
       input: `option no-deref\nverify ${record.snapshotRef} ${params.snapshot}\noption no-deref\ndelete ${pendingRef} ${params.snapshot}\n`,

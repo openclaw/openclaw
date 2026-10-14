@@ -47,6 +47,45 @@ type PluginDoctorPlanCollection = {
   assertResourceScope: () => void;
 };
 
+function createMigrationInput(
+  input: PluginDoctorInput,
+  owner: Pick<
+    DetectedPluginDoctorStateMigrationPlan,
+    "pluginId" | "channelIds" | "trustedForDurableStores"
+  >,
+  repairAuthority?: PluginDoctorRepairAuthority,
+  assertIngressMutationCurrent?: () => void,
+  scope: Pick<PluginDoctorInput, "config" | "env"> = input,
+): Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0] {
+  return {
+    ...input,
+    serviceWorkspaceDir:
+      tryResolveConfiguredAgentWorkspaceDir(scope.config, scope.env) ??
+      resolveDefaultAgentWorkspaceDir(scope.env),
+    context: createPluginDoctorStateMigrationContext({
+      pluginId: owner.pluginId,
+      env: scope.env,
+      config: scope.config,
+      repairAuthority,
+      trustedForDurableStores: owner.trustedForDurableStores ?? true,
+      // Detection receives inspection-only access; mutation exists only inside the
+      // writer's live authority. Untrusted owners never receive the ingress lane.
+      // `?? true` preserves older hand-built hosts; registry entries fix this decision.
+      ...((owner.trustedForDurableStores ?? true)
+        ? {
+            channelIngress: {
+              channelIds: owner.channelIds ?? [],
+              stateDir: input.stateDir,
+              ...(assertIngressMutationCurrent
+                ? { mutation: { assertCurrent: assertIngressMutationCurrent } }
+                : {}),
+            },
+          }
+        : {}),
+    }),
+  };
+}
+
 function pluginInspectionFacts(
   collection: PluginDoctorPlanCollection,
 ): Pick<MigrationMessages, "requiredPluginIds" | "statelessPluginIds"> {
@@ -192,33 +231,9 @@ export async function collectPluginDoctorStateMigrationPlans(
     try {
       params.repairAuthority?.assertCurrent();
       collected.assertResourceScope();
-      detected = await entry.migration.detectLegacyState({
-        ...input,
-        serviceWorkspaceDir:
-          tryResolveConfiguredAgentWorkspaceDir(config, env) ??
-          resolveDefaultAgentWorkspaceDir(env),
-        context: createPluginDoctorStateMigrationContext({
-          pluginId: entry.pluginId,
-          env,
-          config,
-          repairAuthority: params.repairAuthority,
-          trustedForDurableStores: entry.trustedForDurableStores ?? true,
-          // Detection runs before exclusive state ownership, so it is handed
-          // inspection-only ingress access and no mutation gate. Untrusted owners get
-          // no ingress lane at all: Doctor must not widen the runtime's durable-store
-          // trust gate.
-          // `?? true` keeps older or hand-built hosts working; a real registry record
-          // always carries the decision explicitly.
-          ...((entry.trustedForDurableStores ?? true)
-            ? {
-                channelIngress: {
-                  channelIds: entry.channelIds ?? [],
-                  stateDir: input.stateDir,
-                },
-              }
-            : {}),
-        }),
-      });
+      detected = await entry.migration.detectLegacyState(
+        createMigrationInput(input, entry, params.repairAuthority, undefined, { config, env }),
+      );
     } catch (err) {
       inspectedPluginIds.delete(entry.pluginId);
       params.warnings?.push(`Failed detecting ${entry.migration.label}: ${String(err)}`);
@@ -317,28 +332,9 @@ async function migratePluginDoctorStatePlans(
       try {
         repairAuthority?.assertCurrent();
         assertResourceScope?.();
-        const result = await plan.migration.migrateLegacyState({
-          ...input,
-          serviceWorkspaceDir:
-            tryResolveConfiguredAgentWorkspaceDir(input.config, input.env) ??
-            resolveDefaultAgentWorkspaceDir(input.env),
-          context: createPluginDoctorStateMigrationContext({
-            pluginId: plan.pluginId,
-            env: input.env,
-            config: input.config,
-            repairAuthority,
-            trustedForDurableStores: plan.trustedForDurableStores ?? true,
-            ...((plan.trustedForDurableStores ?? true)
-              ? {
-                  channelIngress: {
-                    channelIds: plan.channelIds ?? [],
-                    stateDir: input.stateDir,
-                    mutation: { assertCurrent: assertIngressMutationCurrent },
-                  },
-                }
-              : {}),
-          }),
-        });
+        const result = await plan.migration.migrateLegacyState(
+          createMigrationInput(input, plan, repairAuthority, assertIngressMutationCurrent),
+        );
         repairAuthority?.assertCurrent();
         changes.push(...result.changes);
         warnings.push(...result.warnings);

@@ -1,5 +1,5 @@
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { ThemeArtwork, ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
 import type { LOBSTER_PALETTE_WEIGHTS } from "./lobster-pet-palettes.ts";
@@ -7,6 +7,20 @@ import type { LOBSTER_PALETTE_WEIGHTS } from "./lobster-pet-palettes.ts";
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterRunOutcome = "ok" | "error" | "aborted";
+
+export type LobsterPetProps = {
+  seed: number;
+  mode: LobsterPetMode;
+  visitsEnabled: boolean;
+  residentEnabled: boolean;
+  critters: readonly string[] | undefined;
+  critterArtwork: ThemeArtwork["critters"];
+  floorEnabled: boolean;
+  runOutcome: LobsterRunOutcome;
+  soundsEnabled: boolean;
+  gatewayVersion: string | null;
+  onVisitsDisabled: () => void;
+};
 
 export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
 

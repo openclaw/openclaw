@@ -16,6 +16,7 @@ import {
 import { digestClawBytes, digestClawValue } from "./digest.js";
 import { digestClawMcpServer } from "./mcp.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
+import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import { materializeClawToolProfile } from "./tool-profile-consent.js";
 import {
@@ -70,36 +71,6 @@ type PendingWorkspaceFileAction = {
   content?: Buffer;
 };
 
-function workspaceSourceErrorCode(
-  error: unknown,
-): "workspace_source_invalid" | "workspace_source_unsafe" | "workspace_source_too_large" {
-  if (error instanceof FsSafeError) {
-    if (error.code === "too-large") {
-      return "workspace_source_too_large";
-    }
-    if (error.code === "symlink" || error.code === "hardlink" || error.code === "path-mismatch") {
-      return "workspace_source_unsafe";
-    }
-  }
-  if (error instanceof Error && error.message.includes("symlinked directory")) {
-    return "workspace_source_unsafe";
-  }
-  return "workspace_source_invalid";
-}
-
-function workspaceSourceMessage(code: string, sourcePath: string): string {
-  if (code === "workspace_source_too_large") {
-    return `Workspace source ${JSON.stringify(sourcePath)} exceeds ${MAX_MANAGED_FILE_BYTES} bytes.`;
-  }
-  if (code === "workspace_sources_too_large") {
-    return `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`;
-  }
-  if (code === "workspace_source_unsafe") {
-    return `Workspace source ${JSON.stringify(sourcePath)} must be a regular, non-symlinked, non-hardlinked file.`;
-  }
-  return `Workspace source ${JSON.stringify(sourcePath)} must resolve to a file inside the Claw package.`;
-}
-
 async function inspectWorkspaceFileAction(params: {
   sourceRoot: Root;
   source: ClawSourceIdentity;
@@ -144,8 +115,7 @@ async function inspectWorkspaceFileAction(params: {
       },
     };
   } catch (error) {
-    const code = workspaceSourceErrorCode(error);
-    const message = workspaceSourceMessage(code, params.sourcePath);
+    const { code, message } = clawWorkspaceSourceFailure(error, params.sourcePath, "package");
     const diagnostic = blocker(code, params.manifestPath, message);
     return {
       action: {
@@ -396,7 +366,7 @@ export async function buildClawAddPlan(params: {
     const diagnostic = blocker(
       "workspace_sources_too_large",
       "$.workspace",
-      workspaceSourceMessage("workspace_sources_too_large", ""),
+      `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
     );
     blockers.push(diagnostic);
     for (const pending of pendingWorkspaceFiles) {
@@ -424,8 +394,7 @@ export async function buildClawAddPlan(params: {
         pending.action.source = planSourcePath(pending.sourcePath, read.realPath);
         pending.action.digest = digestClawBytes(read.buffer);
       } catch (error) {
-        const code = workspaceSourceErrorCode(error);
-        const message = workspaceSourceMessage(code, pending.sourcePath);
+        const { code, message } = clawWorkspaceSourceFailure(error, pending.sourcePath, "package");
         const diagnostic = blocker(code, pending.manifestPath, message);
         pending.action.blocked = true;
         pending.action.reason = diagnostic.message;

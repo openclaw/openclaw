@@ -180,7 +180,7 @@ struct ChatMediaAudioAttachment: View {
 
 @MainActor
 @Observable
-final class ChatMediaAudioPlayer: NSObject, ChatMediaNowPlayingOwner {
+final class ChatMediaAudioPlayer: NSObject, ChatMediaPlayer {
     private(set) var isPlaying = false
     private(set) var isPlaybackBlocked = false
     private(set) var isUnavailable = false
@@ -211,14 +211,6 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaNowPlayingOwner {
         self.player.prepareToPlay()
     }
 
-    func toggle() {
-        if self.isPlaying {
-            self.pause()
-        } else {
-            self.play()
-        }
-    }
-
     func seek(to time: TimeInterval) {
         let upperBound = self.duration > 0 ? self.duration : self.player.duration
         let target = min(max(0, time), max(0, upperBound))
@@ -238,24 +230,12 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaNowPlayingOwner {
         ChatMediaPlaybackCoordinator.shared.release(self)
     }
 
-    func stopForMediaPlaybackInterruption() {
-        self.pause()
-    }
-
     var nowPlayingMetadata: ChatMediaNowPlayingMetadata {
         ChatMediaNowPlayingMetadata(
             title: self.title,
             duration: self.duration,
             elapsed: self.currentTime,
             playbackRate: self.isPlaying ? 1 : 0)
-    }
-
-    func handleRemoteCommand(_ command: ChatMediaRemoteCommand) {
-        switch command {
-        case .play: self.play()
-        case .pause: self.pause()
-        case .toggle: self.toggle()
-        }
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully _: Bool) {
@@ -273,7 +253,7 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaNowPlayingOwner {
         self.fail()
     }
 
-    private func play() {
+    func play() {
         guard self.playbackAllowed() else {
             self.isPlaybackBlocked = true
             return
@@ -295,7 +275,7 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaNowPlayingOwner {
         self.startProgressUpdates()
     }
 
-    private func pause() {
+    func pause() {
         self.progressTask?.cancel()
         self.progressTask = nil
         self.player.pause()

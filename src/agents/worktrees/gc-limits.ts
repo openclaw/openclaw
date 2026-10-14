@@ -5,6 +5,7 @@ import type {
   WorktreeEvictionCandidate,
   WorktreeEvictionReason,
 } from "./git-worktree-operations.js";
+import { readWorktreeSlotCount } from "./pending-slots.js";
 import { readLiveRegistryWorktreeIds, readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
@@ -32,7 +33,7 @@ export async function enforceWorktreeCleanupLimits(
   const records = await readRegistryWorktrees(params.env, { liveOnly: true });
   const refresh = async () => {
     const liveIds = new Set(await readLiveRegistryWorktreeIds(params.env));
-    return { liveIds, exceeded: liveIds.size > maxCount };
+    return { liveIds, exceeded: (await readWorktreeSlotCount(params.env)) > maxCount };
   };
   let state = await refresh();
   if (!state.exceeded) {

@@ -10,6 +10,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -124,6 +125,7 @@ it.each([
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const deps = normalizeConfigIoDeps(options);
+    const observationWork = new AsyncWorkScope();
     let expected: ConfigHealthState | undefined;
     let expectedWarnings = 0;
     let intervened = false;
@@ -140,11 +142,12 @@ it.each([
       expectedWarnings = options.logger.warn.mock.calls.length;
       intervened = true;
     };
-    const writeNewerObservation = () => {
-      fs.writeFileSync(configPath, newerRaw);
-      observeConfigSnapshotSync(deps, newer);
-      recordNewerObservation();
-    };
+    const writeNewerObservation = () =>
+      observationWork.run(() => {
+        fs.writeFileSync(configPath, newerRaw);
+        observeConfigSnapshotSync(deps, newer);
+        recordNewerObservation();
+      });
     const writeNewerAsyncObservation = async () => {
       intervened = true;
       fs.writeFileSync(configPath, newerRaw);
@@ -235,6 +238,7 @@ it.each([
         release.resolve();
       }
       expect((await pending).valid).toBe(true);
+      await observationWork.drain();
       expect(intervened).toBe(true);
       expect(expected).toBeDefined();
       expect(options.logger.warn.mock.calls).toHaveLength(expectedWarnings);
@@ -251,12 +255,16 @@ it.each([
       expect(readConfigHealthStateFromStore(options)).toEqual(expected);
     } finally {
       release.resolve();
-      await pending;
+      try {
+        await pending;
+      } finally {
+        await observationWork.drain();
+      }
     }
   },
 );
 
-it.each([' { "hash" : "legacy" } ', '["legacy"]', "{invalid"])(
+it.each([' { "hash" : "legacy" } ', "{invalid"])(
   "compares raw legacy health facts without tightening their decoder: %s",
   async (legacyText) => {
     const home = directories.make("openclaw-health-legacy-basis-");

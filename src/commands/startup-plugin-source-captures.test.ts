@@ -19,12 +19,14 @@ const mocks = vi.hoisted(() => ({
   preserving: false,
 }));
 
-vi.mock("./config-preflight-snapshot.js", () => ({
-  readConfigPreflightSnapshot: mocks.read,
+vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config-preflight-snapshot.js")>()),
+  createConfigPreflightSnapshotReader: () => ({
+    read: mocks.read,
+    takePluginCache: () => undefined,
+    [Symbol.asyncDispose]: async () => {},
+  }),
   readAdmittedConfigSnapshot: mocks.read,
-  needsRefreshedPluginIndexPersistence: () => false,
-  assertPreflightConfigUnchanged: vi.fn(),
-  persistRefreshedPluginIndex: vi.fn(),
 }));
 vi.mock("../infra/sqlite-readonly-worker.js", () => ({
   withSqliteReadOnlyWorkerScope: (run: () => unknown) => run(),

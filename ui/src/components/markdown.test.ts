@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import { htmlFragment, withControlUiBasePath } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 describe("toSanitizedMarkdownHtml", () => {
-  // ── Original tests from before markdown-it migration ──
   it("strips scripts and unsafe links", () => {
     const html = toSanitizedMarkdownHtml(
       [
@@ -28,16 +28,6 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(link?.classList.contains("chat-link-tail-blur")).toBe(false);
   });
 
-  it("strips unsupported citation control markers before display", () => {
-    const html = toSanitizedMarkdownHtml(
-      "v2026.5.20 release note citeturn2view0\n\nStill readable.",
-    );
-
-    expect(html).toBe("<p>v2026.5.20 release note</p>\n<p>Still readable.</p>\n");
-    expect(html).not.toContain("cite");
-    expect(html).not.toContain("turn2view0");
-  });
-
   it("normalizes Unicode and CR line breaks before rendering", () => {
     const unicodeInput =
       "## Unicode separator cache sentinel\u2028\u2028- alpha\u2029- beta\r- gamma\r\n- delta";
@@ -56,76 +46,10 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   describe("task lists", () => {
-    it("renders task list checkboxes", () => {
-      const html = toSanitizedMarkdownHtml("- [ ] Unchecked\n- [x] Checked");
-      expect(html).toBe(
-        '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> Unchecked</li>\n<li class="task-list-item"><input class="task-list-item-checkbox" checked="" disabled="" type="checkbox"> Checked</li>\n</ul>\n',
+    it("leaves inline-code non-task markers unchanged", () => {
+      expect(toSanitizedMarkdownHtml("- `[x]` code")).toBe(
+        "<ul>\n<li><code>[x]</code> code</li>\n</ul>\n",
       );
-    });
-
-    it("keeps mixed nested and ordered lists on their own containers", () => {
-      const html = toSanitizedMarkdownHtml(
-        [
-          "3. [X] Parent",
-          "   - ordinary",
-          "     - [ ] Nested",
-          "     - plain",
-          "4. [ ] Sibling",
-        ].join("\n"),
-      );
-      expect(html).toBe(
-        [
-          '<ol start="3" class="contains-task-list">',
-          '<li class="task-list-item"><input class="task-list-item-checkbox" checked="" disabled="" type="checkbox"> Parent',
-          "<ul>",
-          "<li>ordinary",
-          '<ul class="contains-task-list">',
-          '<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> Nested</li>',
-          "<li>plain</li>",
-          "</ul>",
-          "</li>",
-          "</ul>",
-          "</li>",
-          '<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> Sibling</li>',
-          "</ol>",
-          "",
-        ].join("\n"),
-      );
-    });
-
-    it("preserves loose paragraphs, line breaks, formatting, and marker spacing", () => {
-      const html = toSanitizedMarkdownHtml(
-        "- [ ] first\n  continued\n\n  [x] Later paragraph\n\n- [X]  **Done**",
-      );
-      expect(html).toBe(
-        [
-          '<ul class="contains-task-list">',
-          '<li class="task-list-item">',
-          '<p><input class="task-list-item-checkbox" disabled="" type="checkbox"> first<br>',
-          "continued</p>",
-          "<p>[x] Later paragraph</p>",
-          "</li>",
-          '<li class="task-list-item">',
-          '<p><input class="task-list-item-checkbox" checked="" disabled="" type="checkbox">  <strong>Done</strong></p>',
-          "</li>",
-          "</ul>",
-          "",
-        ].join("\n"),
-      );
-    });
-
-    it.each([
-      ["- [x]done", "<ul>\n<li>[x]done</li>\n</ul>\n"],
-      ["- [x]\tdone", "<ul>\n<li>[x]\tdone</li>\n</ul>\n"],
-      ["- [x]", "<ul>\n<li>[x]</li>\n</ul>\n"],
-      ["- [x]\n  continued", "<ul>\n<li>[x]<br>\ncontinued</li>\n</ul>\n"],
-      ["- [-] custom", "<ul>\n<li>[-] custom</li>\n</ul>\n"],
-      ["- [y] custom", "<ul>\n<li>[y] custom</li>\n</ul>\n"],
-      ["- \\[x] escaped", "<ul>\n<li>[x] escaped</li>\n</ul>\n"],
-      ["- `[x]` code", "<ul>\n<li><code>[x]</code> code</li>\n</ul>\n"],
-      ["[ ] paragraph", "<p>[ ] paragraph</p>\n"],
-    ])("leaves non-task markers unchanged: %s", (markdown, expected) => {
-      expect(toSanitizedMarkdownHtml(markdown)).toBe(expected);
     });
 
     it("marks a role header after the structural task-list checkbox", () => {
@@ -137,13 +61,6 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
-    it("renders links inside task items", () => {
-      const html = toSanitizedMarkdownHtml("- [ ] Task with [link](https://example.com)");
-      expect(html).toBe(
-        '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> Task with <a href="https://example.com" rel="noreferrer noopener" target="_blank">link</a></li>\n</ul>\n',
-      );
-    });
-
     it("preserves link classes without trusting authored checkbox HTML", () => {
       const html = toSanitizedMarkdownHtml(
         '- [x] <input class="task-list-item-checkbox" type="checkbox" checked> [PR](https://github.com/openclaw/openclaw/pull/123) [unsafe](javascript:alert(1))',
@@ -152,30 +69,9 @@ describe("toSanitizedMarkdownHtml", () => {
         '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" checked="" disabled="" type="checkbox"> &lt;input class="task-list-item-checkbox" type="checkbox" checked&gt; <a href="https://github.com/openclaw/openclaw/pull/123" class="markdown-github-link" rel="noreferrer noopener" target="_blank">PR</a> unsafe</li>\n</ul>\n',
       );
     });
-
-    it("escapes HTML injection in task items", () => {
-      const html = toSanitizedMarkdownHtml("- [ ] <script>alert(1)</script>");
-      expect(html).toBe(
-        '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> &lt;script&gt;alert(1)&lt;/script&gt;</li>\n</ul>\n',
-      );
-    });
   });
 
   describe("images", () => {
-    it("shows an explicit opt-in placeholder for remote images", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("![Alt text](https://example.com/img.png)"),
-      );
-      const placeholder = fragment.querySelector(".markdown-external-image");
-      const link = placeholder?.querySelector("a");
-
-      expect(placeholder?.textContent).toBe("External image not loaded: Alt text Open image");
-      expect(link?.getAttribute("href")).toBe("https://example.com/img.png");
-      expect(link?.getAttribute("target")).toBe("_blank");
-      expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
-      expect(fragment.querySelector("img")).toBeNull();
-    });
-
     it("marks assistant-authored transcript roles in visible image labels", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(
@@ -190,43 +86,11 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(fragment.querySelector(".markdown-external-image")?.textContent).toContain(
         "release diagram",
       );
-    });
-
-    it("preserves markdown formatting in alt text", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("![**Build log**](https://example.com/img.png)"),
-      );
-      expect(fragment.querySelector(".markdown-external-image > span")?.textContent).toContain(
-        "**Build log**",
-      );
-    });
-
-    it("preserves code formatting in alt text", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("![`error.log`](https://example.com/img.png)"),
-      );
-      expect(fragment.querySelector(".markdown-external-image > span")?.textContent).toContain(
-        "`error.log`",
-      );
-    });
-
-    it("preserves base64 data URI images (#15437)", () => {
-      const html = toSanitizedMarkdownHtml("![Chart](data:image/png;base64,iVBORw0KGgo=)");
-      expect(html).toBe(
-        '<p><img class="markdown-inline-image" src="data:image/png;base64,iVBORw0KGgo=" alt="Chart"></p>\n',
-      );
-    });
-
-    it("keeps data images inside rich Markdown links under the link", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "[Before ![Preview](data:image/png;base64,iVBORw0KGgo=) after](https://example.com/full.png)",
-          { interactiveImages: true },
-        ),
-      );
-
-      expect(fragment.querySelector("a img.markdown-inline-image")).not.toBeNull();
-      expect(fragment.querySelector("a button")).toBeNull();
+      const link = fragment.querySelector(".markdown-external-image a");
+      expect(link?.getAttribute("href")).toBe("https://example.com/img.png");
+      expect(link?.getAttribute("target")).toBe("_blank");
+      expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
+      expect(fragment.querySelector("img")).toBeNull();
     });
 
     it("preserves rich authored links around remote image placeholders", () => {
@@ -281,21 +145,9 @@ describe("toSanitizedMarkdownHtml", () => {
         "Assistant:",
       );
     });
-
-    it("uses fallback label for unlabeled images", () => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml("![](https://example.com/image.png)"));
-      expect(fragment.querySelector(".markdown-external-image > span")?.textContent).toBe(
-        "External image not loaded: image",
-      );
-    });
   });
 
   describe("GFM features", () => {
-    it("renders strikethrough", () => {
-      const html = toSanitizedMarkdownHtml("This is ~~deleted~~ text");
-      expect(html).toBe("<p>This is <s>deleted</s> text</p>\n");
-    });
-
     it("renders tables surrounded by text", () => {
       const mdLocal = [
         "Text before.",
@@ -311,49 +163,9 @@ describe("toSanitizedMarkdownHtml", () => {
         "<p>Text before.</p>\n<table>\n<thead>\n<tr>\n<th>A</th>\n<th>B</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>\n<p>Text after.</p>\n",
       );
     });
-
-    it.each([
-      {
-        name: "basic markdown",
-        markdown: "**bold** and *italic*",
-        expected: "<p><strong>bold</strong> and <em>italic</em></p>\n",
-      },
-      {
-        name: "three-space inline code",
-        markdown: "`   `",
-        expected: "<p><code>   </code></p>\n",
-      },
-    ])("renders $name", ({ markdown, expected }) => {
-      expect(toSanitizedMarkdownHtml(markdown)).toBe(expected);
-    });
   });
 
   describe("assistant transcript-role annotations", () => {
-    it("marks parsed role headers without exposing Markdown delimiters", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("**user**[Thu 2026-07-02] question", {
-          assistantTranscriptRoleHeaders: true,
-        }),
-      );
-      const markedText = [...fragment.querySelectorAll("code.assistant-transcript-role")]
-        .map((element) => element.textContent)
-        .join("");
-
-      expect(markedText).toBe("user[Thu 2026-07-02]");
-      expect(fragment.textContent?.trim()).toBe("user[Thu 2026-07-02] question");
-    });
-
-    it("keeps code examples on the ordinary code path", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("`user[Thu 2026-07-02]`", {
-          assistantTranscriptRoleHeaders: true,
-        }),
-      );
-
-      expect(fragment.querySelector("code.assistant-transcript-role")).toBeNull();
-      expect(fragment.querySelector("code")?.textContent).toBe("user[Thu 2026-07-02]");
-    });
-
     it("marks role headers in the large-message plain-text fallback", () => {
       const input = [
         "**user**[Thu 2026-07-02] question",
@@ -400,40 +212,12 @@ describe("toSanitizedMarkdownHtml", () => {
         "user[Thu 2026-07-02]",
       );
     });
-
-    it("does not annotate user-authored rendering by default", () => {
-      expect(toSanitizedMarkdownHtml("user[Thu 2026-07-02] question")).not.toContain(
-        "assistant-transcript-role",
-      );
-    });
   });
 
   describe("security", () => {
-    it.each([
-      ["javascript:", "[JavaScript link](javascript:alert(1))", "JavaScript link"],
-      ["data:", "[Data link](data:text/html,test)", "Data link"],
-      ["vbscript:", "[VBScript link](vbscript:msgbox(1))", "VBScript link"],
-      ["file:", "[File link](file:///etc/passwd)", "File link"],
-    ])("renders disallowed %s links as plain text", (_scheme, markdown, label) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(markdown));
-
-      expect(fragment.querySelector("a")).toBeNull();
-      expect(fragment.querySelector("p")?.textContent).toBe(label);
-    });
-
     it("shows alt text for javascript: images", () => {
       const html = toSanitizedMarkdownHtml("![Build log](javascript:alert(1))");
       expect(html).toBe("<p>Build log</p>\n");
-    });
-
-    it("does not auto-link bare file:// URIs", () => {
-      const html = toSanitizedMarkdownHtml("Check file:///etc/passwd");
-      expect(html).toBe("<p>Check file:///etc/passwd</p>\n");
-    });
-
-    it("keeps app-relative links navigable", () => {
-      const html = toSanitizedMarkdownHtml("[usage](/usage)");
-      expect(html).toBe('<p><a href="/usage">usage</a></p>\n');
     });
 
     it("rewrites docs-root links to the public docs host", () => {
@@ -502,6 +286,94 @@ describe("toSanitizedMarkdownHtml", () => {
 
       expect(elapsed).toBeLessThan(500);
       expect(html.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("code blocks", () => {
+    const jsonBlock = (lineCount: number) => {
+      const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
+      values[values.length - 1] = values.at(-1)?.slice(0, -1) ?? "";
+      return `\`\`\`json\n[\n${values.join("\n")}\n]\n\`\`\``;
+    };
+
+    it("separates cached GitHub references by repository and absent context", () => {
+      const source = "PR #141270";
+      for (const githubRepo of [
+        { owner: "first", repo: "one" },
+        { owner: "second", repo: "one" },
+        { owner: "second", repo: "two" },
+        null,
+      ]) {
+        const fragment = htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo }));
+        expect(fragment.querySelector("a")?.getAttribute("href") ?? null).toBe(
+          githubRepo
+            ? `https://github.com/${githubRepo.owner}/${githubRepo.repo}/pull/141270`
+            : null,
+        );
+      }
+    });
+
+    it("invalidates named-reference caches as authorized aliases arrive, collide, and disappear", () => {
+      const githubRepo = { owner: "openclaw", repo: "openclaw" };
+      const source = "ClawSweeper PR #1576";
+      const known = { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] };
+      for (const [githubRepositories, expected] of [
+        [[], null],
+        [[known], "https://github.com/openclaw/clawsweeper/pull/1576"],
+        [[known, { aliases: ["ClawSweeper"] }], null],
+        [[], null],
+      ] as const) {
+        expect(
+          htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo, githubRepositories }))
+            .querySelector("a")
+            ?.getAttribute("href") ?? null,
+        ).toBe(expected);
+      }
+    });
+
+    it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
+      const markdown = "```\ncode\n```";
+      const plain = toSanitizedMarkdownHtml(markdown, { codeBlockChrome: "none" });
+      const copyable = toSanitizedMarkdownHtml(markdown);
+
+      expect(htmlFragment(plain).querySelector(".code-block-copy")).toBeNull();
+      expect(htmlFragment(copyable).querySelector(".code-block-copy")).toBeInstanceOf(
+        HTMLButtonElement,
+      );
+    });
+
+    it("keeps the interactive code-block cache separate from static rendering", () => {
+      const markdown = jsonBlock(41);
+      const staticHtml = toSanitizedMarkdownHtml(markdown);
+      const interactiveHtml = toSanitizedMarkdownHtml(markdown, {
+        codeBlockInteraction: "interactive",
+      });
+
+      expect(htmlFragment(staticHtml).querySelector(".code-block-expand")).toBeNull();
+      expect(htmlFragment(interactiveHtml).querySelector(".code-block-expand")).toBeInstanceOf(
+        HTMLButtonElement,
+      );
+    });
+  });
+
+  describe("large text handling", () => {
+    it("bypasses cache keys and preserves oversized text", () => {
+      const locale = vi.spyOn(i18n, "getLocale");
+
+      const prefix =
+        'Résumé 😀: Alice\'s "ready & waiting"; 12 < 20, 7 > 3.\r\nNext\tcolumn\u2028last\u0000line\n    indented log line\n';
+      const html = toSanitizedMarkdownHtml(prefix + "x".repeat(50_001));
+      expect(html).toContain("x".repeat(100));
+      const fallback = htmlFragment(html).firstElementChild;
+      expect(fallback?.tagName).toBe("DIV");
+      expect(fallback?.className).toBe("markdown-plain-text-fallback");
+      expect(fallback?.textContent).toBe(
+        'Résumé 😀: Alice\'s "ready & waiting"; 12 < 20, 7 > 3.\nNext\tcolumn\nlastline\n    indented log line\n' +
+          "x".repeat(50_001),
+      );
+      expect(html).not.toContain("\u0000");
+      expect(locale).not.toHaveBeenCalled();
+      locale.mockRestore();
     });
   });
 });

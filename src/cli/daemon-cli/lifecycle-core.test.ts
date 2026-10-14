@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createGatewayServiceRunArgs as createServiceRunArgs,
@@ -40,7 +41,8 @@ vi.mock("../../config/config.js", () => ({
   readBestEffortConfig: async () => loadConfig(),
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: lifecycleTestRuntime,
 }));
 
@@ -73,6 +75,8 @@ vi.mock("./lifecycle-audit.js", () => ({
   },
 }));
 
+// The runtime mock consumes the initialized lifecycle harness, not an early static import.
+const { ExitError } = await import("../../runtime.js");
 const { runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js");
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
@@ -102,6 +106,129 @@ function expectUnsupportedServiceCheckFailure() {
 }
 
 describe("Gateway service lifecycle", () => {
+  it.each(["native-start", "recovered-start", "repaired-start", "restart-repair-refused"] as const)(
+    "preserves the single reported outcome through %s catch boundaries",
+    async (route) => {
+      lifecycleTestRuntime.exit.mockClear();
+      lifecycleTestRuntime.writeJson.mockClear();
+      lifecycleTestRuntime.error.mockClear();
+      if (route === "recovered-start") {
+        service.isLoaded.mockResolvedValue(false);
+        service.readCommand.mockResolvedValue(null);
+      } else if (route === "repaired-start" || route === "restart-repair-refused") {
+        service.readCommand.mockResolvedValue({
+          programArguments: [MISSING_SERVICE_PROGRAM],
+        });
+      }
+      const refusedRepair = route === "restart-repair-refused";
+      const expectedCode = refusedRepair ? 1 : 2;
+      const exit = new ExitError(expectedCode);
+      await writeGatewayRestartIntentSync.withImplementation(
+        () => true,
+        async () => {
+          await lifecycleTestRuntime.exit.withImplementation(
+            (code) => {
+              expect(code).toBe(expectedCode);
+              throw exit;
+            },
+            async () => {
+              const operation = refusedRepair
+                ? runServiceRestart({
+                    ...createServiceRunArgs(),
+                    repairLoadedService: async () => null,
+                  })
+                : runServiceStart({
+                    ...createServiceRunArgs(),
+                    ...(route === "recovered-start"
+                      ? { onNotLoaded: async () => ({ result: "started" as const, loaded: true }) }
+                      : {}),
+                    ...(route === "repaired-start"
+                      ? {
+                          repairLoadedService: async () => ({
+                            result: "started" as const,
+                            loaded: true,
+                          }),
+                        }
+                      : {}),
+                    postStartCheck: async ({ fail }) => {
+                      fail("Gateway is still starting", ["inspect"], "still-starting");
+                    },
+                  });
+              await expect(operation).rejects.toBe(exit);
+            },
+          );
+        },
+      );
+      expect(lifecycleTestRuntime.exit).toHaveBeenCalledExactlyOnceWith(expectedCode);
+      expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledOnce();
+      expect(lifecycleTestRuntime.error).not.toHaveBeenCalled();
+      expect(lifecycleRuntimeLogs).toHaveLength(1);
+      const payload = JSON.parse(lifecycleRuntimeLogs[0]!);
+      expect(payload).toMatchObject(
+        refusedRepair
+          ? {
+              ok: false,
+              action: "restart",
+              error: expect.stringContaining("service needs repair before restart"),
+            }
+          : {
+              ok: false,
+              action: "start",
+              result: "still-starting",
+              error: "Gateway is still starting",
+            },
+      );
+      if (refusedRepair) {
+        expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
+        expect(service.restart).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["stop-recovery", "restart-recovery", "restart-owned"] as const)(
+    "preserves one reported refusal from %s callbacks",
+    async (route) => {
+      lifecycleTestRuntime.exit.mockClear();
+      lifecycleTestRuntime.writeJson.mockClear();
+      lifecycleTestRuntime.error.mockClear();
+      service.isLoaded.mockResolvedValue(false);
+      service.readCommand.mockResolvedValue(null);
+      const exit = new ExitError(1);
+      await lifecycleTestRuntime.exit.withImplementation(
+        () => {
+          throw exit;
+        },
+        async () => {
+          const refuse = async (ctx: { fail: (message: string) => void }) => {
+            ctx.fail("Recovery refused");
+            return null;
+          };
+          const operation =
+            route === "stop-recovery"
+              ? runServiceStop({ ...createServiceRunArgs(), onNotLoaded: refuse })
+              : runServiceRestart({
+                  ...createServiceRunArgs(),
+                  ...(route === "restart-owned"
+                    ? { restartOwnedProcess: refuse }
+                    : { onNotLoaded: refuse }),
+                });
+          await expect(operation).rejects.toBe(exit);
+        },
+      );
+      expect(lifecycleTestRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledOnce();
+      expect(lifecycleTestRuntime.error).not.toHaveBeenCalled();
+      expect(lifecycleRuntimeLogs).toHaveLength(1);
+      expect(JSON.parse(lifecycleRuntimeLogs[0]!)).toMatchObject({
+        ok: false,
+        action: route === "stop-recovery" ? "stop" : "restart",
+        error: "Recovery refused",
+      });
+      expect(service.restart).not.toHaveBeenCalled();
+      expect(service.stop).not.toHaveBeenCalled();
+    },
+  );
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -371,6 +498,24 @@ describe("Gateway service lifecycle", () => {
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
 
+  it("reports startup recovery instead of install hints when restart cannot verify a serving owner", async () => {
+    writeGatewayRestartIntentSync.mockImplementationOnce(() => {
+      throw new GatewayRestartPreparationError("serving-owner");
+    });
+    await expect(
+      runServiceRestart({
+        ...createServiceRunArgs(),
+        renderStartHints: () => ["openclaw gateway install"],
+      }),
+    ).rejects.toThrow("__exit__:1");
+    const payload = readJsonLog<{ hints: string[] }>();
+    expect(payload.hints).toEqual([
+      "openclaw gateway status --deep",
+      "Fix the reported startup failure, then run `openclaw gateway start` to wait for readiness without restarting the process.",
+    ]);
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("clears restart intent when service-manager restart fails before signaling", async () => {
     service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
     writeGatewayRestartIntentSync.mockReturnValueOnce(true);
@@ -385,6 +530,58 @@ describe("Gateway service lifecycle", () => {
       }),
     );
     expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
+  });
+
+  it.each(["ready", "still-starting", "failed"] as const)(
+    "checks an already-running service before reporting start %s",
+    async (outcome) => {
+      service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+      const postStartCheck: NonNullable<
+        Parameters<typeof runServiceStart>[0]["postStartCheck"]
+      > = async ({ fail }) => {
+        if (outcome !== "ready") {
+          fail(
+            "Gateway listener is unavailable.",
+            [],
+            outcome === "still-starting" ? outcome : undefined,
+          );
+        }
+      };
+      const start = runServiceStart({ ...createServiceRunArgs(), postStartCheck });
+      if (outcome === "ready") {
+        await start;
+        expect(readJsonLog()).toMatchObject({ ok: true, result: "already-running" });
+      } else {
+        await expect(start).rejects.toThrow(`__exit__:${outcome === "still-starting" ? 2 : 1}`);
+        expect(readJsonLog()).toMatchObject({
+          ok: false,
+          error: "Gateway listener is unavailable.",
+        });
+        if (outcome === "still-starting") {
+          expect(readJsonLog()).toMatchObject({ result: "still-starting" });
+        }
+      }
+      expect(lifecycleRuntimeLogs.filter((line) => line.trim().startsWith("{"))).toHaveLength(1);
+      expect(service.start).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves the readiness failure and exit code after starting a stopped service", async () => {
+    await expect(
+      runServiceStart({
+        ...createServiceRunArgs(),
+        postStartCheck: async ({ fail }) =>
+          fail("Gateway is still starting.", [], "still-starting"),
+      }),
+    ).rejects.toThrow("__exit__:2");
+    expect(readJsonLog()).toMatchObject({
+      ok: false,
+      result: "still-starting",
+      error: "Gateway is still starting.",
+    });
+    expect(lifecycleRuntimeLogs.filter((line) => line.trim().startsWith("{"))).toHaveLength(1);
+    expect(service.start).toHaveBeenCalledOnce();
   });
 
   it.each([["Gateway", "", "", "openclaw gateway", "restart"]] as const)(

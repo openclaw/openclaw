@@ -13,6 +13,15 @@ type ReadOnlyTranscriptSnapshot =
     }
   | { ok: false; error: unknown };
 
+function resetReadIterator(iterator: ReturnType<StatementSync["iterate"]> | undefined): void {
+  // A throwing next() does not close its iterator; reset before the next session.
+  try {
+    iterator?.return?.();
+  } catch {
+    // Preserve the original read error if cleanup fails.
+  }
+}
+
 export class ReadOnlySqliteTranscriptReader {
   private labelDetection?: StatementSync;
   private labelSnapshot?: StatementSync;
@@ -84,12 +93,7 @@ export class ReadOnlySqliteTranscriptReader {
       }
       return { ok: true, rows: [] };
     } catch (error) {
-      // A throwing next() does not close its iterator; reset before the next session.
-      try {
-        iterator?.return?.();
-      } catch {
-        // Preserve the original read error if cleanup fails.
-      }
+      resetReadIterator(iterator);
       return { ok: false, error };
     }
   }
@@ -160,12 +164,7 @@ export class ReadOnlySqliteTranscriptReader {
           : {}),
       };
     } catch (error) {
-      // A throwing next() does not close its iterator; reset before the next session.
-      try {
-        iterator?.return?.();
-      } catch {
-        // Preserve the original read error if cleanup fails.
-      }
+      resetReadIterator(iterator);
       return { ok: false, error };
     }
   }

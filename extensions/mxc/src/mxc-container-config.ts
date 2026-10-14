@@ -175,9 +175,7 @@ function buildFilesystemConfig(params: {
     }
   }
   readonlyPathSpecs.push(
-    ...resolveBaselineReadonlyPaths(params.context.hostEnv).map((candidatePath) =>
-      optionalFilesystemPath(path.resolve(candidatePath)),
-    ),
+    ...resolveBaselineReadonlyPaths(params.context.hostEnv).map(optionalFilesystemPath),
     ...params.baseline.configuredPaths.readonlyPaths.map(createConfiguredFilesystemPath),
     ...resolveMxcProtectedSkillPolicyPaths(workspace).map(optionalFilesystemPath),
   );
@@ -189,7 +187,7 @@ function buildFilesystemConfig(params: {
   } else {
     readonlyPathSpecs.push(requiredFilesystemPath(projectDirPath));
   }
-  readwritePathSpecs.push(requiredFilesystemPath(path.resolve(params.sandboxTempDir)));
+  readwritePathSpecs.push(requiredFilesystemPath(params.sandboxTempDir));
   readwritePathSpecs.push(
     ...params.baseline.configuredPaths.readwritePaths.map(createConfiguredFilesystemPath),
   );
@@ -344,13 +342,9 @@ function hostPathExists(candidatePath: string): boolean {
     statSync(candidatePath);
     return true;
   } catch (err) {
-    if (isNodeError(err)) {
+    if (err instanceof Error && "code" in err) {
       return false;
     }
     throw err;
   }
-}
-
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && "code" in err;
 }

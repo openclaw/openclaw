@@ -12,9 +12,11 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getApiProvider } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
@@ -259,6 +261,61 @@ describe("ModelRegistry models.json auth", () => {
     for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
       for (const [provider, config] of Object.entries(providers)) {
         expect(candidate.find(provider, "shared-model")).toMatchObject(config.models![0]!);
+      }
+    }
+  });
+
+  it("keeps estimates out of SQLite catalog metadata and reconstructs them on reload", async () => {
+    const provider = "window-fixture";
+    const modelsPath = await writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: "plugins/window-fixture/catalog.json",
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          [provider]: {
+            api: "openai-responses",
+            baseUrl: "https://models.example/v1",
+            models: [
+              { id: "unknown" },
+              { id: "prompt-only", contextTokens: 777_000 },
+              { id: "reported", contextWindow: 128_000, contextTokens: 777_000 },
+              { id: "authored", contextWindow: 64_000 },
+            ],
+          },
+        },
+      },
+    });
+    const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath));
+    expect(pluginCatalogs).toHaveLength(1);
+    const stored = JSON.parse(pluginCatalogs[0]!.contents).providers[provider].models;
+    for (const id of ["unknown", "prompt-only"]) {
+      expect(stored.find((row: { id: string }) => row.id === id)).not.toHaveProperty(
+        "contextWindow",
+      );
+    }
+    expect(pluginCatalogs[0]!.contents).not.toContain("contextWindowSource");
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+      pluginCatalogs,
+      pluginMetadataSnapshot: pluginOwnerSnapshot(provider, provider),
+    });
+    for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
+      expect(candidate.find(provider, "unknown")).toMatchObject({
+        contextWindow: 128_000,
+        contextWindowSource: "synthetic",
+      });
+      expect(candidate.find(provider, "prompt-only")).toMatchObject({
+        contextWindow: 777_000,
+        contextTokens: 777_000,
+        contextWindowSource: "synthetic",
+      });
+      for (const [id, window] of [
+        ["reported", 128_000],
+        ["authored", 64_000],
+      ] as const) {
+        const runtime = candidate.find(provider, id);
+        expect(runtime?.contextWindow).toBe(window);
+        expect(runtime).not.toHaveProperty("contextWindowSource");
       }
     }
   });
@@ -653,6 +710,39 @@ describe("ModelRegistry API provider ownership", () => {
 });
 
 describe("ModelRegistry persisted catalog state", () => {
+  it("refreshes an acknowledged plugin catalog write without reading SQLite on the host", async () => {
+    const provider = (id: string) => ({
+      baseUrl: "https://models.example/v1",
+      api: "openai-completions",
+      models: [{ id }],
+    });
+    const modelsPath = await writeGeneratedPluginCatalog("zai", provider("before"));
+    const auth = AuthStorage.inMemory();
+    auth.setRuntimeApiKey("zai", "synthetic-catalog-key");
+    const observation = observeHostDataSql();
+    try {
+      const registry = await ModelRegistry.createAsync(auth, modelsPath, {
+        pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai"),
+      });
+      expect(registry.find("zai", "before")).toBeDefined();
+      await replacePersistedPluginModelCatalogs({
+        agentDir: dirname(modelsPath),
+        pluginCatalogWrites: {
+          "plugins/zai/catalog.json": JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: { zai: provider("after") },
+          }),
+        },
+      });
+      await registry.refreshAsync();
+      expect(registry.find("zai", "before")).toBeUndefined();
+      expect(registry.fork(AuthStorage.inMemory()).find("zai", "after")).toBeDefined();
+      expect(observation.queries.filter((query) => /\bcache_entries\b/iu.test(query))).toEqual([]);
+    } finally {
+      observation.restore();
+    }
+  });
+
   it.each(["catalog.json.doctor-importing-previous-process"])(
     "leaves released provider catalogs for Doctor (%s)",
     async (filename) => {

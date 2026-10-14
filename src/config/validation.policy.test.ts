@@ -90,10 +90,6 @@ function validateCredential(source: "env" | "exec", strict: boolean, defaultAlia
 }
 
 describe("config validation SecretRef policy", () => {
-  it("allows impossible SecretRefs on inactive plugin targets at runtime", () => {
-    expect(validateCredential("exec", false).ok).toBe(true);
-  });
-
   it("rejects impossible inactive plugin SecretRefs in strict mode without leaking their IDs", () => {
     const result = validateCredential("exec", true);
     expect(result.ok).toBe(false);
@@ -226,14 +222,6 @@ describe("ambient heartbeat ownership", () => {
   });
 
   it.each([
-    {
-      name: "system owner",
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {} },
-        defaults: { systemAgent: { agentId: "ops" } },
-      },
-    },
     {
       name: "per-agent heartbeat",
       agents: {

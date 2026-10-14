@@ -5,13 +5,6 @@ import Foundation
 import OSLog
 import Security
 
-@_silgen_name("csops")
-private func csops(
-    _: pid_t,
-    _: UInt32,
-    _: UnsafeMutableRawPointer?,
-    _: Int) -> Int32
-
 @MainActor
 enum ApplicationRelocator {
     struct ApplicationIdentity: Equatable, Sendable {
@@ -179,22 +172,18 @@ enum ApplicationRelocator {
         }
 
         if let currentIdentity = environment.currentIdentity {
-            for candidate in environment.candidates {
+            let trustedCandidates = environment.candidates.filter {
+                $0.isTrusted && $0.identity?.bundleIdentifier == currentIdentity.bundleIdentifier
+            }
+            for candidate in trustedCandidates {
                 guard let installedIdentity = candidate.identity,
-                      candidate.isTrusted,
-                      installedIdentity.bundleIdentifier == currentIdentity.bundleIdentifier,
                       installedIdentity.buildVersion.compare(currentIdentity.buildVersion, options: .numeric) !=
                       .orderedAscending
                 else { continue }
                 return .handOff(candidate.url)
             }
 
-            for candidate in environment.candidates {
-                guard candidate.isWritable,
-                      candidate.isTrusted,
-                      let installedIdentity = candidate.identity,
-                      installedIdentity.bundleIdentifier == currentIdentity.bundleIdentifier
-                else { continue }
+            if let candidate = trustedCandidates.first(where: \.isWritable) {
                 return .offerInstall(destination: candidate.url, replacing: true)
             }
         }
@@ -299,6 +288,23 @@ enum ApplicationRelocator {
         }
     }
 
+    /// The system cleans scratch directories, so nothing persistent may point into them.
+    /// Relocation still leaves deliberate local builds there alone.
+    static func allowsPersistentIntegration(
+        _ bundleURL: URL,
+        homeDirectory: URL,
+        temporaryDirectory: URL,
+        isReadOnlyVolume: Bool) -> Bool
+    {
+        // `/tmp` and `$TMPDIR` live under `/private`; compare both spellings alike.
+        let path = { (url: URL) in
+            url.standardizedFileURL.path.replacingOccurrences(of: "/private/", with: "/", options: .anchored)
+        }
+        let bundlePath = path(bundleURL)
+        return !self.isTransientLocation(bundleURL, homeDirectory: homeDirectory, isReadOnlyVolume: isReadOnlyVolume)
+            && !["/tmp", path(temporaryDirectory)].contains { self.isInside(bundlePath, root: $0) }
+    }
+
     static func currentBundleAllowsPersistentIntegration(
         bundle: Bundle = .main,
         fileManager: FileManager = .default,
@@ -312,9 +318,10 @@ enum ApplicationRelocator {
             fallback: bundle.bundleURL)
         let isReadOnlyVolume = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly ?? false
-        return !self.isTransientLocation(
+        return self.allowsPersistentIntegration(
             bundleURL,
             homeDirectory: fileManager.homeDirectoryForCurrentUser,
+            temporaryDirectory: fileManager.temporaryDirectory,
             isReadOnlyVolume: isReadOnlyVolume)
     }
 }
@@ -417,7 +424,7 @@ extension ApplicationRelocator {
               parentPID == getppid(),
               let expectedHashText = environment[replacementCodeHashEnvironmentKey],
               let expectedHash = Data(base64Encoded: expectedHashText),
-              expectedHash == kernelCodeDirectoryHash(),
+              expectedHash == ProcessIdentity.codeDirectoryHash(pid: getpid()),
               let readyFDText = environment[replacementReadyFDEnvironmentKey],
               let readyFD = Int32(readyFDText),
               readyFD >= 3,
@@ -764,7 +771,7 @@ extension ApplicationRelocator {
     private static func runningCodeIdentity(
         bundleIdentifier: String) -> (codeDirectoryHash: Data, requirementData: Data)?
     {
-        guard let codeDirectoryHash = kernelCodeDirectoryHash(),
+        guard let codeDirectoryHash = ProcessIdentity.codeDirectoryHash(pid: getpid()),
               let teamIdentifier = kernelTeamIdentifier(),
               let requirementString = developerIDRequirementString(
                   bundleIdentifier: bundleIdentifier,
@@ -792,14 +799,6 @@ extension ApplicationRelocator {
             "certificate 1[field.1.2.840.113635.100.6.2.6] exists and " +
             "certificate leaf[field.1.2.840.113635.100.6.1.13] exists and " +
             "certificate leaf[subject.OU] = \"\(teamIdentifier)\""
-    }
-
-    private static func kernelCodeDirectoryHash() -> Data? {
-        var bytes = [UInt8](repeating: 0, count: 20)
-        let result = bytes.withUnsafeMutableBytes {
-            csops(getpid(), 5, $0.baseAddress, $0.count)
-        }
-        return result == 0 ? Data(bytes) : nil
     }
 
     private static func kernelTeamIdentifier() -> String? {
@@ -1166,6 +1165,11 @@ extension ApplicationRelocator {
         guard pipe(&descriptors) == 0 else { return nil }
         let readDescriptor = descriptors[0]
         let writeDescriptor = descriptors[1]
+        var spawnResult: Int32 = -1
+        defer {
+            if spawnResult != 0 { Darwin.close(readDescriptor) }
+            Darwin.close(writeDescriptor)
+        }
 
         var environmentAssignments = [
             "\(replacementSourceBundleEnvironmentKey)=\(sourceBundleURL.path)",
@@ -1199,44 +1203,22 @@ extension ApplicationRelocator {
         defer { cArguments.compactMap(\.self).forEach { free($0) } }
 
         var fileActions: posix_spawn_file_actions_t?
+        guard posix_spawn_file_actions_init(&fileActions) == 0 else { return nil }
+        defer { posix_spawn_file_actions_destroy(&fileActions) }
         var attributes: posix_spawnattr_t?
-        guard posix_spawn_file_actions_init(&fileActions) == 0,
-              posix_spawnattr_init(&attributes) == 0
-        else {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
-        defer {
-            posix_spawn_file_actions_destroy(&fileActions)
-            posix_spawnattr_destroy(&attributes)
-        }
+        guard posix_spawnattr_init(&attributes) == 0 else { return nil }
+        defer { posix_spawnattr_destroy(&attributes) }
         guard posix_spawn_file_actions_adddup2(&fileActions, writeDescriptor, childReadyDescriptor) == 0,
               posix_spawnattr_setflags(
                   &attributes,
                   Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0
-        else {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
-        if readDescriptor != childReadyDescriptor,
-           posix_spawn_file_actions_addclose(&fileActions, readDescriptor) != 0
-        {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
-        if writeDescriptor != childReadyDescriptor,
-           posix_spawn_file_actions_addclose(&fileActions, writeDescriptor) != 0
-        {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
+        else { return nil }
+        for descriptor in descriptors where descriptor != childReadyDescriptor {
+            guard posix_spawn_file_actions_addclose(&fileActions, descriptor) == 0 else { return nil }
         }
 
         var processIdentifier = pid_t()
-        let spawnResult = cArguments.withUnsafeMutableBufferPointer { buffer in
+        spawnResult = cArguments.withUnsafeMutableBufferPointer { buffer in
             posix_spawn(
                 &processIdentifier,
                 "/usr/bin/env",
@@ -1245,11 +1227,7 @@ extension ApplicationRelocator {
                 buffer.baseAddress,
                 environ)
         }
-        Darwin.close(writeDescriptor)
-        guard spawnResult == 0 else {
-            Darwin.close(readDescriptor)
-            return nil
-        }
+        guard spawnResult == 0 else { return nil }
         return (processIdentifier, readDescriptor)
     }
 

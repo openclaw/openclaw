@@ -4,9 +4,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
-import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import {
+  historyLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
@@ -22,7 +25,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { SessionManager } from "./session-manager.js";
+import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
 
 async function seedTranscript(state: OpenClawTestState) {
   const target = {
@@ -126,7 +129,8 @@ it("rejects a persisted quarantine through the history worker without retargetin
     manager.appendMessage(makeUserMessage("keep the original view", 2));
     const before = manager.getPersistedEntries();
     const priorTarget = manager.getSessionTarget();
-    const dispatch = vi.spyOn(historyLane.pool, "run");
+    // The closed database makes this a cold read, which runs on the target-discovery lane.
+    const dispatch = vi.spyOn(targetDiscoveryLane.pool, "run");
     try {
       const failure = await manager.setSessionTargetAsync(target).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
@@ -143,7 +147,10 @@ it("rejects a persisted quarantine through the history worker without retargetin
       expect(manager.getSessionTarget()).toEqual(priorTarget);
       expect(manager.getCwd()).toBe("/retained");
       expect(manager.isPersisted()).toBe(false);
-      expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 0, pendingTasks: 0 });
+      expect(targetDiscoveryLane.pool.getSnapshot()).toMatchObject({
+        activeTasks: 0,
+        pendingTasks: 0,
+      });
     } finally {
       dispatch.mockRestore();
       expect(clearOpenClawDatabaseQuarantine(target.storePath, { env: state.env })).toBe(true);
@@ -187,6 +194,38 @@ it.each(["UTF-16le", "UTF-16be"] as const)(
     });
   },
 );
+
+it("hydrates events below, on, and above byte-slice boundaries without dropping their successors", async () => {
+  await withOpenClawTestState({ label: "session-hydration-stream-boundaries" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "boundary-hydration",
+      sessionKey: "agent:main:boundary-hydration",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const entries = SessionManager.open(target).getPersistedEntries();
+    let parentId: string | null = null;
+    for (const size of [65_535, 65_536, 65_537, 131_072]) {
+      const event: SessionMessageEntry = {
+        type: "message",
+        id: `boundary-${size}`,
+        parentId,
+        timestamp: new Date(size).toISOString(),
+        message: makeUserMessage("", size),
+      };
+      event.message = makeUserMessage(
+        "x".repeat(size - Buffer.byteLength(JSON.stringify(event))),
+        size,
+      );
+      expect(Buffer.byteLength(JSON.stringify(event))).toBe(size);
+      entries.push(event);
+      parentId = event.id;
+    }
+    expect(replaceTranscriptEventsSync(target, entries)).toBe(true);
+    expect((await SessionManager.openAsync(target)).getPersistedEntries()).toEqual(entries);
+  });
+});
 
 it("hydrates one complete UTF-8 snapshot while a writer replaces rows between chunks", async () => {
   await withOpenClawTestState({ label: "session-hydration-stream-snapshot" }, async (state) => {

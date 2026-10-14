@@ -86,7 +86,7 @@ export const A2aTaskRequestParamsSchema = z.object({
 
 type A2aCanonicalMethod = "SendMessage" | "GetTask";
 
-// Hermes-generation A2A 0.3 peers use dotted RPC names; only these three
+// Hermes-generation A2A 0.3 peers use dotted RPC names; only these
 // explicitly supported interoperability aliases are accepted.
 const A2A_METHOD_ALIASES: Readonly<Record<string, A2aCanonicalMethod>> = {
   SendMessage: "SendMessage",
@@ -104,13 +104,16 @@ const A2A_UNSUPPORTED_METHODS = new Set([
   "ListTasks",
   "SendStreamingMessage",
   "SubscribeToTask",
+  "GetExtendedAgentCard",
+]);
+
+const A2A_UNSUPPORTED_PUSH_METHODS = new Set([
   "CreateTaskPushNotificationConfig",
   "SetTaskPushNotificationConfig",
   "GetTaskPushNotificationConfig",
   "ListTaskPushNotificationConfig",
   "ListTaskPushNotificationConfigs",
   "DeleteTaskPushNotificationConfig",
-  "GetExtendedAgentCard",
 ]);
 
 export function resolveA2aRpcMethod(
@@ -118,6 +121,9 @@ export function resolveA2aRpcMethod(
 ): A2aCanonicalMethod | "unsupported" | undefined {
   if (Object.hasOwn(A2A_METHOD_ALIASES, method)) {
     return A2A_METHOD_ALIASES[method];
+  }
+  if (A2A_UNSUPPORTED_PUSH_METHODS.has(method)) {
+    throw new A2aProtocolError(-32003, "Push notifications are not supported");
   }
   return A2A_UNSUPPORTED_METHODS.has(method) ? "unsupported" : undefined;
 }

@@ -7,7 +7,6 @@ import {
   assertLiveImageProbeReply,
   buildLiveCronProbeMessage,
   createLiveCronProbeSpec,
-  isClaudeLikeLiveAgent,
   resolveOpenClawCliProcessArgs,
   shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
@@ -24,15 +23,6 @@ describe("live-agent-probes", () => {
       "cron",
       "list",
     ]);
-  });
-
-  it("only special-cases Claude-like retry prompts", () => {
-    expect(isClaudeLikeLiveAgent("claude")).toBe(true);
-    expect(isClaudeLikeLiveAgent("claude-cli")).toBe(true);
-    expect(isClaudeLikeLiveAgent("codex")).toBe(false);
-    expect(isClaudeLikeLiveAgent("google-gemini-cli")).toBe(false);
-    expect(isClaudeLikeLiveAgent("opencode-ai")).toBe(false);
-    expect(isClaudeLikeLiveAgent("future-agent")).toBe(false);
   });
 
   it("accepts only cat for the shared image probe reply", () => {

@@ -57,6 +57,20 @@ type DraftModelControlSelection = {
   fastMode?: FastMode;
 };
 
+export function resolveDraftDefaultModelTarget(params: {
+  agent?: GatewayAgentRow;
+  defaults?: SessionsListResult["defaults"];
+  catalog: ModelCatalogEntry[];
+  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+}) {
+  const { agent, defaults, catalog, modelSelectionPolicy: policy } = params;
+  return resolveDraftModelTarget(
+    policy?.restricted ? policy.defaultModel : (agent?.model?.primary ?? defaults?.model),
+    policy?.restricted || agent?.model?.primary ? undefined : defaults?.modelProvider,
+    catalog,
+  );
+}
+
 export function resolveDraftModelControls(params: {
   model: string;
   selection: DraftModelControlSelection;
@@ -69,11 +83,12 @@ export function resolveDraftModelControls(params: {
   const agentDefaultModel = policy?.restricted
     ? (policy.defaultModel ?? undefined)
     : agent?.model?.primary;
-  const defaultTarget = resolveDraftModelTarget(
-    policy?.restricted ? policy.defaultModel : (agentDefaultModel ?? defaults?.model),
-    policy?.restricted || agentDefaultModel ? undefined : defaults?.modelProvider,
-    metadata.catalog,
-  );
+  const defaultTarget = resolveDraftDefaultModelTarget({
+    agent,
+    defaults,
+    catalog: metadata.catalog,
+    modelSelectionPolicy: policy,
+  });
   const selectedTarget = resolveDraftModelTarget(
     model,
     undefined,
@@ -81,6 +96,12 @@ export function resolveDraftModelControls(params: {
     selection.agentRuntime,
   );
   const entry = selectedTarget?.entry ?? defaultTarget?.entry;
+  const contextWindow = selection.contextWindow || entry?.contextWindowDefault;
+  const thinkingProfile = resolveThinkingProfileForSession(
+    resolveDraftThinkingTarget(defaultTarget, policy?.restricted ? undefined : agent),
+    policy?.restricted ? undefined : defaults,
+    metadata.catalog,
+  );
   const modelCatalogState: ChatModelCatalogState = {
     // Agent defaults and the catalog hydrate independently; both must identify this draft.
     hasSnapshot: agent !== undefined && metadata.hasSnapshot,
@@ -95,7 +116,16 @@ export function resolveDraftModelControls(params: {
     defaultTarget,
     agentDefaultModel,
     modelCatalogState,
-    contextWindowTarget: resolveDraftContextWindowTarget(entry, selection.contextWindow),
+    contextWindowTarget:
+      entry?.contextWindows && contextWindow
+        ? {
+            contextWindow,
+            contextWindows: entry.contextWindows,
+            ...(entry.contextWindowDefault
+              ? { contextWindowDefault: entry.contextWindowDefault }
+              : {}),
+          }
+        : undefined,
     fastModeTarget: {
       agentRuntime: entry?.agentRuntime,
       model: selectedTarget?.model ?? defaultTarget?.model,
@@ -103,28 +133,16 @@ export function resolveDraftModelControls(params: {
       fastMode: selection.fastMode,
       effectiveFastMode: selection.fastMode ?? entry?.effectiveFastMode,
     },
-    thinkingDefaults: resolveDraftThinkingDefaults(
-      defaultTarget,
-      policy?.restricted ? undefined : agent,
-      policy?.restricted ? undefined : defaults,
-      metadata.catalog,
-    ),
+    thinkingDefaults: {
+      modelProvider: defaultTarget?.provider ?? null,
+      model: defaultTarget?.model ?? null,
+      contextTokens: policy?.restricted ? null : (defaults?.contextTokens ?? null),
+      agentRuntime: thinkingProfile?.agentRuntime,
+      thinkingLevels: thinkingProfile?.thinkingLevels,
+      thinkingDefault: thinkingProfile?.thinkingDefault,
+    },
     thinkingSession: resolveDraftThinkingTarget(selectedTarget, undefined, selection),
   };
-}
-
-function resolveDraftContextWindowTarget(
-  entry: ModelRuntimeEntry | undefined,
-  contextWindow: string,
-) {
-  const selected = contextWindow || entry?.contextWindowDefault;
-  return entry?.contextWindows && selected
-    ? {
-        contextWindow: selected,
-        contextWindows: entry.contextWindows,
-        ...(entry.contextWindowDefault ? { contextWindowDefault: entry.contextWindowDefault } : {}),
-      }
-    : undefined;
 }
 
 function resolveDraftThinkingTarget(
@@ -142,27 +160,6 @@ function resolveDraftThinkingTarget(
     thinkingOptions: agent?.thinkingOptions,
     thinkingDefault: agent?.thinkingDefault ?? runtimeEntry?.thinkingDefault,
     thinkingLevel: selection?.thinkingLevel || undefined,
-  };
-}
-
-function resolveDraftThinkingDefaults(
-  target: DraftModelTarget | null,
-  agent: GatewayAgentRow | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-  catalog: ModelCatalogEntry[],
-) {
-  const profile = resolveThinkingProfileForSession(
-    resolveDraftThinkingTarget(target, agent),
-    defaults,
-    catalog,
-  );
-  return {
-    modelProvider: target?.provider ?? null,
-    model: target?.model ?? null,
-    contextTokens: defaults?.contextTokens ?? null,
-    agentRuntime: profile?.agentRuntime,
-    thinkingLevels: profile?.thinkingLevels,
-    thinkingDefault: profile?.thinkingDefault,
   };
 }
 
@@ -189,15 +186,11 @@ export function resolveDraftModelTarget(
     };
   }
   const separator = value.indexOf("/");
-  if (separator > 0) {
-    return {
-      model: value.slice(separator + 1),
-      provider: normalizeChatModelProviderId(value.slice(0, separator)) || null,
-    };
-  }
   return {
-    model: value,
-    provider: normalizeChatModelProviderId(provider ?? "") || null,
+    model: separator > 0 ? value.slice(separator + 1) : value,
+    provider:
+      normalizeChatModelProviderId(separator > 0 ? value.slice(0, separator) : (provider ?? "")) ||
+      null,
   };
 }
 
@@ -276,6 +269,23 @@ export function resolveDraftModelSelectionBlockedReason(params: {
     return t("chat.modelControls.modelsUnavailable");
   }
   // Explicit model/runtime and personal-account choices retain Gateway availability checks.
+  if (
+    model &&
+    resolveDraftModelTarget(model, undefined, metadata.catalog, agentRuntime)?.entry
+      ?.manualSelectionAllowed === false
+  ) {
+    return t("chat.modelControls.modelsUnavailable");
+  }
+  if (
+    agentRuntime &&
+    resolveDraftModelTarget(model, undefined, metadata.catalog, agentRuntime)?.entry?.available ===
+      false
+  ) {
+    return (
+      chatModelUnavailableMessage(resolveDraftModelUnavailableReason(params)) ??
+      t("chat.modelControls.modelsUnavailable")
+    );
+  }
   const unavailable = chatModelUnavailableMessage(
     resolveDraftModelUnavailableReason(params),
     !model && !agentRuntime && !params.accountSelected ? params.inference : undefined,
@@ -357,6 +367,17 @@ export function reconcileDraftModelSelection(params: {
       selectedTarget.entry.available === false ||
       selectedTarget.entry.manualSelectionAllowed === false)
   ) {
+    // An explicit runtime is execution intent. A disappearing account/runtime must
+    // block that draft, not silently replace its host with the default model.
+    if (params.agentRuntime && params.agentRuntime !== "openclaw") {
+      return {
+        model: requestedModel,
+        agentRuntime: params.agentRuntime,
+        thinkingLevel: params.thinkingLevel,
+        fastMode: params.fastMode,
+        repaired: false,
+      };
+    }
     return { model: "", thinkingLevel: "", repaired: true };
   }
   const selected = selectedTarget?.entry

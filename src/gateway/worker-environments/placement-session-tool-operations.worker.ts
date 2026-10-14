@@ -1,10 +1,5 @@
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type {
-  WorkerOperationContext,
+  WorkerWriteOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
 import { createPlacementSessionToolOperationKernel } from "./placement-session-tool-operations.kernel.js";
@@ -19,23 +14,18 @@ function operation<Args extends unknown[]>(
 ) {
   return (
     input: { args: Args; instanceId: string; nowMs?: number },
-    { open }: WorkerOperationContext,
+    { writeAdmitted }: WorkerWriteOperationContext,
   ): PlacementSessionToolReceipt =>
-    runOpenClawStateWriteTransaction(
+    writeAdmitted(
       ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const tools = createPlacementSessionToolOperationKernel({
           db,
           instanceId: input.instanceId,
           now: () => input.nowMs ?? Date.now(),
         });
-        const receipt = execute(tools, input.args);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
-        deferSqliteWorkerCommitReceipt(db, receipt);
-        return receipt;
+        return execute(tools, input.args);
       },
-      { database: open() },
-      { operationLabel: type },
+      { operationLabel: type, receipt: "result", transactionEnvironment: "process" },
     );
 }
 
@@ -73,4 +63,4 @@ export const placementSessionToolOperations = {
     "placementTools.recover",
     (tools, _args: KernelArgs<"recover">) => ({ recovered: tools.recover() }),
   ),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

@@ -9,7 +9,7 @@ import {
 import { readSessionTranscriptContextMessages } from "../config/sessions/session-accessor.sqlite-model-context.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -49,13 +49,6 @@ describe("chat command transcript context", () => {
       kind: "mixed",
       input: "/status plugins",
       reply: "Plugin status: ready.",
-      contextual: true,
-    },
-    {
-      name: "ordinary reply",
-      kind: "ordinary",
-      input: "Remember the project deadline.",
-      reply: "The project deadline is Friday.",
       contextual: true,
     },
   ])("retains visible history and the correct model context for $name", async (scenario) => {
@@ -114,7 +107,7 @@ describe("chat command transcript context", () => {
       ];
       expect(roleAndText(history.payload?.messages ?? [])).toEqual(exchange);
       const { agentId, canonicalKey, entry, storePath } =
-        loadGatewaySessionEntryReadOnly(sessionKey);
+        await loadGatewaySessionEntryReadOnlyAsync(sessionKey);
       assert(entry, `chat.send must create ${sessionKey}`);
       const modelContext = readSessionTranscriptContextMessages(
         { agentId, sessionId: entry.sessionId, sessionKey: canonicalKey, storePath },

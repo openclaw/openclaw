@@ -1,8 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
-import type { SsrFPolicy } from "./openclaw-runtime-network.js";
-import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
+import {
+  resolveProviderRequestPolicyConfig,
+  resolveProviderTransportSsrFPolicy,
+  type SsrFPolicy,
+} from "./openclaw-runtime-network.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
 
 // Builds authenticated remote embedding HTTP clients from agent memory config.
@@ -77,6 +80,31 @@ function isNativeOpenAIEmbeddingRoute(provider: string, baseUrl: string): boolea
   );
 }
 
+/**
+ * The recognized native ChatGPT/Codex subscription route. It serves chat
+ * traffic only — it has no embeddings endpoint, so its base URL must never
+ * leak into embedding requests. (#165476)
+ */
+const NATIVE_CHAT_ONLY_SUBSCRIPTION_BASE_URL = "https://chatgpt.com/backend-api/codex";
+
+/**
+ * Whether the provider is pinned to the recognized native chat-only
+ * subscription route. The redirect to the adapter default must apply ONLY
+ * here: matching on the api mode alone would also redirect custom provider
+ * URLs, misattributing their destination-owned credentials (e.g. a custom
+ * Authorization header) to the adapter default such as api.openai.com.
+ */
+function isNativeChatOnlySubscriptionRoute(
+  api: string | undefined,
+  baseUrl: string | undefined,
+): boolean {
+  return (
+    api === "openai-chatgpt-responses" &&
+    normalizeEmbeddingDestinationKey(NATIVE_CHAT_ONLY_SUBSCRIPTION_BASE_URL) ===
+      normalizeEmbeddingDestinationKey(baseUrl ?? "")
+  );
+}
+
 /** Resolve base URL, bearer headers, header overrides, and SSRF policy for remote embeddings. */
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
@@ -91,7 +119,17 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   });
   const remoteBaseUrl = normalizeOptionalString(remote?.baseUrl);
   const providerConfig = params.options.config.models?.providers?.[params.provider];
-  const providerBaseUrl = normalizeOptionalString(providerConfig?.baseUrl) || params.defaultBaseUrl;
+  // A chat-only subscription route has no embeddings endpoint: never inherit
+  // its base URL for embeddings — fall through to the adapter default instead.
+  // The redirect applies ONLY to the recognized native subscription route; a
+  // custom provider URL keeps its own destination (and credentials) even when
+  // the provider uses a chat-only subscription api mode.
+  const providerBaseUrl = isNativeChatOnlySubscriptionRoute(
+    normalizeOptionalString(providerConfig?.api),
+    normalizeOptionalString(providerConfig?.baseUrl),
+  )
+    ? params.defaultBaseUrl
+    : normalizeOptionalString(providerConfig?.baseUrl) || params.defaultBaseUrl;
   const baseUrl = remoteBaseUrl || providerBaseUrl;
   const providerOwnsDestination = embeddingProviderOwnsDestination({
     baseUrl,
@@ -142,5 +180,36 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   const headers = Object.fromEntries(
     new Map(entries.map((entry) => [entry[0].toLowerCase(), entry])).values(),
   );
-  return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl) };
+  return {
+    baseUrl,
+    headers,
+    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+      provider: params.provider,
+      api: providerConfig?.api ?? "openai-completions",
+      baseUrl,
+      allowPrivateNetwork: providerConfig?.request?.allowPrivateNetwork,
+    }),
+  };
+}
+
+/** Embedding adapters share inference's endpoint classification and explicit network policy. */
+export function resolveEmbeddingProviderSsrFPolicy(params: {
+  provider: string;
+  api?: string;
+  baseUrl: string;
+  allowPrivateNetwork?: boolean;
+}): SsrFPolicy | undefined {
+  const policy = resolveProviderRequestPolicyConfig({
+    provider: params.provider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    capability: "other",
+    request: { allowPrivateNetwork: params.allowPrivateNetwork },
+  });
+  return resolveProviderTransportSsrFPolicy({
+    baseUrl: params.baseUrl,
+    url: params.baseUrl,
+    allowPrivateNetwork: policy.allowPrivateNetwork,
+    trustConfiguredBaseUrlOrigin: policy.trustConfiguredBaseUrlOrigin,
+  });
 }

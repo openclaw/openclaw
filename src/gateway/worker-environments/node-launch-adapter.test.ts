@@ -56,6 +56,7 @@ function nodeProof(connId = "conn-1", available = 2): NodeWorkerSupervisorNodePr
       capacity: { total: 2, available },
       environmentSession: 1,
       capturedExecPolicy: true,
+      promptContext: 1,
     },
     commands: ["system.run"],
   };
@@ -615,7 +616,7 @@ describe("node worker launch adapter", () => {
     },
   );
 
-  it.each(["environmentSession", "capturedExecPolicy"] as const)(
+  it.each(["environmentSession", "capturedExecPolicy", "promptContext"] as const)(
     "requires %s support before dispatching a turn",
     async (feature) => {
       const node = nodeProof();
@@ -625,7 +626,10 @@ describe("node worker launch adapter", () => {
         getTransport: () => transportWith(invoke, async () => [node]),
       });
 
-      await expect(adapter.launch(launchRequest())).rejects.toThrow("openclaw update");
+      await expect(adapter.launch(launchRequest())).rejects.toMatchObject({
+        code: "node_runner_update_required",
+        message: expect.stringContaining("openclaw update"),
+      });
       expect(invoke).not.toHaveBeenCalled();
     },
   );

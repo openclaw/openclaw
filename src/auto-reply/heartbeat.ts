@@ -26,25 +26,6 @@ export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
-function stripLeadingHtmlCommentScaffolding(
-  line: string,
-  state: { inHtmlComment: boolean },
-): string {
-  let remaining = line;
-  while (state.inHtmlComment || remaining.trimStart().startsWith("<!--")) {
-    const searchText = state.inHtmlComment ? remaining : remaining.trimStart();
-    const commentEnd = searchText.indexOf("-->");
-    if (commentEnd === -1) {
-      state.inHtmlComment = true;
-      return "";
-    }
-
-    state.inHtmlComment = false;
-    remaining = searchText.slice(commentEnd + 3);
-  }
-  return remaining;
-}
-
 /**
  * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
@@ -64,9 +45,19 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     return false;
   }
 
-  const state = { inHtmlComment: false };
-  for (const line of content.split("\n")) {
-    const trimmed = stripLeadingHtmlCommentScaffolding(line, state).trim();
+  let inHtmlComment = false;
+  for (let line of content.split("\n")) {
+    while (inHtmlComment || line.trimStart().startsWith("<!--")) {
+      const searchText: string = inHtmlComment ? line : line.trimStart();
+      const commentEnd = searchText.indexOf("-->");
+      inHtmlComment = commentEnd === -1;
+      if (inHtmlComment) {
+        line = "";
+        break;
+      }
+      line = searchText.slice(commentEnd + 3);
+    }
+    const trimmed = line.trim();
     if (
       !trimmed ||
       /^#+(\s|$)/.test(trimmed) ||
@@ -188,16 +179,9 @@ export function stripHeartbeatToken(
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }
 
-  if (!picked.text) {
-    return { shouldSkip: true, text: "", didStrip: true };
-  }
-
   const rest = picked.text.trim();
-  if (mode === "heartbeat" && rest.length <= maxAckChars) {
-    return { shouldSkip: true, text: "", didStrip: true };
-  }
-
-  return { shouldSkip: false, text: rest, didStrip: true };
+  const shouldSkip = !picked.text || (mode === "heartbeat" && rest.length <= maxAckChars);
+  return { shouldSkip, text: shouldSkip ? "" : rest, didStrip: true };
 }
 
 /** Recognizes canonical silent replies and backwards-compatible heartbeat acknowledgements. */

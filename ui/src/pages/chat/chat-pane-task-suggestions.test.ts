@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  AgentsListResult,
   TaskSuggestion,
   TaskSuggestionsAcceptResult,
   TaskSuggestionsListResult,
@@ -189,75 +190,53 @@ describe("chat pane task suggestion lifecycle", () => {
     expect(state.chatError).toBe("Couldn't copy the prompt to the clipboard");
   });
 
-  it("keeps accept ownership and selection when the resolved event arrives before the response", async () => {
+  it("hides a launched task through early events and stale lists without changing sessions", async () => {
     const accepted = createDeferred<TaskSuggestionsAcceptResult>();
-    const lateList = createDeferred<TaskSuggestionsListResult>();
-    let holdList = false;
+    const next = { ...suggestion, id: "task_next", title: "Next task" };
     const request = createGatewayRequestMock((method) =>
       method === "taskSuggestions.accept"
         ? accepted.promise
-        : holdList
-          ? lateList.promise
-          : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
+        : Promise.resolve({ suggestions: [suggestion, next] } satisfies TaskSuggestionsListResult),
     );
-    const client = createTestGatewayClient(request);
-    const sessions = createSessionCapabilityFixture();
-    const { pane } = createTestChatPane({ client, sessions });
+    const { pane } = createTestChatPane({
+      client: createTestGatewayClient(request),
+      sessions: createSessionCapabilityFixture(),
+    });
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
-    pane.taskSuggestions = [suggestion];
+    pane.taskSuggestions = [suggestion, next];
     const container = document.createElement("div");
     const draw = () =>
       render(renderChatTaskSuggestionTray(pane.suggestionChatProps(true, false, false)), container);
 
     const pending = pane.resolveTaskSuggestion(suggestion, "accept");
     draw();
-    expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
-    expect(container.textContent).toContain("Starting");
+    expect(container.querySelector('[data-task-id="task_123"]')).toBeNull();
+    expect(container.querySelector('[data-task-id="task_next"]')?.hasAttribute("hidden")).toBe(
+      false,
+    );
     pane.handleTaskSuggestionEvent({
       action: "resolved",
       taskId: suggestion.id,
       resolution: "accepted",
     });
     await pane.refreshTaskSuggestions();
-    expect(pane.taskSuggestions).toEqual([suggestion]);
-    draw();
-    expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
-    expect(container.textContent).toContain(suggestion.prompt);
-    expect(container.textContent).toContain("Starting");
+    expect(pane.taskSuggestions).toEqual([next]);
     await pane.resolveTaskSuggestion(suggestion, "accept");
-    expect(request).toHaveBeenCalledWith("taskSuggestions.accept", {
-      taskId: suggestion.id,
-      mode: "local",
-    });
-    expect(
-      request.mock.calls.filter(([method]) => method === "taskSuggestions.accept"),
-    ).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "taskSuggestions.accept")).toEqual([
+      ["taskSuggestions.accept", { taskId: suggestion.id, mode: "local" }],
+    ]);
     accepted.resolve({ taskId: suggestion.id, key: "agent:main:task" });
-
     await pending;
-    expect(navigate).not.toHaveBeenCalled();
+    await pane.refreshTaskSuggestions();
     draw();
-    expect(container.textContent).toContain("Task started");
-    expect(container.textContent).toContain(suggestion.prompt);
-    const open = container.querySelector<HTMLAnchorElement>(".task-suggestion__open");
-    expect(open?.textContent).toContain("Open session");
-    expect(open?.getAttribute("href")).toContain("task");
+    expect(pane.taskSuggestions).toEqual([next]);
+    expect(container.querySelector('[data-task-id="task_123"]')).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
     await pane.resolveTaskSuggestion(suggestion, "accept");
     expect(
       request.mock.calls.filter(([method]) => method === "taskSuggestions.accept"),
     ).toHaveLength(1);
-    open?.click();
-    expect(navigate).toHaveBeenCalledExactlyOnceWith(pane.paneId, "agent:main:task");
-    holdList = true;
-    const refresh = pane.refreshTaskSuggestions();
-    await pane.resolveTaskSuggestion(suggestion, "dismiss");
-    lateList.resolve({ suggestions: [suggestion] });
-    await refresh;
-    expect(pane.taskSuggestions).toEqual([]);
-    expect(
-      request.mock.calls.filter(([method]) => method === "taskSuggestions.dismiss"),
-    ).toHaveLength(0);
   });
 
   it("recovers a worktree source on the same card without changing the prompt or launch mode", async () => {
@@ -337,8 +316,7 @@ describe("chat pane task suggestion lifecycle", () => {
       ).toBe("started"),
     );
     draw();
-    expect(container.textContent).toContain("Task started");
-    expect(container.textContent).toContain(suggestion.prompt);
+    expect(container.querySelector(".task-suggestion")).toBeNull();
     expect(request.mock.calls.filter(([method]) => method === "taskSuggestions.accept")).toEqual([
       ["taskSuggestions.accept", { taskId: suggestion.id, mode: "worktree" }],
       ["taskSuggestions.accept", { taskId: suggestion.id, mode: "worktree", cwd: "/projects/app" }],
@@ -388,13 +366,21 @@ describe("chat pane task suggestion lifecycle", () => {
     const first = createDeferred<TaskSuggestionsAcceptResult>();
     const retry = createDeferred<TaskSuggestionsAcceptResult>();
     let attempts = 0;
-    const request = createGatewayRequestMock((method) =>
-      method === "taskSuggestions.accept"
+    const request = createGatewayRequestMock((method) => {
+      if (method === "agents.list") {
+        return Promise.resolve({
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "main" }],
+        } satisfies AgentsListResult);
+      }
+      return method === "taskSuggestions.accept"
         ? ++attempts === 1
           ? first.promise
           : retry.promise
-        : Promise.resolve({ suggestions: [] }),
-    );
+        : Promise.resolve({ suggestions: [] });
+    });
     const { pane, state } = createTestChatPane({
       client: createTestGatewayClient(request),
       sessions: createSessionCapabilityFixture(),
@@ -428,25 +414,19 @@ describe("chat pane task suggestion lifecycle", () => {
     first.resolve({ taskId: suggestion.id, key: "agent:main:stale" });
     await pending;
     draw(true);
-    expect(container.textContent).toContain("Starting");
-    expect(container.querySelector(".task-suggestion__open")).toBeNull();
+    expect(container.querySelector(".task-suggestion")).toBeNull();
     retry.resolve({ taskId: suggestion.id, key: "agent:main:recovered-task" });
     await retrying;
     draw(true);
-    expect(container.textContent).toContain("Task started");
-    expect(container.querySelector(".task-suggestion__open")?.getAttribute("href")).toContain(
-      "recovered-task",
-    );
-    expect(pane.suggestionChatProps(true, false, false).onOpenTaskSuggestion).toBeUndefined();
+    expect(container.querySelector(".task-suggestion")).toBeNull();
     expect(request.mock.calls.filter(([method]) => method === "taskSuggestions.accept")).toEqual([
       ["taskSuggestions.accept", { taskId: suggestion.id, mode: "worktree" }],
       ["taskSuggestions.accept", { taskId: suggestion.id, mode: "worktree" }],
     ]);
     pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null, selfUser: null });
     draw(false);
-    expect(container.textContent).toContain("Task started");
-    expect(container.textContent).toContain(suggestion.prompt);
-    expect(container.querySelector(".task-suggestion__open")?.getAttribute("href")).toBeNull();
+    expect(container.querySelector(".task-suggestion")).toBeNull();
+
     pane.applyGatewaySnapshot({
       ...snapshot,
       selfUser: { id: "operator-b", name: "Operator B" },
@@ -456,9 +436,14 @@ describe("chat pane task suggestion lifecycle", () => {
     expect(pane.taskSuggestions).toEqual([]);
   });
 
-  it.each([false, true])(
-    "retains the prompt after acceptance fails and retries the same task (resolved: %s)",
-    async (resolved) => {
+  it.each([
+    { resolved: false, result: undefined },
+    { resolved: true, result: undefined },
+    { resolved: false, result: { taskId: "other-task", key: "agent:main:task" } },
+    { resolved: false, result: { taskId: suggestion.id, key: " " } },
+  ])(
+    "restores a failed or unconfirmed acceptance and retries the same task (%j)",
+    async ({ resolved, result }) => {
       const first = createDeferred<TaskSuggestionsAcceptResult>();
       const retry = createDeferred<TaskSuggestionsAcceptResult>();
       let attempts = 0;
@@ -474,6 +459,7 @@ describe("chat pane task suggestion lifecycle", () => {
       });
       pane.taskSuggestions = [suggestion];
       const pending = pane.resolveTaskSuggestion(suggestion, "accept", "worktree");
+      expect(pane.taskSuggestions).toEqual([]);
       if (resolved) {
         pane.handleTaskSuggestionEvent({
           action: "resolved",
@@ -481,7 +467,11 @@ describe("chat pane task suggestion lifecycle", () => {
           resolution: "accepted",
         });
       }
-      first.reject(new Error("Acceptance response unavailable"));
+      if (result) {
+        first.resolve(result);
+      } else {
+        first.reject(new Error("Acceptance response unavailable"));
+      }
       await pending;
       await pane.refreshTaskSuggestions();
       expect(pane.taskSuggestions).toEqual([suggestion]);
@@ -490,10 +480,11 @@ describe("chat pane task suggestion lifecycle", () => {
       expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
       expect(container.textContent).toContain(suggestion.prompt);
       expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-        "Acceptance response unavailable",
+        result ? "Couldn't confirm" : "Acceptance response unavailable",
       );
       expect(container.querySelector(".task-suggestion__retry")?.textContent).toContain("Retry");
       const retrying = pane.resolveTaskSuggestion(suggestion, "accept");
+      expect(pane.taskSuggestions).toEqual([]);
       await pane.resolveTaskSuggestion(suggestion, "accept");
       expect(attempts).toBe(2);
       expect(request.mock.calls.filter(([method]) => method === "taskSuggestions.accept")).toEqual([
@@ -502,6 +493,7 @@ describe("chat pane task suggestion lifecycle", () => {
       ]);
       retry.resolve({ taskId: suggestion.id, key: "agent:main:task" });
       await retrying;
+      expect(pane.taskSuggestions).toEqual([]);
     },
   );
 
@@ -542,7 +534,7 @@ describe("chat pane task suggestion lifecycle", () => {
         hello: { ...hello, auth: { ...hello.auth, recoveryScope: "principal-a" } },
       });
       draw();
-      expect(container.textContent).toContain(suggestion.prompt);
+      expect(container.querySelector(".task-suggestion")).toBeNull();
       pane.applyGatewaySnapshot({
         ...snapshot,
         hello: { ...hello, auth: { ...hello.auth, recoveryScope: "principal-b" } },
@@ -597,10 +589,10 @@ describe("chat pane task suggestion lifecycle", () => {
         return props;
       };
       draw();
-      expect(container.textContent).toContain(suggestion.prompt);
+      expect(Boolean(container.querySelector(".task-suggestion"))).toBe(phase === "failed");
       state.currentSessionId = "physical-original";
       const originalProps = draw();
-      expect(container.textContent).toContain(suggestion.prompt);
+      expect(Boolean(container.querySelector(".task-suggestion"))).toBe(phase === "failed");
 
       state.currentSessionId = "physical-replacement";
       draw();
@@ -611,7 +603,6 @@ describe("chat pane task suggestion lifecycle", () => {
       await pane.refreshTaskSuggestions();
       expect(pane.taskSuggestions).toEqual([]);
       // Retained handlers cannot revive a retired operation after reconciliation removes it.
-      originalProps.onOpenTaskSuggestion?.(suggestion);
       originalProps.onAcceptTaskSuggestion?.(suggestion, "local");
       expect(navigate).not.toHaveBeenCalled();
       expect(

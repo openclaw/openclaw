@@ -5,7 +5,6 @@ import { extnameFromAnyPath } from "./file-name.js";
 /** Maximum byte prefix passed to dependency MIME sniffers for bounded memory/CPU work. */
 export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
-// Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
   "image/avif": ".avif",
   "image/heic": ".heic",
@@ -85,7 +84,6 @@ const MIME_BY_EXT: Record<string, string> = {
   ".oga": "audio/ogg",
   ".wav": "audio/wav",
   ".webm": "video/webm",
-  // Additional extension aliases
   ".aif": "audio/aiff",
   ".aifc": "audio/aiff",
   ".jpeg": "image/jpeg",
@@ -237,7 +235,6 @@ export function mimeTypeFromFilePath(filePath?: string | null): string | undefin
   return MIME_BY_EXT[ext];
 }
 
-/** Returns true when a filename extension is a supported audio container. */
 export function isAudioFileName(fileName?: string | null): boolean {
   return mediaKindFromMime(mimeTypeFromFilePath(fileName)) === "audio";
 }
@@ -295,7 +292,6 @@ export function extensionForMime(mime?: string | null): string | undefined {
   return Object.hasOwn(EXT_BY_MIME, normalized) ? EXT_BY_MIME[normalized] : undefined;
 }
 
-/** Returns true when content type or filename identifies GIF media. */
 export function isGifMedia(opts: {
   contentType?: string | null;
   fileName?: string | null;

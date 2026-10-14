@@ -181,13 +181,16 @@ export function createAgentRunEventHandler(params: {
         message: readStringValue(evt.data.message),
       });
     }
+    const readToolEventIdentity = () => ({
+      itemId: readStringValue(evt.data.itemId),
+      phase: readStringValue(evt.data.phase),
+      title: readStringValue(evt.data.title),
+      toolCallId: readStringValue(evt.data.toolCallId),
+      name: readStringValue(evt.data.name),
+    });
     if (evt.stream === "command_output" && !shouldSuppressProgressAfterMessageToolDelivery()) {
       await params.turn.opts?.onCommandOutput?.({
-        itemId: readStringValue(evt.data.itemId),
-        phase: readStringValue(evt.data.phase),
-        title: readStringValue(evt.data.title),
-        toolCallId: readStringValue(evt.data.toolCallId),
-        name: readStringValue(evt.data.name),
+        ...readToolEventIdentity(),
         output: readStringValue(evt.data.output),
         status: readStringValue(evt.data.status),
         exitCode:
@@ -199,21 +202,15 @@ export function createAgentRunEventHandler(params: {
       });
     }
     if (evt.stream === "patch" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const readPaths = (value: unknown) =>
+        Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === "string")
+          : undefined;
       await params.turn.opts?.onPatchSummary?.({
-        itemId: readStringValue(evt.data.itemId),
-        phase: readStringValue(evt.data.phase),
-        title: readStringValue(evt.data.title),
-        toolCallId: readStringValue(evt.data.toolCallId),
-        name: readStringValue(evt.data.name),
-        added: Array.isArray(evt.data.added)
-          ? evt.data.added.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
-        modified: Array.isArray(evt.data.modified)
-          ? evt.data.modified.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
-        deleted: Array.isArray(evt.data.deleted)
-          ? evt.data.deleted.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
+        ...readToolEventIdentity(),
+        added: readPaths(evt.data.added),
+        modified: readPaths(evt.data.modified),
+        deleted: readPaths(evt.data.deleted),
         summary: readStringValue(evt.data.summary),
       });
     }
@@ -224,7 +221,9 @@ export function createAgentRunEventHandler(params: {
     const phase = readStringValue(evt.data.phase) ?? "";
     const backend = readStringValue(evt.data.backend);
     const hookMessages = normalizeTrimmedStringList(evt.data.messages);
-    const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
+    const sendCompactionUserNotices = async (
+      noticePhase: "start" | "end" | "incomplete" | "degraded",
+    ) => {
       if (hookMessages.length > 0) {
         const noticePayload = createCompactionHookNoticePayload({
           messages: hookMessages,
@@ -235,7 +234,7 @@ export function createAgentRunEventHandler(params: {
           await deliverCompactionNoticePayload(noticePayload, "hook");
         }
       }
-      if (params.notifyUserAboutCompaction) {
+      if (noticePhase === "degraded" || params.notifyUserAboutCompaction) {
         await deliverCompactionNoticePayload(
           createCompactionNoticePayload({
             phase: noticePhase,
@@ -281,6 +280,6 @@ export function createAgentRunEventHandler(params: {
       });
     }
     await params.turn.opts?.onCompactionEnd?.({ completed: true });
-    await sendCompactionUserNotices("end");
+    await sendCompactionUserNotices(evt.data.qualityDegraded === true ? "degraded" : "end");
   };
 }

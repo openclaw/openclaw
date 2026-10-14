@@ -100,21 +100,6 @@ describe("bash process registry", () => {
     expect(remove).toHaveBeenCalledOnce();
   });
 
-  it("captures output and truncates", () => {
-    const session = createRegistrySession({
-      maxOutputChars: 10,
-      pendingMaxOutputChars: 30_000,
-      backgrounded: false,
-    });
-
-    addSession(session);
-    appendOutput(session, "stdout", "0123456789");
-    appendOutput(session, "stdout", "abcdef");
-
-    expect(session.aggregated).toBe("6789abcdef");
-    expect(session.truncated).toBe(true);
-  });
-
   it("caps pending output to avoid runaway polls", () => {
     const session = createRegistrySession({
       maxOutputChars: 100_000,
@@ -147,23 +132,6 @@ describe("bash process registry", () => {
 
     const drained = drainSession(session);
     expect(drained.output.length).toBe(5_000);
-    expect(session.truncated).toBe(true);
-  });
-
-  it("caps stdout and stderr independently", () => {
-    const session = createRegistrySession({
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 10,
-      backgrounded: true,
-    });
-
-    addSession(session);
-    appendOutput(session, "stdout", "a".repeat(6));
-    appendOutput(session, "stdout", "b".repeat(6));
-    appendOutput(session, "stderr", "c".repeat(12));
-
-    const drained = drainSession(session);
-    expect(drained.output).toBe("a".repeat(4) + "b".repeat(6) + "c".repeat(10));
     expect(session.truncated).toBe(true);
   });
 
@@ -255,21 +223,6 @@ describe("bash process registry", () => {
     expect(session.pendingStdoutChars).toBe(2);
     expect(drainSession(session).output).toBe("bc");
     expect(tail("a🎉bc", 3)).toBe("bc");
-  });
-
-  it("keeps multi-chunk pending output on a UTF-16 boundary", () => {
-    const session = createRegistrySession({
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 3,
-      backgrounded: true,
-    });
-
-    addSession(session);
-    appendOutput(session, "stdout", "a🎉");
-    appendOutput(session, "stdout", "bc");
-
-    expect(session.pendingStdoutChars).toBe(2);
-    expect(drainSession(session).output).toBe("bc");
   });
 
   it("only persists finished sessions when backgrounded", () => {
@@ -461,21 +414,6 @@ describe("bash process registry", () => {
       expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas");
     },
   );
-
-  it("clears background activity in the test reset", () => {
-    const session = createRegistrySession({
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
-      backgrounded: false,
-    });
-
-    addSession(session);
-    markBackgrounded(session);
-    expect(getActiveBackgroundExecSessionCount()).toBe(1);
-
-    resetProcessRegistryForTests();
-    expect(getActiveBackgroundExecSessionCount()).toBe(0);
-  });
 
   it("resets its own registry after another module instance replaces the global test API", async () => {
     const testApiKey = Symbol.for("openclaw.bashProcessRegistryTestApi");

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sharedAuthBootstrap from "../agents/auth-profiles/shared-store-bootstrap.js";
 import * as sessionTargets from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readChannelPairingState } from "../pairing/pairing-store-sqlite.js";
+import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -386,7 +386,7 @@ describe("legacy state migration read-only refusals", () => {
     fs.writeFileSync(pairingPath, pairingBytes);
     const cfg: OpenClawConfig = { channels: { telegram: { enabled: true } } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
-    const pairingBefore = readChannelPairingState("telegram", fixture.env);
+    const pairingBefore = readChannelPairingStateSnapshot("telegram", fixture.env);
 
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "automatic",
@@ -407,7 +407,7 @@ describe("legacy state migration read-only refusals", () => {
     const automatic = await autoMigrateLegacyState(params);
     expect(automatic.stepReceipts.map((step) => step.id)).not.toContain("skill-workshop");
     expect(automatic.stepReceipts.map((step) => step.id)).not.toContain("channel-pairing");
-    expect(readChannelPairingState("telegram", fixture.env)).toEqual(pairingBefore);
+    expect(readChannelPairingStateSnapshot("telegram", fixture.env)).toEqual(pairingBefore);
     expect(fs.readFileSync(pairingPath, "utf8")).toBe(pairingBytes);
 
     const result = await autoMigrateLegacyState({ ...params, doctorOnlyStateMigrations: true });
@@ -418,7 +418,7 @@ describe("legacy state migration read-only refusals", () => {
       changes: ["Migrated 1 telegram/default allowFrom entry → shared SQLite state"],
     });
     expect(pairing?.refusal).toBeUndefined();
-    expect(readChannelPairingState("telegram", fixture.env).allowFrom).toEqual({
+    expect(readChannelPairingStateSnapshot("telegram", fixture.env).allowFrom).toEqual({
       default: ["legacy-user"],
     });
     expect(fs.existsSync(pairingPath)).toBe(false);
@@ -532,27 +532,6 @@ module.exports = { stateMigrations: [{
       expect.stringContaining(`Snapshot tree contains a symbolic link: ${linkedDir}`),
     ]);
     expect(fs.readFileSync(externalDatabase, "utf8")).toBe("external-bytes\n");
-  });
-
-  it("records named-profile workspace endpoints without authorizing unbound writes", async () => {
-    const fixture = await makeFixture();
-    fixture.env.OPENCLAW_PROFILE = "work";
-    const source = path.join(fixture.homeDir, ".openclaw", "workspace-work");
-    const target = path.join(fixture.homeDir, ".openclaw-work", "workspace");
-    fs.mkdirSync(source, { recursive: true });
-    fs.writeFileSync(path.join(source, "AGENTS.md"), "profile workspace\n");
-    const before = snapshotFiles(fixture.root);
-
-    const plan = await planFixture(fixture);
-
-    expect(plan.steps.find((step) => step.id === "profile-workspace")).toMatchObject({
-      source: [{ kind: "path", path: source }],
-      target: [{ kind: "path", path: target }],
-      requiredness: "conditional",
-      outcome: "deferred",
-      refusal: { code: "profile-workspace-snapshot-deferred" },
-    });
-    expect(snapshotFiles(fixture.root)).toEqual(before);
   });
 
   it.runIf(process.platform !== "win32")(

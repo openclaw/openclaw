@@ -80,11 +80,11 @@ it.each(entrypoints)(
   },
 );
 
-it("keeps read-only remote commands available after a config read failure", async () => {
+it("keeps gateway probes available after a config read failure", async () => {
   await withOpenClawTestState({}, async (state) => {
     await state.writeConfig({ $include: "missing.json" });
     const host = runtime();
-    await ensureConfigReady({ runtime: host, commandPath: ["gateway", "call"] });
+    await ensureConfigReady({ runtime: host, commandPath: ["gateway", "probe"] });
     expect(host.exit).not.toHaveBeenCalled();
     expect(host.error.mock.calls.flat().join("\n")).toContain("OpenClaw config could not be read");
   });

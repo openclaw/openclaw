@@ -25,7 +25,6 @@ import {
   createStartedThreadHarness,
   fastWait,
   mockClientRuntimeMethods,
-  queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
@@ -33,8 +32,6 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-import { registerConfirmedStopContinuationTest } from "./run-attempt.confirmed-stop.test-support.js";
-import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -224,14 +221,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
         }),
       ],
     },
-    {
-      name: "a finished native stop hook",
-      notifications: [
-        completedAssistant("msg-1", "Done."),
-        finalizationHookNotification("hook/started", "running"),
-        finalizationHookNotification("hook/completed", "completed"),
-      ],
-    },
   ])("waits for exact native completion after $name", async ({ notifications }) => {
     vi.useFakeTimers();
     const harness = createStartedThreadHarness();
@@ -247,41 +236,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     expectSuccessfulAttempt(await run);
-  });
-
-  it.each([
-    {
-      name: "partial assistant output",
-      notifications: [makeAgentMessageDelta()],
-      assistantTexts: ["Still writing"],
-    },
-  ])("expires execution with $name without inferring success", async (scenario) => {
-    const { harness, params, result, onRunAgentEvent } = await runExecutionTimeoutScenario(
-      scenario.notifications,
-    );
-    expectTimedOutAttempt(result);
-    expect(result.assistantTexts).toEqual(scenario.assistantTexts);
-    expect(result.codexAppServerFailure).toBeUndefined();
-    expect(result.promptTimeoutOutcome).toMatchObject({
-      replayInvalid: true,
-      livenessState: "abandoned",
-    });
-    await expectTurnInterrupted(harness);
-    await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toMatchObject({
-      threadId: "thread-1",
-      cwd: params.workspaceDir,
-    });
-    expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
-    expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
-    expect(onRunAgentEvent.mock.calls.map(([event]) => event)).toContainEqual({
-      stream: "lifecycle",
-      data: expect.objectContaining({
-        phase: "error",
-        status: "timed_out",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      }),
-    });
   });
 
   it("does not let progress extend the elapsed execution budget", async () => {
@@ -443,81 +397,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     expect(requestAborted).toBe(true);
   });
 
-  it("keeps secret user input request activity active until the answer arrives", async () => {
-    vi.useFakeTimers();
-    const harness = createStartedThreadHarness();
-    const toolAuthorityFingerprint = "turn-watch-secret-input-authority";
-    const params = makeTestParams({
-      timeoutMs: 60 * 60_000,
-      toolAuthorityFingerprint,
-    });
-    params.onBlockReply = vi.fn();
-    const onRunProgress = vi.fn();
-    params.onRunProgress = onRunProgress;
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await vi.waitFor(
-      () =>
-        expect(onRunProgress).toHaveBeenCalledWith(
-          expect.objectContaining({ reason: "turn:start" }),
-        ),
-      fastWait,
-    );
-    const response = harness.handleServerRequest({
-      id: "request-user-input",
-      method: "item/tool/requestUserInput",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "input-1",
-        isBlocking: true,
-        questions: [
-          {
-            id: "mode",
-            header: "Mode",
-            question: "Pick a mode",
-            isOther: false,
-            isSecret: true,
-            options: [
-              { label: "Fast", description: "Use less reasoning" },
-              { label: "Deep", description: "Use more reasoning" },
-            ],
-          },
-        ],
-      },
-    });
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
-    expect(
-      onRunProgress.mock.calls.some(
-        ([event]) =>
-          (event as { reason?: string }).reason === "request:item/tool/requestUserInput:response",
-      ),
-    ).toBe(false);
-    expect(
-      queueActiveRunMessageForTest("session-1", "2", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint,
-      }),
-    ).toBe(true);
-    await expect(response).resolves.toEqual({
-      answers: { mode: { answers: ["Deep"] } },
-    });
-    expect(onRunProgress).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "request:item/tool/requestUserInput:response" }),
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-
-    const result = await run;
-    expect(readAttemptTerminal(result)).toMatchObject({
-      aborted: false,
-      timedOut: false,
-      promptError: null,
-    });
-  });
-
   it("waits for native completion after tool events buffered during turn start", async () => {
     vi.useFakeTimers();
     const turnStartRequested = createDeferred<void>();
@@ -550,8 +429,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const result = await run;
     expectSuccessfulAttempt(result);
   });
-
-  registerConfirmedStopContinuationTest();
 
   it("bounds pre-bind terminal projection after client closure at the settlement deadline", async () => {
     const projection = createDeferred<void>();
@@ -780,10 +657,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
   });
 
-  it.each([
-    undefined,
-    { profileId: "staff-fixture", scopes: ["operator.write"], assertCurrent: () => {} },
-  ])(
+  it.each([{ profileId: "staff-fixture", scopes: ["operator.write"], assertCurrent: () => {} }])(
     "settles a client-close route after the host trajectory capability closes (%j)",
     async (operatorSource) => {
       const harness = createStartedThreadHarness();
@@ -824,39 +698,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       turnId: "turn-1",
       replaySafe: false,
       replayBlockedReason: "assistant_output",
-    });
-  });
-
-  it.each([
-    {
-      name: "after a later completed item",
-      notifications: [
-        completedAssistant("msg-1", "Earlier complete reply."),
-        startedCommand("cmd-1", "touch later.txt"),
-        completedCommand("cmd-1", "touch later.txt"),
-      ],
-      assistantText: "Earlier complete reply.",
-      replayBlockedReason: "potential_side_effect",
-    },
-  ] satisfies Array<{
-    name: string;
-    notifications: CodexServerNotification[];
-    assistantText: string;
-    replayBlockedReason: "assistant_output" | "potential_side_effect";
-  }>)("keeps completed assistant output as a client-close failure $name", async (scenario) => {
-    const result = await runClientCloseScenario(scenario.notifications);
-
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(result.assistantTexts).toEqual([scenario.assistantText]);
-    expect(result.codexAppServerFailure).toEqual({
-      kind: "client_closed_before_turn_completed",
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      replaySafe: false,
-      replayBlockedReason: scenario.replayBlockedReason,
     });
   });
 

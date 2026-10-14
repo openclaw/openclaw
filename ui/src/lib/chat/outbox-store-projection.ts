@@ -85,23 +85,28 @@ export function createStoredChatOutboxReader() {
     state.connected,
     presence,
   ];
-  const updatePresence = (nextPresence: typeof presence) => {
+  const refreshProjection = (update?: () => void) => {
     const previous = cached;
     const inputs = lastState ? readInputs(lastState) : undefined;
-    presence = nextPresence;
-    stale = false;
+    update?.();
     if (
       previous &&
       lastState &&
       inputs?.every((value, index) => Object.is(value, previous.inputs[index])) &&
       summarizeStoredChatOutboxes(lastState, presence).signature === previous.signature
     ) {
-      // A durable write can replace tab input without changing any rendered badge.
+      // New durable input or attention ownership can leave every rendered badge unchanged.
       previous.inputs = readInputs(lastState);
-      return;
+      return previous;
     }
     notify();
+    return null;
   };
+  const updatePresence = (nextPresence: typeof presence) =>
+    refreshProjection(() => {
+      presence = nextPresence;
+      stale = false;
+    });
   const loadPresence = async () => {
     if (loading || !stale || !owner || !listeners.size) {
       return;
@@ -145,18 +150,11 @@ export function createStoredChatOutboxReader() {
           return;
         }
         const attentionOwner = chatOutboxAttentionOwners.get(key);
-        const previous = cached;
-        if (
-          previous &&
-          readInputs(lastState).every((value, index) => Object.is(value, previous.inputs[index])) &&
-          summarizeStoredChatOutboxes(lastState, presence).signature === previous.signature
-        ) {
-          // Pane synchronization may publish without changing any visible badge.
+        const previous = refreshProjection();
+        if (previous) {
           previous.attentionOwner = attentionOwner;
           previous.attentionRevision = attentionOwner?.attentionRevision;
-          return;
         }
-        notify();
       });
       void loadPresence();
       return () => {
@@ -320,14 +318,8 @@ function summarizeStoredChatOutboxes(
       scopes.set(scopeKey, scope);
     }
   }
-  const attentionCountsByScope = new Map<string, number>();
-  let total = 0;
-  for (const [scopeKey, ids] of idsByScope) {
-    total += ids.all.size;
-    if (ids.attention.size) {
-      attentionCountsByScope.set(scopeKey, ids.attention.size);
-    }
-  }
+  const attentionCount = (scopeKey: string) => idsByScope.get(scopeKey)?.attention.size ?? 0;
+  const total = [...idsByScope.values()].reduce((count, ids) => count + ids.all.size, 0);
   // Resolve sidebar queries with this render's state; stored destinations stay captured.
   const sessionScopeKey = (sessionKey: string) =>
     storedChatOutboxScopeKey(resolveUiConversationIdentity(state, sessionKey));
@@ -344,16 +336,15 @@ function summarizeStoredChatOutboxes(
       total,
       sessions: [...scopes.entries()]
         // Cleared drafts must not consume the native snapshot's bounded row budget.
-        .filter(([key]) => drafts.get(key)?.active || attentionCountsByScope.has(key))
+        .filter(([key]) => drafts.get(key)?.active || attentionCount(key) > 0)
         .toSorted(([left], [right]) => left.localeCompare(right))
         .map(([key, scope]): StoredSidebarSessionFacts => ({
           sessionKey: scope.sessionKey,
           agentId: scope.agentId,
           hasComposerDraft: Boolean(drafts.get(key)?.active),
-          outboxAttentionCount: attentionCountsByScope.get(key) ?? 0,
+          outboxAttentionCount: attentionCount(key),
         })),
-      attentionCountForSession: (sessionKey: string) =>
-        attentionCountsByScope.get(sessionScopeKey(sessionKey)) ?? 0,
+      attentionCountForSession: (sessionKey: string) => attentionCount(sessionScopeKey(sessionKey)),
       hasSessionDraft: (sessionKey: string) =>
         Boolean(drafts.get(sessionScopeKey(sessionKey))?.active),
     },

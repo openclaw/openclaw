@@ -6,13 +6,13 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import { waitForContextWindowCacheLoad } from "../agents/context.js";
+import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
+import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -20,6 +20,7 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../agents/model-thinking-default.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
+import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
@@ -29,7 +30,7 @@ import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { toAgentModelListLike } from "../config/model-input.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../config/sessions/lifecycle-read.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -44,6 +45,7 @@ import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinki
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { prepareTtsPreferences } from "../tts/tts-preferences.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -54,7 +56,7 @@ import {
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { readSessionFallbackModel } from "./session-fallback-model.js";
+import { readSessionFallbackModelAsync } from "./session-fallback-model.js";
 import type { StatusMessageParts } from "./status-message.js";
 import { createStatusModelResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
@@ -85,17 +87,17 @@ const loadStatusPluginHealthRuntime = createLazyPromise(
   () => import("./status-plugin-health.runtime.js"),
 );
 
-function resolveCodexSyntheticUsageAuthProfileId(params: {
+async function resolveCodexSyntheticUsageAuthProfileId(params: {
   profileId: string | undefined;
   cfg: OpenClawConfig;
   agentDir?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const normalizedProfileId = params.profileId?.trim();
   if (!normalizedProfileId) {
     return undefined;
   }
   try {
-    const store = ensureAuthProfileStore(params.agentDir, {
+    const store = await ensureAuthProfileStoreAsync(params.agentDir, {
       allowKeychainPrompt: false,
       config: params.cfg,
       readOnly: true,
@@ -208,7 +210,6 @@ export async function buildStatusReplyParts(
     statusChannel,
     provider,
     model,
-    contextTokens,
     thinkingCatalog,
     resolvedThinkLevel,
     resolvedFastMode,
@@ -237,7 +238,7 @@ export async function buildStatusReplyParts(
       sessionId: sessionEntry?.sessionId,
       sessionKeys: sessionKey ? [sessionKey] : [],
     }) === undefined
-      ? readSessionFallbackModel({
+      ? await readSessionFallbackModelAsync({
           ...modelParams,
           config: cfg,
           sessionScope: { agentId: statusAgentId, sessionKey, storePath },
@@ -268,6 +269,7 @@ export async function buildStatusReplyParts(
     workspaceDir: statusWorkspaceDir,
     readOnly: true,
   });
+  const owner = preparedOwner ? materializePreparedModelCatalogOwner(preparedOwner) : undefined;
   // This lookup borrows existing facts; status never starts inventory discovery.
   const resolveModel = createStatusModelResolver({
     cfg,
@@ -275,7 +277,7 @@ export async function buildStatusReplyParts(
     agentDir: statusAgentDir,
     workspaceDir: statusWorkspaceDir,
     sessionEntry,
-    owner: preparedOwner ? materializePreparedModelCatalogOwner(preparedOwner) : undefined,
+    owner,
   });
   const selectedStatusProvider = resolveStatusRuntimeProvider({
     provider: selectedLookupProvider,
@@ -360,7 +362,7 @@ export async function buildStatusReplyParts(
       sessionHarnessId: sessionEntry?.agentHarnessId,
     });
   const codexUsageAuthProfileId = useCodexSyntheticUsage
-    ? resolveCodexSyntheticUsageAuthProfileId({
+    ? await resolveCodexSyntheticUsageAuthProfileId({
         profileId: sessionEntry?.authProfileOverride,
         cfg,
         agentDir: statusAgentDir,
@@ -497,22 +499,37 @@ export async function buildStatusReplyParts(
           : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
   }
   const { buildStatusMessageParts } = await loadStatusMessageRuntime();
-  await waitForContextWindowCacheLoad();
   const configuredThinkingDefault = resolveConfiguredThinkingDefault({
     cfg,
     agentId: statusAgentId,
     provider: selectedLookupProvider,
     model: selectedLookupModel,
   });
-  const preparedContextTokens =
-    typeof contextTokens === "number" && contextTokens > 0 ? contextTokens : undefined;
+  const catalog = owner ? (owner.isCurrent() ? owner.modelCatalog : undefined) : undefined;
+  const contextCatalog = catalog
+    ? catalog.entries.map(
+        (entry) =>
+          selectModelCatalogRuntimeEntry({
+            entry,
+            routeVariants: catalog.routeVariants,
+            runtimeId: effectiveHarness ?? "openclaw",
+            allowApiFallback: false,
+          }).entry,
+      )
+    : owner
+      ? []
+      : (thinkingCatalog ?? []).filter((entry) =>
+          entry.nativeRuntime
+            ? entry.nativeRuntime === effectiveHarness
+            : ["openclaw", "auto", entry.provider].includes(effectiveHarness ?? "openclaw"),
+        );
   const selectedCatalogEntry = findModelInCatalog(
-    thinkingCatalog ?? [],
+    contextCatalog,
     selectedLookupProvider,
     selectedLookupModel,
   );
   const initialActiveCatalogEntry = findModelInCatalog(
-    thinkingCatalog ?? [],
+    contextCatalog,
     activeProvider,
     modelRefs.active.model || model,
   );
@@ -561,14 +578,49 @@ export async function buildStatusReplyParts(
               ? "active-or-bundled"
               : "active",
         });
-  const lifecycleTimestamps = await resolveSessionLifecycleTimestampsAsync({
-    entry: sessionEntry,
-    agentId: statusAgentId,
+  const hasCommittedUsage =
+    resolveFreshSessionTotalTokens(sessionEntry) !== undefined &&
+    [
+      sessionEntry?.inputTokens,
+      sessionEntry?.outputTokens,
+      sessionEntry?.cacheRead,
+      sessionEntry?.cacheWrite,
+    ].every((value) => typeof value === "number") &&
+    Boolean(sessionEntry?.model || activeModel);
+  const [lifecycleTimestamps, transcriptUsage] = await Promise.all([
+    resolveSessionLifecycleTimestampsAsync({
+      entry: sessionEntry,
+      agentId: statusAgentId,
+      sessionKey,
+      storePath,
+    }),
+    params.includeTranscriptUsage !== false && !hasCommittedUsage && sessionEntry?.sessionId
+      ? import("../gateway/session-transcript-usage.js")
+          .then(({ readRecentSessionUsageFromTranscriptAsync }) =>
+            readRecentSessionUsageFromTranscriptAsync(
+              {
+                agentId: statusAgentId,
+                sessionEntry,
+                sessionId: sessionEntry.sessionId,
+                sessionKey,
+                storePath,
+              },
+              256 * 1024,
+            ),
+          )
+          .catch(() => null)
+      : undefined,
+  ]);
+  const preparedSandboxRuntime = await resolveSandboxRuntimeStatusAsync({
+    cfg,
     sessionKey,
-    storePath,
+    agentId: statusAgentId,
+    preparedSessionEntry: sessionEntry,
   });
   return buildStatusMessageParts({
     config: cfg,
+    preparedSandboxRuntime,
+    preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     agent: {
       ...agentDefaults,
       model: {
@@ -586,25 +638,18 @@ export async function buildStatusReplyParts(
     modelRefs,
     activeModel,
     selectedContextWindow: selectedCatalogEntry?.contextWindow,
-    selectedContextTokens:
-      selectedCatalogEntry?.contextTokens ??
-      (selectedCatalogEntry && !activeRuntimeIsAuthoritative ? preparedContextTokens : undefined),
-    thinkingCatalog,
+    selectedContextTokens: selectedCatalogEntry?.contextTokens,
+    thinkingCatalog: contextCatalog,
     runtimeContextProvider: activeRuntimeIsAuthoritative ? activeStatusProvider : undefined,
-    runtimeContextTokens:
-      activeRuntimeIsAuthoritative &&
-      (initialActiveCatalogEntry || fallbackState.active) &&
-      (!activeModel || (activeModel.modelProvider === provider && activeModel.model === model))
-        ? preparedContextTokens
-        : undefined,
+    runtimeContextTokens: initialActiveCatalogEntry?.contextTokens,
     sessionEntry,
     sessionKey,
     parentSessionKey,
     sessionScope,
-    sessionStorePath: storePath,
     sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
     groupActivation,
     resolvedThink: effectiveThinkLevel,
+    requestedThink: requestedThinkLevel,
     resolvedFast: effectiveFastMode,
     resolvedHarness: effectiveHarness,
     resolvedVerbose: resolvedVerboseLevel,
@@ -627,6 +672,6 @@ export async function buildStatusReplyParts(
     pluginHealthLine,
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,
-    includeTranscriptUsage: params.includeTranscriptUsage ?? true,
+    transcriptUsage,
   });
 }

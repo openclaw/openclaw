@@ -13,10 +13,21 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-/** Recheck authority and idle execution at preparation and the synchronous write boundary. */
-export function validateSessionPatchSandboxChange(params: {
+export async function prepareSessionPatchSandboxChange(
+  params: Parameters<typeof validateSessionPatchSandboxChange>[0],
+): Promise<() => ErrorShape | undefined> {
+  await readSessionWorkerPlacementAsync({
+    context: params.context,
+    sessionId: params.existingEntry?.sessionId,
+  });
+  return () => validateSessionPatchSandboxChange(params);
+}
+
+/** Check authority and idle execution at the synchronous write boundary. */
+function validateSessionPatchSandboxChange(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   patch: SessionsPatchParams;

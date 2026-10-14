@@ -8,6 +8,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../../config/config.js";
 import {
@@ -36,6 +37,7 @@ import { withTimeout } from "../../../infra/fs-safe.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import {
@@ -81,9 +83,11 @@ import {
   createBoundWorker,
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
+  prepareIsolatedChildAdmissionProof,
   readBoundExecutionState,
   registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
+import { registerRequestCustodySpawnCases } from "./subagent-spawn.request-custody.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
 import { registerManagedWorktreeSpawnCases } from "./subagent-spawn.worktree.test-support.js";
 
@@ -116,6 +120,7 @@ let state: OpenClawTestState;
 let stateDir = "";
 let runtimeConfig: OpenClawConfig;
 let settleRootWork: ReturnType<typeof observeRootWork>;
+let releaseProfileCatalog: (() => void) | undefined;
 
 async function writeTestConfig(maxChildrenPerAgent?: number) {
   const config = {
@@ -153,12 +158,15 @@ async function writeTestConfig(maxChildrenPerAgent?: number) {
   } satisfies OpenClawConfig;
   await state.writeConfig(config);
   clearConfigCache();
-  clearRuntimeConfigSnapshot();
+  setRuntimeConfigSnapshot(config);
   return config;
 }
 
 beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "spawn-production-boundary" });
+  state = await createOpenClawTestState({
+    label: "spawn-production-boundary",
+    prepareProfileCatalog: true,
+  });
   await resetPreparedModelRuntimeHarness(state);
   runEmbeddedAgent.mockReset();
   stateDir = state.stateDir;
@@ -213,6 +221,8 @@ afterEach(async ({ task }) => {
   vi.mocked(callGateway).mockReset();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  releaseProfileCatalog?.();
+  releaseProfileCatalog = undefined;
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
@@ -371,20 +381,18 @@ async function createGuestParent(audit = true) {
   };
   await state.writeConfig(runtimeConfig);
   clearConfigCache();
-  clearRuntimeConfigSnapshot();
+  setRuntimeConfigSnapshot(runtimeConfig);
   const modelPolicy = prepareOperatorModelPolicy({
     cfg: runtimeConfig,
     policy: { sourceAgent: "main", allow: ["custom/test-model"] },
   });
-  const source = createSpawnOperatorSource(
-    ensureProfileForEmail("spawn-guest@example.test").id,
-    guestRole.scopes,
-    {
-      modelPolicy,
-      rolePolicy: { sessionAccessCap: "none", sandboxRequired: true, agents: ["main"] },
-      readCurrentRoleAssignment: () => "guest",
-    },
-  );
+  const guest = ensureProfileForEmail("spawn-guest@example.test");
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
+  const source = createSpawnOperatorSource(guest.id, guestRole.scopes, {
+    modelPolicy,
+    rolePolicy: { sessionAccessCap: "none", sandboxRequired: true, agents: ["main"] },
+    readCurrentRoleAssignment: () => "guest",
+  });
   const bound = await createBoundParent(source.authority, {
     guestProfileId: source.authority.profileId,
   });
@@ -398,6 +406,17 @@ async function createGuestParent(audit = true) {
 }
 
 describe("recursive spawn production boundary", () => {
+  registerRequestCustodySpawnCases({
+    createBoundParent,
+    createBoundGateway,
+    closeBoundGateway,
+    throwBoundFailures,
+    parentSessionKey,
+    parentRunId,
+    assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
+    runEmbeddedAgent,
+  });
+
   registerGuestSpawnCases({
     createGuestParent,
     createBoundGateway,
@@ -446,7 +465,7 @@ describe("recursive spawn production boundary", () => {
     assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
   });
 
-  it("admits a descendant using the active parent turn model", async () => {
+  it("admits an isolated descendant with current policy and the active parent turn model", async () => {
     const customProvider = expectDefined(
       runtimeConfig.models?.providers?.custom,
       "custom provider fixture",
@@ -495,6 +514,7 @@ describe("recursive spawn production boundary", () => {
       },
     );
     const { context, runtime, identities } = await createBoundGateway(bound);
+    const childProof = await prepareIsolatedChildAdmissionProof(bound);
     const modelRun = createDeferred<EmbeddedAgentRunResult>();
     const modelRunStarted = createDeferred();
     runEmbeddedAgent.mockImplementationOnce(() => {
@@ -552,9 +572,8 @@ describe("recursive spawn production boundary", () => {
         applicableGrantRefs: ["tool:sessions_spawn"],
         runtimeAssuranceRefs: ["spawn-runtime:subagent"],
       });
-      expect(
-        loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey }),
-      ).toMatchObject({
+      const admittedChild = childProof.assertAdmitted(details.childSessionKey, embeddedRun);
+      expect(admittedChild).toMatchObject({
         spawnedBy: parentSessionKey,
         spawnedBySessionId: "parent-session",
         spawnedBySenderIsOwner: true,
@@ -566,10 +585,8 @@ describe("recursive spawn production boundary", () => {
         modelOverrideFallbackOriginModel: "child-model",
       });
       // The receipt's parent id stays out of navigation fields that sessions.list projects.
-      expect(
-        loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey })
-          ?.parentSessionId,
-      ).toBeUndefined();
+      expect(admittedChild.parentSessionId).toBeUndefined();
+      expect(admittedChild.groupId).toBeUndefined();
       expect(subagentRuns.get(details.runId)).toMatchObject({
         childSessionKey: details.childSessionKey,
         requesterSessionKey: parentSessionKey,
@@ -577,6 +594,7 @@ describe("recursive spawn production boundary", () => {
     } catch (error) {
       failures.push(error);
     } finally {
+      childProof.restore();
       modelRun.resolve({
         payloads: [{ text: "descendant complete" }],
         meta: { durationMs: 1 },
@@ -587,7 +605,6 @@ describe("recursive spawn production boundary", () => {
   });
 
   it.each([
-    "active",
     "completed",
     "stopped",
     "operator-completed",
@@ -788,14 +805,6 @@ describe("recursive spawn production boundary", () => {
           expect(
             identities.some((identity) => identity.operationalRunInstance === releaserInstance),
           ).toBe(false);
-          if (parentState === "active") {
-            expect(
-              identities.some(
-                (identity) =>
-                  identity.operationalRunInstance === bound.admission.operationalRunInstance,
-              ),
-            ).toBe(true);
-          }
         }
       } catch (error) {
         failures.push(error);

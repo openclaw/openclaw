@@ -3,7 +3,7 @@ import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -110,7 +110,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
     label: "BytePlus",
     defaultModel: DEFAULT_BYTEPLUS_VIDEO_MODEL,
     models: [DEFAULT_BYTEPLUS_VIDEO_MODEL, "seedance-1-5-pro-251215"],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "byteplus", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "byteplus", ...ctx }),
     capabilities: {
       providerOptions: {
         seed: "number",

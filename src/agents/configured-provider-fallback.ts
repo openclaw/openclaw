@@ -25,14 +25,12 @@ export function resolveConfiguredProviderFallback(params: {
     params.defaultProvider,
   );
   const defaultModel = params.defaultModel?.trim();
-  const defaultProviderHasConfiguredModel =
+  if (
     Array.isArray(defaultProviderConfig?.models) &&
-    defaultProviderConfig.models.some((model) => Boolean(model?.id));
-  const defaultProviderHasDefaultModel =
-    defaultModel !== undefined &&
-    Array.isArray(defaultProviderConfig?.models) &&
-    defaultProviderConfig.models.some((model) => model?.id === defaultModel);
-  if (defaultProviderHasConfiguredModel && (!defaultModel || defaultProviderHasDefaultModel)) {
+    defaultProviderConfig.models.some(
+      (model) => model?.id && (!defaultModel || model.id === defaultModel),
+    )
+  ) {
     return null;
   }
   // A utility-only row does not express primary intent. Keep the remaining

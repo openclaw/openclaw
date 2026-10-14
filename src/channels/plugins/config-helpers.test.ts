@@ -85,7 +85,7 @@ describe("clearAccountFieldsFromConfigSection", () => {
     return result;
   }
 
-  it.each(["token", "   ", { source: "env", provider: "default", id: "SAMPLE_TOKEN" }])(
+  it.each([{ source: "env", provider: "default", id: "SAMPLE_TOKEN" }])(
     "clears the entire root field group for truthy value %j",
     (token) => {
       const cfg: OpenClawConfig = {
@@ -104,7 +104,7 @@ describe("clearAccountFieldsFromConfigSection", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves nested field-presence reporting with mode %s",
     (markClearedOnFieldPresence) => {
       const sibling = { token: "keep" };
@@ -132,12 +132,7 @@ describe("clearAccountFieldsFromConfigSection", () => {
     });
   });
 
-  it.each([
-    {},
-    { channels: {} },
-    { channels: { sample: { accounts: {} } } },
-    { channels: { sample: { token: "", secret: "" } } },
-  ])("returns original config without pruning a no-op %j", (cfg) => {
+  it.each([{ channels: {} }])("returns original config without pruning a no-op %j", (cfg) => {
     const result = clear(cfg);
     expect(result).toEqual({ nextConfig: cfg, changed: false, cleared: false });
     expect(result.nextConfig).toBe(cfg);

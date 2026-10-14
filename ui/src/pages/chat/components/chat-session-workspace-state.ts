@@ -188,11 +188,7 @@ export function refreshSessionWorkspaceState(
   const diffOpen =
     workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
   delete workspace.diffContent;
-  if (!refreshFiles) {
-    workspace.pendingReload = true;
-    return diffOpen;
-  }
-  if (workspace.loading) {
+  if (!refreshFiles || workspace.loading) {
     workspace.pendingReload = true;
   } else {
     loadSessionWorkspace(state, workspace);

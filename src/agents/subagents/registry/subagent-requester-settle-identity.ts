@@ -49,12 +49,24 @@ export function isRequesterSettleWakeForRun(params: {
 }): boolean {
   const { entry, requesterSessionKey, requesterAgentId } = params;
   const wake = entry.requesterSettleWake;
-  const pauseNotice = entry.pauseReason === "sessions_yield" && wake?.pauseNotice;
-  const batchRunIds = pauseNotice ? [entry.runId] : wake?.batchRunIds;
+  if (!wake) {
+    return false;
+  }
+  const pauseNotice = entry.pauseReason === "sessions_yield" && wake.pauseNotice;
+  // Dispatch selects the surviving members of its frozen generation. Retired
+  // rows no longer contribute to the admitted wake's identity.
+  const batchRunIds = pauseNotice
+    ? [entry.runId]
+    : wake.batchRunIds?.filter((id) => {
+        const member = params.runsById.get(id);
+        return (
+          member?.requesterSettleWake !== undefined &&
+          member.requesterSettleWake.rearmGeneration === wake.rearmGeneration
+        );
+      });
   if (
     entry.requesterSessionKey !== requesterSessionKey ||
     (entry.requesterAgentId && entry.requesterAgentId !== requesterAgentId) ||
-    !wake ||
     wake.attemptCount < 1 ||
     !isSameSubagentRun(params.runsById.get(entry.runId), entry) ||
     !batchRunIds?.includes(entry.runId)
@@ -109,6 +121,16 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
     completionRequesterSessionId: entry.completionRequesterSessionId,
     completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
   };
+}
+
+export function sameRequesterSettleRunIdentity(
+  left: SubagentRunRecord,
+  right: SubagentRunRecord,
+): boolean {
+  return isDeepStrictEqual(
+    captureRequesterSettleRunIdentity(left),
+    captureRequesterSettleRunIdentity(right),
+  );
 }
 
 /** Wake decisions retain their observed progress; retirement/presentation metadata is carried forward. */
@@ -251,10 +273,7 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
     if (
       !entry ||
       (entry.expectsCompletionMessage === true && entry.requesterTurnRunId) ||
-      !isDeepStrictEqual(
-        captureRequesterSettleRunIdentity(entry),
-        captureRequesterSettleRunIdentity(observed),
-      ) ||
+      !sameRequesterSettleRunIdentity(entry, observed) ||
       (wake?.yieldedFinalDeliverable === true) !==
         (observed.requesterSettleWake?.yieldedFinalDeliverable === true) ||
       !wake ||

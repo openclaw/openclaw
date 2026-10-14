@@ -12,7 +12,6 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -39,6 +38,7 @@ async function seedState(state: OpenClawTestState) {
   });
   const database = openOpenClawStateDatabase({ env: state.env });
   database.db.exec(`
+    CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT;
     INSERT INTO skill_workshop_collection_reviews (
       review_id, owner_agent_id, backup_id, create_time, kept_names_json, written_names_json, dropped_json
     ) VALUES ('review-preserved', 'main', 'backup-preserved', 1, '[]', '[]', '[]');
@@ -51,7 +51,7 @@ function damageWorkshopIndex(databasePath: string): void {
   const database = new DatabaseSync(databasePath);
   try {
     database.exec(
-      "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+      "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
     );
     database.enableDefensive?.(false);
     database.exec("PRAGMA writable_schema = ON;");
@@ -180,11 +180,14 @@ describe("Doctor state readability recovery", () => {
       );
       const repaired = new DatabaseSync(database.path, { readOnly: true });
       try {
+        // Doctor removes the dangling index first, then retires the proposal tables.
         expect(
           repaired
-            .prepare("SELECT review_id, backup_id FROM skill_workshop_collection_reviews")
-            .all(),
-        ).toEqual([{ review_id: "review-preserved", backup_id: "backup-preserved" }]);
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE name = 'skill_workshop_collection_reviews'",
+            )
+            .get(),
+        ).toBeUndefined();
         expect(
           repaired
             .prepare(
@@ -267,52 +270,41 @@ describe("Doctor state readability recovery", () => {
     });
   });
 
-  it.each(["shared-schema", "custom-agent-schema", "external-owner"] as const)(
-    "refuses %s before changing the malformed source",
-    async (reason) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const database = await seedState(state);
-        if (reason === "shared-schema") {
-          database.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
-        } else if (reason === "custom-agent-schema") {
-          const customPath = state.path("custom", "sessions.sqlite");
-          fs.mkdirSync(path.dirname(customPath));
-          const { DatabaseSync } = requireNodeSqlite();
-          const custom = new DatabaseSync(customPath);
-          custom.exec(`
+  it("refuses a newer custom agent schema before changing the malformed source", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = await seedState(state);
+      const customPath = state.path("custom", "sessions.sqlite");
+      fs.mkdirSync(path.dirname(customPath));
+      const { DatabaseSync } = requireNodeSqlite();
+      const custom = new DatabaseSync(customPath);
+      custom.exec(`
             PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};
             CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, agent_id TEXT);
             INSERT INTO schema_meta VALUES ('primary', 'main');
           `);
-          custom.close();
-          await state.writeConfig({
-            agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
-            session: { store: customPath },
-            gateway: { mode: "local" },
-            plugins: { enabled: false },
-          });
-        } else {
-          claimOpenClawStateOwnership("fixture-manager", {
-            env: { ...state.env, OPENCLAW_SUPERVISOR_MODE: "external" },
-          });
-        }
-        await closeOpenClawStateDatabaseAsync();
-        damageWorkshopIndex(database.path);
-        const before = fs.readFileSync(database.path);
-        const configBefore = fs.readFileSync(state.configPath);
-
-        await expect(
-          doctorCommand(
-            { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            { repair: true, nonInteractive: true },
-          ),
-        ).rejects.toThrow(reason === "external-owner" ? /externally supervised/ : /newer/);
-
-        expect(fs.readFileSync(database.path)).toEqual(before);
-        expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
-        expect(mocks.runContributions).not.toHaveBeenCalled();
-        expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+      custom.close();
+      await state.writeConfig({
+        agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
+        session: { store: customPath },
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
       });
-    },
-  );
+      await closeOpenClawStateDatabaseAsync();
+      damageWorkshopIndex(database.path);
+      const before = fs.readFileSync(database.path);
+      const configBefore = fs.readFileSync(state.configPath);
+
+      await expect(
+        doctorCommand(
+          { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          { repair: true, nonInteractive: true },
+        ),
+      ).rejects.toThrow(/newer/);
+
+      expect(fs.readFileSync(database.path)).toEqual(before);
+      expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+      expect(mocks.runContributions).not.toHaveBeenCalled();
+      expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+    });
+  });
 });

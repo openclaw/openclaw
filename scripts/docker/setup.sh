@@ -556,7 +556,6 @@ export OTEL_SEMCONV_STABILITY_OPT_IN="${OTEL_SEMCONV_STABILITY_OPT_IN:-}"
 export OPENCLAW_OTEL_PRELOADED="${OPENCLAW_OTEL_PRELOADED:-}"
 export OPENCLAW_SKIP_ONBOARDING="$SKIP_ONBOARDING"
 
-# Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
 if [[ -n "$SANDBOX_ENABLED" && -S "$DOCKER_SOCKET_PATH" ]]; then
   DOCKER_GID="$(stat -c '%g' "$DOCKER_SOCKET_PATH" 2>/dev/null || stat -f '%g' "$DOCKER_SOCKET_PATH" 2>/dev/null || echo "")"
@@ -860,7 +859,6 @@ echo ""
 echo "==> Starting gateway"
 run_gateway_up current
 
-# --- Sandbox setup (opt-in via OPENCLAW_SANDBOX=1) ---
 if [[ -n "$SANDBOX_ENABLED" ]]; then
   echo ""
   echo "==> Sandbox setup"
@@ -919,7 +917,6 @@ YAML
 fi
 
 if [[ -n "$SANDBOX_ENABLED" ]]; then
-  # Enable sandbox in OpenClaw config.
   sandbox_config_ok=true
   for sandbox_setting in mode:non-main scope:agent workspaceAccess:none; do
     sandbox_path="agents.defaults.sandbox.${sandbox_setting%%:*}"

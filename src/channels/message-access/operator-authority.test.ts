@@ -138,8 +138,8 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
         Object.assign(run.run, runOverlay, { config: cfg, agentId: "main" });
         const operation = createTestReplyOperation({ sessionId: run.run.sessionId });
         try {
-          operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-          operation.bindToolAuthorityRoute(run.run);
+          await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+          await operation.bindToolAuthorityRouteAsync(run.run);
           const queueMessage = vi.fn(async () => {});
           operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
           operation.setPhase("running");

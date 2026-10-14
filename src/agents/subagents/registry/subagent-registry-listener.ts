@@ -7,6 +7,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -66,6 +67,7 @@ export function createSubagentRegistryListener(config: {
         }
         const lifecycleGeneration = getAgentEventLifecycleGeneration();
         const context = captureOpenClawStateWorkerContext();
+        const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         const assertCurrent = () => {
           assertSubagentRegistryWriteSourceCurrent(context);
           if (
@@ -76,8 +78,6 @@ export function createSubagentRegistryListener(config: {
           }
         };
         if (phase === "start") {
-          const startedAt =
-            typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
           if (startedAt) {
             await mutateSubagentRuns(
               [evt.runId],
@@ -90,7 +90,8 @@ export function createSubagentRegistryListener(config: {
                   current.execution.status === "terminal" ||
                   current.killIntent ||
                   current.killReconciliation ||
-                  shouldSuppressSubagentRecoverySessionEffects(current) ||
+                  (shouldSuppressSubagentRecoverySessionEffects(current) &&
+                    resolveSubagentChildAuthority(current).status !== "legacy-unverified") ||
                   (current.execution.status === "running" &&
                     current.execution.startedAt === startedAt &&
                     typeof current.sessionStartedAt === "number")
@@ -122,7 +123,6 @@ export function createSubagentRegistryListener(config: {
           return;
         }
         const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
-        const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         const terminalReply = normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply);
         const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
           phase,

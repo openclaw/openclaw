@@ -451,11 +451,12 @@ function mergeRecoveredManagedNpmInstallRecords(
   return merged;
 }
 
-/** Reads install records from the persisted installed plugin index. */
-export function readPersistedInstalledPluginIndexInstallRecords(
+/** Read the committed install ledger through its worker-backed metadata owner. */
+export async function readPersistedInstalledPluginIndexInstallRecordsAsync(
   options: InstalledPluginIndexStoreOptions = {},
-): Record<string, PluginInstallRecord> | null {
-  const state = inspectPersistedInstalledPluginIndexInstallRecordsSync(options);
+): Promise<Record<string, PluginInstallRecord> | null> {
+  const prepared = await preparePersistedInstalledPluginIndexCacheEntry(options);
+  const state = inspectPersistedInstalledPluginIndexInstallRecords(prepared.entry);
   return state.status === "valid" ? copyPluginInstallRecordMap(state.records) : null;
 }
 

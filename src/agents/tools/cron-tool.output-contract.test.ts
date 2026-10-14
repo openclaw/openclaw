@@ -1,8 +1,12 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { clearCronJobActive, markCronJobActive } from "../../cron/active-jobs.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
@@ -31,7 +35,7 @@ const job: CronJob = {
   sessionTarget: "main",
   wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "Check unpaid invoices" },
-  state: {},
+  state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
 };
 const compactSourceJob: CronJob = {
   ...job,
@@ -87,17 +91,10 @@ function createCronService(storePath: string) {
 
 describe("automations output contract", () => {
   const { makeStorePath } = createCronStoreHarness({ prefix: "cron-code-mode-output-" });
-  it("accepts stored scheduler diagnostics (#157477)", async () => {
-    const tool = createCronTool(undefined, {
-      callGatewayTool: vi.fn().mockResolvedValue({
-        ...job,
-        state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
-      }),
-    });
-    const result = await tool.execute("diagnostics", { action: "get", jobId: job.id });
-    expect(Value.Errors(expectDefined(tool.outputSchema, "output schema"), result.details)).toEqual(
-      [],
-    );
+
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
   });
 
   it.each(["current"] as const)(
@@ -239,9 +236,10 @@ async function consume() {
   const jobCount = status.jobs;
   const details = await automations({ action: "get", jobId: "invoice-check" });
   const name = details.name;
+  const scheduleErrorCount = details.state.scheduleErrorCount;
   const runs = await automations({ action: "runs", jobId: details.id });
   const summaries = runs.entries.map(entry => entry.summary);
-  return { names, next, enabled, jobCount, name, summaries };
+  return { names, next, enabled, jobCount, name, scheduleErrorCount, summaries };
 }
 `;
     const fileName = "/automations-consumer.ts";
@@ -263,6 +261,11 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
   added.id;
   const addedJob = "job" in added ? added.job : added;
   const id: string = addedJob.id;
+  const updated = await automations({ action: "update", jobId: id, job: { enabled: false } });
+  const warning: string | undefined = updated.deliveryPreview?.detail;
+  const details = await automations({ action: "get", jobId: id });
+  // @ts-expect-error Get does not return a write-time delivery preview.
+  details.deliveryPreview;
   const run = await automations({ action: "run", jobId: id });
   if (!run.ok) {
     const instance: string | undefined = run.processInstanceId;
@@ -292,6 +295,7 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
         enabled: true,
         jobCount: 1,
         name: job.name,
+        scheduleErrorCount: 3,
         summaries: ["Three unpaid invoices"],
       },
     });

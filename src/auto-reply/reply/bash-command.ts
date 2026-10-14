@@ -9,7 +9,7 @@ import {
 } from "../../agents/bash-process-registry.js";
 import { renderExecExitLabel } from "../../agents/bash-tools.exec-output.js";
 import { createExecTool } from "../../agents/bash-tools.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox.js";
 import { isCommandFlagEnabled } from "../../config/commands.flags.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -68,12 +68,9 @@ function formatOutputBlock(text: string) {
 }
 
 function parseBashRequest(trimmed: string): BashRequest | null {
+  const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
   let restSource;
-  if (trimmed.toLowerCase().startsWith("/bash")) {
-    const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
-    if (!match) {
-      return null;
-    }
+  if (match) {
     restSource = match[1] ?? "";
   } else if (trimmed.startsWith("!")) {
     restSource = trimmed.slice(1);
@@ -136,17 +133,19 @@ export async function handleBashChatCommand(params: {
     });
 
   if (!params.elevated.enabled || !params.elevated.allowed) {
-    const runtimeSandboxed = resolveSandboxRuntimeStatus({
-      cfg: params.cfg,
-      agentId,
-      sessionKey: params.sessionKey,
-      classificationSessionKey: resolveRuntimePolicySessionKey({
-        agentId,
+    const runtimeSandboxed = (
+      await resolveSandboxRuntimeStatusAsync({
         cfg: params.cfg,
-        ctx: params.ctx,
+        agentId,
         sessionKey: params.sessionKey,
-      }),
-    }).sandboxed;
+        classificationSessionKey: resolveRuntimePolicySessionKey({
+          agentId,
+          cfg: params.cfg,
+          ctx: params.ctx,
+          sessionKey: params.sessionKey,
+        }),
+      })
+    ).sandboxed;
     return {
       text: formatElevatedUnavailableMessage({
         runtimeSandboxed,

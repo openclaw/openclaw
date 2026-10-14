@@ -19,9 +19,17 @@ const loadWebSocketConstructor = createLazyRuntimeNamedExport(
 
 const WEBSOCKET_CONNECTING = 0;
 const WEBSOCKET_OPEN = 1;
+const WEBSOCKET_CLOSING = 2;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
+// An empty target close has nothing left to deliver. Bound that handshake so
+// a silent gateway cannot hold the command open.
+const STREAM_CLOSE_ACK_MS = 5_000;
+// A peer that stops reading leaves the payload queued in this process.
+// This bounds that wait before close(). After close(), ws owns the
+// handshake and destroys the socket on its own 30 second timer.
+const STREAM_CLOSE_FLUSH_MS = 30_000;
 const streamLog = createSubsystemLogger("node-host/stream");
 
 type NodeStreamCloseTrigger =
@@ -89,9 +97,19 @@ function createNodeStreamSplice(params: {
   ws: WebSocket;
   streamName: string;
   diagnostics: NodeStreamDiagnostics;
+  closeAckMs?: number;
+  scheduleCloseAck?: (callback: () => void, delayMs: number) => () => void;
 }) {
   let resumeTimer: ReturnType<typeof setInterval> | undefined;
+  let cancelCloseAck: (() => void) | undefined;
+  const scheduleCloseAck =
+    params.scheduleCloseAck ??
+    ((callback: () => void, delayMs: number) => {
+      const timer = setTimeout(callback, delayMs);
+      return () => clearTimeout(timer);
+    });
   let settled = false;
+  let forwardedBytes = 0;
   let finish!: (trigger: NodeStreamCloseTrigger, error?: Error) => void;
   const resumeWebSocket = () => params.ws.resume();
   const onMessage = (data: RawData, isBinary: boolean) => {
@@ -128,6 +146,8 @@ function createNodeStreamSplice(params: {
       params.diagnostics.trigger ??= trigger;
       settled = true;
       clearInterval(resumeTimer);
+      cancelCloseAck?.();
+      cancelCloseAck = undefined;
       stopInbound();
       if (error) {
         reject(error);
@@ -141,6 +161,7 @@ function createNodeStreamSplice(params: {
       if (params.ws.readyState !== WEBSOCKET_OPEN) {
         return;
       }
+      forwardedBytes += chunk.length;
       params.ws.send(chunk, { binary: true }, (error) => error && finish("send-error", error));
       if (params.ws.bufferedAmount <= PAUSE_BUFFERED_BYTES || resumeTimer) {
         return;
@@ -161,9 +182,50 @@ function createNodeStreamSplice(params: {
       params.diagnostics.trigger ??= "target-close";
       stopInbound();
       if (params.socket.readableEnded && params.ws.readyState === WEBSOCKET_OPEN) {
-        // Let the Gateway receive the last frames and close acknowledgement before
-        // the control-channel invocation can retire its desktop/portal stream.
-        params.ws.close();
+        const closeAckMs = params.closeAckMs ?? STREAM_CLOSE_ACK_MS;
+        const retireUnacknowledged = () => {
+          cancelCloseAck = undefined;
+          finish("websocket-close");
+          if (
+            params.ws.readyState === WEBSOCKET_OPEN ||
+            params.ws.readyState === WEBSOCKET_CLOSING
+          ) {
+            params.ws.terminate();
+          }
+        };
+        if (forwardedBytes === 0) {
+          params.ws.close();
+          cancelCloseAck = scheduleCloseAck(retireUnacknowledged, closeAckMs);
+          return;
+        }
+        // bufferedAmount === 0 only means the kernel accepted the bytes.
+        // Finish on the gateway close, not on a timer, or the receive stream
+        // is destroyed while those bytes are still downstream.
+        let observedAmount = params.ws.bufferedAmount;
+        let progressAt = Date.now();
+        const closeAfterDrain = () => {
+          if (settled || params.ws.readyState !== WEBSOCKET_OPEN) {
+            return;
+          }
+          cancelCloseAck?.();
+          cancelCloseAck = undefined;
+          const amount = params.ws.bufferedAmount;
+          const now = Date.now();
+          if (amount < observedAmount) {
+            observedAmount = amount;
+            progressAt = now;
+          }
+          if (amount > 0) {
+            if (now - progressAt < STREAM_CLOSE_FLUSH_MS) {
+              cancelCloseAck = scheduleCloseAck(closeAfterDrain, RESUME_CHECK_MS);
+              return;
+            }
+            retireUnacknowledged();
+            return;
+          }
+          params.ws.close();
+        };
+        closeAfterDrain();
       } else {
         finish("target-close");
       }
@@ -196,6 +258,8 @@ export async function runNodeStreamTransport(params: {
   streamName: string;
   signal: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
+  closeAckMs?: number;
+  scheduleCloseAck?: (callback: () => void, delayMs: number) => () => void;
 }): Promise<void> {
   const socket = "stream" in params.target ? params.target.stream : new net.Socket();
   // Loopback peers may send immediately; retain their first bytes until metadata is accepted.
@@ -258,6 +322,8 @@ export async function runNodeStreamTransport(params: {
       ws,
       streamName: params.streamName,
       diagnostics,
+      closeAckMs: params.closeAckMs,
+      scheduleCloseAck: params.scheduleCloseAck,
     });
     await sendAttachMetadata(ws, params.metadata);
     void params.emitStatus?.(`${params.streamName} stream attached\n`).catch(() => undefined);
@@ -271,8 +337,18 @@ export async function runNodeStreamTransport(params: {
   } finally {
     params.signal.removeEventListener("abort", onAbort);
     socket.destroy();
-    if (ws && (ws.readyState === WEBSOCKET_OPEN || ws.readyState === WEBSOCKET_CONNECTING)) {
-      ws.close();
+    if (
+      ws &&
+      (ws.readyState === WEBSOCKET_CONNECTING ||
+        ws.readyState === WEBSOCKET_OPEN ||
+        ws.readyState === WEBSOCKET_CLOSING)
+    ) {
+      const closing = ws;
+      // A protocol error may already have called close(), which starts the
+      // library handshake timer. Otherwise start that same close.
+      if (closing.readyState !== WEBSOCKET_CLOSING) {
+        closing.close();
+      }
     }
   }
 }

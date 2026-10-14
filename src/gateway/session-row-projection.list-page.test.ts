@@ -7,8 +7,11 @@ import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import * as topology from "../config/sessions/combined-store-gateway-read.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -24,6 +27,66 @@ import * as rowInputs from "./session-utils-row.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("reconciles an invalidated row while rebuilding topology for sessions.list", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const keys = ["agent:main:dashboard:pending-row", "agent:main:dashboard:other-row"];
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: `pending-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      const row = projection.capture({ agentId: "main", key: keys[0]! })!;
+      const prepare = topology.prepareCombinedSessionStoreForGatewayAsync;
+      vi.spyOn(topology, "prepareCombinedSessionStoreForGatewayAsync").mockImplementationOnce(
+        async (...args) => {
+          const result = await prepare(...args);
+          emitSessionIdentityMutation({
+            kind: "reset",
+            agentId: "main",
+            databaseIdentity: readDatabasePathIdentitySync(row.storeTarget.storePath).key.slice(5),
+            previous: { sessionId: "pending-0", sessionKeys: [keys[0]!] },
+            current: { sessionId: "pending-0", sessionKeys: [keys[0]!] },
+          });
+          const invalidated = projection.capture({ agentId: "main", key: keys[0]! })!;
+          expect(invalidated.storedEntry).toBeUndefined();
+          expect(invalidated.retainedDatabaseFacts).toBeUndefined();
+          expect(invalidated.pendingDatabaseFacts).toBeUndefined();
+          return result;
+        },
+      );
+      sessionChanges.emit({ all: true, scope: "stores" });
+      const respond = vi.fn();
+      await sessionReadHandlers["sessions.list"]!({
+        req: { type: "req", id: "pending-row-list", method: "sessions.list" },
+        params: {},
+        client: null,
+        context: bindSessionRowProjection(requestContext(cfg), () => projection),
+        isWebchatConnect: () => false,
+        respond,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          sessions: [
+            expect.objectContaining({ sessionId: "pending-1" }),
+            expect.objectContaining({ sessionId: "pending-0" }),
+          ],
+        }),
+      );
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 it("retries failed catalog renewal without blocking lists on its replacement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -122,72 +185,67 @@ it("retains prepared child metadata across a parent presentation refresh", async
   });
 });
 
-it.each([false, true])(
-  "counts matching children across cached archive views (serialized: %s)",
-  async (acceptsSerializedJson) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const parent = "agent:main:dashboard:archive-parent";
-      const children = [1, 2].map((id) => `${parent}-child-${id}`);
+it("counts matching children across cached serialized archive views", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const parent = "agent:main:dashboard:archive-parent";
+    const children = [1, 2].map((id) => `${parent}-child-${id}`);
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: "archive-parent", updatedAt: 3 },
+    );
+    const writeChild = (index: number, archivedAt?: number) =>
       replaceSessionEntrySync(
-        { agentId: "main", sessionKey: parent },
-        { sessionId: "archive-parent", updatedAt: 3 },
+        { agentId: "main", sessionKey: children[index]! },
+        {
+          sessionId: `archive-child-${index}`,
+          updatedAt: 1,
+          parentSessionKey: parent,
+          archivedAt,
+        },
       );
-      const writeChild = (index: number, archivedAt?: number) =>
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: children[index]! },
-          {
-            sessionId: `archive-child-${index}`,
-            updatedAt: 1,
-            parentSessionKey: parent,
-            archivedAt,
-          },
-        );
+    writeChild(0);
+    writeChild(1, 1);
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const listParent = async () => {
+      const result = await listProjectedSessions({
+        projection,
+        opts: { limit: 1 },
+        acceptsSerializedJson: true,
+      });
+      expect(result.sessions[0]?.key).toBe(parent);
+      return result.sessions[0]?.childSessions ?? [];
+    };
+    try {
+      expect(await listParent()).toEqual([children[0]]);
+      const archived = await listProjectedSessions({
+        projection,
+        opts: { archived: true },
+        acceptsSerializedJson: true,
+      });
+      expect(archived.sessions.map((row) => row.key)).toEqual([children[1]]);
+      const all = await listProjectedSessions({
+        projection,
+        opts: { archived: "all", limit: 1 },
+        acceptsSerializedJson: true,
+      });
+      expect(all.sessions[0]?.childSessions).toEqual(children);
+      const visible = await listParent();
+      expect(visible).toEqual([children[0]]);
+      expect(await listParent()).toBe(visible);
+      writeChild(0, 2);
+      expect(await listParent()).toEqual([]);
       writeChild(0);
-      writeChild(1, 1);
-      const release = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const listParent = async () => {
-        const result = await listProjectedSessions({
-          projection,
-          opts: { limit: 1 },
-          acceptsSerializedJson,
-        });
-        expect(result.sessions[0]?.key).toBe(parent);
-        return result.sessions[0]?.childSessions ?? [];
-      };
-      try {
-        expect(await listParent()).toEqual([children[0]]);
-        const archived = await listProjectedSessions({
-          projection,
-          opts: { archived: true },
-          acceptsSerializedJson,
-        });
-        expect(archived.sessions.map((row) => row.key)).toEqual([children[1]]);
-        const all = await listProjectedSessions({
-          projection,
-          opts: { archived: "all", limit: 1 },
-          acceptsSerializedJson,
-        });
-        expect(all.sessions[0]?.childSessions).toEqual(children);
-        const visible = await listParent();
-        expect(visible).toEqual([children[0]]);
-        if (acceptsSerializedJson) {
-          expect(await listParent()).toBe(visible);
-        }
-        writeChild(0, 2);
-        expect(await listParent()).toEqual([]);
-        writeChild(0);
-        writeChild(1);
-        expect(await listParent()).toEqual(children);
-      } finally {
-        projection.dispose();
-        release();
-      }
-    });
-  },
-);
+      writeChild(1);
+      expect(await listParent()).toEqual(children);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 it("yields while materializing only overlapping selected pages for concurrent list handlers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

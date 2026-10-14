@@ -72,15 +72,13 @@ export function registerAgentHarness(
     },
   };
   const existingIndex = harnesses.findIndex((registration) => registration.harness.id === id);
-  if (existingIndex !== -1) {
+  if (existingIndex === -1) {
+    harnesses.push(entry);
+  } else {
     assertDirectPluginRegistrationReplacement(
       harnesses[existingIndex]?.pluginId,
       `agent harness ${id}`,
     );
-  }
-  if (existingIndex === -1) {
-    harnesses.push(entry);
-  } else {
     harnesses.splice(existingIndex, 1, entry);
   }
 }

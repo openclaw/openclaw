@@ -197,3 +197,33 @@ it.skipIf(process.platform !== "linux")(
     });
   },
 );
+
+// Manager socket absence is native evidence, while an advertised but unreadable
+// manager must continue to fence test builds. No service lifecycle calls occur.
+it.each([false, true])(
+  "fences test preparation only when a manager may exist (present=%s)",
+  (present) =>
+    withMockedPlatform("linux", () =>
+      withTestDir({ prefix: "openclaw-manager-absence-" }, async (home) => {
+        const lstat = vi
+          .spyOn(fs, "lstat")
+          .mockRejectedValue(Object.assign(new Error("Synthetic path absent"), { code: "ENOENT" }));
+        const directories = vi.spyOn(fs, "readdir").mockResolvedValue([]);
+        userctl.mockRejectedValue(new Error("Synthetic advertised manager inaccessible"));
+        systemctl.mockRejectedValue(new Error("Synthetic advertised manager inaccessible"));
+        const env = {
+          HOME: home,
+          XDG_RUNTIME_DIR: home,
+          ...(present ? { DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/user-bus" } : {}),
+        };
+        try {
+          await expect(
+            resolveLiveManagedGatewayDistFence(home, { env, requireVerified: true }),
+          ).resolves.toMatchObject({ refuse: present });
+        } finally {
+          directories.mockRestore();
+          lstat.mockRestore();
+        }
+      }),
+    ),
+);

@@ -34,10 +34,8 @@ export function closeAgentPicker(root: ParentNode) {
   }
 }
 
-export function closeSessionMenus(root: ParentNode) {
-  for (const selector of ["wa-dropdown[open]", "wa-popover.new-session-page__picker-popover"]) {
-    for (const menu of root.querySelectorAll<HTMLElement & { open: boolean }>(selector)) {
-      menu.open = false;
-    }
+export function closeSessionMenus(root: Pick<ParentNode, "querySelectorAll">) {
+  for (const menu of root.querySelectorAll<HTMLElement & { open: boolean }>("wa-dropdown[open]")) {
+    menu.open = false;
   }
 }

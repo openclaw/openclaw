@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -12,15 +13,17 @@ import { sharingPolicyClient, rolePolicyConfig } from "./session-sharing.test-ut
 afterEach(() => vi.restoreAllMocks());
 
 it("refreshes retained sharing facts on profile changes and clears them when identity detaches", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const source = ensureProfileForEmail("source@example.test");
     const target = ensureProfileForEmail("target@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const client = sharingPolicyClient({ user: source.id }) as GatewayWsClient;
     prepareGatewayRecipientProfile(client);
     expect(client.preparedSessionProfile).toEqual({
       profileId: source.id,
       aliases: new Set([source.id]),
       role: null,
+      githubLogin: null,
     });
     const stop = onUserProfilesChanged(() => prepareGatewayRecipientProfile(client));
     try {
@@ -32,6 +35,7 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
         profileId: target.id,
         aliases: new Set([source.id, target.id]),
         role: "none",
+        githubLogin: null,
       });
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const sharing = prepareProjectedSessionSharing({
@@ -54,7 +58,7 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
 });
 
 it("uses fresh prepared caller, alias, role, and membership facts without querying SQLite", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const owner = ensureProfileForEmail("owner@example.test");
     const oldOwner = ensureProfileForEmail("old-owner@example.test");
     const target = {

@@ -1,25 +1,17 @@
-import {
-  SelectList,
-  Text,
-  type Component,
-  type OverlayHandle,
-  type SelectItem,
-} from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TaskSuggestion } from "../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
-import { selectListTheme, tuiTheme as theme } from "./theme/theme.js";
+import {
+  TuiChoicePrompt,
+  createTuiChoiceSelector,
+  type TuiChoiceSelector,
+} from "./components/choice-prompt.js";
+import { tuiTheme as theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { matchesOwnedTuiSession } from "./tui-session-events.js";
-
-type TaskSelector = Component & {
-  onSelect?: (item: SelectItem) => void;
-  onCancel?: () => void;
-  onSelectionChange?: (item: SelectItem) => void;
-  setSelectedIndex?: (index: number) => void;
-};
 
 type TaskSuggestionControllerDeps = {
   client: Pick<
@@ -36,15 +28,10 @@ type TaskSuggestionControllerDeps = {
   closeOverlay: (handle: OverlayHandle) => void;
   requestRender: () => void;
   onAccepted: (sessionKey: string) => Promise<void> | void;
-  createSelector?: (items: SelectItem[]) => TaskSelector;
+  createSelector?: (items: SelectItem[]) => TuiChoiceSelector;
 };
 
 const TASK_BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
-const TASK_DETAIL_VIEWPORT_LINES = 12;
-const TASK_DETAIL_PAGE_LINES = TASK_DETAIL_VIEWPORT_LINES - 1;
-const PAGE_UP_INPUT = "\u001b[5~";
-const PAGE_DOWN_INPUT = "\u001b[6~";
-
 type TaskAction = SelectItem & { value: "accept" | "dismiss" };
 
 const TASK_ACTIONS = [
@@ -94,124 +81,28 @@ function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
   };
 }
 
-class TaskPrompt implements Component {
-  private readonly title: Text;
-  private readonly details: Text[];
-  private readonly detailPosition = new Text();
-  private readonly confirmation = new Text();
-  private detailOffset = 0;
-  private detailLineCount = 0;
-
-  constructor(
-    suggestion: TaskSuggestion,
-    private readonly selector: TaskSelector,
-    private readonly requestRender: () => void,
-  ) {
-    this.title = new Text(theme.header(`Suggested follow-up: ${clean(suggestion.title)}`));
-    this.details = [
-      new Text(theme.dim(`Project: ${clean(suggestion.cwd)}`)),
-      new Text(theme.system(`Why: ${clean(suggestion.tldr)}`)),
-      new Text(theme.system("Instructions:")),
-      new Text(theme.system(sanitizeTaskText(suggestion.prompt.trim()))),
-    ];
-  }
-
-  setConfirmation(text: string): void {
-    this.confirmation.setText(theme.accent(text));
-  }
-
-  invalidate(): void {
-    for (const component of [
-      this.title,
-      ...this.details,
-      this.detailPosition,
-      this.confirmation,
-      this.selector,
-    ]) {
-      component.invalidate();
-    }
-  }
-
-  render(width: number): string[] {
-    // Page the complete confirmation details as one unit. This keeps actions
-    // visible without hiding a long project-path suffix from the operator.
-    const detailLines = this.details.flatMap((component) => component.render(width));
-    this.detailLineCount = detailLines.length;
-    const maxDetailOffset = Math.max(0, detailLines.length - TASK_DETAIL_VIEWPORT_LINES);
-    this.detailOffset = Math.min(this.detailOffset, maxDetailOffset);
-    const visibleDetails = detailLines.slice(
-      this.detailOffset,
-      this.detailOffset + TASK_DETAIL_VIEWPORT_LINES,
-    );
-    if (detailLines.length > TASK_DETAIL_VIEWPORT_LINES) {
-      const visibleEnd = this.detailOffset + visibleDetails.length;
-      this.detailPosition.setText(
-        theme.dim(
-          `Details ${this.detailOffset + 1}-${visibleEnd} of ${detailLines.length} · PgUp/PgDn to inspect`,
-        ),
-      );
-    } else {
-      this.detailPosition.setText("");
-    }
-    const detailPosition = this.detailPosition.render(width);
-    const confirmation = this.confirmation.render(width);
-    return [
-      ...this.title.render(width).slice(0, 2),
-      ...visibleDetails,
-      ...(detailPosition.some((line) => line.trim()) ? detailPosition : []),
-      ...(confirmation.some((line) => line.trim()) ? ["", ...confirmation] : []),
-      "",
-      ...this.selector.render(width),
-    ];
-  }
-
-  handleInput(data: string): void {
-    if (data === PAGE_UP_INPUT || data === PAGE_DOWN_INPUT) {
-      const maxOffset = Math.max(0, this.detailLineCount - TASK_DETAIL_VIEWPORT_LINES);
-      const delta = data === PAGE_UP_INPUT ? -TASK_DETAIL_PAGE_LINES : TASK_DETAIL_PAGE_LINES;
-      const nextOffset = Math.min(maxOffset, Math.max(0, this.detailOffset + delta));
-      if (nextOffset !== this.detailOffset) {
-        this.detailOffset = nextOffset;
-        for (const component of this.details) {
-          component.invalidate();
-        }
-        this.requestRender();
-      }
-      return;
-    }
-    this.selector.handleInput?.(data);
-  }
-}
-
 export function createTuiTaskSuggestionController(deps: TaskSuggestionControllerDeps) {
-  const createSelector =
-    deps.createSelector ??
-    ((items: SelectItem[]) => new SelectList(items, items.length, selectListTheme));
+  const createSelector = deps.createSelector ?? createTuiChoiceSelector;
   const suggestions = new Map<string, TaskSuggestion>();
   const hiddenIds = new Set<string>();
   const resolvingIds = new Set<string>();
-  let activeId: string | null = null;
-  let activeOverlay: OverlayHandle | null = null;
-  let activeSelector: TaskSelector | null = null;
-  let activeActionKey: string | null = null;
+  type Presentation = { id: string; overlay?: OverlayHandle; actionKey: string };
+  let active: Presentation | null = null;
   let revision = 0;
   let disposed = false;
 
   const closeActive = () => {
-    if (activeOverlay) {
-      deps.closeOverlay(activeOverlay);
-      activeOverlay = null;
+    if (active?.overlay) {
+      deps.closeOverlay(active.overlay);
     }
-    activeId = null;
-    activeSelector = null;
-    activeActionKey = null;
+    active = null;
   };
 
   const remove = (id: string) => {
     revision += 1;
     suggestions.delete(id);
     hiddenIds.delete(id);
-    if (activeId === id) {
+    if (active?.id === id) {
       closeActive();
     }
   };
@@ -235,8 +126,8 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
     }
     const actions = availableActions();
     const actionKey = actions.map((action) => action.value).join(",");
-    if (activeId) {
-      if (activeActionKey === actionKey) {
+    if (active) {
+      if (active.actionKey === actionKey) {
         return;
       }
       closeActive();
@@ -250,17 +141,26 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       return;
     }
 
-    activeId = suggestion.id;
     const selector = createSelector(actions);
-    activeSelector = selector;
-    activeActionKey = actionKey;
+    const presentation: Presentation = { id: suggestion.id, actionKey };
+    active = presentation;
     const dismissIndex = actions.findIndex((action) => action.value === "dismiss");
     selector.setSelectedIndex?.(Math.max(dismissIndex, 0));
     let acceptArmed = false;
-    const prompt = new TaskPrompt(suggestion, selector, deps.requestRender);
+    const prompt = new TuiChoicePrompt(
+      theme.header(`Suggested follow-up: ${clean(suggestion.title)}`),
+      [
+        theme.dim(`Project: ${clean(suggestion.cwd)}`),
+        theme.system(`Why: ${clean(suggestion.tldr)}`),
+        theme.system("Instructions:"),
+        theme.system(sanitizeTaskText(suggestion.prompt.trim())),
+      ],
+      selector,
+      { lines: 12, titleLines: 2, requestRender: deps.requestRender },
+    );
 
     const resolve = async (action: TaskAction) => {
-      if (activeId !== suggestion.id || activeSelector !== selector) {
+      if (active !== presentation) {
         return;
       }
       closeActive();
@@ -320,7 +220,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       prompt.setConfirmation("");
     };
     selector.onSelect = (item) => {
-      if (activeSelector !== selector) {
+      if (active !== presentation) {
         return;
       }
       const selectedAction = actions.find((action) => action.value === item.value);
@@ -339,7 +239,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       deps.requestRender();
     };
     selector.onCancel = () => {
-      if (activeSelector !== selector) {
+      if (active !== presentation) {
         return;
       }
       hiddenIds.add(suggestion.id);
@@ -348,7 +248,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       presentNext();
       deps.requestRender();
     };
-    activeOverlay = deps.openOverlay(prompt);
+    presentation.overlay = deps.openOverlay(prompt);
     deps.requestRender();
   };
 
@@ -379,7 +279,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       return true;
     },
     () => {
-      if (activeId && !suggestions.has(activeId)) {
+      if (active && !suggestions.has(active.id)) {
         closeActive();
       }
       presentNext();
@@ -422,8 +322,8 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
         return;
       }
       hiddenIds.clear();
-      const active = activeId ? suggestions.get(activeId) : undefined;
-      if (active && !matchesSession(active)) {
+      const suggestion = active ? suggestions.get(active.id) : undefined;
+      if (suggestion && !matchesSession(suggestion)) {
         closeActive();
       }
       presentNext();

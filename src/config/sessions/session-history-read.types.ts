@@ -9,6 +9,10 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionBranchSummary,
 } from "./session-accessor.types.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
+
+export type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 
 export type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -20,14 +24,10 @@ export type SessionPreviewItem = {
   text: string;
 };
 
-export type SessionTranscriptWatermark = {
-  generation: string | null;
-  maxSeq: number | null;
-};
-
 export type SessionBranchSummarySnapshot = SessionTranscriptWatermark & {
   branches: SessionBranchSummary[];
   appendSafe?: boolean;
+  source?: { sessionId: string; databaseIdentity: string };
 };
 
 export type SessionBranchSummaryReadResult =
@@ -49,6 +49,7 @@ export type SessionTranscriptModelContext = {
 export type SessionTranscriptReadSnapshot = {
   events: TranscriptEvent[];
   eventJson?: string[];
+  eventSeqs?: number[];
   version: SessionTranscriptContextVersion;
 };
 
@@ -60,7 +61,13 @@ export type SessionTranscriptContextSnapshot = {
 
 export type PreparedSessionTranscriptHydration =
   | { kind: "full"; snapshot: SessionTranscriptReadSnapshot }
-  | { kind: "bounded"; snapshot: SessionTranscriptBoundedActiveContext };
+  | {
+      kind: "bounded";
+      snapshot: SessionTranscriptBoundedActiveContext;
+      transcript?: SessionTranscriptAnchorFacts;
+      /** Byte and sequence facts for the actor's bounded context residency. */
+      residentRows?: Array<{ rawSeq: number; serializedBytes: number }>;
+    };
 
 export type SessionPendingInputReceipt =
   | { runId: string; state: "pending"; cancelled?: true }

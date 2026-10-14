@@ -1,4 +1,3 @@
-// Hermes MCP config mapping and manual follow-up planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";

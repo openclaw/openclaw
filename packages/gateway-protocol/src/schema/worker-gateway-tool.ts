@@ -101,6 +101,7 @@ export const WorkerToolSurfaceSchema = closedObject({
         resultContentSource: Type.Optional(Type.Literal("network")),
         executionMode: Type.Optional(Type.Enum(["sequential", "parallel"])),
         catalogMode: Type.Optional(Type.Literal("direct-only")),
+        async: Type.Optional(Type.Literal(false)),
       }),
     }),
     { maxItems: 256 },

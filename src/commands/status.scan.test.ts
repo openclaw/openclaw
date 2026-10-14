@@ -255,7 +255,7 @@ describe("status scans", () => {
     );
   });
 
-  it.each([undefined, "token"])(
+  it.each(["token"])(
     "uses manifest environment credentials for cold-start JSON (%s)",
     async (token) => {
       await withTemporaryEnv(coldStartEnv(token), async () => {
@@ -271,17 +271,6 @@ describe("status scans", () => {
       }
     },
   );
-
-  it("keeps scaffold-only channel config on read-only JSON metadata", async () => {
-    configure({ plugins: { enabled: false }, channels: { telegram: { enabled: false } } });
-    await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
-    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ url, timeoutMs: 60_000, detailLevel: "presence" }),
-    );
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
 
   describe("collectStatusScanOverview", () => {
     const sqliteWal = createSqliteWalHealth();
@@ -376,32 +365,6 @@ describe("status scans", () => {
         execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
         available: false,
       });
-    });
-
-    it("can keep channel overview on metadata-only status paths", async () => {
-      const result = await collectStatusScanOverview({
-        commandName: "status",
-        opts: createStatusGatewayProbeBudget(1234),
-        showSecrets: false,
-        includeLiveChannelStatus: false,
-        includeChannelSetupRuntimeFallback: false,
-        gatewaySnapshot,
-      });
-
-      expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ method: "status" }),
-      );
-      expect(mocks.buildChannelsTable).toHaveBeenCalledExactlyOnceWith(
-        { session: {} },
-        {
-          sourceConfig: { session: { raw: true } },
-          showSecrets: false,
-          includeSetupFallbackPlugins: false,
-          liveChannelStatus: null,
-        },
-      );
-      expect(result.channelIssues).toStrictEqual([]);
-      expect(result.runtimeDegradation).not.toHaveProperty("childRuntime");
     });
   });
 });

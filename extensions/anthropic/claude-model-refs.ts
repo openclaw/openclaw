@@ -12,9 +12,6 @@ type ClaudeCliAnthropicModelRefs = {
 
 export function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return { model: "" };
-  }
   const lastSlash = trimmed.lastIndexOf("/");
   let delimiter = trimmed.indexOf("@", lastSlash + 1);
   if (delimiter <= 0) {
@@ -68,21 +65,20 @@ export function parseAnthropicModelRef(
 }
 
 function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
-  const split = splitTrailingModelAuthProfile(modelId);
-  const trimmed = split.model.trim();
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+  const { model, profile } = splitTrailingModelAuthProfile(modelId);
+  const normalized = normalizeLowercaseStringOrEmpty(model);
   if (!normalized) {
     return null;
   }
   const upgraded = upgradeOldClaudeModelId(normalized);
   if (upgraded) {
-    return attachModelAuthProfile(upgraded, split.profile);
+    return attachModelAuthProfile(upgraded, profile);
   }
   if (normalized.startsWith("claude-")) {
-    return attachModelAuthProfile(trimmed, split.profile);
+    return attachModelAuthProfile(model, profile);
   }
   const aliasedModel = CLAUDE_MODEL_ID_ALIASES.get(normalized);
-  return aliasedModel ? attachModelAuthProfile(aliasedModel, split.profile) : null;
+  return aliasedModel ? attachModelAuthProfile(aliasedModel, profile) : null;
 }
 
 function upgradeOldClaudeModelId(normalized: string): string | null {

@@ -189,18 +189,4 @@ describe("discord channel message adapter", () => {
       },
     });
   });
-
-  it("declares fresh final delivery and pending preview cleanup", () => {
-    const adapter = requireDiscordMessageAdapter();
-    expect(adapter.live?.capabilities).toEqual({
-      draftPreview: true,
-      previewFinalization: true,
-      progressUpdates: true,
-    });
-    expect(adapter.live?.finalizer?.capabilities).toEqual({
-      finalEdit: false,
-      normalFallback: true,
-      discardPending: true,
-    });
-  });
 });

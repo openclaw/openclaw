@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
@@ -13,10 +18,23 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 
 const baseTools = ["read", "web_search", "exec"];
 
+beforeEach(() => {
+  for (const name of listKnownProviderAuthEnvVarNamesCore()) {
+    vi.stubEnv(name, undefined);
+  }
+  // Route selection needs a configured managed fallback without forcing a provider.
+  vi.stubEnv("BRAVE_API_KEY", "test-managed-search-key");
+});
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.unstubAllEnvs();
+});
+
 function selectedTools(
   requestedTools: string[],
   options?: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>,
 ) {
+  setRuntimeConfigSnapshot(options?.config ?? {});
   const actualTools = createOpenClawCodingTools({
     ...options,
     cwd: "/tmp/openclaw-agent-tools-policy-test",
@@ -105,14 +123,14 @@ describe("applyModelProviderToolPolicy", () => {
       native: true,
     },
     {
-      name: "unauthenticated direct",
+      name: "direct without auth-profile metadata",
       modelProvider: "openai",
       auth: false,
       suppressManagedWebSearch: undefined,
-      native: false,
+      native: true,
     },
   ])(
-    "selects one Codex search route for $name",
+    "selects the admitted Codex transport's search route for $name",
     ({ modelProvider, auth, suppressManagedWebSearch, native }) => {
       const filtered = selectedTools(baseTools, {
         config: {

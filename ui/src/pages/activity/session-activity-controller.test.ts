@@ -17,15 +17,10 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(Math, "random").mockReturnValue(0);
   client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
-  controller = new SessionActivityController({
-    addController() {},
-    removeController() {},
-    requestUpdate() {},
-    updateComplete: Promise.resolve(true),
-  });
+  controller = new SessionActivityController(() => {});
 });
 afterEach(() => {
-  controller.hostDisconnected();
+  controller.dispose();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -137,7 +132,7 @@ it.each([
 
     await controller.load(client, filters);
     expect(request).toHaveBeenCalledTimes(4);
-    controller.hostDisconnected();
+    controller.dispose();
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(24 * 3_600_000);
     expect(request).toHaveBeenCalledTimes(4);
@@ -208,7 +203,7 @@ it("keeps the same-query snapshot during invalidation and clears it on person ch
   );
   void controller.load(client, { ...filters, personId: "other" });
   expect(controller.result).toBeUndefined();
-  controller.hostDisconnected();
+  controller.dispose();
 });
 
 it("holds a trailing Activity refresh through page hiding and retires it on disconnect", async () => {
@@ -219,19 +214,14 @@ it("holds a trailing Activity refresh through page hiding and retires it on disc
   vi.stubGlobal("document", documentEvents);
   vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
   vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
-  controller = new SessionActivityController({
-    addController() {},
-    removeController() {},
-    requestUpdate() {},
-    updateComplete: Promise.resolve(true),
-  });
+  controller = new SessionActivityController(() => {});
   let complete!: (value: typeof result) => void;
   const pending = new Promise<typeof result>((resolve) => {
     complete = resolve;
   });
   const request = vi.spyOn(client, "request").mockResolvedValue(result);
   try {
-    controller.hostConnected();
+    controller.connect();
     const filters = { personId: null, time: "7d" as const, query: "" };
     void controller.load(client, filters);
     await vi.advanceTimersByTimeAsync(0);
@@ -250,7 +240,7 @@ it("holds a trailing Activity refresh through page hiding and retires it on disc
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(3);
     controller.invalidate();
-    controller.hostDisconnected();
+    controller.dispose();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(3);
   } finally {

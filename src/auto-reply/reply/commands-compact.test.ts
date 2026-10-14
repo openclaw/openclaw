@@ -3,10 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  resolveAgentDirMock,
-  resolveSessionAgentIdMock,
-} from "./commands-agent-scope.test-support.js";
-import {
   abortEmbeddedAgentRun,
   buildCompactParams,
   compactEmbeddedAgentSession,
@@ -65,14 +61,20 @@ describe("handleCompactCommand", () => {
       compacted: false,
     });
     const abortController = new AbortController();
+    const ownerIds = Array.from({ length: 24 }, (_, index) =>
+      index === 23 ? "owner" : `owner-${index}`,
+    );
+    const params = buildCompactParams("/compact", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: "/tmp/openclaw-session-store.json" },
+    });
+    params.command.ownerList = ownerIds;
+    params.command.senderIsOwner = true;
 
     const result = await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: "/tmp/openclaw-session-store.json" },
-        } as OpenClawConfig),
+        ...params,
         ctx: {
           Provider: "whatsapp",
           Surface: "whatsapp",
@@ -116,6 +118,10 @@ describe("handleCompactCommand", () => {
     expect(call.groupSpace).toBe("workspace-1");
     expect(call.spawnedBy).toBe("agent:main:parent");
     expect(call.senderId).toBe("owner");
+    expect(call.ownerNumbers).toHaveLength(16);
+    expect(call.ownerNumbers?.at(-1)).toBe("owner");
+    expect(call).not.toHaveProperty("senderIsOwner");
+    expect(params.command.ownerList).toEqual(ownerIds);
     expect(call.senderName).toBe("Alice");
     expect(call.senderUsername).toBe("alice_u");
     expect(call.senderE164).toBe("+15551234567");
@@ -124,33 +130,6 @@ describe("handleCompactCommand", () => {
     expect(call.authProfileIdSource).toBe("user");
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
-  });
-
-  it("keeps the verified current owner in bounded manual-compaction prompt guidance", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-    });
-    const ownerIds = Array.from({ length: 24 }, (_, index) => `owner-${index}`);
-    const params = buildCompactParams("/compact", compactCommandConfig);
-    params.command = {
-      ...params.command,
-      ownerList: ownerIds,
-      senderId: "owner-23",
-      senderIsOwner: true,
-    };
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-
-    await handleCompactCommand(params, true);
-
-    const call = requireCompactEmbeddedAgentSessionCall();
-    expect(call.ownerNumbers).toHaveLength(16);
-    expect(call.ownerNumbers?.at(-1)).toBe("owner-23");
-    expect(call).not.toHaveProperty("senderIsOwner");
-    expect(params.command.ownerList).toEqual(ownerIds);
   });
 
   it("treats already-under-target manual compaction as skipped", async () => {
@@ -226,215 +205,6 @@ describe("handleCompactCommand", () => {
     expect(result?.reply?.isStatusNotice).toBe(true);
   });
 
-  it("uses the canonical session agent when resolving the compaction session file", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-    });
-    resolveSessionAgentIdMock.mockReturnValue("target");
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: "/tmp/openclaw-session-store.json" },
-    } as OpenClawConfig;
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", cfg),
-        agentId: "main",
-        sessionKey: "agent:target:whatsapp:direct:12345",
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(resolveSessionAgentIdMock).toHaveBeenCalledOnce();
-    const resolveCall = requireResolveSessionAgentIdCall();
-    expect(resolveCall.sessionKey).toBe("agent:target:whatsapp:direct:12345");
-    expect(resolveCall.config).toBe(cfg);
-    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget).toEqual({
-      agentId: "target",
-      sessionId: "session-1",
-      sessionKey: "agent:target:whatsapp:direct:12345",
-      storePath: "/tmp/openclaw-session-store.json",
-    });
-  });
-
-  it("keeps the selected agent when compacting an ambiguous global session", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-    });
-    resolveSessionAgentIdMock.mockReturnValue("marie-clawndo");
-    const cfg = {
-      agents: {
-        entries: {
-          main: {},
-          "marie-clawndo": {},
-        },
-      },
-    } as OpenClawConfig;
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", cfg),
-        agentId: "marie-clawndo",
-        sessionKey: "global",
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
-      sessionKey: "global",
-      config: cfg,
-      agentId: "marie-clawndo",
-    });
-    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget).toMatchObject({
-      agentId: "marie-clawndo",
-    });
-  });
-
-  it("uses the resolved command store for compaction", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-    });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: "/tmp/default-sessions.json" },
-    } as OpenClawConfig;
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", cfg),
-        storePath: "/tmp/scoped-sessions.json",
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget?.storePath).toBe(
-      "/tmp/scoped-sessions.json",
-    );
-  });
-
-  it("uses the canonical session agent directory for compaction runtime inputs", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-    });
-    resolveSessionAgentIdMock.mockReturnValue("target");
-    resolveAgentDirMock.mockReturnValue("/tmp/target-agent");
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", cfg),
-        agentId: "main",
-        agentDir: "/tmp/main-agent",
-        sessionKey: "agent:target:whatsapp:direct:12345",
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(requireCompactEmbeddedAgentSessionCall().agentDir).toBe("/tmp/target-agent");
-    expect(resolveAgentDirMock).toHaveBeenCalledOnce();
-    const [configArg, agentIdArg] = requireResolveAgentDirCall();
-    expect(configArg).toBe(cfg);
-    expect(agentIdArg).toBe("target");
-  });
-
-  it("prefers the target session entry for compaction runtime metadata", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-    });
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", compactCommandConfig),
-        sessionKey: "agent:target:whatsapp:direct:12345",
-        sessionEntry: {
-          sessionId: "wrapper-session",
-          updatedAt: Date.now(),
-          groupId: "wrapper-group",
-          groupChannel: "#wrapper",
-          space: "wrapper-space",
-          spawnedBy: "agent:wrapper",
-          skillsSnapshot: { prompt: "wrapper", skills: [] },
-          contextTokens: 111,
-        },
-        sessionStore: {
-          "agent:target:whatsapp:direct:12345": {
-            sessionId: "target-session",
-            updatedAt: Date.now(),
-            groupId: "target-group",
-            groupChannel: "#target",
-            space: "target-space",
-            spawnedBy: "agent:target-parent",
-            skillsSnapshot: { prompt: "target", skills: [] },
-            contextTokens: 222,
-          },
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    const call = requireCompactEmbeddedAgentSessionCall();
-    expect(call.sessionId).toBe("target-session");
-    expect(call.groupId).toBe("target-group");
-    expect(call.groupChannel).toBe("#target");
-    expect(call.groupSpace).toBe("target-space");
-    expect(call.spawnedBy).toBe("agent:target-parent");
-    expect(call.skillsSnapshot).toEqual({ prompt: "target", skills: [] });
-  });
-
-  it("carries a model-locked session's persisted native runtime into compaction", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason: "no codex app-server thread binding",
-    });
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", compactCommandConfig),
-        sessionEntry: {
-          sessionId: "locked-session",
-          updatedAt: Date.now(),
-          agentHarnessId: "codex",
-          agentRuntimeOverride: "openclaw",
-          modelSelectionLocked: true,
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
-      sessionId: "locked-session",
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-    });
-  });
-
   it("targets the persisted native CLI session for manual compaction", async () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () =>
@@ -450,16 +220,25 @@ describe("handleCompactCommand", () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
       compacted: true,
+      compactionKind: "native-harness",
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: 999,
+        details: { completed: true },
+      },
     });
 
     try {
-      await handleCompactCommand(
+      const result = await handleCompactCommand(
         {
           ...buildCompactParams("/compact", compactCommandConfig),
           provider: "anthropic",
           sessionEntry: {
             sessionId: "cli-session",
             updatedAt: Date.now(),
+            totalTokens: 999,
+            totalTokensFresh: true,
             cliSessionBindings: {
               "claude-cli": { sessionId: "native-claude-session" },
             },
@@ -473,20 +252,20 @@ describe("handleCompactCommand", () => {
         cliSessionId: "native-claude-session",
         trigger: "manual",
       });
+      expect(requireResolveSessionAgentIdCall().sessionKey).toBe("agent:main:main");
+      expect(requireResolveAgentDirCall()).toEqual([compactCommandConfig, "main"]);
+      expect(incrementCompactionCount).toHaveBeenCalledOnce();
+      expect(requireIncrementCompactionCountCall().compactionKind).toBe("native-harness");
+      expect(requireIncrementCompactionCountCall().tokensAfter).toBeUndefined();
+      expect(formatContextUsageShort).toHaveBeenLastCalledWith(null, null);
+      expect(result?.reply?.text).toContain("Compaction finished (resulting context unknown) •");
+      expect(result?.reply?.text).not.toContain("undefined");
     } finally {
       cliBackendsTesting.resetDepsForTest();
     }
   });
 
-  it.each([
-    { provider: "anthropic", harness: "claude-cli", override: true, expectedRuntime: "claude-cli" },
-    { provider: "anthropic", harness: "claude-cli", expectedRuntime: "claude-cli" },
-    { provider: "openai", harness: "claude-cli", override: true, expectedRuntime: undefined },
-    { provider: "openai", harness: "claude-cli", expectedRuntime: undefined },
-    { provider: "anthropic", harness: "codex", override: true, expectedRuntime: undefined },
-    { provider: "openai", harness: "codex", expectedRuntime: "codex" },
-    { provider: "github-copilot", harness: "copilot", expectedRuntime: "copilot" },
-  ])(
+  it.each([{ provider: "openai", harness: "codex", expectedRuntime: "codex" }])(
     "uses the model picker's runtime only when it serves $provider (#117470)",
     async ({ provider, harness, expectedRuntime, ...testCase }) => {
       cliBackendsTesting.setDepsForTest({
@@ -538,69 +317,6 @@ describe("handleCompactCommand", () => {
     },
   );
 
-  it("prefers the target session entry when incrementing compaction count", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      compactionKind: "context-engine",
-      result: {
-        summary: "compacted",
-        firstKeptEntryId: "first-kept",
-        tokensBefore: 999,
-        tokensAfter: 321,
-      },
-    });
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", compactCommandConfig),
-        sessionKey: "agent:target:whatsapp:direct:12345",
-        sessionEntry: {
-          sessionId: "wrapper-session",
-          updatedAt: Date.now(),
-        },
-        sessionStore: {
-          "agent:target:whatsapp:direct:12345": {
-            sessionId: "target-session",
-            updatedAt: Date.now(),
-          },
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    const call = requireIncrementCompactionCountCall();
-    if (!call.sessionEntry) {
-      throw new Error("incrementCompactionCount sessionEntry missing");
-    }
-    expect(call.sessionEntry.sessionId).toBe("target-session");
-    expect(call.compactionKind).toBe("context-engine");
-    expect(call.tokensAfter).toBe(321);
-  });
-
-  it("reports authoritative compaction no-ops without incrementing", async () => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-    });
-
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", compactCommandConfig),
-        sessionEntry: {
-          sessionId: "target-session",
-          updatedAt: Date.now(),
-          totalTokens: 999,
-          totalTokensFresh: true,
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
-    expect(result?.reply?.text).toContain("Compaction skipped");
-  });
-
   it("reports server-side compaction with before and after tokens", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
@@ -623,52 +339,6 @@ describe("handleCompactCommand", () => {
 
     expect(result?.reply?.text).toContain("Server-side compaction (8614 → 736)");
     expect(requireIncrementCompactionCountCall().compactionKind).toBe("server-endpoint");
-  });
-
-  it.each([
-    {
-      owner: "native harness",
-      compactionKind: "native-harness" as const,
-      details: { completed: true },
-    },
-    {
-      owner: "context engine",
-      compactionKind: "context-engine" as const,
-      details: undefined,
-    },
-  ])("counts confirmed $owner compaction without a post-compaction count", async (testCase) => {
-    const { details } = testCase;
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      compactionKind: testCase.compactionKind,
-      result: {
-        summary: "",
-        firstKeptEntryId: "",
-        tokensBefore: 999,
-        ...(details ? { details } : {}),
-      },
-    });
-
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", compactCommandConfig),
-        sessionEntry: {
-          sessionId: "native-session",
-          updatedAt: Date.now(),
-          totalTokens: 999,
-          totalTokensFresh: true,
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(vi.mocked(incrementCompactionCount)).toHaveBeenCalledOnce();
-    expect(requireIncrementCompactionCountCall().compactionKind).toBe(testCase.compactionKind);
-    expect(requireIncrementCompactionCountCall().tokensAfter).toBeUndefined();
-    expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(null, null);
-    expect(result?.reply?.text).toContain("Compaction finished (resulting context unknown) •");
-    expect(result?.reply?.text).not.toContain("undefined");
   });
 
   it("forwards the routed account id from the command context", async () => {

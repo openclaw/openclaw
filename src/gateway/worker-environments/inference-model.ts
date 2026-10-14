@@ -124,7 +124,7 @@ export async function resolveApprovedWorkerLocalModel(params: ResolveApprovedWor
 }
 
 export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerModelParams) {
-  const { target, signal, runtimeSnapshot } = params;
+  const { target, signal, runtimeSnapshot, modelRef } = params;
   return await withPluginRuntimeGenerationScope(runtimeSnapshot, async () => {
     const approved = await resolveApprovedWorkerModelSelection(params);
     if (!approved) {
@@ -179,6 +179,8 @@ export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerMo
     // Route projection and credential selection are one decision. Pin even an
     // automatic profile so generic auth fallback cannot cross to another route.
     const prepared = await prepareSimpleCompletionModel({
+      // This session-bound worker owner revalidates the exact live turn after awaited work.
+      workerInferenceAuthority: { assertCurrent: params.assertCurrent },
       cfg: modelConfig,
       transport: "provider-stream",
       agentId: target.agentId,
@@ -213,10 +215,16 @@ export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerMo
       }),
       provider: resolved.ref.provider,
       model: resolved.ref.model,
-      config: lifecycleConfig,
-      agentDir,
       workspaceDir,
+      modelRef,
+      runtimeSnapshot,
+      sessionEntry,
       prepared,
     };
   });
 }
+
+export type PreparedWorkerInference = Extract<
+  Awaited<ReturnType<typeof resolveApprovedWorkerModel>>,
+  { prepared: unknown }
+>;

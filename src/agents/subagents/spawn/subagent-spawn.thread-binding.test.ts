@@ -21,7 +21,6 @@ let pluginFixtures: typeof import("../../../test-utils/channel-plugins.js");
 let config: Record<string, unknown>;
 let bindingService: BindingService;
 let routable = true;
-let resolveTarget: NonNullable<LoadOptions["resolveConversationDeliveryTarget"]>;
 const caller = {
   agentSessionKey: "agent:main:main",
   agentChannel: "matrix",
@@ -55,7 +54,6 @@ describe("spawnSubagentDirect thread binding", () => {
       getRuntimeConfig: () => config,
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       getSessionBindingService: () => bindingService,
-      resolveConversationDeliveryTarget: (params) => resolveTarget(params),
     }));
     pluginRuntime = await import("../../../plugins/runtime.js");
     pluginFixtures = await import("../../../test-utils/channel-plugins.js");
@@ -77,9 +75,6 @@ describe("spawnSubagentDirect thread binding", () => {
       status: "active",
       conversation: request.conversation,
     }));
-    resolveTarget = ({ conversationId }) => ({
-      to: conversationId ? `channel:${String(conversationId)}` : undefined,
-    });
     pluginRuntime.setActivePluginRegistry(
       pluginFixtures.createTestRegistry([
         {
@@ -164,9 +159,7 @@ describe("spawnSubagentDirect thread binding", () => {
       bindingService = makeBindingService(bind, () =>
         generic ? [{ status: "active", conversation }] : [],
       );
-      if (generic) {
-        resolveTarget = () => ({ to: "channel:collab_dm_1" });
-      } else {
+      if (!generic) {
         config = createSubagentSpawnTestConfig(os.tmpdir(), {
           agents: {
             defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["bot-alpha"] } },

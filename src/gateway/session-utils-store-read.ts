@@ -40,6 +40,25 @@ export type GatewaySessionStoreRead = {
   capturedReadSource?: CapturedSessionEntryReadSource;
 };
 
+export function gatewaySessionStoreReadOptions(
+  params: Pick<GatewaySessionStoreRead["options"], "env" | "projection" | "readConsistency"> & {
+    exactRead?: boolean;
+    preserveQualifiedAddress?: boolean;
+    storeCache?: GatewaySessionStoreCache;
+  },
+  keys: string[],
+  readOnly: boolean | undefined,
+): GatewaySessionStoreRead["options"] {
+  return {
+    env: params.env,
+    readOnly,
+    ...(params.exactRead || params.preserveQualifiedAddress ? { exactKeys: keys } : {}),
+    ...(params.projection ? { projection: params.projection } : {}),
+    ...(params.readConsistency ? { readConsistency: params.readConsistency } : {}),
+    ...(params.storeCache ? { cache: params.storeCache } : {}),
+  };
+}
+
 /** Single-target resolution keeps its original lazy read and failure order. */
 export function readGatewaySessionStore(
   read: GatewaySessionStoreRead,

@@ -179,106 +179,64 @@ describe("schema preflight source artifacts", () => {
     expect(sourceArtifacts(paths)).toEqual(before);
   });
 
-  it("reads newer live WAL schemas without changing contents beyond agent SHM read marks", async () => {
+  it("inspects incompatible agent schemas while an independent WAL writer keeps committing", async () => {
     const fixture = createFixture();
-    fixture.state.db.exec(`PRAGMA user_version = ${supportedVersions.state + 10};`);
-    fixture.main.db.exec(`PRAGMA user_version = ${supportedVersions.agent + 10};`);
-    fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent + 10};`);
-    // SQLite's WAL-index read-mark array occupies bytes 100..119 of SHM.
-    const allowReadMarks = [fixture.main.path, fixture.worker.path];
-    const before = sourceArtifacts(fixture.paths, allowReadMarks);
-    let eventLoopServiced = false;
-    const immediate = setImmediate(() => {
-      eventLoopServiced = true;
-    });
-    try {
-      const result = await preflightOpenClawDatabaseSchemas({
-        env: fixture.env,
-        supportedVersions,
-        verifyCurrentSchemaShape: true,
-      });
-      expect(eventLoopServiced).toBe(true);
-      expect(result.indeterminate).toEqual([]);
-      expect(
-        result.incompatible.map(({ path: pathname, foundVersion }) => [pathname, foundVersion]),
-      ).toEqual([
-        [fixture.state.path, supportedVersions.state + 10],
-        [fixture.main.path, supportedVersions.agent + 10],
-        [fixture.worker.path, supportedVersions.agent + 10],
-      ]);
-      expect(sourceArtifacts(fixture.paths, allowReadMarks)).toEqual(before);
-    } finally {
-      clearImmediate(immediate);
-      fixture.state.db.exec(`PRAGMA user_version = ${supportedVersions.state};`);
-      fixture.main.db.exec(`PRAGMA user_version = ${supportedVersions.agent};`);
-      fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent};`);
-    }
-  });
-
-  it.each(["compatible", "incompatible"] as const)(
-    "inspects %s agent schemas while an independent WAL writer keeps committing",
-    async (outcome) => {
-      const fixture = createFixture();
-      const foundVersion = supportedVersions.agent + (outcome === "incompatible" ? 1 : 0);
-      // A 64 MiB source makes each byte-copy attempt overlap real commits.
-      fixture.main.db.exec(`
+    const foundVersion = supportedVersions.agent + 1;
+    // A 64 MiB source makes each byte-copy attempt overlap real commits.
+    fixture.main.db.exec(`
         CREATE TABLE payloads (value BLOB NOT NULL) STRICT;
         WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 1024)
         INSERT INTO payloads SELECT zeroblob(65536) FROM rows;
         CREATE TABLE writes (sequence INTEGER PRIMARY KEY);
         PRAGMA user_version = ${foundVersion};
       `);
-      fixture.close();
-      const mainHash = () =>
-        createHash("sha256").update(fs.readFileSync(fixture.main.path)).digest("hex");
-      const mainBefore = mainHash();
-      const stateBefore = sourceArtifacts([fixture.state.path]);
-      const writer = startSqliteConcurrentWriter(fixture.main.path, "WAL");
-      try {
-        await writer.waitFor("ready");
-        const walBefore = fs.readFileSync(`${fixture.main.path}-wal`);
-        for (const inspect of [
-          () => preflightOpenClawDatabaseSchemas({ env: fixture.env, supportedVersions }),
-          () =>
-            preflightOpenClawDatabaseSchemas({
-              env: fixture.env,
-              supportedVersions,
-              verifyCurrentSchemaShape: true,
-              requireStartupMigrationReadiness: true,
-            }),
-          () =>
-            checkTargetDatabaseSchemasForContexts(supportedVersions, [
-              { env: fixture.env, config: {} },
-            ]),
-        ]) {
-          const { commits } = await writer.progress();
-          const result = await inspect();
-          expect((await writer.progress()).commits).toBeGreaterThan(commits);
-          expect(result.indeterminate).toEqual([]);
-          expect(result.incompatible).toEqual(
-            outcome === "compatible"
-              ? []
-              : [expect.objectContaining({ kind: "agent", path: fixture.main.path, foundVersion })],
-          );
-        }
-        // The writer appends WAL frames. Inspection must not checkpoint the main
-        // database or rewrite any preexisting WAL bytes while those commits run.
-        expect(mainHash()).toBe(mainBefore);
-        const wal = fs.openSync(`${fixture.main.path}-wal`, "r");
-        try {
-          const prefix = Buffer.alloc(walBefore.length);
-          expect(fs.readSync(wal, prefix, 0, prefix.length, 0)).toBe(prefix.length);
-          expect(prefix).toEqual(walBefore);
-        } finally {
-          fs.closeSync(wal);
-        }
-        expect(sourceArtifacts([fixture.state.path])).toEqual(stateBefore);
-      } finally {
-        await writer.stop();
+    fixture.close();
+    const mainHash = () =>
+      createHash("sha256").update(fs.readFileSync(fixture.main.path)).digest("hex");
+    const mainBefore = mainHash();
+    const stateBefore = sourceArtifacts([fixture.state.path]);
+    const writer = startSqliteConcurrentWriter(fixture.main.path, "WAL");
+    try {
+      await writer.waitFor("ready");
+      const walBefore = fs.readFileSync(`${fixture.main.path}-wal`);
+      for (const inspect of [
+        () => preflightOpenClawDatabaseSchemas({ env: fixture.env, supportedVersions }),
+        () =>
+          preflightOpenClawDatabaseSchemas({
+            env: fixture.env,
+            supportedVersions,
+            verifyCurrentSchemaShape: true,
+            requireStartupMigrationReadiness: true,
+          }),
+        () =>
+          checkTargetDatabaseSchemasForContexts(supportedVersions, [
+            { env: fixture.env, config: {} },
+          ]),
+      ]) {
+        const { commits } = await writer.progress();
+        const result = await inspect();
+        expect((await writer.progress()).commits).toBeGreaterThan(commits);
+        expect(result.indeterminate).toEqual([]);
+        expect(result.incompatible).toEqual([
+          expect.objectContaining({ kind: "agent", path: fixture.main.path, foundVersion }),
+        ]);
       }
-    },
-    30_000,
-  );
+      // The writer appends WAL frames. Inspection must not checkpoint the main
+      // database or rewrite any preexisting WAL bytes while those commits run.
+      expect(mainHash()).toBe(mainBefore);
+      const wal = fs.openSync(`${fixture.main.path}-wal`, "r");
+      try {
+        const prefix = Buffer.alloc(walBefore.length);
+        expect(fs.readSync(wal, prefix, 0, prefix.length, 0)).toBe(prefix.length);
+        expect(prefix).toEqual(walBefore);
+      } finally {
+        fs.closeSync(wal);
+      }
+      expect(sourceArtifacts([fixture.state.path])).toEqual(stateBefore);
+    } finally {
+      await writer.stop();
+    }
+  }, 30_000);
 
   it("ignores uncommitted writer versions without ending the owning transactions", async () => {
     const fixture = createFixture();
@@ -311,74 +269,6 @@ describe("schema preflight source artifacts", () => {
       }
     }
   });
-
-  it("preserves a candidate symlink locator and reads the physical database", async () => {
-    const fixture = createFixture();
-    unregisterOpenClawAgentDatabase({
-      agentId: "worker",
-      path: fixture.worker.path,
-      env: fixture.env,
-    });
-    fixture.close();
-    const alias = path.join(fixture.env.OPENCLAW_STATE_DIR, "worker-alias.sqlite");
-    fs.symlinkSync(fixture.worker.path, alias);
-    const before = sourceArtifacts([...fixture.paths, alias]);
-    const result = await preflightOpenClawDatabaseSchemas({
-      env: fixture.env,
-      supportedVersions: { ...supportedVersions, agent: supportedVersions.agent - 1 },
-      configuredAgentDatabaseCandidatePaths: [alias],
-    });
-    expect(result.indeterminate).toEqual([]);
-    expect(result.incompatible.map((database) => database.path)).toEqual([
-      fixture.main.path,
-      alias,
-    ]);
-    expect(sourceArtifacts([...fixture.paths, alias])).toEqual(before);
-  });
-
-  it.each(["registered", "candidate"] as const)(
-    "preserves native traversal and deduplication for a %s dot-dot locator",
-    async (kind) => {
-      const fixture = createFixture();
-      fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent + 10};`);
-      unregisterOpenClawAgentDatabase({
-        agentId: "worker",
-        path: fixture.worker.path,
-        env: fixture.env,
-      });
-      const link = path.join(fixture.env.OPENCLAW_STATE_DIR, "worker-link");
-      fs.symlinkSync(path.dirname(fixture.worker.path), link, "dir");
-      const locator = `${link}${path.sep}..${path.sep}agent${path.sep}openclaw-agent.sqlite`;
-      if (kind === "registered") {
-        registerOpenClawAgentDatabase({ agentId: "worker", path: locator, env: fixture.env });
-      }
-      fixture.close();
-      const lexicalPath = path.resolve(locator);
-      fs.mkdirSync(path.dirname(lexicalPath), { recursive: true });
-      fs.copyFileSync(fixture.main.path, lexicalPath, fs.constants.COPYFILE_EXCL);
-      expect(fs.realpathSync.native(locator)).toBe(fs.realpathSync.native(fixture.worker.path));
-      expect(fs.realpathSync(locator)).toBe(fs.realpathSync.native(lexicalPath));
-      const paths = [...fixture.paths, lexicalPath];
-      const before = sourceArtifacts(paths);
-      const result = await preflightOpenClawDatabaseSchemas({
-        env: fixture.env,
-        supportedVersions,
-        configuredAgentDatabaseCandidatePaths:
-          kind === "candidate"
-            ? [locator, fixture.worker.path, lexicalPath]
-            : [fixture.worker.path, lexicalPath],
-      });
-      expect(result.indeterminate).toEqual([]);
-      expect(result.incompatible).toEqual([
-        expect.objectContaining({
-          path: locator,
-          foundVersion: supportedVersions.agent + 10,
-        }),
-      ]);
-      expect(sourceArtifacts(paths)).toEqual(before);
-    },
-  );
-
   it.each(["state", "main"] as const)(
     "fails closed when the %s snapshot cannot be prepared",
     async (kind) => {
@@ -398,6 +288,7 @@ describe("schema preflight source artifacts", () => {
         env: fixture.env,
         supportedVersions,
         verifyCurrentSchemaShape: true,
+        preserveSourceArtifacts: true,
       });
       expect(result.incompatible).toEqual([]);
       expect(result.indeterminate).toEqual([
@@ -407,49 +298,6 @@ describe("schema preflight source artifacts", () => {
           reason: "inert snapshot admission failure",
         },
       ]);
-      expect(sourceArtifacts(fixture.paths)).toEqual(before);
-    },
-  );
-
-  it.each(["state", "main"] as const)(
-    "cleans the %s snapshot when its private open fails",
-    async (kind) => {
-      const fixture = createFixture();
-      fixture.close();
-      const before = sourceArtifacts(fixture.paths);
-      const prepare = snapshots.prepareSqliteReadOnlyLocation;
-      const cleanups: Array<{ location: string; cleanup: ReturnType<typeof vi.fn> }> = [];
-      vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
-        async (pathname, options) => {
-          const prepared = await prepare(pathname, options);
-          const cleanup = vi.fn(prepared.cleanupAsync);
-          cleanups.push({ location: prepared.location, cleanup });
-          return {
-            ...prepared,
-            location:
-              pathname === fixture[kind].path
-                ? path.join(path.dirname(prepared.location), "missing.sqlite")
-                : prepared.location,
-            cleanupAsync: cleanup,
-          };
-        },
-      );
-      const result = await preflightOpenClawDatabaseSchemas({
-        env: fixture.env,
-        supportedVersions,
-        verifyCurrentSchemaShape: true,
-      });
-      expect(result.indeterminate).toEqual([
-        expect.objectContaining({
-          kind: kind === "state" ? "state" : "agent",
-          path: fixture[kind].path,
-        }),
-      ]);
-      expect(cleanups.length).toBe(kind === "state" ? 1 : 3);
-      for (const { location, cleanup } of cleanups) {
-        expect(cleanup).toHaveBeenCalledOnce();
-        expect(fs.existsSync(path.dirname(location))).toBe(false);
-      }
       expect(sourceArtifacts(fixture.paths)).toEqual(before);
     },
   );

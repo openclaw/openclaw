@@ -61,19 +61,17 @@ export async function listAllCodexAppServerModels(
   const maxPages = normalizeMaxPages(options.maxPages);
   return await withCodexAppServerModelRequest(options, async (request) => {
     const models: CodexAppServerModel[] = [];
-    let cursor = options.cursor;
     let nextCursor: string | undefined;
     for (let page = 0; page < maxPages; page += 1) {
       const result = await requestModelListPage(request, {
         ...options,
-        cursor,
+        cursor: page === 0 ? options.cursor : nextCursor,
       });
       models.push(...result.models);
       nextCursor = result.nextCursor;
       if (!nextCursor) {
         return { models };
       }
-      cursor = nextCursor;
     }
     return { models, nextCursor, truncated: true };
   });

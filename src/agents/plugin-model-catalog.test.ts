@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fileLocks from "../infra/file-lock.js";
+import * as sqliteQueries from "../infra/kysely-sync.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -107,14 +108,58 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "legacy"), { recursive: true });
     writeFileSync(legacyPath, catalogContents("legacy"), "utf8");
 
-    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ["zai"])).toEqual([
-      { pluginId: "zai", contents: zai },
-    ]);
+    const reads = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    try {
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ["missing", "zai", "zai"])).toEqual(
+        [{ pluginId: "zai", contents: zai }],
+      );
+      const materializedRows = reads.mock.results.flatMap((result) =>
+        result.type === "return" ? result.value.rows : [],
+      );
+      expect(materializedRows).toContainEqual({ key: "zai", value_json: zai });
+      expect(materializedRows).not.toContainEqual({ key: "anthropic", value_json: anthropic });
+      reads.mockClear();
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, [])).toEqual([]);
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+    }
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "anthropic", contents: anthropic },
       { pluginId: "zai", contents: zai },
     ]);
     expect(existsSync(legacyPath)).toBe(true);
+
+    const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      const insert = database.prepare(
+        "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
+      );
+      insert.run("plugin-model-catalog-v1", "λ🦞", "unicode catalog bytes");
+      insert.run("plugin-model-catalog-v1", "\uFFFD", "replacement catalog bytes");
+      insert.run("plugin-model-catalog-v1", "null", null);
+    } finally {
+      database.close();
+    }
+    for (const { ids, expected } of [
+      {
+        ids: ["zai", "anthropic", "zai", "missing"],
+        expected: [
+          { pluginId: "anthropic", contents: anthropic },
+          { pluginId: "zai", contents: zai },
+        ],
+      },
+      { ids: ["missing", "null"], expected: [] },
+      { ids: ["λ🦞"], expected: [{ pluginId: "λ🦞", contents: "unicode catalog bytes" }] },
+      {
+        ids: ["\uFFFD"],
+        expected: [{ pluginId: "\uFFFD", contents: "replacement catalog bytes" }],
+      },
+      { ids: ["\uD800"], expected: [] },
+      { ids: ["\uDC00"], expected: [] },
+    ]) {
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ids)).toEqual(expected);
+    }
   });
 
   it("skips catalog mutation for unrelated credentials and observes a later matching publication", async () => {

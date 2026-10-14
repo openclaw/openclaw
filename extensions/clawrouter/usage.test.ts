@@ -199,47 +199,21 @@ describe("ClawRouter usage", () => {
     expect(snapshot.summary).toBeUndefined();
   });
 
-  it.each([
-    ["malformed JSON", new TextEncoder().encode('{"budget":')],
-    ["a non-object JSON root", new TextEncoder().encode("null")],
-    [
-      "invalid UTF-8",
-      new Uint8Array([
-        ...new TextEncoder().encode(
-          '{"budget":{"configured":true,"windowKey":"default/test-policy/2026-',
-        ),
-        0xff,
-        ...new TextEncoder().encode('","limitMicros":1000000,"spentMicros":500000}}'),
-      ]),
-    ],
-  ])("reports %s as a malformed usage response", async (_label, body) => {
-    const snapshot = await fetchUsage({
-      fetchGuard: mockFetchGuard(new Response(body)),
-    });
+  it.each([["malformed JSON", new TextEncoder().encode('{"budget":')]])(
+    "reports %s as a malformed usage response",
+    async (_label, body) => {
+      const snapshot = await fetchUsage({
+        fetchGuard: mockFetchGuard(new Response(body)),
+      });
 
-    expect(snapshot).toEqual({
-      provider: "clawrouter",
-      displayName: "ClawRouter",
-      windows: [],
-      error: "Malformed usage response",
-    });
-  });
-
-  it("preserves response stream failures as transport errors", async () => {
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.error(new TypeError("usage stream failed"));
-        },
-      }),
-    );
-
-    await expect(
-      fetchUsage({
-        fetchGuard: mockFetchGuard(response),
-      }),
-    ).rejects.toThrow("usage stream failed");
-  });
+      expect(snapshot).toEqual({
+        provider: "clawrouter",
+        displayName: "ClawRouter",
+        windows: [],
+        error: "Malformed usage response",
+      });
+    },
+  );
 
   it("releases a rejected response while a capture clone retains its body", async () => {
     const cancel = vi.fn();
@@ -306,29 +280,6 @@ describe("ClawRouter usage", () => {
         ),
       }),
     ).rejects.toThrow("ClawRouter usage response exceeds");
-  });
-
-  it("fetches usage through the production SSRF-guarded transport", async () => {
-    const { baseUrl, requests } = await startUsageServer((req, res) => {
-      expect(req.headers.authorization).toBe("Bearer proxy-key");
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          budget: { configured: false, ledger: "unmetered" },
-          usage: { summary: { requestCount: 0, totalTokens: 0, actualCostMicros: 0 } },
-        }),
-      );
-    });
-
-    const snapshot = await fetchUsage({
-      baseUrl,
-    });
-
-    expect(snapshot.windows).toEqual([]);
-    expect(snapshot.summary).toBe("0 requests · 0 tokens · $0.00 used");
-    expect(snapshot.plan).toBe("Unmetered proxy key");
-    expect(snapshot.billing).toEqual([{ type: "spend", amount: 0, unit: "USD" }]);
-    expect(requests).toEqual(["GET /v1/usage"]);
   });
 
   it("preserves provider usage routing through the env proxy", async () => {

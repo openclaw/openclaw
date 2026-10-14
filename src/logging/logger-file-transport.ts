@@ -5,7 +5,7 @@ import path from "node:path";
 import { appendRegularFile, appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
-import { redactSensitiveText, serializeRedactedFileLogRecord } from "./redact.js";
+import { redactSensitiveText } from "./redact.js";
 import { formatTimestamp } from "./timestamps.js";
 
 // Keep burst memory bounded while one equally bounded batch is in flight.
@@ -104,7 +104,7 @@ function buildDroppedMarker(target: FileLogQueueEntry, count: number): FileLogQu
   };
   return {
     ...target,
-    payload: `${serializeRedactedFileLogRecord(record)}\n`,
+    payload: `${JSON.stringify(record)}\n`,
   };
 }
 

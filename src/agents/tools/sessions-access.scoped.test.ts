@@ -45,6 +45,7 @@ describe("resolveSessionToolAccess scoped providers", () => {
           await expect(access).resolves.toEqual({
             allowed: true,
             expectedSessionId: "async-incarnation",
+            basis: "scoped-grant",
           });
         } else {
           await expect(access).resolves.toMatchObject({

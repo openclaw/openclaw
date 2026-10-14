@@ -306,7 +306,7 @@ function parseWikiSearchEnumOption<T extends string>(
   if ((allowed as readonly string[]).includes(value)) {
     return value as T;
   }
-  throw new Error(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
+  throw invalidCliArgument(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
 }
 
 async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }): Promise<string> {
@@ -791,7 +791,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   const obsidian = wiki.command("obsidian").description("Run official Obsidian CLI helpers");
   obsidian
     .command("status")
-    .description("Probe the Obsidian CLI")
+    .description("Check the Obsidian CLI")
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       requireCommandContext();

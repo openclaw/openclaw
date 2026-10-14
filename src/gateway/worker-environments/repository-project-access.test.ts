@@ -62,6 +62,7 @@ describe("prepared repository source access", () => {
       return {
         project,
         setupRecipe: undefined,
+        recipe: { source: "none", inputs: {}, env: {} },
         assertCurrent: () => {
           if (!identityCurrent) {
             throw new Error("Repository identity changed");
@@ -90,6 +91,7 @@ describe("prepared repository source access", () => {
     const access = createWorkerEnvironmentAccess({
       store: fixture.store,
       getCleanupError: () => undefined,
+      readStartStatus: () => undefined,
       getConfig: () => fixture.config,
       projectNamespace: "gateway",
       bindPreparedWorkspace: bind,

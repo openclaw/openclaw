@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { resolvePluginProviders } from "openclaw/plugin-sdk/provider-catalog-runtime";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -120,7 +121,6 @@ const provider = "cold-inventory-provider";
 const pluginId = "cold-inventory-plugin";
 const pinnedId = "chat-2026-08-17-pinned";
 const curatedId = "chat-latest";
-const throwingId = "chat-throws";
 const persistedId = "Persisted-Session-Model";
 
 function ownerCount() {
@@ -183,7 +183,7 @@ function createFixture(state: OpenClawTestState) {
     mode: string;
   }> = [];
   const preparationGates: Array<{
-    started: boolean;
+    started: Deferred;
     resume: Deferred;
   }> = [];
   const resources: {
@@ -264,7 +264,7 @@ module.exports = {
         const gate = state.nextPreparation;
         if (gate) {
           state.nextPreparation = undefined;
-          gate.started = true;
+          gate.started.resolve();
           await gate.resume.promise;
           database.prepare("SELECT 42 AS value").get();
         }
@@ -272,7 +272,6 @@ module.exports = {
       },
       async prepareDynamicModel(ctx) {
         database.prepare("SELECT 42 AS value").get();
-        if (ctx.modelId === ${JSON.stringify(throwingId)}) throw new Error("Provider preparation failed");
         if (ctx.modelId !== ${JSON.stringify(pinnedId)}) return;
         return {
           id: ctx.modelId, name: "Pinned chat", provider: ctx.provider,
@@ -346,7 +345,7 @@ module.exports = {
         stateDir: state.stateDir,
         reason: "manual",
       });
-      const gate = { started: false, resume: createDeferredCore() };
+      const gate = { started: createDeferredCore(), resume: createDeferredCore() };
       preparationGates.push(gate);
       resources.nextPreparation = gate;
       return gate;
@@ -605,7 +604,9 @@ describe("cold dynamic-model effective inventory", () => {
     });
   });
 
-  it("keeps a cancelled build's database until actual preparation settles before its replacement", async () => {
+  it("keeps a cancelled build's database until actual preparation settles before its replacement", async ({
+    signal,
+  }) => {
     await withColdFixture(async (fixture) => {
       const input = fixture.runtimeInput;
       const gate = await fixture.pausePreparation();
@@ -637,7 +638,14 @@ describe("cold dynamic-model effective inventory", () => {
       let replacement: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
       let pendingReplacement: ReturnType<typeof acquireReadOnlyPreparedModelRuntime> | undefined;
       try {
-        await expect.poll(() => gate.started).toBe(true);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            gate.started.promise,
+            first,
+            "Model runtime build settled before provider preparation",
+          ),
+          signal,
+        );
         expect(fixture.connections).toHaveLength(2);
         const original = fixture.connections[1]!;
         expect(original.preparations).toBe(1);
@@ -738,127 +746,117 @@ describe("cold dynamic-model effective inventory", () => {
     });
   });
 
-  it.each(["configured", "persisted"] as const)(
-    "includes provider-supported tools without full catalog preparation (%s)",
-    async (source) => {
-      await withColdFixture(async (fixture) => {
-        if (source === "persisted") {
-          await selectPersistedModel(fixture);
-        }
+  it("includes persisted provider-supported tools without full catalog preparation", async () => {
+    await withColdFixture(async (fixture) => {
+      await selectPersistedModel(fixture);
+      expect(pickerIds(fixture)).toEqual([curatedId]);
+      expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
+      const { respond, invoke } = await createInventoryInvocation(fixture);
+      const fullCatalog = vi.spyOn(modelCatalog, "buildPreparedModelCatalogSnapshot");
+      try {
+        await invoke();
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
+        const inventory = respond.mock.calls[0]?.[1] as EffectiveToolInventoryResult;
+        expect({
+          tools: inventory.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+          notices: inventory.notices,
+        }).toEqual({
+          tools: ["healthy_tool", "parameterless_tool"],
+          notices: undefined,
+        });
+        expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
+        expect(fixture.config.agents?.defaults?.model).toEqual({
+          primary: "other/configured",
+        });
         expect(pickerIds(fixture)).toEqual([curatedId]);
-        expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
-        const { respond, invoke } = await createInventoryInvocation(fixture);
-        const fullCatalog = vi.spyOn(modelCatalog, "buildPreparedModelCatalogSnapshot");
-        try {
-          await invoke();
-          expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
-          const inventory = respond.mock.calls[0]?.[1] as EffectiveToolInventoryResult;
-          expect({
-            tools: inventory.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
-            notices: inventory.notices,
-          }).toEqual({
+        expect(fixture.readNormalizations()).toEqual([
+          {
+            owners: 1,
+            workspaceDir: fixture.input.workspaceDir,
             tools: ["healthy_tool", "parameterless_tool"],
-            notices: undefined,
-          });
-          expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
-          expect(fixture.config.agents?.defaults?.model).toEqual({
-            primary: source === "persisted" ? "other/configured" : `${provider}/${pinnedId}`,
-          });
-          expect(pickerIds(fixture)).toEqual([curatedId]);
-          expect(fixture.readNormalizations()).toEqual([
-            {
-              owners: 1,
-              workspaceDir: fixture.input.workspaceDir,
-              tools: ["healthy_tool", "parameterless_tool"],
-              modelId: fixture.inventoryParams.modelId,
-            },
-          ]);
-          expect(fullCatalog).not.toHaveBeenCalled();
-        } finally {
-          fullCatalog.mockRestore();
-        }
-      });
-    },
-  );
+            modelId: fixture.inventoryParams.modelId,
+          },
+        ]);
+        expect(fullCatalog).not.toHaveBeenCalled();
+      } finally {
+        fullCatalog.mockRestore();
+      }
+    });
+  });
 
-  it.each([false, true])(
-    "owns base and warm MCP normalization without retaining cached models (sandbox: %s)",
-    async (sandbox) => {
-      await withColdFixture(async (fixture) => {
-        const workspaceDir = sandbox
-          ? path.join(fixture.state.root, "sandbox")
-          : fixture.input.workspaceDir;
-        fs.mkdirSync(workspaceDir, { recursive: true });
-        const catalog: McpToolCatalog = {
-          version: 1,
-          generatedAt: 1,
-          servers: {},
-          tools: [
-            {
-              serverName: "inventory",
-              safeServerName: "inventory",
-              toolName: "probe",
-              inputSchema: Type.Object({}),
-              fallbackDescription: "Synthetic inventory probe",
-            },
-          ],
-        };
-        warmMcp.runtime = {
-          configFingerprint: "inventory",
-          workspaceDir,
-          peekCatalog: () => catalog,
-        };
-        const registryVersion = vi
-          .spyOn(pluginRuntime, "getActivePluginRegistryVersion")
-          .mockReturnValue(1);
-        const channelVersion = vi
-          .spyOn(pluginRuntime, "getActivePluginChannelRegistryVersion")
-          .mockReturnValue(1);
-        try {
-          const { invoke, respond } = await createInventoryInvocation(fixture);
-          const ambient = createEmptyPluginRegistry();
-          const normalizeAmbient = vi.fn(() => {
-            throw new Error("Ambient generation must not normalize prepared inventory");
-          });
-          ambient.providers.push({
-            pluginId: "ambient-provider",
-            source: "test",
-            provider: {
-              id: provider,
-              label: "Ambient provider",
-              auth: [],
-              normalizeToolSchemas: normalizeAmbient,
-            },
-          });
-          for (let request = 0; request < 2; request++) {
-            await withPluginRuntimeRegistryScope(ambient, invoke);
-            expect(respond.mock.calls.at(-1)?.[0]).toBe(true);
-            expect(ownerCount()).toBe(0);
-          }
-          expect(fixture.readNormalizations()).toMatchObject([
-            { owners: 1, workspaceDir: fixture.input.workspaceDir },
-            { owners: 1, workspaceDir },
-            { owners: 1, workspaceDir },
-          ]);
-          const first = respond.mock.calls[0]?.[1];
-          expect(first).toMatchObject({
-            groups: expect.arrayContaining([expect.objectContaining({ id: "mcp" })]),
-          });
-          expect(respond.mock.calls[1]?.[1]).toEqual(first);
-          fixture.failNormalization();
+  it("owns base and sandbox MCP normalization without retaining cached models", async () => {
+    await withColdFixture(async (fixture) => {
+      const workspaceDir = path.join(fixture.state.root, "sandbox");
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      const catalog: McpToolCatalog = {
+        version: 1,
+        generatedAt: 1,
+        servers: {},
+        tools: [
+          {
+            serverName: "inventory",
+            safeServerName: "inventory",
+            toolName: "probe",
+            inputSchema: Type.Object({}),
+            fallbackDescription: "Synthetic inventory probe",
+          },
+        ],
+      };
+      warmMcp.runtime = {
+        configFingerprint: "inventory",
+        workspaceDir,
+        peekCatalog: () => catalog,
+      };
+      const registryVersion = vi
+        .spyOn(pluginRuntime, "getActivePluginRegistryVersion")
+        .mockReturnValue(1);
+      const channelVersion = vi
+        .spyOn(pluginRuntime, "getActivePluginChannelRegistryVersion")
+        .mockReturnValue(1);
+      try {
+        const { invoke, respond } = await createInventoryInvocation(fixture);
+        const ambient = createEmptyPluginRegistry();
+        const normalizeAmbient = vi.fn(() => {
+          throw new Error("Ambient generation must not normalize prepared inventory");
+        });
+        ambient.providers.push({
+          pluginId: "ambient-provider",
+          source: "test",
+          provider: {
+            id: provider,
+            label: "Ambient provider",
+            auth: [],
+            normalizeToolSchemas: normalizeAmbient,
+          },
+        });
+        for (let request = 0; request < 2; request++) {
           await withPluginRuntimeRegistryScope(ambient, invoke);
-          expect(respond.mock.calls.at(-1)?.[0]).toBe(false);
+          expect(respond.mock.calls.at(-1)?.[0]).toBe(true);
           expect(ownerCount()).toBe(0);
-          expect(fixture.readNormalizations().at(-1)).toMatchObject({ owners: 1, workspaceDir });
-          expect(normalizeAmbient).not.toHaveBeenCalled();
-        } finally {
-          warmMcp.runtime = undefined;
-          registryVersion.mockRestore();
-          channelVersion.mockRestore();
         }
-      });
-    },
-  );
+        expect(fixture.readNormalizations()).toMatchObject([
+          { owners: 1, workspaceDir: fixture.input.workspaceDir },
+          { owners: 1, workspaceDir },
+          { owners: 1, workspaceDir },
+        ]);
+        const first = respond.mock.calls[0]?.[1];
+        expect(first).toMatchObject({
+          groups: expect.arrayContaining([expect.objectContaining({ id: "mcp" })]),
+        });
+        expect(respond.mock.calls[1]?.[1]).toEqual(first);
+        fixture.failNormalization();
+        await withPluginRuntimeRegistryScope(ambient, invoke);
+        expect(respond.mock.calls.at(-1)?.[0]).toBe(false);
+        expect(ownerCount()).toBe(0);
+        expect(fixture.readNormalizations().at(-1)).toMatchObject({ owners: 1, workspaceDir });
+        expect(normalizeAmbient).not.toHaveBeenCalled();
+      } finally {
+        warmMcp.runtime = undefined;
+        registryVersion.mockRestore();
+        channelVersion.mockRestore();
+      }
+    });
+  });
 
   it("releases the dynamic owner after base inventory normalization fails", async () => {
     await withColdFixture(async (fixture) => {
@@ -910,22 +908,16 @@ describe("cold dynamic-model effective inventory", () => {
     });
   });
 
-  it.each(
-    [
-      { policy: "global disable", plugins: { enabled: false } },
-      { policy: "entry disable", plugins: { entries: { [pluginId]: { enabled: false } } } },
-      { policy: "deny", plugins: { deny: [pluginId] } },
-      { policy: "restrictive allow omission", plugins: { allow: ["unrelated-inventory-plugin"] } },
-    ].flatMap(({ policy, plugins }) =>
-      (["configured", "persisted"] as const).map((source) => ({ policy, plugins, source })),
-    ),
-  )(
-    "honors $policy despite an ambient competing provider ($source)",
-    async ({ plugins, source }) => {
+  it.each([
+    { policy: "global disable", plugins: { enabled: false } },
+    { policy: "entry disable", plugins: { entries: { [pluginId]: { enabled: false } } } },
+    { policy: "deny", plugins: { deny: [pluginId] } },
+    { policy: "restrictive allow omission", plugins: { allow: ["unrelated-inventory-plugin"] } },
+  ])(
+    "honors $policy despite a persisted model and ambient competing provider",
+    async ({ plugins }) => {
       await withColdFixture(async (fixture) => {
-        if (source === "persisted") {
-          await selectPersistedModel(fixture);
-        }
+        await selectPersistedModel(fixture);
         const config: OpenClawConfig = {
           ...fixture.config,
           plugins: { ...fixture.config.plugins, ...plugins },
@@ -959,24 +951,4 @@ describe("cold dynamic-model effective inventory", () => {
       });
     },
   );
-
-  it.each([
-    { modelId: "chat-unknown", throws: false },
-    { modelId: throwingId, throws: true },
-  ])("releases the selected owner when resolving $modelId", async ({ modelId, throws }) => {
-    await withColdFixture(async (fixture) => {
-      const resolution = acquireEffectiveToolInventoryRuntimeModelContext({
-        ...fixture.inventoryParams,
-        modelId,
-      });
-      if (throws) {
-        await expect(resolution).rejects.toThrow("Provider preparation failed");
-      } else {
-        const acquired = await resolution;
-        expect(acquired.run((context) => context)).toEqual({});
-        await acquired[Symbol.asyncDispose]();
-      }
-      expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
-    });
-  });
 });

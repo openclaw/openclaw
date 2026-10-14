@@ -548,6 +548,26 @@ describe("session roster event traffic", () => {
         { profileId: "ada", open: 8, running: 1 },
       ]);
       expect(sessions.state.result?.ownerSessionCounts).toBeUndefined();
+      // Descendant-only changes on a held conversation outside the facet page also change counts.
+      for (const [index, hasActiveSubagentRun] of [true, false].entries()) {
+        running = hasActiveSubagentRun ? 2 : 1;
+        emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            sessionKey: other.key,
+            agentId: "main",
+            reason: "subagent",
+            ancestorSessions: [],
+            session: { ...other, updatedAt: 100 + index, hasActiveSubagentRun },
+          },
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(summaryRequest).toHaveBeenCalledTimes(3 + index);
+        expect(sessions.listSnapshot(query).result?.ownerSessionCounts).toEqual([
+          { profileId: "ada", open: 8, running },
+        ]);
+      }
     } finally {
       observation.dispose();
       sessions.dispose();

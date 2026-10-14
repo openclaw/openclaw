@@ -1,7 +1,4 @@
-import {
-  agentHarnessAttemptTerminal,
-  type AgentHarnessAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { TranscriptEntryAnchor } from "openclaw/plugin-sdk/session-transcript-runtime";
 
 export type EmbeddedRunAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }> & {
@@ -15,4 +12,4 @@ export type AttemptFailureSource = Extract<
 export type AttemptSettlementWarning = NonNullable<
   Extract<EmbeddedRunAttemptResult["terminal"], { kind: "ok" }>["settlementWarning"]
 >;
-export const attemptTerminal = agentHarnessAttemptTerminal;
+export { agentHarnessAttemptTerminal as attemptTerminal } from "openclaw/plugin-sdk/agent-harness-runtime";

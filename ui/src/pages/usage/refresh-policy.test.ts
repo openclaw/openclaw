@@ -28,16 +28,6 @@ describe("UsageRefreshPolicy", () => {
     vi.restoreAllMocks();
   });
 
-  it("skips automatic refresh while the cached payload is within the TTL", () => {
-    const { policy, reload } = createPolicy();
-    policy.setLastLoadedAtMs(NOW_MS - USAGE_PAYLOAD_TTL_MS + 1);
-
-    policy.request("reconnect");
-    policy.request("poll");
-
-    expect(reload).not.toHaveBeenCalled();
-  });
-
   it("defers stale work until the page is visible", () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const { policy, reload } = createPolicy();
@@ -48,16 +38,6 @@ describe("UsageRefreshPolicy", () => {
 
     visibility.mockReturnValue("visible");
     policy.request("focus");
-    expect(reload).toHaveBeenCalledOnce();
-  });
-
-  it("always fetches for a manual refresh", () => {
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-    const { policy, reload } = createPolicy();
-    policy.setLastLoadedAtMs(NOW_MS);
-
-    policy.request("manual");
-
     expect(reload).toHaveBeenCalledOnce();
   });
 

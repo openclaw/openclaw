@@ -14,7 +14,7 @@ import {
   captureDeliveryQueueStateContext,
   pruneExpiredDeliveryQueueTombstones,
 } from "../infra/delivery-queue-sqlite.js";
-import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import { startDevicePairSetupMaintenance } from "../infra/device-bootstrap.js";
 import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
@@ -31,8 +31,7 @@ import {
   isGatewayWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
+import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
 import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
 import {
   abortChatRunById,
@@ -140,6 +139,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: scheduler.now() + (immediate ? 0 : everyMs),
       everyMs,
+      phase: "maintenance",
       run,
     });
   };
@@ -169,10 +169,7 @@ export function startGatewayMaintenanceTimers(params: {
     const admission = tryBeginGatewaySuspendAdmission(() => {
       invalidated = true;
     });
-    if (!admission) {
-      return { status: "retry", reason: "admission-closed" };
-    }
-    if (!admission.commit()) {
+    if (!admission?.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }
     try {
@@ -241,14 +238,21 @@ export function startGatewayMaintenanceTimers(params: {
     params.nodeSendToAllSubscribed("tick", payload);
   });
 
-  // Automatic refresh warms the cache; explicit status and Doctor requests own live probes.
+  // Warm once; an unobserved Gateway needs no periodic snapshot. Health requests
+  // refresh stale snapshots, and connected clients still receive passive updates.
+  let initialHealthRefresh = true;
   schedulePeriodic(
     "health",
     HEALTH_REFRESH_INTERVAL_MS,
-    () =>
-      params
+    () => {
+      if (!initialHealthRefresh && params.clients.size === 0) {
+        return undefined;
+      }
+      initialHealthRefresh = false;
+      return params
         .refreshGatewayHealthSnapshot({ probe: false })
-        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`)),
+        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
+    },
     true,
   );
 
@@ -285,6 +289,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: mediaScheduler.now(),
       everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
+      phase: "maintenance",
       run,
     });
   };
@@ -297,35 +302,12 @@ export function startGatewayMaintenanceTimers(params: {
       );
     }
   });
-  schedulePeriodic(
-    "device-pair-setup",
-    60_000,
-    () =>
-      pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() }).catch((error: unknown) => {
-        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
-      }),
-    true,
-  );
-
-  // Plugin-state expiry belongs to Gateway maintenance, not background-run tracking.
-  schedulePeriodic(
-    "plugin-state",
-    60_000,
-    async () => {
-      // Accepted writes retain their job scope until the scheduler joins their cleanup.
-      const signal = getAsyncWorkSignal();
-      try {
-        const { sweepExpiredPluginStateEntriesInWorker } =
-          await import("../plugin-state/plugin-state-worker-client.js");
-        await sweepExpiredPluginStateEntriesInWorker({
-          assertActive: () => signal?.throwIfAborted(),
-        });
-      } catch (error) {
-        params.logHealth.error(`plugin state cleanup failed: ${formatError(error)}`);
-      }
+  startDevicePairSetupMaintenance({
+    scheduler,
+    onError: (error) => {
+      params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
     },
-    true,
-  );
+  });
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
@@ -335,9 +317,6 @@ export function startGatewayMaintenanceTimers(params: {
     pruneExpiredArtifactDownloads(params.clients, now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
-      if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
-        return undefined;
-      }
       const keyRunId = key.slice(key.indexOf(":") + 1);
       if (keyRunId) {
         if (params.chatAbortControllers.has(keyRunId) || params.chatQueuedTurns.has(keyRunId)) {
@@ -420,37 +399,20 @@ export function startGatewayMaintenanceTimers(params: {
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
-      if (entry.projectSessionTerminalPersistence) {
-        const lifecycleGeneration = entry.lifecycleGeneration?.trim();
-        const sessionKey = entry.sessionKey.trim();
-        const sessionId = entry.sessionId.trim();
-        if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
-          params.restartRecoveryCandidates.set(runId, {
-            runId,
-            lifecycleGeneration,
-            sessionKey,
-            sessionId,
-            observedAt: entry.projectSessionTerminalObservedAt,
-          });
+      if (!entry.projectSessionTerminalPersistence && entry.projectSessionActive !== false) {
+        const aborted = abortChatRunById(params, {
+          runId,
+          sessionKey: entry.sessionKey,
+          stopReason: "timeout",
+        });
+        if (aborted.aborted) {
+          continue;
         }
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
+        // A non-abortable expired entry (signal already aborted, frozen reply
+        // op) whose owner cleanup was lost would otherwise survive every sweep:
+        // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
       }
-      if (entry.projectSessionActive === false) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
-      }
-      const aborted = abortChatRunById(params, {
-        runId,
-        sessionKey: entry.sessionKey,
-        stopReason: "timeout",
-      });
-      // A non-abortable expired entry (signal already aborted, frozen reply
-      // op) whose owner cleanup was lost would otherwise survive every sweep:
-      // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
-      if (!aborted.aborted) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-      }
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;

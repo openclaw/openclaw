@@ -1,6 +1,5 @@
 package ai.openclaw.app.node
 
-import android.content.Context
 import android.provider.CallLog
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -280,12 +279,9 @@ private class FakeCallLogDataSource(
 ) : CallLogDataSource {
   var lastRequest: CallLogSearchRequest? = null
 
-  override fun hasReadPermission(context: Context): Boolean = canRead
+  override fun hasReadPermission(): Boolean = canRead
 
-  override fun search(
-    context: Context,
-    request: CallLogSearchRequest,
-  ): List<CallLogRecord> {
+  override fun search(request: CallLogSearchRequest): List<CallLogRecord> {
     lastRequest = request
     failure?.let { throw it }
     val startIndex = request.offset.coerceAtLeast(0)

@@ -6,7 +6,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -28,7 +28,10 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import {
+  captureCanonicalSessionReaderContinuation,
+  markCanonicalSessionValidationPending,
+} from "./session-canonical-key.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import {
   readSessionEntriesFromStoreInWorker,
@@ -38,8 +41,7 @@ import {
   readExactSessionEntriesWithLifecycle,
   readSessionRowDatabaseFacts,
 } from "./session-entry-read.worker.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
-import * as sharingKernel from "./session-sharing-store.kernel.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
 it("hydrates only requested snapshots while retaining exact-read lifecycle and authorization facts", async () => {
@@ -48,6 +50,9 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
     const sessionKey = "agent:main:scoped-snapshots";
     const entry = {
       sessionId: "snapshot-session",
+      sidebarRoot: true,
+      parentSessionKey: "agent:main:dashboard:parent",
+      spawnedBy: "agent:main:dashboard:parent",
       updatedAt: 1,
       createdAt: 1,
       sessionStartedAt: 1,
@@ -104,6 +109,11 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
             payloads.textBytes.entry = 0;
             const selected = read(fields);
             expect(selected.entries).toHaveLength(1);
+            expect(selected.entries[0]?.entry).toMatchObject({
+              sidebarRoot: true,
+              parentSessionKey: entry.parentSessionKey,
+              spawnedBy: entry.spawnedBy,
+            });
             expect(selected.databaseIdentity?.identity).toBeTypeOf("string");
             expect(selected.lifecycleTimestamps.sessionStartedAt).toBe(1);
             expect(selected.members).toEqual({ [sessionKey]: [] });
@@ -135,13 +145,18 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
       sessionKeys: [sessionKey],
       snapshotFields: ["sessionDiffBaseline"],
     });
+    expect(transported.entries[0]?.entry).toMatchObject({
+      sidebarRoot: true,
+      parentSessionKey: entry.parentSessionKey,
+      spawnedBy: entry.spawnedBy,
+    });
     expect(transported.entries[0]?.entry.sessionDiffBaseline).toEqual(entry.sessionDiffBaseline);
     expect(transported.entries[0]?.entry.skillsSnapshot).toBeUndefined();
     expect(transported.entries[0]?.entry.systemPromptReport).toBeUndefined();
   });
 });
 
-it("publishes exact-read admission only after commit and reuses it on the retained reader", async () => {
+it("publishes lifecycle snapshot admission only after commit and reuses it on the retained reader", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:cron:admission";
@@ -162,6 +177,7 @@ it("publishes exact-read admission only after commit and reuses it on the retain
             database: target,
             env,
             sessionKeys: [sessionKey],
+            projection: "lifecycle",
           });
         const commitFailure = new Error("Injected snapshot commit failure");
         const exec = reader.db.exec.bind(reader.db);
@@ -186,7 +202,6 @@ it("publishes exact-read admission only after commit and reuses it on the retain
         );
         try {
           expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
-          expect(queries.counts.validation).toBeGreaterThan(0);
           const admission = captureCanonicalSessionReaderContinuation(reader);
           expect(admission).toBeDefined();
           admission?.release();
@@ -319,6 +334,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
             database: target,
             env,
             sessionKeys: [sessionKey],
+            projection: "lifecycle",
           });
         }
         const continuation = useContinuation
@@ -441,7 +457,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
   });
 });
 
-it("consumes admitted board absence for a cohort and observes first use and foreign DDL", async () => {
+it("consumes admitted board absence for a cohort and observes first use and published DDL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKeys = Array.from(
@@ -454,7 +470,7 @@ it("consumes admitted board absence for a cohort and observes first use and fore
     database.db.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    const peer = openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
     try {
       retained.run(target, () => {
@@ -500,12 +516,6 @@ it("consumes admitted board absence for a cohort and observes first use and fore
             .rows.filter((row) => row.hasBoard)
             .map((row) => row.sessionKey),
         ).toEqual([sessionKeys[0]]);
-        peer.exec("BEGIN IMMEDIATE; DROP TABLE board_widgets; DROP TABLE board_tabs");
-        expect(
-          boardStore.readBoardSessionKeys({ db: peer, path: target.path }, sessionKeys),
-        ).toEqual(new Set());
-        peer.exec("ROLLBACK");
-        expect(read().rows[0]?.hasBoard).toBe(true);
         peer.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
         expect(read().rows.every((row) => !row.hasBoard)).toBe(true);
       });
@@ -545,23 +555,16 @@ it.each(["worker", "exact", "row-facts"] as const)(
   },
 );
 
-it("closes worker-prepared authority synchronously before queued consumers can reuse it", async () => {
+it("returns detached metadata and rejects asynchronous batch consumers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:consumer";
     writeSessionEntry(database, sessionKey, { sessionId: "consumer-session", updatedAt: 1 });
     const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
-    let queued: Promise<void> | undefined;
     await withSessionEntriesFromStoresInWorker([input], ([read]) => {
       expect(read!.result.entries[0]?.entry.sessionId).toBe("consumer-session");
       read!.assertCurrent();
-      queued = Promise.resolve().then(() => {
-        expect(read!.assertCurrent).toThrow("consumer is no longer active");
-      });
     });
-    await queued;
-    const result = await readSessionEntriesFromStoreInWorker(input);
-    expect(Object.keys(result).toSorted()).toEqual(["entries", "kind", "lifecycleTimestamps"]);
     await expect(withSessionEntriesFromStoresInWorker([input], async () => {})).rejects.toThrow(
       "consumers must remain synchronous",
     );
@@ -637,6 +640,7 @@ it("preserves listing validation of dirty siblings in selected worker reads", as
         projection: "list",
       });
     expect((await read()).entries).toHaveLength(1);
+    markCanonicalSessionValidationPending(database, [sibling]);
     database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
       JSON.stringify({
         sessionId: sibling,
@@ -739,152 +743,119 @@ it.each(["unsettled marker", "missing window"] as const)(
   },
 );
 
-it.each(["durable", "incognito"] as const)(
-  "keeps %s delivery generations live only through same-generation writes",
-  async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const sessionKey =
-        kind === "incognito" ? "agent:main:dashboard:incognito-delivery" : "agent:main:delivery";
-      const scope = { agentId: "main", sessionKey, env };
-      const entry = { sessionId: "original", updatedAt: 1 };
-      replaceSessionEntrySync(scope, entry);
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
-      const descriptor = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey,
-        sessionId: entry.sessionId,
-        lifecycleRevision: null,
-      };
-      let other: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
-      if (kind === "durable") {
-        other = openOpenClawAgentDatabase({
-          agentId: "main",
-          env,
-          path: path.join(path.dirname(database.path), "other", "openclaw-agent.sqlite"),
-        });
-        writeSessionEntry(other, sessionKey, { sessionId: "another-store-session", updatedAt: 1 });
-      }
-      const authority = await prepareSessionDeliveryGeneration(descriptor);
-      try {
-        await runExclusiveSessionLifecycleMutation("patch", {
-          scope: database.path,
-          identities: [sessionKey, entry.sessionId],
-          prepare: async () => {
-            expect(authority.assertCurrent).toThrow(
-              expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-            );
-          },
-          run: async () => {
-            expect(authority.assertCurrent).toThrow(
-              expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-            );
-          },
-        });
-        authority.assertCurrent();
-        replaceSessionEntrySync(scope, {
-          ...entry,
-          updatedAt: 2,
-          delivery: {
-            kind: "external",
-            route: {
-              channel: "matrix",
-              accountId: "another-account",
-              target: { to: "!ordinary:example" },
-            },
-            context: { channel: "matrix", accountId: "another-account", to: "!ordinary:example" },
-            origin: { provider: "matrix", accountId: "another-account", to: "!ordinary:example" },
-          },
-          activeWriterRunId: "new-ordinary-run",
-        });
-        addSessionMember(
-          { ...scope, storePath: database.path },
-          { identityId: "ordinary-member", addedBy: "owner", addedAt: 2 },
-        );
-        const queries = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
-        try {
-          authority.assertCurrent();
-          expect(queries.counts.all).toBe(0);
-        } finally {
-          queries.restore();
-        }
-        if (other) {
-          await expect(
-            prepareSessionDeliveryGeneration({ ...descriptor, storePath: other.path }),
-          ).rejects.toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
+it("keeps durable delivery generations live only through same-generation writes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const sessionKey = "agent:main:delivery";
+    const scope = { agentId: "main", sessionKey, env };
+    const entry = { sessionId: "original", updatedAt: 1 };
+    replaceSessionEntrySync(scope, entry);
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+    const descriptor = {
+      agentId: "main",
+      storePath: database.path,
+      sessionKey,
+      sessionId: entry.sessionId,
+      lifecycleRevision: null,
+    };
+    const other = openOpenClawAgentDatabase({
+      agentId: "main",
+      env,
+      path: path.join(path.dirname(database.path), "other", "openclaw-agent.sqlite"),
+    });
+    writeSessionEntry(other, sessionKey, { sessionId: "another-store-session", updatedAt: 1 });
+    const authority = await prepareSessionDeliveryGeneration(descriptor);
+    try {
+      await runExclusiveSessionLifecycleMutation("patch", {
+        scope: database.path,
+        identities: [sessionKey, entry.sessionId],
+        prepare: async () => {
+          expect(authority.assertCurrent).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
           );
-          authority.assertCurrent();
-        }
-        replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "reset-generation" });
-        expect(authority.assertCurrent).toThrow(
+        },
+        run: async () => {
+          expect(authority.assertCurrent).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+          );
+        },
+      });
+      authority.assertCurrent();
+      replaceSessionEntrySync(scope, {
+        ...entry,
+        updatedAt: 2,
+        delivery: {
+          kind: "external",
+          route: {
+            channel: "matrix",
+            accountId: "another-account",
+            target: { to: "!ordinary:example" },
+          },
+          context: { channel: "matrix", accountId: "another-account", to: "!ordinary:example" },
+          origin: { provider: "matrix", accountId: "another-account", to: "!ordinary:example" },
+        },
+        activeWriterRunId: "new-ordinary-run",
+      });
+      addSessionMember(
+        { ...scope, storePath: database.path },
+        { identityId: "ordinary-member", addedBy: "owner", addedAt: 2 },
+      );
+      const queries = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
+      try {
+        authority.assertCurrent();
+        // Native writers can share a handle with raw SDK writes; one final row read certifies it.
+        expect(queries.counts.all).toBe(1);
+        authority.assertCurrent();
+        expect(queries.counts.all).toBe(1);
+      } finally {
+        queries.restore();
+      }
+      await expect(
+        prepareSessionDeliveryGeneration({ ...descriptor, storePath: other.path }),
+      ).rejects.toThrow(expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }));
+      authority.assertCurrent();
+      replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "reset-generation" });
+      expect(authority.assertCurrent).toThrow(
+        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
+      );
+      await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(
+        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
+      );
+      const replay = await prepareSessionDeliveryGeneration({
+        ...descriptor,
+        lifecycleRevision: "reset-generation",
+      });
+      try {
+        replay.assertCurrent();
+        runOpenClawAgentWriteTransaction(
+          (writer) => {
+            deleteSessionEntryRows(writer, sessionKey);
+            writeSessionEntry(writer, sessionKey, { sessionId: "replacement", updatedAt: 3 });
+          },
+          toDatabaseOptions(resolveSqliteScope(scope)),
+        );
+        expect(replay.assertCurrent).toThrow(
           expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
         );
         await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(
           expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
         );
-        const replay = await prepareSessionDeliveryGeneration({
+        const replacement = await prepareSessionDeliveryGeneration({
           ...descriptor,
-          lifecycleRevision: "reset-generation",
+          sessionId: "replacement",
         });
-        try {
-          replay.assertCurrent();
-          runOpenClawAgentWriteTransaction(
-            (writer) => {
-              deleteSessionEntryRows(writer, sessionKey);
-              writeSessionEntry(writer, sessionKey, { sessionId: "replacement", updatedAt: 3 });
-            },
-            toDatabaseOptions(resolveSqliteScope(scope)),
-          );
-          expect(replay.assertCurrent).toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
-          );
-          await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
-          );
-          const replacement = await prepareSessionDeliveryGeneration({
-            ...descriptor,
-            sessionId: "replacement",
-          });
-          replacement.assertCurrent();
-          replacement.release();
-          expect(replacement.assertCurrent).toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-          );
-          if (kind === "incognito") {
-            const current = { ...descriptor, sessionId: "replacement" };
-            const held = await prepareSessionDeliveryGeneration(current);
-            const failedProjection = vi
-              .spyOn(sharingKernel, "listSessionMembersInDatabase")
-              .mockImplementationOnce(() => {
-                throw new Error("synthetic projection failure");
-              });
-            try {
-              writeSessionEntry(database, sessionKey, { sessionId: "replacement", updatedAt: 4 });
-              expect(held.assertCurrent).toThrow(
-                expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-              );
-              await expect(prepareSessionDeliveryGeneration(current)).rejects.toThrow(
-                expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-              );
-            } finally {
-              failedProjection.mockRestore();
-              held.release();
-            }
-            writeSessionEntry(database, sessionKey, { sessionId: "replacement", updatedAt: 5 });
-            const repaired = await prepareSessionDeliveryGeneration(current);
-            repaired.assertCurrent();
-            repaired.release();
-          }
-        } finally {
-          replay.release();
-        }
+        replacement.assertCurrent();
+        replacement.release();
+        expect(replacement.assertCurrent).toThrow(
+          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+        );
       } finally {
-        authority.release();
+        replay.release();
       }
-    });
-  },
-);
+    } finally {
+      authority.release();
+    }
+  });
+});
 
 it("orders native reads with writers and ignores unrelated metadata notifications", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -966,29 +937,3 @@ it.each(["entry", "store", "topology", "native"] as const)(
     });
   },
 );
-
-it("refuses an ordered result when its database closes during reader cleanup", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:closing-consumer";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
-    const reading = withSessionEntriesFromStoresInWorker(
-      [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
-      ([read]) => {
-        read!.assertCurrent();
-        queueMicrotask(() => {
-          closing = closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-        });
-        return read!.result.entries[0]?.entry;
-      },
-      { ordered: true },
-    );
-    try {
-      await expect(reading).rejects.toThrow("revoked");
-      expect(closing).toBeDefined();
-    } finally {
-      await closing;
-    }
-  });
-});

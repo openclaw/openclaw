@@ -10,19 +10,17 @@ import {
   peekStoredDeviceIdentityId,
   storeDeviceAuthToken,
 } from "./index.ts";
-import { rotateDeviceToken } from "./page-operations.ts";
+import { createInitialDevicesState, rotateDeviceToken } from "./page-operations.ts";
 
 function createState(request: (method: string, params?: unknown) => Promise<unknown>) {
   return {
-    client: {
-      request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
-    },
-    connected: true,
+    ...createInitialDevicesState({
+      client: {
+        request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
+      },
+      connected: true,
+    }),
     requestGeneration: 1,
-    devicesLoading: false,
-    devicesQueuedRefresh: "none" as const,
-    devicesError: null as string | null,
-    devicesList: null,
   };
 }
 
@@ -178,21 +176,8 @@ describe("device token request lifecycle", () => {
     expect(loadDeviceAuthToken(tokenParams)?.token).toBe("rotated-token");
   });
 
+  // Grant matching uses the same whitespace normalization as the device-auth store.
   it("reports a cross-device rotation the Gateway withheld the token for", async () => {
-    const state = createState(async () => ({
-      ...rotationResult,
-      tokenDelivery: "withheld-cross-device",
-    }));
-
-    expect(await rotateDeviceToken(state, tokenParams)).toEqual({
-      delivery: "withheld-cross-device",
-    });
-    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
-  });
-
-  // The Gateway echoes the raw request deviceId and its own stored role, so a grant that
-  // differs only by surrounding whitespace is still the one this page asked to rotate.
-  it("accepts a result whose grant differs from the request only by whitespace", async () => {
     const state = createState(async () => ({
       ...rotationResult,
       deviceId: " 00 ",
@@ -203,6 +188,7 @@ describe("device token request lifecycle", () => {
     expect(await rotateDeviceToken(state, tokenParams)).toEqual({
       delivery: "withheld-cross-device",
     });
+    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
 
   // Gateways released before tokenDelivery answer without it; a present token is then

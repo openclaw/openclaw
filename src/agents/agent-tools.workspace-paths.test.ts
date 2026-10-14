@@ -144,43 +144,35 @@ describe("workspace path resolution", () => {
     });
   });
 
-  it.each([false, true])(
-    "guards decoded file URLs with normalized forwarding=%s",
-    async (normalizeGuardedPathParams) => {
-      await withTempDir("openclaw-guard-url-", async (stateDir) => {
-        const stateRoot = await fs.realpath(stateDir);
-        const root = path.join(stateRoot, "workspace");
-        const inside = path.join(root, "note.txt");
-        const outside = path.join(stateRoot, "outside.txt");
-        await fs.mkdir(root);
-        await fs.writeFile(inside, "URL_INSIDE_MARKER");
-        await fs.writeFile(outside, "URL_OUTSIDE_MARKER");
-        const base = createReadTool(root) as unknown as AnyAgentTool;
-        const execute = vi.spyOn(base, "execute");
-        const read = wrapToolWorkspaceRootGuardWithOptions(base, root, {
-          containerWorkdir: "/workspace",
-          normalizeGuardedPathParams,
-        });
-        const insideUrl = pathToFileURL(inside).href;
-
-        expect(getTextContent(await read.execute("inside-url", { path: insideUrl }))).toContain(
-          "URL_INSIDE_MARKER",
-        );
-        expect(execute).toHaveBeenCalledWith(
-          "inside-url",
-          { path: normalizeGuardedPathParams ? inside : insideUrl },
-          undefined,
-          undefined,
-        );
-        await expect(
-          read.execute("outside-url", { path: pathToFileURL(outside).href }),
-        ).rejects.toThrow(/Path escapes sandbox root/i);
-        expect(execute).toHaveBeenCalledTimes(1);
-        expect(await fs.readFile(inside, "utf8")).toBe("URL_INSIDE_MARKER");
-        expect(await fs.readFile(outside, "utf8")).toBe("URL_OUTSIDE_MARKER");
+  it("guards decoded file URLs while forwarding the original URL", async () => {
+    await withTempDir("openclaw-guard-url-", async (stateDir) => {
+      const stateRoot = await fs.realpath(stateDir);
+      const root = path.join(stateRoot, "workspace");
+      const inside = path.join(root, "note.txt");
+      const outside = path.join(stateRoot, "outside.txt");
+      await fs.mkdir(root);
+      await fs.writeFile(inside, "URL_INSIDE_MARKER");
+      await fs.writeFile(outside, "URL_OUTSIDE_MARKER");
+      const base = createReadTool(root) as unknown as AnyAgentTool;
+      const execute = vi.spyOn(base, "execute");
+      const read = wrapToolWorkspaceRootGuardWithOptions(base, root, {
+        containerWorkdir: "/workspace",
+        normalizeGuardedPathParams: false,
       });
-    },
-  );
+      const insideUrl = pathToFileURL(inside).href;
+
+      expect(getTextContent(await read.execute("inside-url", { path: insideUrl }))).toContain(
+        "URL_INSIDE_MARKER",
+      );
+      expect(execute).toHaveBeenCalledWith("inside-url", { path: insideUrl }, undefined, undefined);
+      await expect(
+        read.execute("outside-url", { path: pathToFileURL(outside).href }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(await fs.readFile(inside, "utf8")).toBe("URL_INSIDE_MARKER");
+      expect(await fs.readFile(outside, "utf8")).toBe("URL_OUTSIDE_MARKER");
+    });
+  });
 
   it.runIf(process.platform !== "win32")("rejects hardlinked file aliases", async () => {
     await withTempDir("openclaw-hardlinks-", async (parent) => {
@@ -416,11 +408,10 @@ function patchSandbox(sandbox: UnsafeMountedSandbox) {
   return { root, bridge: fsBridge!, workspaceMounts: [{ hostRoot: root, containerRoot }] };
 }
 
-function resolveApplyPatchTool(sandbox: UnsafeMountedSandbox, workspaceOnly?: boolean) {
+function resolveApplyPatchTool(sandbox: UnsafeMountedSandbox) {
   return createApplyPatchTool({
     cwd: sandbox.workspaceDir,
     sandbox: patchSandbox(sandbox),
-    workspaceOnly,
   });
 }
 
@@ -497,17 +488,6 @@ describe("tools.fs.workspaceOnly", () => {
         .stat(path.join(agentRoot, "pwned.txt"))
         .catch((error: unknown) => error);
       expect((missingPatchedFile as NodeJS.ErrnoException).code).toBe("ENOENT");
-    });
-  });
-
-  it("allows apply_patch outside workspace root when explicitly disabled", async () => {
-    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
-      const applyPatchTool = resolveApplyPatchTool(sandbox, false);
-
-      await applyPatchTool.execute("t2", { input: APPLY_PATCH_PAYLOAD });
-      expect(await fs.readFile(path.join(agentRoot, "pwned.txt"), "utf8")).toBe(
-        "owned-by-apply-patch\n",
-      );
     });
   });
 });

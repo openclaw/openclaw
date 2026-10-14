@@ -1,7 +1,9 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   resolveCommandAuthorization,
+  resolveCommandAuthorizationAsync,
   resolveStoredModelOverride,
   type CommandAuthorization,
 } from "./command-auth-native.js";
@@ -59,7 +61,7 @@ describe("plugin-sdk/command-auth-native", () => {
     ).toEqual({ provider: "example", model: "raw" });
   });
 
-  it("preserves the native authorization result contract", () => {
+  it("preserves the native authorization result contract", async () => {
     type PublishedAuthorization = {
       providerId?: ChannelId;
       ownerList: string[];
@@ -74,6 +76,9 @@ describe("plugin-sdk/command-auth-native", () => {
     expectTypeOf<
       ReturnType<typeof resolveCommandAuthorization>
     >().toEqualTypeOf<PublishedAuthorization>();
+    expectTypeOf<ReturnType<typeof resolveCommandAuthorizationAsync>>().toEqualTypeOf<
+      Promise<PublishedAuthorization>
+    >();
     const expected: PublishedAuthorization = {
       providerId: undefined,
       ownerList: ["owner"],
@@ -83,12 +88,24 @@ describe("plugin-sdk/command-auth-native", () => {
       from: undefined,
       to: undefined,
     };
-    const actual = resolveCommandAuthorization({
+    const params = {
       ctx: { Provider: "webchat", Surface: "webchat", SenderId: "guest" },
       cfg: { commands: { ownerAllowFrom: ["owner"] } },
       commandAuthorized: true,
+    };
+    using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const actual = withPluginRuntimePluginScope({ pluginId: "command-auth-compat-proof" }, () => {
+      resolveCommandAuthorization(params);
+      return resolveCommandAuthorization(params);
     });
+    expect(await resolveCommandAuthorizationAsync(params)).toStrictEqual(expected);
     expect(actual).toStrictEqual(expected);
     expect(new Set(Reflect.ownKeys(actual))).toEqual(new Set(Reflect.ownKeys(expected)));
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        "resolveCommandAuthorization is deprecated; use resolveCommandAuthorizationAsync",
+      ),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
   });
 });

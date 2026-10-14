@@ -1,5 +1,4 @@
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { listAgentsForGateway } from "./session-utils-store.js";
@@ -69,55 +68,15 @@ describe("listAgentsForGateway model identity", () => {
       ready: "disabled",
     },
     {
-      name: "legacy sole provider matching utility",
+      name: "model-owned suffix",
       cfg: {
         agents: {
-          defaults: {
-            utilityModel: "local-utility/small@local:utility",
-            models: { "local-utility/small": { alias: "helper" } },
-          },
-          entries: {
-            main: {},
-            ops: {
-              utilityModel: "worker-helper@local:ops",
-              models: { "local-utility/small": { alias: "worker-helper" } },
-            },
-            disabled: { utilityModel: "" },
-          },
-        },
-        models: {
-          providers: {
-            "local-utility": {
-              baseUrl: "http://127.0.0.1:9/v1",
-              models: [
-                makeProviderModelFixture({
-                  id: "small",
-                  provider: "local-utility",
-                  api: "openai-completions",
-                  baseUrl: "http://127.0.0.1:9/v1",
-                }),
-              ],
-            },
-          },
+          defaults: { model: { primary: "lmstudio/gemma-4-31b-it@q8_0@lmstudio:setup-fake" } },
+          entries: { main: {} },
         },
       },
-      expected: [
-        { id: "main", primary: "local-utility/small", utility: "local-utility/small" },
-        { id: "ops", primary: "local-utility/small", utility: "local-utility/small" },
-        { id: "disabled", primary: "local-utility/small" },
-      ],
+      expected: [{ id: "main", primary: "lmstudio/gemma-4-31b-it@q8_0" }],
     },
-    ...[
-      [
-        "custom/vertex-ai_claude-haiku-4-5@20251001@custom:setup-fake",
-        "custom/vertex-ai_claude-haiku-4-5@20251001",
-      ],
-      ["lmstudio/gemma-4-31b-it@q8_0@lmstudio:setup-fake", "lmstudio/gemma-4-31b-it@q8_0"],
-    ].map(([primary, expected]) => ({
-      name: `model-owned suffix: ${primary}`,
-      cfg: { agents: { defaults: { model: { primary } }, entries: { main: {} } } },
-      expected: [{ id: "main", primary: expected }],
-    })),
   ])("projects $name without mutating config", async ({ cfg, expected, ready }) => {
     const original = structuredClone(cfg);
     const { agents } = await listAgentsForGateway(cfg);

@@ -35,7 +35,7 @@ export async function startZaloGatewayAccount(
     }
     if (!probe.ok) {
       ctx.log?.warn?.(
-        `[${account.accountId}] Zalo probe failed before provider start (${String(probe.elapsedMs)}ms): ${probe.error}`,
+        `[${account.accountId}] Zalo check failed before provider start (${String(probe.elapsedMs)}ms): ${probe.error}`,
       );
     }
     ctx.setStatus({
@@ -44,7 +44,7 @@ export async function startZaloGatewayAccount(
     });
   } catch (err) {
     ctx.log?.warn?.(
-      `[${account.accountId}] Zalo probe threw before provider start: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+      `[${account.accountId}] Zalo check failed before provider start: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
     );
   }
   const statusSink = createAccountStatusSink({

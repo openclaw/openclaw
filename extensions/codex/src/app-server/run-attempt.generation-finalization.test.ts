@@ -4,6 +4,7 @@ import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-m
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as sessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
 import {
   patchSessionEntry,
@@ -107,6 +108,7 @@ describe("Codex generation admission", () => {
     params.sessionId = "session-current";
     params.sessionKey = sessionKey;
     params.config = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(params.config);
     const clientFactory = vi.fn(async () => {
       throw new Error("client must not start");
     });
@@ -439,6 +441,7 @@ describe("Codex finalization generation ownership", () => {
         identity: successor,
         storePath: scope.storePath,
       });
+      using _ = { [Symbol.dispose]: adopted.release };
       expect(adopted.binding).toEqual(admittedBinding);
       harness.close();
 

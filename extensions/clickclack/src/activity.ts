@@ -28,7 +28,6 @@ const STREAMING_COMMENTARY_ITEM_KINDS = new Set([
   "reasoning",
 ]);
 
-/** Provider-specific reasoning lanes normalized into one ClickClack label. */
 const THINKING_ITEM_KINDS = new Set(["analysis", "thinking", "reasoning"]);
 
 function normalizedItemKind(payload: ClickClackItemEventPayload): string {
@@ -62,13 +61,7 @@ function activityBody(payload: ClickClackItemEventPayload): string {
   if (head && text) {
     return `**${head}**\n\n${text}`;
   }
-  if (text) {
-    return text;
-  }
-  if (head) {
-    return head;
-  }
-  return payload.status?.trim() || payload.kind?.trim() || "";
+  return text || head || payload.status?.trim() || payload.kind?.trim() || "";
 }
 
 type CommentarySegment = {
@@ -131,7 +124,7 @@ export function createClickClackActivityPublisher(params: {
       clearTimeout(segment.timer);
       segment.timer = undefined;
     }
-    if (!segment.dirty || !segment.body.trim()) {
+    if (!segment.dirty || !segment.body) {
       return Promise.resolve();
     }
     segment.dirty = false;
@@ -155,7 +148,7 @@ export function createClickClackActivityPublisher(params: {
     const body = commentaryBody(payload);
     const key = payload.itemId?.trim() || "turn";
     let segment = commentaryByItem.get(key);
-    if (!body.trim()) {
+    if (!body) {
       if (segment) {
         clearTimeout(segment.timer);
         commentaryByItem.delete(key);

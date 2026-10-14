@@ -26,41 +26,19 @@ describe("irc protocol", () => {
   });
 
   it("sanitizes outbound text to prevent command injection", () => {
-    expect(sanitizeIrcOutboundText("hello\\r\\nJOIN #oops")).toBe("hello JOIN #oops");
-    expect(sanitizeIrcOutboundText("\\u0001test\\u0000")).toBe("test");
+    expect(sanitizeIrcOutboundText("hello\r\nJOIN #oops")).toBe("hello JOIN #oops");
+    expect(sanitizeIrcOutboundText("\u0001test\u0000")).toBe("test");
+  });
+
+  it("keeps literal backslash sequences as message text", () => {
+    const text = String.raw`Run C:\tools\new.exe, printf("%d\n"), match \x41 or caf\u00e9`;
+    expect(sanitizeIrcOutboundText(text)).toBe(text);
   });
 
   it("validates targets and rejects control characters", () => {
     expect(sanitizeIrcTarget("#openclaw")).toBe("#openclaw");
-    expect(() => sanitizeIrcTarget("#bad\\nPING")).toThrow(/Invalid IRC target/);
+    expect(sanitizeIrcTarget(String.raw`\tom`)).toBe(String.raw`\tom`);
+    expect(() => sanitizeIrcTarget("#bad\nPING")).toThrow(/Invalid IRC target/);
     expect(() => sanitizeIrcTarget(" user")).toThrow(/Invalid IRC target/);
-  });
-
-  describe("\\u escape surrogate-range guard", () => {
-    const LONE_SURROGATE = /[\uD800-\uDFFF]/;
-
-    it("preserves literal \\uXXXX when codepoint is a low surrogate", () => {
-      const out = sanitizeIrcOutboundText("\\uDFFF");
-      expect(LONE_SURROGATE.test(out)).toBe(false);
-    });
-
-    it("decodes adjacent surrogate-pair escapes to the astral character", () => {
-      expect(sanitizeIrcOutboundText("\\uD83D\\uDE00")).toBe("😀");
-      expect(sanitizeIrcOutboundText("\\uD83D\\uDE00\\uD83D\\uDE01")).toBe("😀😁");
-    });
-
-    it("decodes BMP-escaped prefix before a surrogate pair correctly", () => {
-      // Regression: \\u0041\\uD83D\\uDE00 must yield A😀, not A\\uD83D\\uDE00.
-      // The old step-1 regex \\u(xxxx)\\u(xxxx) would consume \\u0041\\uD83D as a
-      // non-pair, leaving \\uDE00 as a lone surrogate.
-      expect(sanitizeIrcOutboundText("\\u0041\\uD83D\\uDE00")).toBe("A😀");
-    });
-
-    it("handles lone high surrogate followed by a different surrogate pair", () => {
-      // \\uD800\\uD83D\\uDE00: D800 is lone (no matching low), D83D+DE00 form 😀.
-      // Use toBe rather than LONE_SURROGATE regex: emoji contains surrogate
-      // code units internally that would trigger a naive /[\uD800-\uDFFF]/ check.
-      expect(sanitizeIrcOutboundText("\\uD800\\uD83D\\uDE00")).toBe("\\uD800😀");
-    });
   });
 });

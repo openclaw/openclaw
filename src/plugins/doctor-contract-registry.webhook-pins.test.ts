@@ -7,6 +7,8 @@ import { createConfigIO } from "../config/io.factory.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
+import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { applyPluginDoctorCompatibilityMigrations } from "./doctor-contract-registry.js";
@@ -79,6 +81,35 @@ function channelConfig(accounts: Record<string, Record<string, unknown>>): OpenC
 }
 
 describe("Doctor historical webhook pins", () => {
+  it.each([{ accountIds: [] }, { accountIds: ["work"] }])(
+    "keeps real rehearsal webhook pins and records no-op completion in state: $accountIds",
+    async ({ accountIds }) => {
+      const { configPath, env, migrate } = await fixture(accountIds);
+      const rehearsalEnv = {
+        ...env,
+        ...buildUpdateRehearsalPathEnv(path.dirname(configPath)),
+        ...buildUpdateDoctorEnv({
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
+          serviceRepairPolicy: "external",
+        }),
+      };
+      const config = channelConfig({ work: { enabled: true } });
+      const result = migrate(config, rehearsalEnv);
+      if (accountIds.length === 0) {
+        expect(result).toEqual({ config, changes: [] });
+        expect(migrate(config, rehearsalEnv)).toEqual({ config, changes: [] });
+      } else {
+        expect(result.config.channels?.["nextcloud-talk"]).toEqual({
+          accounts: { work: { enabled: true, legacyWebhook: endpoint } },
+        });
+        expect(result.config.meta?.migrations?.webhookListeners).toEqual({
+          "nextcloud-talk": [["channels", "nextcloud-talk", "accounts", "work", "legacyWebhook"]],
+        });
+      }
+    },
+  );
+
   it.each([
     {
       name: "reported installed repair",

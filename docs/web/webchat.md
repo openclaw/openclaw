@@ -25,8 +25,8 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 
 - The UI connects to the Gateway WebSocket and uses the `chat.history`, `chat.send`, `chat.inject`, and `chat.message.get` RPC methods.
 - Control UI opens a chat with a small recent-history page through `chat.startup`. Short chat links resolve their session in that same request. Short-reference startup also subscribes the connection to authorized session events before reading history, so updates arriving before the chat pane mounts are not missed. Scroll upward to load older messages. A restored Home pane waits for the selected chat to finish loading, while explicitly opening Home loads it immediately.
-- `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`. History pages skip hidden and tool-only transcript entries while filling the requested visible-message window from the existing indexed transcript. API clients can send a per-request `maxChars` to override the default limit for one call.
-- Paginated `chat.history` and `chat.startup` requests accept a `maxBytes` page target, defaulting to 512 KiB with a 6 MiB hard ceiling for messages and their activity. The Control UI keeps the initial tail small, then requests up to 1,000 older messages and follows `nextOffset` to continue. One readable message or a group projected from one transcript row can exceed the target so pagination does not hide its content; groups that exceed the hard ceiling remain bounded. Anchored `messageId` reads keep their existing default budget because they have no continuation. Bound Claude CLI transcripts use the same page budget and back-scroll pagination, including messages that exist only in the native transcript.
+- `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`. History pages skip hidden and tool-only transcript entries while filling the requested visible-message window from the existing indexed transcript. A byte-full window can finish before the requested message count, with older content available through pagination. API clients can send a per-request `maxChars` to override the default limit for one call.
+- Paginated `chat.history` and `chat.startup` requests accept a `maxBytes` page target, defaulting to 512 KiB with a 6 MiB hard ceiling for messages and their activity. The Control UI requests up to 80 messages within 256 KiB for the initial tail, then up to 1,000 older messages within 1 MiB and follows `nextOffset` to continue. Messages and indivisible groups projected from one transcript row that exceed the page budget use fetchable references rather than exceeding the budget. Anchored `messageId` reads retain the same default page budget. Bound Claude CLI transcripts use the same page budget and back-scroll pagination, including messages that exist only in the native transcript.
 - If history changes during a page read, the Gateway returns a coherent page from the current history. A `windowReset: true` response contains a replacement tail; clients replace their loaded history and continue with its `deltaCursor` and pagination fields. A stale delta cursor returns `{ kind: "reset" }`, prompting a fresh tail request. Reads racing a projection rebuild wait briefly before returning a retryable rebuilding error.
 - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized entry through `chat.message.get`. That fetch does not increase the default history payload. The preview remains visible while it loads. Recovered content replaces it inline. `chat.message.get` uses the same transcript branch and display rules as `chat.history`. Unlike `chat.history`, it targets one entry by `messageId`. It returns an honest unavailable reason when the full content can no longer be returned.
 - `chat.history` follows the active transcript branch for append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
@@ -62,6 +62,8 @@ reply-admission ticket before acknowledging, so a later send cannot overtake a
 message whose preparation is still pending.
 An optional `messageSeq` comes only from a committed transcript receipt. Clients
 must not predict it from history length or treat `status: "started"` as persistence.
+Chat admission rechecks current committed session access independently of sidebar
+refreshes. Durable input custody still checks that authority at the write boundary.
 The Control UI replaces its provisional source with accepted custody, then with
 the canonical row. Accepted inputs stay below saved conversation history until
 they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
@@ -83,6 +85,39 @@ WebChat has two separate data paths:
 
 Normal agent-run final answers should be durable because the embedded runtime writes the assistant `message_end`. Any fallback that mirrors a delivered final payload into the transcript must first avoid duplicating an assistant turn that the embedded runtime already wrote.
 
+## Speech
+
+When `tts` is configured, assistant messages offer **Read aloud**. Audio is
+synthesized by the Gateway using the configured TTS provider, voice, and endpoint.
+**Stop reading** cancels browser playback. Long replies play in ordered chunks
+within `tts.maxTextLength`. Starting another Read aloud or Talk action stops the
+previous playback. The control does not use browser speech synthesis. The former `messages.tts` configuration is migrated to `tts` by Doctor.
+
+Hold the microphone button for dictation. Explicit audio models in
+`tools.media.models` use the same transcription owner as uploaded voice notes,
+including local OpenAI-compatible `/v1/audio/transcriptions` endpoints and local
+CLI models. Audio is transcribed when capture ends; file-based providers do not
+produce partial captions. An explicit Talk transcription provider, matching
+`agents.defaults.voiceModel`, or Voice Call streaming configuration keeps the
+streaming path. Dictation is unavailable when none of the configured file
+providers or CLI commands can run.
+Loopback and private-network endpoints use the existing provider opt-in:
+`models.providers.<id>.request.allowPrivateNetwork: true`.
+
+Set `talk.realtime.mode: "stt-tts"` for split browser Talk: the Gateway transcribes
+each utterance, the current chat session's agent answers it, and the browser plays
+the Gateway's generated speech. This uses the configured agent model, including
+local models. Output uses `talk.provider` when set, otherwise `tts`.
+The browser pauses capture while generating and playing the answer. Stop ends
+capture and playback and cancels that call's active chat run. Split Talk requires
+both transcription and speech output to be configured. Dictation in an existing
+conversation uses that conversation's agent credentials; the catalog remains an
+advisory view of the configured Talk agent.
+
+Without these settings, the existing realtime Talk and transcription-provider
+selection remain unchanged. Browser microphone capture requires a secure context
+(HTTPS or localhost) and microphone permission.
+
 ## Human mention delivery
 
 The Control UI binds each [selected person](/concepts/multi-user#mentioning-people) to the submitted message text. `chat.send`, the initial message on `sessions.create`, and `sessions.send` accept an optional `mentions` array of `{ profileId, start, end }` annotations. There are at most ten annotations. `start` is inclusive and `end` is exclusive, measured in UTF-16 code units. The Gateway validates their text ranges and recipients before accepting the input. Plain `@name` text and agent output do not create human mentions. Copying or quoting text does not copy its recipient selections.
@@ -102,6 +137,10 @@ The supporting RPCs require `operator.read` and use the authenticated profile, n
 
 Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restarts within their retention limits. Capacity limits can still skip alerts. Restarting or reconnecting does not resend old browser notifications or restore dismissed entries. Notification failures do not retry or undo the posted chat message. Browser push does not provide exactly-once delivery. See [Inbox retention](/concepts/multi-user#temporary-mentions-inbox) and [notification preferences](/web/notifications#receive-human-mention-alerts).
 
+Dismissing an unknown or already dismissed entry is harmless and returns the current Inbox snapshot. If an Inbox request returns an `UNAVAILABLE` error, the Control UI retries with increasing delays and respects the Gateway’s minimum retry delay. Ordinary connection updates and mention events do not bypass that backoff.
+
+Background Inbox refresh failures retry after one minute, doubling the delay up to fifteen minutes until a refresh succeeds. Session and profile updates respect the pending background retry; explicit Inbox reads can still retry immediately. The `gateway/mentions` warning records the failing phase, source, error class and code, cause, elapsed time, and next retry delay.
+
 ## Control UI agents tools panel
 
 - The Control UI `/agents` Tools panel has a "Tool preview" backed by `tools.effective(sessionKey=...)`. It previews core, plugin, channel-owned, and already-discovered MCP server tools using the session's saved settings. It does not report the exact tools of an active run.
@@ -119,7 +158,7 @@ Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restar
 
 Full configuration: [Configuration](/gateway/configuration)
 
-WebChat has no persisted config section. Gateway uses the built-in `chat.history` display limit. API clients can send per-request `maxChars` to override it for a single call. Legacy `channels.webchat` and `gateway.webchat` config is retired. Run `openclaw doctor --fix` to remove it.
+WebChat has no persisted config section. Gateway uses the built-in `chat.history` display limit. API clients can send per-request `maxChars` to override it for a single call. Clients that can expand tool output with `chat.message.get` may also send `toolResultMaxChars` to request shorter tool-result text previews without reducing user or assistant text. Complete JSON objects and arrays that fit the existing display limit retain that limit because clients use them for source cards and embedded views. This optional limit applies to `chat.history` and `chat.startup`, including history pages and delta catch-up; omit it to retain the default behavior. Repeat it on each page request. Legacy `channels.webchat` and `gateway.webchat` config is retired. Run `openclaw doctor --fix` to remove it.
 
 Related global options:
 

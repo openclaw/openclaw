@@ -126,13 +126,11 @@ const ToolPolicyBaseSchema = z.strictObject({
   deny: z.array(z.string()).optional(),
 });
 
-export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) => {
-  addAllowAlsoAllowConflictIssue(
-    value,
-    ctx,
+export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine(
+  createAllowAlsoAllowConflictValidator(
     "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-  );
-}).optional();
+  ),
+).optional();
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
@@ -276,28 +274,21 @@ const ToolProfileSchema = z
   .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
   .optional();
 
-function addAllowAlsoAllowConflictIssue(
-  value: { allow?: string[]; alsoAllow?: string[] },
-  ctx: z.RefinementCtx,
-  message: string,
-): void {
-  if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message,
-    });
-  }
+function createAllowAlsoAllowConflictValidator(message: string) {
+  return (value: { allow?: string[]; alsoAllow?: string[] }, ctx: z.RefinementCtx): void => {
+    if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+    }
+  };
 }
 
 const ToolPolicyWithProfileSchema = ToolPolicyBaseSchema.extend({
   profile: ToolProfileSchema,
-}).superRefine((value, ctx) => {
-  addAllowAlsoAllowConflictIssue(
-    value,
-    ctx,
+}).superRefine(
+  createAllowAlsoAllowConflictValidator(
     "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-  );
-});
+  ),
+);
 
 // Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
 export const ElevatedAllowFromSchema = z
@@ -652,13 +643,11 @@ const AgentToolsSchema = z
     message: MessageToolConfigSchema,
     sandbox: NestedToolPolicySchema,
   })
-  .superRefine((value, ctx) => {
-    addAllowAlsoAllowConflictIssue(
-      value,
-      ctx,
+  .superRefine(
+    createAllowAlsoAllowConflictValidator(
       "agent tools cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-    );
-  })
+    ),
+  )
   .optional();
 
 export const AgentEntrySchema = AgentEntryBaseSchema.extend({
@@ -702,6 +691,8 @@ export const ToolsSchema = z
          * - "all": any session (default; cross-agent access is governed by tools.agentToAgent)
          */
         visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+        /** Allow sessions_send to target thread/topic sessions (default: false). */
+        allowThreadTargets: z.boolean().optional(),
       })
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
@@ -747,11 +738,9 @@ export const ToolsSchema = z
     /** Unified progress_card status tool for parent sessions; enabled by default. False opts out. */
     updatePlan: z.boolean().optional(),
   })
-  .superRefine((value, ctx) => {
-    addAllowAlsoAllowConflictIssue(
-      value,
-      ctx,
+  .superRefine(
+    createAllowAlsoAllowConflictValidator(
       "tools cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-    );
-  })
+    ),
+  )
   .optional();

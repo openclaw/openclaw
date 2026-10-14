@@ -68,6 +68,25 @@ export function toPackageRefExtensionSqlParams(
   };
 }
 
+export function toPackageRefSqlFields(ref: PersistedClawPackageRef) {
+  return {
+    agent_id: ref.agentId,
+    package_kind: ref.kind,
+    package_source: ref.source,
+    package_ref: ref.ref,
+    package_version: ref.version,
+    package_integrity: ref.integrity,
+    schema_version: ref.schemaVersion,
+    claw_name: ref.clawName,
+    package_status: ref.status,
+    relationship: ref.relationship,
+    origin: ref.origin,
+    independent_owner: ref.independentOwner ? 1 : 0,
+    installed_at_ms: ref.installedAtMs,
+    updated_at_ms: ref.updatedAtMs,
+  };
+}
+
 function parsePackageRefExtension(row: PackageRefRow): ClawAppliedExtension | undefined {
   const values = [
     row.extension_id,

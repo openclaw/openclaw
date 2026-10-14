@@ -79,7 +79,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
 
     try {
       let extensionSummary: { summary: string; details?: unknown } | undefined;
-      let fromExtension = false;
 
       if (this.currentExtensionRunner.hasHandlers("session_before_tree")) {
         const result = await this.currentExtensionRunner.emit({
@@ -94,7 +93,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
 
         if (result?.summary && options.summarize) {
           extensionSummary = result.summary;
-          fromExtension = true;
         }
 
         if (result?.customInstructions !== undefined) {
@@ -108,6 +106,7 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         }
       }
 
+      const fromExtension = extensionSummary !== undefined;
       let summaryText: string | undefined;
       let summaryDetails: unknown;
       if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../workspace-bootstrap-read.js";
@@ -15,8 +16,10 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+const addedTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 async function makeWorkspace(label: string): Promise<string> {
-  return await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`)));
+  return await fs.realpath(addedTempDirs.make(`openclaw-${label}-`));
 }
 
 describe("prepareEmbeddedAttemptBootstrap", () => {
@@ -92,7 +95,6 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
   it("withholds the completion marker when the execution project AGENTS.md was unreadable", async () => {
     const agentWorkspace = await makeWorkspace("agent-workspace");
     const sessionWorkspace = await makeWorkspace("session-workspace");
-    tempDirs.push(agentWorkspace, sessionWorkspace);
     await fs.writeFile(path.join(agentWorkspace, "AGENTS.md"), "Canonical agent instructions");
     await fs.writeFile(
       path.join(sessionWorkspace, "AGENTS.md"),
@@ -113,11 +115,21 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       }),
     );
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+
+    await fs.writeFile(path.join(sessionWorkspace, "AGENTS.md"), "Recovered project instructions");
+    const recovered = await prepare({
+      agentWorkspace,
+      sessionWorkspace,
+      contextInjection: "continuation-skip",
+    });
+    expect(recovered.shouldRecordCompletedBootstrapTurn).toBe(true);
+    expect(recovered.contextFiles).toContainEqual(
+      expect.objectContaining({ content: "Recovered project instructions" }),
+    );
   });
 
   it("withholds the completion marker when a full bootstrap turn carried an unreadable file", async () => {
     const workspace = await makeWorkspace("onboarding-workspace");
-    tempDirs.push(workspace);
     await fs.writeFile(path.join(workspace, "BOOTSTRAP.md"), "Finish the workspace setup.");
     await fs.writeFile(
       path.join(workspace, "AGENTS.md"),

@@ -1,6 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { captureSessionEventTargetForHost } from "../../../auto-reply/reply/session-event-handoff.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -8,23 +14,33 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
+import { mintSpawnSessionKey } from "../../spawn-plan.js";
 import { startAcpSpawnParentStreamRelay } from "./acp-spawn-parent-stream.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
+  try {
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+  } finally {
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
+  }
 });
 
 it("persists the real relay's ordered batch with zero caller-thread SQL", async () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("acp-parent-boundary-") };
-  const { db } = openOpenClawAgentDatabase({ agentId: "main", env });
-  db.exec(`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-    VALUES ('agent:main:acp:child', 'child', '{}', 1);
-    INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at)
-    VALUES ('child', 'agent:main:acp:child', 'conversation', 1, 1);`);
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+  const agent = openOpenClawAgentDatabase({ agentId: "main", env });
+  const { db } = agent;
+  const childSessionKey = mintSpawnSessionKey({ targetAgentId: "main", backend: "acp" });
+  writeSessionEntry(agent, childSessionKey, { sessionId: "child", updatedAt: 1 });
+  const parentSessionKey = "agent:main:parent";
+  writeSessionEntry(agent, parentSessionKey, { sessionId: "parent", updatedAt: 1 });
+  const expectedTarget = await captureSessionEventTargetForHost("main", parentSessionKey, { env });
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(() => {
     throw new Error("ACP diagnostics ran SQL on the caller");
   });
@@ -33,8 +49,10 @@ it("persists the real relay's ordered batch with zero caller-thread SQL", async 
   });
   const relay = startAcpSpawnParentStreamRelay({
     runId: "boundary-run",
-    parentSessionKey: "agent:main:parent",
-    childSessionKey: "agent:main:acp:child",
+    parentSessionKey,
+    requesterAgentId: "main",
+    expectedTarget,
+    childSessionKey,
     childSessionId: "child",
     agentId: "main",
     env,

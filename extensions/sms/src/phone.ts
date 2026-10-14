@@ -1,4 +1,3 @@
-// Sms plugin module implements phone behavior.
 export function normalizeSmsPhoneNumber(raw: string): string {
   const trimmed = raw
     .trim()
@@ -20,5 +19,5 @@ export function normalizeSmsAllowFrom(raw: string): string {
   if (raw.trim() === "*") {
     return "*";
   }
-  return normalizeSmsPhoneNumber(raw).toLowerCase();
+  return normalizeSmsPhoneNumber(raw);
 }

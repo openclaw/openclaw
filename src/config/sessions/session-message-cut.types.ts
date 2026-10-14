@@ -8,6 +8,12 @@ import type { SessionNativeBindingParticipants } from "./session-native-binding.
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionMessageCutExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
+/** Bundled history mutations carry source authority separately from released SDK arguments. */
+export type SessionMessageCutPreconditions = {
+  sourceRepositoryWorkspaceId?: string;
+  assertUpstreamCurrent?: () => void;
+};
+
 export type SessionMessageCutResult =
   | SessionMessageCutMutationResult
   | SessionBranchSwitchMutationResult

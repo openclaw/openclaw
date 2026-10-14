@@ -60,18 +60,21 @@ function assertValidExecRemoteCommand(command: string): void {
       continue;
     }
 
-    if (frame.quote === "plain" && frame.kind === "arithmetic") {
+    if (
+      frame.quote === "plain" &&
+      (frame.kind === "arithmetic" || frame.kind === "command-substitution")
+    ) {
       if (char === "(") {
         frame.parenDepth += 1;
-        continue;
-      }
-      if (char === ")") {
+      } else if (char === ")") {
         frame.parenDepth -= 1;
         if (frame.parenDepth === 0) {
           frames.pop();
         }
       }
-      continue;
+      if (frame.kind === "arithmetic" || char === "(" || char === ")") {
+        continue;
+      }
     }
 
     if (char === "`") {
@@ -137,18 +140,6 @@ function assertValidExecRemoteCommand(command: string): void {
         throw new Error(
           `Malformed SSH/OpenShell exec command: unresolved placeholder token ${placeholder}.`,
         );
-      }
-    }
-    if (frame.kind === "command-substitution") {
-      if (char === "(") {
-        frame.parenDepth += 1;
-        continue;
-      }
-      if (char === ")") {
-        frame.parenDepth -= 1;
-        if (frame.parenDepth === 0) {
-          frames.pop();
-        }
       }
     }
   }

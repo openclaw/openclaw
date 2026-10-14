@@ -12,7 +12,7 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -229,6 +229,12 @@ it.each([
         childAdmission = await beginSessionWorkAdmission({
           scope: storePath,
           identities: [runningKey, "running-session"],
+          run: {
+            runId: "running",
+            sessionKey: runningKey,
+            sessionId: "running-session",
+            agentId: "main",
+          },
           assertAllowed: () => {},
           onInterrupt: () => nativeInterrupted.resolve(),
         });
@@ -240,6 +246,9 @@ it.each([
         await registerSubagentRun({
           runId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+            ?.entry,
           requesterSessionKey: sourceKey,
           requesterAgentId: "main",
           requesterDisplayKey: sourceKey,
@@ -363,7 +372,7 @@ it.each([
         reason: "fast-abort",
       });
       await turn;
-      expect(readAcpSessionMeta({ cfg, sessionKey: acpKey })?.state).toBe(
+      expect(readAcpSessionEntry({ cfg, sessionKey: acpKey })?.acp?.state).toBe(
         !active && completion === "reject" ? "error" : "idle",
       );
     } finally {

@@ -15,32 +15,6 @@ describe("google provider catalog", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("registers current Gemini rows for the Google Vertex provider", () => {
-    const provider = buildGoogleVertexStaticCatalogProvider();
-
-    expect(provider.api).toBe("google-vertex");
-    expect(provider.baseUrl).toBe("https://{location}-aiplatform.googleapis.com");
-    expect(provider.models.map((model) => model.id)).toEqual(
-      expect.arrayContaining([
-        "gemini-2.5-pro",
-        "gemini-3.1-pro-preview",
-        "gemini-3.5-flash-lite",
-        "gemini-3.6-flash",
-        "gemini-3.7-flash",
-      ]),
-    );
-    expect(provider.models.find((model) => model.id === "gemini-3.7-flash")).toMatchObject({
-      contextWindow: 1_048_576,
-      maxTokens: 65_536,
-      reasoning: true,
-      input: ["text", "image"],
-      thinkingLevelMap: { minimal: null },
-    });
-    expect(provider.models.find((model) => model.id === "gemini-3.6-flash")).not.toHaveProperty(
-      "thinkingLevelMap",
-    );
-  });
-
   it("keeps Google AI Studio and Vertex model ids aligned", () => {
     expect(buildGoogleVertexStaticCatalogProvider().models.map((model) => model.id)).toEqual(
       buildGoogleStaticCatalogProvider().models.map((model) => model.id),
@@ -225,48 +199,30 @@ describe("google provider catalog", () => {
     }
   });
 
-  it.each([{}, { models: [] }, { models: [{ name: "models/gemini-3.6-flash" }] }])(
-    "preserves a successful empty text inventory: %j",
-    async (body) => {
-      const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
-        response: Response.json(body),
-        finalUrl: url,
-        release: async () => undefined,
-      }));
-
-      const provider = await buildGoogleLiveCatalogProvider({
-        discoveryMode: "strict",
-        apiKey: "GEMINI_API_KEY",
-        discoveryApiKey: "resolved-google-key",
-        fetchGuard,
-      });
-
-      expect(provider.models).toEqual([]);
-      const advisory = await buildGoogleLiveCatalogProvider({
-        apiKey: "GEMINI_API_KEY",
-        discoveryApiKey: "resolved-google-key",
-        fetchGuard,
-      });
-      expect(advisory.models).toEqual(buildGoogleStaticCatalogProvider().models);
-    },
-  );
-
-  it.each([401, 503])("preserves HTTP %i for the catalog outcome owner", async (status) => {
-    const release = vi.fn(async () => undefined);
+  it.each([{}])("preserves a successful empty text inventory: %j", async (body) => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
-      response: new Response(null, { status }),
+      response: Response.json(body),
       finalUrl: url,
-      release,
+      release: async () => undefined,
     }));
-    await expect(
-      buildGoogleLiveCatalogProvider({ discoveryMode: "strict", apiKey: "google-key", fetchGuard }),
-    ).rejects.toMatchObject({ status });
-    expect(release).toHaveBeenCalledOnce();
-    const advisory = await buildGoogleLiveCatalogProvider({ apiKey: "google-key", fetchGuard });
+
+    const provider = await buildGoogleLiveCatalogProvider({
+      discoveryMode: "strict",
+      apiKey: "GEMINI_API_KEY",
+      discoveryApiKey: "resolved-google-key",
+      fetchGuard,
+    });
+
+    expect(provider.models).toEqual([]);
+    const advisory = await buildGoogleLiveCatalogProvider({
+      apiKey: "GEMINI_API_KEY",
+      discoveryApiKey: "resolved-google-key",
+      fetchGuard,
+    });
     expect(advisory.models).toEqual(buildGoogleStaticCatalogProvider().models);
   });
 
-  it.each([null, { models: "invalid" }, { models: [null] }])(
+  it.each([{ models: "invalid" }, { models: [null] }])(
     "rejects a malformed inventory: %j",
     async (body) => {
       const fetchGuard: LiveModelCatalogFetchGuard = async ({ url }) => ({

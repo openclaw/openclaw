@@ -9,6 +9,7 @@ import {
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TSchema } from "typebox";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 
 export type MemoryToolOptions = {
   config?: OpenClawConfig;
@@ -20,6 +21,7 @@ export type MemoryToolOptions = {
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
 };
 
 const MemorySearchSchema = {

@@ -1,7 +1,6 @@
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-/** Reports unavailable owner facts, distinguishing admission refusal from a missing owner. */
 export class PreparedModelRuntimeOwnerNotPublishedError extends Error {
   readonly admissionBlocked: boolean;
 
@@ -11,7 +10,6 @@ export class PreparedModelRuntimeOwnerNotPublishedError extends Error {
   }
 }
 
-/** Only missing owners permit activation or catalog fallback; refused admission must settle work. */
 export function isPreparedModelRuntimeMissingOwnerError(
   error: unknown,
 ): error is PreparedModelRuntimeOwnerNotPublishedError {

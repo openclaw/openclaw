@@ -162,14 +162,10 @@ export function toHistoryMediaEntries(
       kind: entry.kind,
       messageId: entry.messageId,
     };
-    if (entry.durationMs) {
-      historyEntry.durationMs = entry.durationMs;
-    }
-    if (entry.width) {
-      historyEntry.width = entry.width;
-    }
-    if (entry.height) {
-      historyEntry.height = entry.height;
+    for (const key of ["durationMs", "width", "height"] as const) {
+      if (entry[key]) {
+        historyEntry[key] = entry[key];
+      }
     }
     return historyEntry;
   });

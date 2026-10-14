@@ -1,16 +1,15 @@
-import { html, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { html } from "lit";
+import { createComponent } from "solid-js";
+import { afterEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { BUILTIN_THEME_IDS } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import "../test-helpers/load-styles.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeName } from "../app/theme.ts";
 import { TYPEFACES, resolveTypefaces, syncTypefaceStylesheets } from "../app/typography.ts";
-import {
-  readAvatarGatewayContext,
-  setAvatarGatewayOrigin,
-} from "../lib/identity-avatar-context.ts";
-import { renderSessionLeadingState } from "./session-leading-indicator.ts";
+import { LitContent, solidContent } from "../lit/solid-content.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { renderSessionLeadingState } from "./solid/session-presentation.tsx";
 import "./session-owner-chip.ts";
 
 function renderedLuminance(...backgrounds: string[]): number {
@@ -58,24 +57,6 @@ function contrastRatio(first: number, second: number): number {
 
 const originalTheme = document.documentElement.getAttribute("data-theme-mode");
 const originalPalette = document.documentElement.getAttribute("data-theme");
-const originalAvatarGatewayContext = readAvatarGatewayContext();
-
-beforeEach(() => {
-  const nativeFetch = globalThis.fetch.bind(globalThis);
-  // These profiles have no saved image; resolve their fallback through the Gateway loader.
-  setAvatarGatewayOrigin(location.origin);
-  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const url = input instanceof Request ? input.url : String(input);
-    if (
-      url === `${location.origin}/api/users/profile-ada/avatar` ||
-      url === `${location.origin}/api/users/profile-bob/avatar`
-    ) {
-      return Promise.resolve(new Response(null, { status: 404 }));
-    }
-    return nativeFetch(input, init);
-  });
-});
-
 async function applyTheme(theme: ThemeName, mode: "light" | "dark") {
   await new Promise<void>((resolve) => {
     syncThemePaletteStylesheet(theme, resolve);
@@ -150,12 +131,6 @@ const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
 afterEach(() => {
   document.body.replaceChildren();
-  setAvatarGatewayOrigin(
-    originalAvatarGatewayContext.origin,
-    originalAvatarGatewayContext.authTokens,
-    originalAvatarGatewayContext.resourceBasePath,
-  );
-  vi.restoreAllMocks();
   if (originalPalette === null) {
     document.documentElement.removeAttribute("data-theme");
   } else {
@@ -212,53 +187,58 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
       shell.append(sessions);
       sidebar.append(shell);
       document.body.append(sidebar);
-      render(
-        html`<div class="sidebar-recent-session">
-          <a class="sidebar-recent-session__link">
-            <span class="sidebar-session-indicator"
-              >${
-                renderSessionLeadingState(
-                  {
-                    key: "agent:main:shared",
-                    label: "Shared session",
-                    renameValue: "Shared session",
-                    active: false,
-                    visuallyActive: false,
-                    hasActiveRun: presence === "running",
-                    modelSelectionLocked: false,
-                    pinned: false,
-                    pinnable: true,
-                    cloudWorkerStopAction: null,
-                    hasAutomation: false,
-                    unread: presence === "unread",
-                    attention: { kind: "none" },
-                    childSessionKeys: [],
-                    children: [],
-                    isChild: false,
-                    loadingChildren: false,
-                    containsActiveDescendant: false,
-                    runningChildCount: 0,
-                    failedChildCount: 0,
-                    participants: [
-                      { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
-                    ],
-                    participantCount: ownerCount - 1,
-                  },
-                  {
-                    type: "human",
-                    id: "profile-ada",
-                    identity: { type: "profile", id: "profile-ada" },
-                    label: "Ada",
-                  },
-                  "owned",
-                  presence === "away" ? false : undefined,
-                ).leadingIndicator
-              }</span
-            >
-            <span class="sidebar-recent-session__title">Shared session</span>
-          </a>
-        </div>`,
-        sessions,
+      mountSolid(
+        () =>
+          createComponent(LitContent, {
+            value: html`<div class="sidebar-recent-session">
+              <a class="sidebar-recent-session__link">
+                <span class="sidebar-session-indicator"
+                  >${solidContent(
+                    () =>
+                      renderSessionLeadingState(
+                        {
+                          key: "agent:main:shared",
+                          label: "Shared session",
+                          renameValue: "Shared session",
+                          active: false,
+                          visuallyActive: false,
+                          hasActiveRun: presence === "running",
+                          modelSelectionLocked: false,
+                          pinned: false,
+                          pinnable: true,
+                          cloudWorkerStopAction: null,
+                          hasAutomation: false,
+                          unread: presence === "unread",
+                          attention: { kind: "none" },
+                          childSessionKeys: [],
+                          children: [],
+                          isChild: false,
+                          loadingChildren: false,
+                          containsActiveDescendant: false,
+                          runningChildCount: 0,
+                          failedChildCount: 0,
+                          participants: [
+                            { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
+                          ],
+                          participantCount: ownerCount - 1,
+                        },
+                        {
+                          type: "human",
+                          id: "profile-ada",
+                          identity: { type: "profile", id: "profile-ada" },
+                          label: "Ada",
+                        },
+                        "owned",
+                        presence === "away" ? false : undefined,
+                      ).leadingIndicator,
+                    {},
+                  )}</span
+                >
+                <span class="sidebar-recent-session__title">Shared session</span>
+              </a>
+            </div>`,
+          }),
+        { container: sessions },
       );
       const row = sidebar.querySelector<HTMLElement>(".sidebar-recent-session")!;
       // Contrast is measured at each interaction endpoint, outside its transition.
@@ -366,7 +346,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         expect(style.borderTopWidth).toBe("1px");
         const rowBackground = [
           getComputedStyle(sidebar).backgroundColor,
-          getComputedStyle(row).backgroundColor,
+          getComputedStyle(row, "::after").backgroundColor,
         ];
         const rowLuminance = renderedLuminance(...rowBackground);
         if (presence === "away") {
@@ -475,7 +455,8 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
             [getComputedStyle(stack, "::before"), getComputedStyle(stack, "::after")].map(
               (cutout) => ({
                 width: cutout.borderTopWidth,
-                matchesRow: cutout.borderTopColor === getComputedStyle(row).backgroundColor,
+                matchesRow:
+                  cutout.borderTopColor === getComputedStyle(row, "::after").backgroundColor,
               }),
             ),
           )

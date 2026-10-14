@@ -6,7 +6,6 @@
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import type { BootstrapContextRunKind, BootstrapMode } from "./bootstrap-mode.js";
 import { resolveBootstrapMode } from "./bootstrap-mode.js";
-import { isUnreadableWorkspaceBootstrapFile } from "./workspace-bootstrap-read.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
 /**
@@ -37,7 +36,7 @@ type WorkspaceBootstrapRoutingInput = {
 /** Bootstrap placement decision consumed by system/runtime context assembly. */
 type WorkspaceBootstrapRouting = {
   bootstrapMode: BootstrapMode;
-  /** Every workspace bootstrap file reached the prompt, so a continuation can skip re-injection. */
+  /** Routing withholds no workspace bootstrap content. Readability is checked after loading. */
   deliversCompleteWorkspaceContext: boolean;
   includeBootstrapInSystemContext: boolean;
 };
@@ -50,9 +49,6 @@ type WorkspaceBootstrapRouting = {
 export async function resolveWorkspaceBootstrapRouting(
   params: WorkspaceBootstrapRoutingInput,
 ): Promise<WorkspaceBootstrapRouting> {
-  const workspaceBootstrapPending = await params.isWorkspaceBootstrapPending(
-    params.resolvedWorkspace,
-  );
   const hasBootstrapContent =
     params.bootstrapFiles?.some(
       (file) =>
@@ -61,8 +57,10 @@ export async function resolveWorkspaceBootstrapRouting(
         typeof file.content === "string" &&
         file.content.trim().length > 0,
     ) ?? false;
+  const workspaceBootstrapPending =
+    hasBootstrapContent || (await params.isWorkspaceBootstrapPending(params.resolvedWorkspace));
   const bootstrapMode = resolveBootstrapMode({
-    bootstrapPending: workspaceBootstrapPending || hasBootstrapContent,
+    bootstrapPending: workspaceBootstrapPending,
     runKind: params.bootstrapContextRunKind ?? "default",
     isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
     isPrimaryRun: params.isPrimaryRun,
@@ -75,11 +73,8 @@ export async function resolveWorkspaceBootstrapRouting(
   });
   return {
     bootstrapMode,
-    // "none" with nothing pending means no BOOTSTRAP.md content was withheld, and a guarded-read
-    // placeholder means what reached the prompt was the fault report rather than the file.
-    deliversCompleteWorkspaceContext:
-      (bootstrapMode === "full" || !(workspaceBootstrapPending || hasBootstrapContent)) &&
-      !(params.bootstrapFiles ?? []).some(isUnreadableWorkspaceBootstrapFile),
+    // Completed workspaces deliver context even though they no longer need onboarding.
+    deliversCompleteWorkspaceContext: bootstrapMode === "full" || !workspaceBootstrapPending,
     includeBootstrapInSystemContext: bootstrapMode === "full",
   };
 }

@@ -133,73 +133,40 @@ export function rewriteOpenEndedRepeats(source: string, flags = ""): string {
   let i = 0;
   while (i < source.length) {
     const char = source[i]!;
+    let end = i + 1;
+    let isAtom = true;
     if (char === "\\") {
       // Only canonical built-in sources reach this rewriter; operator-configured sources
       // compile unmodified at the caller, so their legacy escape and class boundaries keep
       // their exact language. The escape handling below is exact for the built-in sources.
-      const end = escapeAtomEnd(source, i);
+      end = escapeAtomEnd(source, i);
       if (end < 0) {
-        out += char;
-        i += 1;
-        atomStart = -1;
-        continue;
-      }
-      // Adjacent `\uD83D\uDE00` escapes form one complete atom under the `u` flag: a
-      // following quantifier must repeat the pair, not its trailing code unit. Rewriting
-      // them independently changes the configured pattern's language.
-      if (
+        end = i + 1;
+        isAtom = false;
+      } else if (
+        // Unicode surrogate escapes form one atom, just like a literal surrogate pair.
         flags.includes("u") &&
         isHighSurrogateEscape(source, i) &&
         source[end] === "\\" &&
         isLowSurrogateEscape(source, end)
       ) {
-        const pairEnd = escapeAtomEnd(source, end);
-        out += source.slice(i, pairEnd);
-        atomStart = i;
-        atomEnd = pairEnd;
-        i = pairEnd;
-        continue;
-      }
-      out += source.slice(i, end);
-      if (ASSERTION_ESCAPE_CHARS.has(source[i + 1]!)) {
-        atomStart = -1;
+        end = escapeAtomEnd(source, end);
       } else {
-        atomStart = i;
-        atomEnd = end;
+        isAtom = !ASSERTION_ESCAPE_CHARS.has(source[i + 1]!);
       }
-      i = end;
-      continue;
-    }
-    if (char === "[") {
-      const end = classAtomEnd(source, i);
+    } else if (char === "[") {
+      end = classAtomEnd(source, i);
       if (end < 0) {
         // Unsupported class shape: report the source as unsupported so the rewrite leaves
         // the configured expression unchanged and the pattern keeps its exact language.
         return source;
       }
-      out += source.slice(i, end);
-      atomStart = i;
-      atomEnd = end;
-      i = end;
-      continue;
-    }
-    if (char === "{") {
+    } else if (char === "{") {
       const open = OPEN_REPEAT_RE.exec(source.slice(i));
-      if (open && atomStart >= 0) {
-        const atom = source.slice(atomStart, atomEnd);
-        out += `{${open[1]}}${atom}*`;
-        i += open[0].length;
-        if (source[i] === "?") {
-          out += "?";
-          i += 1;
-        }
-        atomStart = -1;
-        continue;
-      }
-      const bounded = BOUNDED_REPEAT_RE.exec(source.slice(i));
-      if (bounded) {
-        out += bounded[0];
-        i += bounded[0].length;
+      const repeat = open && atomStart >= 0 ? open : BOUNDED_REPEAT_RE.exec(source.slice(i));
+      if (repeat) {
+        out += repeat === open ? `{${open[1]}}${source.slice(atomStart, atomEnd)}*` : repeat[0];
+        i += repeat[0].length;
         if (source[i] === "?") {
           out += "?";
           i += 1;
@@ -208,18 +175,8 @@ export function rewriteOpenEndedRepeats(source: string, flags = ""): string {
         continue;
       }
       // A brace that is neither quantifier is a literal single-character atom.
-      out += char;
-      atomStart = i;
-      atomEnd = i + 1;
-      i += 1;
-      continue;
-    }
-    out += char;
-    // A literal astral character is one atom only under the `u` flag: with `u`, a surrogate
-    // pair is a single code point, so splitting it between a quantifier and its atom changes
-    // the pattern's language. Without `u`, JavaScript quantifies only the trailing code unit,
-    // so the pair must keep its per-unit handling and the original language.
-    if (
+    } else if (
+      // Without `u`, JavaScript quantifies only the trailing surrogate code unit.
       flags.includes("u") &&
       char >= "\uD800" &&
       char <= "\uDBFF" &&
@@ -227,28 +184,14 @@ export function rewriteOpenEndedRepeats(source: string, flags = ""): string {
       source[i + 1]! >= "\uDC00" &&
       source[i + 1]! <= "\uDFFF"
     ) {
-      out += source[i + 1]!;
-      atomStart = i;
-      atomEnd = i + 2;
-      i += 2;
-      continue;
-    }
-    if (
-      char === "*" ||
-      char === "+" ||
-      char === "?" ||
-      char === "(" ||
-      char === ")" ||
-      char === "|" ||
-      char === "^" ||
-      char === "$"
-    ) {
-      atomStart = -1;
+      end = i + 2;
     } else {
-      atomStart = i;
-      atomEnd = i + 1;
+      isAtom = !"*+?()|^$".includes(char);
     }
-    i += 1;
+    out += source.slice(i, end);
+    atomStart = isAtom ? i : -1;
+    atomEnd = end;
+    i = end;
   }
   return out;
 }
@@ -288,6 +231,31 @@ type RedactMatcher = {
 };
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
+
+// The shared compiler exposes mutable regexes; probes remain valid only for their original rule.
+const patternPrefilters = new WeakMap<ResolvedRedactPattern, (text: string) => boolean>();
+
+export function setRedactPatternPrefilter(
+  pattern: ResolvedRedactPattern,
+  probe: (text: string) => boolean,
+): void {
+  if (patternPrefilters.has(pattern)) {
+    return;
+  }
+  const source = pattern.source;
+  const exec = pattern.exec;
+  const flags = pattern instanceof RegExp ? pattern.flags : undefined;
+  const replace = pattern instanceof RegExp ? pattern[Symbol.replace] : undefined;
+  patternPrefilters.set(
+    pattern,
+    (text) =>
+      pattern.source !== source ||
+      pattern.exec !== exec ||
+      (pattern instanceof RegExp &&
+        (pattern.flags !== flags || pattern[Symbol.replace] !== replace)) ||
+      probe(text),
+  );
+}
 
 // Derived matchers live only as long as their owner pattern, never as long as a secret value.
 const indexedPatterns = new WeakMap<RegExp, RegExp>();
@@ -354,28 +322,31 @@ export function getSecretCaptureStart(
 
 const globalPatterns = new WeakMap<RegExp, RegExp>();
 
-export function* iterateRedactMatches(
+export function visitRedactMatches(
   text: string,
   pattern: ResolvedRedactPattern,
-): Iterable<RedactMatch> {
-  if (!(pattern instanceof RegExp)) {
-    yield* pattern.exec(text);
+  visit: (match: RedactMatch, pattern: ResolvedRedactPattern) => void,
+): void {
+  if (patternPrefilters.get(pattern)?.(text) === false) {
     return;
   }
-  let regex = pattern;
-  if (!pattern.global) {
-    const cached = globalPatterns.get(pattern);
-    regex = cached ?? new RegExp(pattern.source, `${pattern.flags}g`);
-    if (!cached) {
-      globalPatterns.set(pattern, regex);
+  if (!(pattern instanceof RegExp)) {
+    for (const match of pattern.exec(text)) {
+      visit(match, pattern);
     }
+    return;
+  }
+  let regex = pattern.global ? pattern : globalPatterns.get(pattern);
+  if (!regex) {
+    regex = new RegExp(pattern.source, `${pattern.flags}g`);
+    globalPatterns.set(pattern, regex);
   }
   const unicode = regex.unicode || regex.flags.includes("v");
   let cursor = 0;
   while (cursor <= text.length) {
     const previousIndex = regex.lastIndex;
     let match: RegExpExecArray | null;
-    // A yielded match can re-enter this scanner with the same compiled expression.
+    // A visitor can re-enter this scanner with the same compiled expression.
     try {
       regex.lastIndex = cursor;
       match = regex.exec(text);
@@ -390,12 +361,15 @@ export function* iterateRedactMatches(
       const codePoint = text.codePointAt(cursor);
       cursor += unicode && codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
     }
-    yield {
-      match: match[0],
-      groups: match.slice(1).map((group) => group ?? ""),
-      input: text,
-      offset: match.index,
-    };
+    visit(
+      {
+        match: match[0],
+        groups: match.slice(1).map((group) => group ?? ""),
+        input: text,
+        offset: match.index,
+      },
+      pattern,
+    );
   }
 }
 
@@ -406,6 +380,11 @@ export function replaceRedactPattern(
   replaceRegex?: (...args: unknown[]) => string,
 ): string {
   if (pattern instanceof RegExp) {
+    if (patternPrefilters.get(pattern)?.(text) === false) {
+      // Attached regexes are compiled global; native replacement resets even on a miss.
+      pattern.lastIndex = 0;
+      return text;
+    }
     return text.replace(
       pattern,
       replaceRegex ?? ((...args: unknown[]) => replace(readRedactMatch(args))),
@@ -413,10 +392,10 @@ export function replaceRedactPattern(
   }
   const parts: string[] = [];
   let end = 0;
-  for (const match of iterateRedactMatches(text, pattern)) {
+  visitRedactMatches(text, pattern, (match) => {
     parts.push(text.slice(end, match.offset), replace(match));
     end = match.offset + match.match.length;
-  }
+  });
   return parts.length ? parts.join("") + text.slice(end) : text;
 }
 

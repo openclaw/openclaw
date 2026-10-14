@@ -41,22 +41,26 @@ export function createEmbeddedRunStageSummaryEmitter(options: {
   sessionId?: string;
   tracker: ReturnType<typeof createStageTimingTracker>;
 }): (phase: string) => void {
-  return (phase) => {
-    const summary = options.tracker.snapshot();
-    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
-    if (!shouldWarn && !options.log.isEnabled("trace")) {
-      return;
-    }
-    const message = formatEmbeddedRunStageSummary(
-      `[trace:embedded-run] ${options.label}: runId=${options.runId} sessionId=${options.sessionId} phase=${phase}`,
-      summary,
+  return (phase) =>
+    logEmbeddedRunStageSummary(
+      options.tracker.snapshot(),
+      options.log,
+      () =>
+        `[trace:embedded-run] ${options.label}: runId=${options.runId} sessionId=${options.sessionId} phase=${phase}`,
     );
-    if (shouldWarn) {
-      options.log.warn(message);
-    } else {
-      options.log.trace(message);
-    }
-  };
+}
+
+export function logEmbeddedRunStageSummary(
+  summary: StageTimingSummary,
+  log: Parameters<typeof createEmbeddedRunStageSummaryEmitter>[0]["log"],
+  prefix: () => string,
+  thresholds?: Parameters<typeof shouldWarnEmbeddedRunStageSummary>[1],
+): void {
+  const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary, thresholds);
+  if (shouldWarn || log.isEnabled("trace")) {
+    const message = formatEmbeddedRunStageSummary(prefix(), summary);
+    log[shouldWarn ? "warn" : "trace"](message);
+  }
 }
 
 export function formatEmbeddedRunStageSummary(prefix: string, summary: StageTimingSummary): string {

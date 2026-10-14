@@ -20,6 +20,14 @@ const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 export { readNonEmptyString, readRecord };
 
+export function appendCodexGitConfigParameters(base: string | undefined, parameters: string) {
+  return !base
+    ? parameters
+    : base === parameters || base.endsWith(` ${parameters}`)
+      ? base
+      : `${base} ${parameters}`;
+}
+
 export function isCodexFastServiceTier(value: unknown): boolean {
   return normalizeCodexServiceTier(value) === "priority";
 }
@@ -28,18 +36,14 @@ export function normalizeHeaders(
   value: Record<string, unknown> | undefined,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(value ?? {})
-      .map(
-        ([key, child]) =>
-          [
-            key.trim(),
-            normalizeResolvedSecretInputString({
-              value: child,
-              path: `plugins.entries.codex.config.appServer.headers.${key}`,
-            }),
-          ] as const,
-      )
-      .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
+    Object.entries(value ?? {}).flatMap(([key, child]) => {
+      const name = key.trim();
+      const header = normalizeResolvedSecretInputString({
+        value: child,
+        path: `plugins.entries.codex.config.appServer.headers.${key}`,
+      });
+      return name && header ? [[name, header] as const] : [];
+    }),
   );
 }
 

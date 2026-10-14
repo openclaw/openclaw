@@ -75,8 +75,7 @@ function formatCliSessionReuseLogState(reusableSession: CliReusableSession): str
     case "none":
       return "none";
   }
-  const exhaustive: never = reusableSession;
-  return exhaustive;
+  return reusableSession;
 }
 
 export function buildCliExecLogLine(params: {
@@ -117,23 +116,18 @@ export function logCliInvocation(params: {
   const logArgs: string[] = [];
   for (let i = 0; i < params.args.length; i += 1) {
     const arg = params.args[i] ?? "";
-    if (arg === params.systemPromptArg) {
-      const systemPromptValue = params.args[i + 1] ?? "";
-      logArgs.push(arg, `<systemPrompt:${systemPromptValue.length} chars>`);
-      i += 1;
-      continue;
-    }
-    if (arg === params.modelArg) {
-      logArgs.push(arg, params.args[i + 1] ?? "");
-      i += 1;
-      continue;
-    }
-    if (arg === params.imageArg) {
-      logArgs.push(arg, "<image>");
-      i += 1;
-      continue;
-    }
     logArgs.push(arg);
+    if (arg === params.systemPromptArg || arg === params.modelArg || arg === params.imageArg) {
+      const value = params.args[i + 1] ?? "";
+      logArgs.push(
+        arg === params.systemPromptArg
+          ? `<systemPrompt:${value.length} chars>`
+          : arg === params.modelArg
+            ? value
+            : "<image>",
+      );
+      i += 1;
+    }
   }
   if (params.argsPrompt) {
     const promptIndex = logArgs.indexOf(params.argsPrompt);

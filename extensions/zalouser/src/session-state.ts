@@ -110,13 +110,16 @@ export function captureZalouserCredentialsEnv(
   };
 }
 
-function openZalouserCredentialsStore(env: NodeJS.ProcessEnv) {
-  return getZalouserRuntime().state.openKeyedStore<ZaloCredentialStateRecord>({
-    namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
-    maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-    env,
-  });
+function openZalouserCredentialsStore(env: NodeJS.ProcessEnv, assertCurrent?: () => void) {
+  return getZalouserRuntime().state.openKeyedStoreV2<ZaloCredentialStateRecord>(
+    {
+      namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
+      maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+      env,
+    },
+    assertCurrent ? { assertCurrent } : undefined,
+  );
 }
 
 export async function loadStoredZaloCredentials(
@@ -138,10 +141,9 @@ export async function saveStoredZaloCredentials(
   assertCurrent?: () => void,
 ): Promise<void> {
   const normalizedProfile = normalizeZalouserCredentialProfile(profile);
-  await openZalouserCredentialsStore(env).register(
+  await openZalouserCredentialsStore(env, assertCurrent).register(
     zalouserCredentialStoreKey(normalizedProfile),
     { profile: normalizedProfile, ...credentials },
-    { assertCurrent },
   );
 }
 
@@ -169,18 +171,6 @@ export async function refreshStoredZaloCredentials(
       lastUsedAt: now,
     };
   };
-  if (!store.observe || !store.compareAndApply) {
-    // The plugin still supports released hosts predating atomic worker comparisons.
-    if (!store.update) {
-      throw new Error("Zalo credential refresh requires atomic plugin-state updates");
-    }
-    let saved: StoredZaloCredentials | null = null;
-    await store.update(key, (current) => {
-      saved = prepare(current);
-      return saved ?? undefined;
-    });
-    return isCurrent() ? saved : null;
-  }
   let observed = await store.observe(key);
   while (isCurrent()) {
     // Logout's durable marker also fences a refresh already dispatched to the worker.
@@ -207,28 +197,13 @@ export async function clearStoredZaloCredentials(
   assertCurrent?: () => void,
 ): Promise<boolean> {
   const normalizedProfile = normalizeZalouserCredentialProfile(profile);
-  const opened = openZalouserCredentialsStore(env);
-  const store =
-    assertCurrent && opened.withCurrent ? opened.withCurrent({ assertCurrent }) : opened;
+  const store = openZalouserCredentialsStore(env, assertCurrent);
   const key = zalouserCredentialStoreKey(normalizedProfile);
   const revoked: ZaloCredentialRevocationRecord = {
     kind: "revoked",
     profile: normalizedProfile,
     revokedAt: new Date().toISOString(),
   };
-  if (!store.observe || !store.compareAndApply || (assertCurrent && !opened.withCurrent)) {
-    // Released hosts before worker comparisons retain their atomic update contract.
-    if (!opened.update) {
-      throw new Error("Zalo credential logout requires atomic plugin-state updates");
-    }
-    let hadCredentials = false;
-    await opened.update(key, (current) => {
-      assertCurrent?.();
-      hadCredentials = normalizeStoredZaloCredentials(current, normalizedProfile) !== null;
-      return revoked;
-    });
-    return hadCredentials;
-  }
   let observed = await store.observe(key);
   for (;;) {
     const hadCredentials =

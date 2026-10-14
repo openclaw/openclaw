@@ -35,13 +35,9 @@ export function registerMatrixDeviceCommands(root: Command): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (options: cli.MatrixCliOptions) => {
-      const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand(options, {
-        run: async () => await listMatrixOwnDevices({ accountId, cfg }),
-        onText: (result) => {
-          cli.printAccountLabel(accountId);
-          printMatrixOwnDevices(result);
-        },
+      await cli.runMatrixCliAccountCommand(options, {
+        run: async ({ accountId, cfg }) => await listMatrixOwnDevices({ accountId, cfg }),
+        onText: printMatrixOwnDevices,
         errorPrefix: "Device listing failed",
       });
     });
@@ -53,11 +49,9 @@ export function registerMatrixDeviceCommands(root: Command): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (options: cli.MatrixCliOptions) => {
-      const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand(options, {
-        run: async () => await pruneMatrixStaleGatewayDevices({ accountId, cfg }),
+      await cli.runMatrixCliAccountCommand(options, {
+        run: async ({ accountId, cfg }) => await pruneMatrixStaleGatewayDevices({ accountId, cfg }),
         onText: (result, verbose) => {
-          cli.printAccountLabel(accountId);
           console.log(
             `Deleted stale OpenClaw devices: ${
               result.deletedDeviceIds.length

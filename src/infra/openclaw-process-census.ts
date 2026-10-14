@@ -32,10 +32,47 @@ type ProcessArtifactCustody =
   | { kind: "non-holder" }
   | { kind: "unresolved"; reason: string };
 
+function isStandardSystemdUserManager(command: ProcessCommand | undefined): boolean {
+  return (
+    command !== undefined &&
+    "argv" in command &&
+    command.argv.length === 2 &&
+    command.argv[1] === "--user" &&
+    (command.argv[0] === "/usr/lib/systemd/systemd" || command.argv[0] === "/lib/systemd/systemd")
+  );
+}
+
+function isStandardSystemdLoginProcess(
+  command: ProcessCommand | undefined,
+  parentCommand: ProcessCommand | undefined,
+  inspectorUid: number | undefined,
+): boolean {
+  if (
+    process.platform !== "linux" ||
+    inspectorUid === undefined ||
+    command?.uid !== inspectorUid ||
+    !("argv" in command)
+  ) {
+    return false;
+  }
+  // The manager changes to / before serving, including on reexec. A census
+  // during early initialization can miss its inherited cwd, which it does not
+  // use for OpenClaw artifacts. PAM's child only settles that login session;
+  // require its same-account manager parent, never its process name alone.
+  return (
+    isStandardSystemdUserManager(command) ||
+    (command.argv.length === 1 &&
+      command.argv[0] === "(sd-pam)" &&
+      parentCommand?.uid === command.uid &&
+      isStandardSystemdUserManager(parentCommand))
+  );
+}
+
 function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
+  parentCommand: ProcessCommand | undefined,
 ): ProcessArtifactCustody {
   try {
     const argv = command && "argv" in command ? command.argv : [];
@@ -64,10 +101,23 @@ function classifyProcessArtifactCustody(
     if (identity.kind === "unclassified" && identity.cause !== "runtime-syntax") {
       throw new Error(identity.reason);
     }
+    const { position, operands } = resolveRuntimeScriptPosition(argv);
     if (!cwd || !path.isAbsolute(cwd)) {
+      const inspectorUid = process.getuid?.();
+      if (
+        cwd === undefined &&
+        identity.kind === "other" &&
+        typeof position !== "number" &&
+        position.kind === "not-runtime" &&
+        command.uid !== undefined &&
+        inspectorUid !== undefined &&
+        (command.uid !== inspectorUid ||
+          isStandardSystemdLoginProcess(command, parentCommand, inspectorUid))
+      ) {
+        return { kind: "non-holder" };
+      }
       throw new Error("working directory is unavailable");
     }
-    const { position, operands } = resolveRuntimeScriptPosition(argv);
     if (typeof position !== "number" && position.kind === "not-runtime") {
       return { kind: "non-holder" };
     }
@@ -235,12 +285,21 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
           result.matchingPids.push(pid);
           continue;
         }
+        const inspectorUid = process.getuid?.();
         const foreign =
           observation?.foreignOwner ||
           (command?.uid !== undefined &&
-            process.getuid?.() !== undefined &&
-            command.uid !== process.getuid?.());
-        if ((!argv || cwd === undefined) && !foreign) {
+            inspectorUid !== undefined &&
+            command.uid !== inspectorUid);
+        if (
+          (!argv || cwd === undefined) &&
+          !foreign &&
+          !isStandardSystemdLoginProcess(
+            command,
+            byPid.get(command?.ppid ?? 0)?.command,
+            inspectorUid,
+          )
+        ) {
           result.unverifiedPids.push(pid);
           if (windows) {
             result.error = "Retry update repair as Administrator using the same Windows account.";
@@ -248,7 +307,12 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
         }
         continue;
       }
-      const custody = classifyProcessArtifactCustody(command, pid, directories.get(pid));
+      const custody = classifyProcessArtifactCustody(
+        command,
+        pid,
+        directories.get(pid),
+        byPid.get(command?.ppid ?? 0)?.command,
+      );
       if (custody.kind === "unresolved") {
         throw new Error(`Could not classify PID ${pid}: ${custody.reason}`);
       }

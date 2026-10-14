@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 
+const CLAUDE_CLI_AUTH_TIMEOUT_MS = 10_000;
+
 const CLAUDE_CLI_AUTH_METHODS = [
   "claude.ai",
   "api_key",
@@ -21,7 +23,8 @@ type ClaudeCliAuthStatus =
       authMethod?: (typeof CLAUDE_CLI_AUTH_METHODS)[number];
       email?: string;
     }
-  | { status: "missing" | "unreadable" };
+  | { status: "missing" | "unreadable" }
+  | { status: "timeout"; timeoutMs: number };
 
 /** Ask Claude CLI whether its own login is usable without reading token material. */
 export async function probeClaudeCliAuthStatus(params?: {
@@ -45,11 +48,14 @@ export async function probeClaudeCliAuthStatus(params?: {
       maxOutputBytes: 64 * 1024,
       maxCombinedOutputBytes: 64 * 1024,
       terminateOnOutputLimit: true,
-      timeoutMs: 3_000,
+      timeoutMs: CLAUDE_CLI_AUTH_TIMEOUT_MS,
       signal: params?.signal,
       killProcessTree: true,
     });
     params?.signal?.throwIfAborted();
+    if (result.termination === "timeout") {
+      return { status: "timeout", timeoutMs: CLAUDE_CLI_AUTH_TIMEOUT_MS };
+    }
     if (result.termination !== "exit" || result.code === null) {
       return { status: "unreadable" };
     }

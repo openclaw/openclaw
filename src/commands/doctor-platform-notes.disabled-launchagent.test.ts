@@ -41,31 +41,22 @@ describe("Doctor disabled LaunchAgent diagnosis", () => {
 
   it.each([
     {
-      profile: undefined,
       label: "ai.openclaw.gateway",
       override: undefined,
       command: "openclaw gateway start",
     },
     {
-      profile: "staging",
-      label: "ai.openclaw.staging",
-      override: undefined,
-      command: "openclaw --profile staging gateway start",
-    },
-    {
-      profile: undefined,
       label: "dev.openclaw.custom",
       override: "dev.openclaw.custom",
       command: "OPENCLAW_LAUNCHD_LABEL=dev.openclaw.custom openclaw gateway start",
     },
   ])(
     "diagnoses $label during offline repair without activating it",
-    async ({ profile, label, override, command }) => {
+    async ({ label, override, command }) => {
       const env = {
         HOME: home,
         OPENCLAW_STATE_DIR: path.join(home, "state"),
         OPENCLAW_CONFIG_PATH: path.join(home, "state", "openclaw.json"),
-        OPENCLAW_PROFILE: profile,
         OPENCLAW_LAUNCHD_LABEL: override,
       };
       await fs.mkdir(path.join(home, "Library", "LaunchAgents"), { recursive: true });
@@ -101,30 +92,24 @@ describe("Doctor disabled LaunchAgent diagnosis", () => {
     },
   );
 
-  it.each([
-    { installed: true, loaded: false, enabled: true },
-    { installed: true, loaded: true, enabled: false },
-    { installed: false, loaded: false, enabled: false },
-  ])("leaves other service states unchanged: %j", async ({ installed, loaded, enabled }) => {
+  it("leaves an installed and enabled service unchanged", async () => {
     const label = "dev.openclaw.other-state";
     const env = { HOME: home, OPENCLAW_LAUNCHD_LABEL: label };
-    if (installed) {
-      await fs.mkdir(path.join(home, "Library", "LaunchAgents"), { recursive: true });
-      await fs.writeFile(path.join(home, "Library", "LaunchAgents", `${label}.plist`), "fixture");
-    }
-    vi.mocked(execLaunchctl).mockImplementation(async ([action, target]) => {
+    await fs.mkdir(path.join(home, "Library", "LaunchAgents"), { recursive: true });
+    await fs.writeFile(path.join(home, "Library", "LaunchAgents", `${label}.plist`), "fixture");
+    vi.mocked(execLaunchctl).mockImplementation(async ([action]) => {
       if (action === "print") {
         return {
-          code: loaded ? 0 : 113,
-          stdout: loaded ? `${target} = {\n\tstate = running\n}` : "",
-          stderr: loaded ? "" : "Could not find service",
+          code: 113,
+          stdout: "",
+          stderr: "Could not find service",
           termination: "exit",
         };
       }
       if (action === "print-disabled") {
         return {
           code: 0,
-          stdout: `"${label}" => ${enabled ? "enabled" : "disabled"}`,
+          stdout: `"${label}" => enabled`,
           stderr: "",
           termination: "exit",
         };

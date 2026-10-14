@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
+import type { ApplicationGatewayPhase } from "./gateway.ts";
 import { refreshControlUiServiceWorker } from "./sw-refresh.runtime.ts";
 
 vi.mock("./sw-refresh.runtime.ts", () => ({
@@ -14,32 +15,51 @@ afterEach(() => {
 });
 
 describe("Gateway page activation", () => {
-  it("preserves a declined pairing request across page restoration and online signals", async () => {
-    const connect = vi.fn();
-    const refreshed = new Promise<void>((resolve) => {
-      vi.mocked(refreshControlUiServiceWorker).mockImplementationOnce(async () => {
-        resolve();
-        return false;
-      });
-    });
-    const dispose = startGatewayPageActivation(
-      { snapshot: { client: { needsWakeReconnect: false, pairingRetryPaused: true } }, connect },
-      document,
-      window,
-    );
-    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
-    window.dispatchEvent(new Event("online"));
-    await refreshed;
-    expect(connect).not.toHaveBeenCalled();
-    dispose();
-  });
+  it.each(["stopped", "offline", "reload-required"] as const)(
+    "preserves %s across page restoration, online, and visibility signals",
+    async (phase: ApplicationGatewayPhase) => {
+      const connect = vi.fn();
+      const visibility = vi.spyOn(document, "visibilityState", "get");
+      visibility.mockReturnValue("visible");
+      const dispose = startGatewayPageActivation(
+        { snapshot: { phase, client: { needsWakeReconnect: true } }, connect },
+        document,
+        window,
+      );
+      try {
+        for (const activate of [
+          () => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })),
+          () => window.dispatchEvent(new Event("online")),
+          () => {
+            visibility.mockReturnValue("hidden");
+            document.dispatchEvent(new Event("visibilitychange"));
+            visibility.mockReturnValue("visible");
+            document.dispatchEvent(new Event("visibilitychange"));
+          },
+        ]) {
+          const refreshed = new Promise<void>((resolve) => {
+            vi.mocked(refreshControlUiServiceWorker).mockImplementationOnce(async () => {
+              resolve();
+              return false;
+            });
+          });
+          activate();
+          await refreshed;
+        }
+        expect(connect).not.toHaveBeenCalled();
+        expect(refreshControlUiServiceWorker).toHaveBeenCalledTimes(3);
+      } finally {
+        dispose();
+      }
+    },
+  );
 
   it("coalesces foreground signals into one stale-client recovery", async () => {
     const connect = vi.fn();
     const visibility = vi.spyOn(document, "visibilityState", "get");
     visibility.mockReturnValue("hidden");
     const dispose = startGatewayPageActivation(
-      { snapshot: { client: { needsWakeReconnect: true, pairingRetryPaused: false } }, connect },
+      { snapshot: { phase: "reconnecting", client: { needsWakeReconnect: true } }, connect },
       document,
       window,
     );
@@ -57,7 +77,7 @@ describe("Gateway page activation", () => {
   it("keeps a healthy client mounted when the browser reports online", async () => {
     const connect = vi.fn();
     const dispose = startGatewayPageActivation(
-      { snapshot: { client: { needsWakeReconnect: false, pairingRetryPaused: false } }, connect },
+      { snapshot: { phase: "connected", client: { needsWakeReconnect: false } }, connect },
       document,
       window,
     );
@@ -73,7 +93,7 @@ describe("Gateway page activation", () => {
   it("ignores initial pageshow and removes every listener on dispose", async () => {
     const connect = vi.fn();
     const dispose = startGatewayPageActivation(
-      { snapshot: { client: { needsWakeReconnect: true, pairingRetryPaused: false } }, connect },
+      { snapshot: { phase: "connecting", client: { needsWakeReconnect: true } }, connect },
       document,
       window,
     );

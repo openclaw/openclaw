@@ -154,14 +154,23 @@ function withScenarioCoverage<T extends QaEvidenceSummaryJson["entries"][number]
   };
 }
 
-async function runScenarioCommandSteps(
-  params: QaScenarioCommandRunParams & { steps: readonly QaScenarioCommandStep[] },
-): Promise<QaTestFileScenarioResult> {
+async function runQaTestFileScenario(params: QaScenarioCommandRunParams) {
+  const requiresProducerEvidence =
+    params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
+  if (requiresProducerEvidence) {
+    const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
+    // The enclosing attempt root is exclusive, so old runs remain untouched.
+    await fs.mkdir(scenarioOutputDir);
+  }
+  const steps = buildQaScenarioCommandSteps(params.scenario, {
+    outputDir: params.outputDir,
+    repoRoot: params.repoRoot,
+  });
   const startedAt = Date.now();
   const logPath = path.join(params.outputDir, `${params.scenario.id}.log`);
   const logChunks: string[] = [];
   let failureMessage: string | undefined;
-  for (const step of params.steps) {
+  for (const step of steps) {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
       const isNativeVitestStep =
@@ -207,30 +216,13 @@ async function runScenarioCommandSteps(
   }
   await fs.writeFile(logPath, logChunks.join(""), "utf8");
   const durationMs = Math.max(1, Date.now() - startedAt);
-  return {
+  const result: QaTestFileScenarioResult = {
     scenario: params.scenario,
     status: failureMessage ? "fail" : "pass",
     durationMs,
     logPath,
     ...(failureMessage ? { failureMessage } : {}),
   };
-}
-
-async function runQaTestFileScenario(params: QaScenarioCommandRunParams) {
-  const requiresProducerEvidence =
-    params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
-  if (requiresProducerEvidence) {
-    const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
-    // The enclosing attempt root is exclusive, so old runs remain untouched.
-    await fs.mkdir(scenarioOutputDir);
-  }
-  const result = await runScenarioCommandSteps({
-    ...params,
-    steps: buildQaScenarioCommandSteps(params.scenario, {
-      outputDir: params.outputDir,
-      repoRoot: params.repoRoot,
-    }),
-  });
   if (params.scenario.execution.kind !== "script") {
     return result;
   }
@@ -243,22 +235,17 @@ async function runQaTestFileScenario(params: QaScenarioCommandRunParams) {
       requireCurrentRunEvidence: requiresProducerEvidence,
     });
   } catch (error) {
-    if (result.status !== "pass") {
-      return result;
+    if (result.status === "pass") {
+      result.failureMessage = `Script producer evidence is invalid: ${formatErrorMessage(error)}`;
+      result.status = "fail";
     }
-    return {
-      ...result,
-      failureMessage: `Script producer evidence is invalid: ${formatErrorMessage(error)}`,
-      status: "fail" as const,
-    };
+    return result;
   }
   if (!producerEvidenceResult.producerEvidence) {
     if (requiresProducerEvidence && result.status === "pass") {
-      return {
-        ...result,
-        failureMessage: "Script exited successfully without writing fresh producer QA evidence.",
-        status: "fail" as const,
-      };
+      result.failureMessage =
+        "Script exited successfully without writing fresh producer QA evidence.";
+      result.status = "fail";
     }
     return result;
   }

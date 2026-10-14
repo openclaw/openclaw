@@ -50,58 +50,37 @@ export function childLineageDigest(
   retained?: ManagedHandoffLease,
   slot?: Omit<NonNullable<UpdateCommandChildGrant["slot"]>, "childKey">,
 ): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        database.databasePath,
-        database.databaseIdentity,
-        database.parentIdentity,
-        [original, spawner, parent].map((lease) =>
-          // v1 stores only its runner; bind the borrowed updater too. Shipped
-          // v2/v3 payloads already carry both identities and keep their bytes.
-          lease.version === 1
-            ? [lease.key, lease.owner, lease.payload, lease.updatedAt, lease.helper, lease.executor]
-            : [lease.key, lease.owner, lease.payload, lease.updatedAt],
-        ),
-        ...(slot
-          ? [
-              [
-                "occupied-slot-v1",
-                ...[slot.parent, slot.spawner].map((lease) => [
-                  lease.key,
-                  lease.owner,
-                  lease.payload,
-                  lease.updatedAt,
-                ]),
-                ...(slot.reserver
-                  ? [
-                      [
-                        "legacy-slot-reserver-v1",
-                        slot.reserver.key,
-                        slot.reserver.owner,
-                        slot.reserver.payload,
-                        slot.reserver.updatedAt,
-                      ],
-                    ]
-                  : []),
-              ],
-            ]
-          : []),
-        // Absent retention preserves the shipped single-root digest bytes.
-        ...(retained
-          ? [
-              [
-                "retained-owner-v1",
-                retained.key,
-                retained.owner,
-                retained.payload,
-                retained.updatedAt,
-              ],
-            ]
-          : []),
-      ]),
-    )
-    .digest("hex");
+  const fields = (lease: ManagedHandoffParent) => [
+    lease.key,
+    lease.owner,
+    lease.payload,
+    lease.updatedAt,
+  ];
+  const lineage: unknown[] = [
+    database.databasePath,
+    database.databaseIdentity,
+    database.parentIdentity,
+    [original, spawner, parent].map((lease) =>
+      // v1 stores only its runner; bind the borrowed updater too. Shipped
+      // v2/v3 payloads already carry both identities and keep their bytes.
+      lease.version === 1
+        ? [lease.key, lease.owner, lease.payload, lease.updatedAt, lease.helper, lease.executor]
+        : fields(lease),
+    ),
+  ];
+  if (slot) {
+    lineage.push([
+      "occupied-slot-v1",
+      fields(slot.parent),
+      fields(slot.spawner),
+      ...(slot.reserver ? [["legacy-slot-reserver-v1", ...fields(slot.reserver)]] : []),
+    ]);
+  }
+  // Absent retention preserves the shipped single-root digest bytes.
+  if (retained) {
+    lineage.push(["retained-owner-v1", ...fields(retained)]);
+  }
+  return createHash("sha256").update(JSON.stringify(lineage)).digest("hex");
 }
 
 /** One child interval, shared by direct and delegated executors. */
@@ -169,7 +148,6 @@ export function createChildOwner(params: {
       let candidateParent = parent;
       let acquiredParent = false;
       let children: ManagedHandoffLease[] = [];
-      let bindingAttempted = false;
       let bound = false;
       delegating = true;
       const assertOwners = () => {
@@ -191,7 +169,6 @@ export function createChildOwner(params: {
       const running = async () => {
         let outcome: { result: T } | { error: unknown };
         try {
-          params.assertBase();
           if (retainedParent && candidateRoot === retainedParent.key) {
             throw new UpdateCommandRecoveryPendingError(
               "Retained service root is not a candidate executor.",
@@ -231,16 +208,12 @@ export function createChildOwner(params: {
               ].map((owner) => [owner.key, owner]),
             ).values(),
           ];
+          const candidateSpawnerKey =
+            candidateParent.key === slot?.parent.key ? slot.spawner.key : candidateParent.key;
           const candidateChildIndex =
             candidateParent.key === original.key
               ? 0
-              : parents.findIndex(
-                  (owner) =>
-                    owner.key ===
-                    (candidateParent.key === slot?.parent.key
-                      ? slot.spawner.key
-                      : candidateParent.key),
-                );
+              : parents.findIndex((owner) => owner.key === candidateSpawnerKey);
           const childName = `${randomUUID()}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity, retainedParent, slot)}`;
           for (const childParent of parents) {
             const acquired = store.acquire(
@@ -300,12 +273,11 @@ export function createChildOwner(params: {
           const result = await withCommandProcessScope(() =>
             operation(grant, (pid, argv) => {
               assertOwners();
-              if (bindingAttempted || pid === process.pid) {
+              if (pid === process.pid) {
                 throw new UpdateCommandRecoveryPendingError(
                   "Update process can be bound only once.",
                 );
               }
-              bindingAttempted = true;
               const assigned = store.bindUpdateChildren(children, pid, argv);
               if (!assigned) {
                 throw new UpdateCommandRecoveryPendingError("Update process binding failed.");
@@ -319,7 +291,6 @@ export function createChildOwner(params: {
               "The update worker did not confirm startup.",
             );
           }
-          assertOwners();
           outcome = { result };
         } catch (error) {
           outcome = { error };
@@ -370,9 +341,7 @@ export function createChildOwner(params: {
           failure = cause instanceof Error ? cause : new Error("Update failed", { cause });
         })
         .finally(() => {
-          if (pending === work) {
-            pending = undefined;
-          }
+          pending = undefined;
         });
       return work;
     },

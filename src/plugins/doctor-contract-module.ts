@@ -212,12 +212,19 @@ export type PluginDoctorStateMigrationEntry = {
   migration: PluginDoctorStateMigration;
 };
 
+export type PluginDoctorProviderRename = {
+  from: string;
+  to: string;
+  baseUrl: string;
+};
+
 export type PluginDoctorContractModule = {
   historicalWebhookListener?: unknown;
   /** Retained host artifacts can migrate listener settings while plugin repairs stay deferred. */
   normalizeHistoricalWebhookConfig?: unknown;
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
+  providerRenames?: unknown;
   resolveSessionStoreAgentIds?: unknown;
   /**
    * @deprecated Declare static ownership in openclaw.plugin.json sessionRouteStateOwners.
@@ -286,6 +293,20 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
   }));
 }
 
+function coerceProviderRenames(value: unknown): PluginDoctorProviderRename[] {
+  return z
+    .array(
+      z
+        .object({
+          from: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
+          to: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
+          baseUrl: z.string().url(),
+        })
+        .refine(({ from, to }) => from !== to),
+    )
+    .parse(value ?? []);
+}
+
 /** Coerce a loaded doctor contract once for both registry use and declaration validation. */
 export function coercePluginDoctorContractModule(
   mod: PluginDoctorContractModule,
@@ -328,8 +349,12 @@ export function coercePluginDoctorContractModule(
   const stateMigrations = coercePluginDoctorStateMigrations(
     mod.stateMigrations ?? defaultExport?.stateMigrations,
   );
+  const providerRenames = coerceProviderRenames(
+    mod.providerRenames ?? defaultExport?.providerRenames,
+  );
   const summary: Record<keyof PluginManifestDoctorContract, boolean> = {
-    configRepair: rules.length > 0 || Boolean(normalizeCompatibilityConfig),
+    configRepair:
+      rules.length > 0 || Boolean(normalizeCompatibilityConfig) || providerRenames.length > 0,
     resolveSessionStoreAgentIds: Boolean(resolveSessionStoreAgentIds),
     sessionRouteStateOwners: sessionRouteStateOwners.length > 0,
     stateMigrations: stateMigrations.length > 0,
@@ -339,6 +364,7 @@ export function coercePluginDoctorContractModule(
     normalizeHistoricalWebhookConfig,
     rules,
     normalizeCompatibilityConfig,
+    providerRenames,
     resolveSessionStoreAgentIds,
     sessionRouteStateOwners,
     stateMigrations,

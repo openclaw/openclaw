@@ -1,7 +1,10 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isIncognitoSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
@@ -26,22 +29,22 @@ import {
   canManageSessionSharing,
   isGatewayAdmin,
   resolveSessionSharingRole,
-  resolveSessionSharingTarget,
   resolveSessionVisibility,
   sharingIdentity,
   type SessionSharingRoleParams,
   type SessionSharingTarget,
   type withSessionSharingTarget,
 } from "./session-sharing-policy.js";
-import {
-  loadCachedSessionSharingSnapshot,
-  type SessionSharingSnapshot,
-} from "./session-sharing-snapshot-cache.js";
+import type { GatewaySessionStoreSelection } from "./session-utils-store-retained.js";
 
 function sharingSnapshot(
   target: SessionSharingTarget | null,
   sessionKey: string,
-): SessionSharingSnapshot {
+): {
+  createdActor?: SessionEntry["createdActor"];
+  incognito: boolean;
+  visibility: ReturnType<typeof resolveSessionVisibility>;
+} {
   // Deleted rows fail closed; their unscoped catalog invalidation still refreshes readers.
   return {
     visibility: target ? resolveSessionVisibility(target.entry) : "draft",
@@ -52,22 +55,6 @@ function sharingSnapshot(
   };
 }
 
-function loadSharingSnapshot(params: Parameters<typeof resolveSessionSharingTarget>[0]) {
-  const { sessionKey, agentId } = params;
-  return loadCachedSessionSharingSnapshot({
-    agentId,
-    sessionKey,
-    resolve: () => {
-      const target = resolveSessionSharingTarget(params);
-      return {
-        canonicalKey: target?.canonicalKey ?? sessionKey,
-        canonicalAgentId: target?.agentId ?? agentId,
-        snapshot: sharingSnapshot(target, sessionKey),
-      };
-    },
-  });
-}
-
 export function canReceiveSessionEvent(params: {
   cfg: OpenClawConfig;
   policyConfig?: OpenClawConfig;
@@ -76,7 +63,7 @@ export function canReceiveSessionEvent(params: {
   agentId?: string;
   event?: string;
   payload?: unknown;
-  prepared?: {
+  prepared: {
     sharing: ReturnType<typeof prepareSessionSharing>;
     target: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
   };
@@ -103,26 +90,11 @@ export function canReceiveSessionEvent(params: {
       event !== "session.typing"
     );
   }
-  const sharing = params.prepared?.sharing ?? prepareSessionSharing({ cfg: policyConfig, client });
-  const hidesForeignSessions =
-    (params.prepared ? sharing.sessionCap : operatorSessionCap(client, policyConfig)) === "none";
-  // Discovery remains lazy; these facts belong only to this recipient check, never a socket send.
-  const lookup = params.prepared
-    ? undefined
-    : {
-        agentId: params.agentId,
-        exactRead: sessionKeys.length === 1,
-        storeCache: new Map(),
-        targetDiscoveryCache: new Map(),
-      };
-  const resolveTarget = (sessionKey: string) =>
-    params.prepared
-      ? params.prepared.target(sessionKey, params.agentId)
-      : resolveSessionSharingTarget({ cfg, ...lookup, sessionKey });
+  const sharing = params.prepared.sharing;
+  const hidesForeignSessions = sharing.sessionCap === "none";
+  const resolveTarget = (sessionKey: string) => params.prepared.target(sessionKey, params.agentId);
   const visible = sessionKeys.every((sessionKey) => {
-    const snapshot = params.prepared
-      ? sharingSnapshot(resolveTarget(sessionKey), sessionKey)
-      : loadSharingSnapshot({ cfg, ...lookup, sessionKey });
+    const snapshot = sharingSnapshot(resolveTarget(sessionKey), sessionKey);
     const isCreator = sharing.isCreator(snapshot.createdActor);
     if (snapshot.incognito || (hidesForeignSessions && !isCreator)) {
       return false;
@@ -194,6 +166,58 @@ export type PreparedSessionSharingProfiles = {
   };
 };
 
+export type PreparedMutationSharing = {
+  selection?: GatewaySessionStoreSelection;
+  target: SessionSharingTarget | null;
+  storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
+  members: readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[];
+  isMember?: (identityId: string) => boolean;
+  assertCurrent: () => void;
+};
+
+/** Consume live authority or borrow prepared source facts in one synchronous frame. */
+export function createSessionSharingConsumption(params: {
+  client: GatewayClient | null;
+  sharing: PreparedMutationSharing | undefined;
+  getProfiles: () => PreparedSessionSharingProfiles | undefined;
+}) {
+  const current = { sharing: params.sharing, profiles: params.getProfiles() };
+  return Object.assign(current, {
+    policy: (cfg: OpenClawConfig, members?: readonly string[]) =>
+      current.sharing || current.profiles
+        ? prepareProjectedSessionSharing({
+            cfg,
+            client: params.client,
+            profiles: current.profiles,
+            isMember: (_target, id) =>
+              current.sharing
+                ? (current.sharing.isMember?.(id) ??
+                  current.sharing.members.some((member) => member.identityId === id))
+                : (members?.includes(id) ?? false),
+          })
+        : undefined,
+    consume: <T>(
+      prepared: PreparedMutationSharing | undefined,
+      consume: () => T,
+      profiles: PreparedSessionSharingProfiles | undefined = params.getProfiles(),
+    ): T => {
+      const previous = { sharing: current.sharing, profiles: current.profiles };
+      Object.assign(current, { sharing: prepared, profiles });
+      try {
+        profiles?.readCurrent();
+        prepared?.assertCurrent();
+        const result = consume();
+        if (isPromiseLike(result)) {
+          throw new Error("Sharing authorization consumers must remain synchronous");
+        }
+        return result;
+      } finally {
+        Object.assign(current, previous);
+      }
+    },
+  });
+}
+
 /** Worker authorization also serves callers without a connection-owned profile projection. */
 export async function prepareSessionSharingProfiles(
   client: GatewayClient | null,
@@ -208,6 +232,11 @@ export async function prepareSessionSharingProfiles(
   const unavailable = () => {
     throw new SessionMutationAuthorizationChangedError(authenticatedProfileUnavailableError());
   };
+  const requesterChanged = () => {
+    throw new SessionMutationAuthorizationChangedError(
+      errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed"),
+    );
+  };
   const prepare = async (profileId: string | undefined) => {
     if (!profileId) {
       return () => undefined;
@@ -217,11 +246,14 @@ export async function prepareSessionSharingProfiles(
       const canonicalProfileId = retained.profileId;
       return () => {
         const current = client?.preparedSessionProfile;
+        if (!current) {
+          return unavailable();
+        }
         if (
-          !current?.aliases.has(profileId) ||
+          !current.aliases.has(profileId) ||
           (mode === "selection" && current.profileId !== canonicalProfileId)
         ) {
-          return unavailable();
+          return requesterChanged();
         }
         return current;
       };
@@ -249,7 +281,7 @@ export async function prepareSessionSharingProfiles(
       sharingIdentity(client, currentActor)?.id !== identityId ||
       client?.internal?.operatorRunAuthority !== runAuthority
     ) {
-      return unavailable();
+      return requesterChanged();
     }
     if (runAuthority) {
       assertAdmittedRunOperatorAuthority(runAuthority);
@@ -307,10 +339,10 @@ export function createSessionSharingInputAuthority(
             {
               agentId: read.storageTarget.agentId,
               storePath: read.storageTarget.storePath,
-              sessionKey: toAgentStoreSessionKey({
-                agentId: read.storageTarget.agentId,
-                requestKey: read.target?.storeKey ?? read.storageTarget.canonicalKey,
-              }),
+              sessionKey: resolveSqliteSessionKey(
+                read.target?.storeKey ?? read.storageTarget.canonicalKey,
+                read.storageTarget.agentId,
+              ),
               entry: read.target?.entry,
               readSource: read.target?.readSource,
               members: read.members,

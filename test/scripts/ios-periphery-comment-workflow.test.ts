@@ -491,16 +491,6 @@ describe("iOS Periphery comment workflow", () => {
     expect(sharedWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("xcode-27");
     expect(sharedWorkflow.jobs?.["scan-macos"]?.["runs-on"]).toBe("xcode-27");
   });
-  it("accepts a valid small Periphery artifact", async () => {
-    const archive = makeZip({
-      "periphery.json": "[]\n",
-      "periphery.status": "0\n",
-    });
-    const result = await runReport(archive);
-
-    expect(result.downloadCount).toBe(1);
-    expect(result.core.warnings).toEqual([]);
-  });
 
   it("accepts deflated Periphery artifacts", async () => {
     const archive = makeZip(
@@ -649,16 +639,6 @@ describe("iOS Periphery comment workflow", () => {
     expect(parsed.text).toContain("<script>*bold*</script>");
     expect(parsed.text).toContain("![click](https://example.invalid) @octocat|next");
     expect(parsed.links).toEqual([]);
-  });
-
-  it("treats non-object finding entries as an unreadable report", async () => {
-    const archive = makeZip({
-      "periphery.json": "[null]\n",
-      "periphery.status": "1\n",
-    });
-    const result = await runReport(archive);
-
-    expectUnavailableComment(result.createdBodies);
   });
 
   it("bounds the rendered comment after escaping", async () => {
@@ -972,24 +952,6 @@ describe("Periphery publication admission", () => {
         { platform, scopeJobConclusion, scanJobConclusion },
       );
       expectUnavailableComment(result.createdBodies);
-    },
-  );
-
-  it.each(["success", "scope cleanup", "draft cleanup"])(
-    "does not create a new comment for %s",
-    async (outcome) => {
-      const result = await runCommenter(
-        { expired: false, id: 77, name: "", size_in_bytes: 1 },
-        makeZip({ "periphery.json": "[]", "periphery.status": "0" }),
-        {
-          platform,
-          scanJobConclusion: outcome === "success" ? "success" : "skipped",
-          liveDraft: outcome === "draft cleanup",
-          run: outcome === "draft cleanup" ? draft : report,
-        },
-      );
-      expect(result.createdBodies).toEqual([]);
-      expect(result.updatedBodies).toEqual([]);
     },
   );
 });

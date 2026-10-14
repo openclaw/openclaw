@@ -182,9 +182,10 @@ it("explicit retry clears a cached recoverable neighbor failure through its sour
     });
   const opened = await open(first, resolve, [first, next]);
   const background = vi.fn();
+  const backgroundContainer = document.body.appendChild(document.createElement("div"));
   try {
     const options = { resolveArtifactDownload: resolve, onRequestUpdate: background };
-    renderAssistantAttachments([next], options);
+    render(renderAssistantAttachments([next], options), backgroundContainer);
     await vi.waitFor(() => expect(background).toHaveBeenCalled());
     const item = await opened.gallery!.items[1]!();
     const media = document.createElement("video");
@@ -197,6 +198,8 @@ it("explicit retry clears a cached recoverable neighbor failure through its sour
     await vi.waitFor(() => expect(media.src).toContain("mediaTicket=recovered"));
     expect(resolve).toHaveBeenCalledTimes(2);
   } finally {
+    render(nothing, backgroundContainer);
+    backgroundContainer.remove();
     releaseChatMediaResourceSubscriber(background);
   }
 });

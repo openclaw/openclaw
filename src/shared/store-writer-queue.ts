@@ -42,6 +42,11 @@ const activeStoreWriters = resolveGlobalSingleton(
   () => new AsyncLocalStorage<ActiveStoreWriter>(),
 );
 
+/** Detached follow-up retains caller authority, but cannot borrow its writer locks. */
+export function runOutsideStoreWriterContext<T>(run: () => T): T {
+  return activeStoreWriters.exit(run);
+}
+
 // Independently draining stores share one event loop, including separately bundled callers.
 const writerTurn = resolveGlobalSingleton(
   Symbol.for("openclaw.storeWriterTurn"),
@@ -104,6 +109,17 @@ export function isActiveStoreWriter(
     active = active.parent;
   }
   return false;
+}
+
+/** Development-only reader cleanup guards consume the existing writer context. */
+export function assertStoreWriterReleased(queues: StoreWriterQueues, operation: string): void {
+  let writer = activeStoreWriters.getStore();
+  while (writer) {
+    if (writer.active && writer.queues === queues) {
+      throw new Error(`Cannot ${operation} while holding a store writer`);
+    }
+    writer = writer.parent;
+  }
 }
 
 async function runActiveStoreWriter<T>(

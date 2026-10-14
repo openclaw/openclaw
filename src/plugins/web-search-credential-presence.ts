@@ -67,10 +67,6 @@ export function hasConfiguredWebSearchCredential(params: {
   return (
     hasConfiguredSearchCredentialCandidate(searchConfig) ||
     hasConfiguredPluginWebSearchCandidate(params.config) ||
-    hasManifestWebSearchEnvCredentialCandidate({
-      config: params.config,
-      env: params.env,
-      origin: params.origin,
-    })
+    hasManifestWebSearchEnvCredentialCandidate(params)
   );
 }

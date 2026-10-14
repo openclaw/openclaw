@@ -1,16 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
 import { expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createGatewayBrowserClientFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { SubagentRoster } from "./chat-spawned-subagent.ts";
-import { renderChatComposerNotices } from "./chat-view-notices.ts";
-import type { ChatChildAttention } from "./components/chat-child-attention.ts";
+import { renderChatComposerNotices } from "./chat-view-notices.tsx";
+import type { ChatChildAttention } from "./components/chat-child-attention.tsx";
 
 type ChildRosterPane = TestChatPane & {
   resolveChatReadTarget: () => { sessionKey: string; agentId?: string } | undefined;
@@ -47,7 +47,7 @@ it.each([
         expiresAt: Date.now() + 60_000,
       },
     } satisfies GatewaySessionRow;
-    Reflect.set(pane, "swarmHydrator", { rows: [child], hydrated: true });
+    Reflect.set(pane, "swarmHydrator", { rows: [child], hydrated: true, childrenRead: true });
     Reflect.set(pane, "swarmEnabled", false);
     const container = document.body.appendChild(document.createElement("div"));
     try {
@@ -56,11 +56,12 @@ it.each([
         subagentParentKey: parentKey,
         subagentSessions: [child],
         subagentSessionsHydrated: true,
+        subagentSessionsRead: true,
         swarm: undefined,
       });
-      render(
-        renderChatComposerNotices({ sessionKey: routeKey, messages: [], ...roster }),
-        container,
+      const view = mountSolid(
+        () => renderChatComposerNotices({ sessionKey: routeKey, messages: [], ...roster }),
+        { container },
       );
       const notice = container.querySelector<ChatChildAttention>("openclaw-chat-child-attention");
       expect(notice).not.toBeNull();
@@ -68,13 +69,14 @@ it.each([
       expect(notice!.querySelector(".chat-child-attention")?.textContent).toContain(
         child.agentStatus.note,
       );
+      view.unmount();
       expect(pane.projectChildRoster(undefined)).toMatchObject({
         subagentParentKey: undefined,
         subagentSessions: undefined,
         subagentSessionsHydrated: false,
+        subagentSessionsRead: false,
       });
     } finally {
-      render(html``, container);
       container.remove();
       Reflect.set(pane, "swarmHydrator", null);
       vi.useRealTimers();

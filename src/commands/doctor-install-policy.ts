@@ -29,7 +29,7 @@ async function collectInstallPolicyHealthLines(
     lines.push(`- ${issue.severity.toUpperCase()}: ${sanitizeTerminalText(issue.message)}`);
   }
   if (validation.issues.some((issue) => issue.severity === "error")) {
-    lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
+    lines.push("- Installs and updates for covered targets will be blocked until this is fixed.");
     return lines;
   }
 
@@ -66,17 +66,15 @@ async function collectInstallPolicyHealthLines(
       return lines;
     }
     lines.push(`- ERROR: Deep check failed closed: ${sanitizeTerminalText(result.blocked.reason)}`);
-    lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
-    return lines;
   } catch (err) {
     lines.push(
       `- ERROR: Deep check could not run: ${sanitizeTerminalText(formatErrorMessage(err))}`,
     );
-    lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
-    return lines;
   } finally {
     await fs.rm(probeDir, { recursive: true, force: true });
   }
+  lines.push("- Installs and updates for covered targets will be blocked until this is fixed.");
+  return lines;
 }
 
 export async function noteInstallPolicyHealth(

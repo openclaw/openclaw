@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { captureAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -47,6 +48,11 @@ import {
   createPluginToolFactoryResolver,
 } from "./tool-factory-runtime.js";
 import { createPluginToolAllowlist, type PluginToolAllowlist } from "./tool-grant-allowlist.js";
+import {
+  createPluginToolInspection,
+  inspectionToolOwners,
+  samePluginToolSource,
+} from "./tool-inspection-state.js";
 import { setPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -79,6 +85,7 @@ function inspectPluginTool(
   entry: PluginToolRegistration,
   registry: PluginRegistry,
   assertInvocationCurrent?: () => void,
+  memoryAudience?: OpenClawPluginToolContext["memoryAudience"],
 ): { tool: AnyAgentTool } | { error: string } | null {
   try {
     if (!isRecord(tool)) {
@@ -108,6 +115,7 @@ function inspectPluginTool(
             registry,
             tool as AnyAgentTool,
             assertInvocationCurrent,
+            memoryAudience,
           ),
         };
   } catch (error) {
@@ -312,28 +320,6 @@ export type PluginToolInspectionScope = Omit<
   "preparedRuntime"
 >;
 
-const inspectionToolOwners = new WeakMap<
-  PluginRegistry,
-  { manifests: ReadonlyMap<string, PluginManifestRecord>; assertCurrent: () => void }
->();
-
-function samePluginToolSource(
-  left: PluginManifestRecord | undefined,
-  right: PluginManifestRecord | undefined,
-): boolean {
-  return Boolean(
-    left &&
-    right &&
-    left.origin === right.origin &&
-    left.rootDir === right.rootDir &&
-    left.source === right.source &&
-    left.setupSource === right.setupSource &&
-    (left.sourcePreferred === true) === (right.sourcePreferred === true) &&
-    (left.packageManifest?.build?.bundledDist === false) ===
-      (right.packageManifest?.build?.bundledDist === false),
-  );
-}
-
 /** One inspection owns registration; each selected agent still invokes its own tool factories. */
 export async function acquirePluginToolInspectionRegistry(params: {
   loadContext: PluginRuntimeLoadContext;
@@ -363,9 +349,6 @@ export async function acquirePluginToolInspectionRegistry(params: {
       selected.set(id, manifest);
     }
   }
-  if (selected.size === 0) {
-    return { release: async () => {} };
-  }
   const acquisition = await acquirePluginRegistryForInspection(
     buildPluginRuntimeLoadOptions(params.loadContext, {
       onlyPluginIds: [...selected.keys()].toSorted(),
@@ -378,18 +361,7 @@ export async function acquirePluginToolInspectionRegistry(params: {
   );
   try {
     setPluginRuntimeLoadContext(acquisition.registry, params.loadContext);
-    const current = capturePluginLifecycleAuthority(acquisition.registry, undefined, {
-      scopedRuntime: true,
-    });
-    inspectionToolOwners.set(acquisition.registry, {
-      manifests: selected,
-      assertCurrent: () => {
-        if (!current?.()) {
-          throw new Error("Plugin tool inspection has been released");
-        }
-      },
-    });
-    return acquisition;
+    return createPluginToolInspection(acquisition, selected);
   } catch (error) {
     try {
       await acquisition.release();
@@ -428,26 +400,44 @@ export async function acquireStandalonePluginToolRegistry(
       if (!hasAuthority?.()) {
         throw new Error("Plugin tool registry has been released");
       }
-      return resolvePluginToolsFromRegistry(
-        { ...params, runtimeRegistry: acquisition.registry },
-        loadState,
+      return resolvePluginToolsSynchronously(
+        resolvePluginToolsFromRegistry(
+          { ...params, runtimeRegistry: acquisition.registry },
+          loadState,
+        ),
       );
     },
   };
 }
 
 export function resolvePluginTools(params: PluginToolResolutionParams): AnyAgentTool[] {
+  return resolvePluginToolsSynchronously(resolvePluginToolsSteps(params));
+}
+
+function resolvePluginToolsSynchronously(steps: Generator<Promise<void>, AnyAgentTool[], void>) {
+  const step = steps.next();
+  if (!step.done) {
+    void step.value.catch(() => {});
+    throw new Error("Workspace preparation is pending; use asynchronous tool construction.");
+  }
+  return step.value;
+}
+
+export function* resolvePluginToolsSteps(
+  params: PluginToolResolutionParams,
+): Generator<Promise<void>, AnyAgentTool[], void> {
   const loadState = resolvePluginToolLoadState(params);
   return loadState && loadState.onlyPluginIds.length > 0
-    ? resolvePluginToolsFromRegistry(params, loadState)
+    ? yield* resolvePluginToolsFromRegistry(params, loadState)
     : [];
 }
 
-function resolvePluginToolsFromRegistry(
+function* resolvePluginToolsFromRegistry(
   params: PluginToolResolutionParams,
   loadState: PluginToolLoadState,
-): AnyAgentTool[] {
+): Generator<Promise<void>, AnyAgentTool[], void> {
   const { context, env, onlyPluginIds, allowlist, snapshot } = loadState;
+  const workspace = captureAgentWorkspaceReadiness(params.context.sessionKey);
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolPolicyName(tool)));
@@ -620,6 +610,17 @@ function resolvePluginToolsFromRegistry(
       });
       // Catalog discovery may construct tools without an admitted run; their V2 execution stays fenced.
       params.assertInvocationCurrent?.();
+      if (
+        workspace &&
+        entry.workspaceAccess !== false &&
+        entry.workspaceAccess !== "execute" &&
+        !workspace.isReady?.()
+      ) {
+        workspace.assertCurrent();
+        yield workspace.waitUntilReady();
+        workspace.assertCurrent();
+        factoryContext.assertInvocationCurrent?.();
+      }
       const factoryResult = factories.resolve(entry, factoryContext, declaredNames, owner.registry);
       if (factoryResult.failed) {
         continue;
@@ -688,6 +689,7 @@ function resolvePluginToolsFromRegistry(
           entry,
           owner.registry,
           factoryContext.assertInvocationCurrent,
+          factoryContext.memoryAudience,
         );
         if (!inspected) {
           continue;
@@ -717,6 +719,7 @@ function resolvePluginToolsFromRegistry(
           pluginId: entry.pluginId,
           ...(manifestPlugin?.kind ? { kind: manifestPlugin.kind } : {}),
           optional: entry.optional || metadata?.optional === true,
+          workspaceAccess: entry.workspaceAccess ?? true,
           replaySafe: metadata?.replaySafe === true,
           sideEffecting: metadata?.sideEffecting === true,
           trustedLocalMedia:

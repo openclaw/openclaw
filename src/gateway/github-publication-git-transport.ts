@@ -10,6 +10,7 @@ import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
@@ -93,27 +94,21 @@ export function createGitHubPublicationCommandRunner(
     assertCurrent?.();
     return result;
   };
-  const run = async (argv: string[], options: GitCommandOptions = {}) => {
-    const result = await runPublicationCommand(argv, {
-      ...options,
-      operation: gitOperation,
-      beforeRun: assertCurrent,
-    });
-    assertCurrent?.();
-    return result;
-  };
-  return {
-    step,
-    run,
-    require: async (argv: string[], options: GitCommandOptions = {}) => {
-      const result = await requirePublicationCommand(argv, {
+  const guarded =
+    <T>(command: (argv: string[], options: GitCommandOptions) => Promise<T>) =>
+    async (argv: string[], options: GitCommandOptions = {}): Promise<T> => {
+      const result = await command(argv, {
         ...options,
         operation: gitOperation,
         beforeRun: assertCurrent,
       });
       assertCurrent?.();
       return result;
-    },
+    };
+  return {
+    step,
+    run: guarded(runPublicationCommand),
+    require: guarded(requirePublicationCommand),
   };
 }
 
@@ -394,6 +389,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   cwd: string;
   assertCurrent?: () => void;
 }): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
+  const context = captureOpenClawStateWorkerContext();
   const { withSettledLocalWorkspacePath } =
     await import("./worker-environments/local-workspace-projection.js");
   return await withSettledLocalWorkspacePath(params, async (custody) => {
@@ -401,17 +397,19 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
     const bound = {
       ...params,
       assertCurrent: () => {
+        context.admission.assertCurrent();
         params.assertCurrent?.();
         custody?.assertCurrent();
       },
     };
-    const [{ findLiveRegistryWorktreeByPath }, { withManagedWorktreeGit }, { getRuntimeConfig }] =
+    const [{ readLiveRegistryWorktreeByPath }, { withManagedWorktreeGit }, { getRuntimeConfig }] =
       await Promise.all([
-        import("../agents/worktrees/registry.js"),
+        import("../agents/worktrees/registry-read.js"),
         import("../agents/worktrees/checkout-policy.js"),
         import("../config/config.js"),
       ]);
-    const record = findLiveRegistryWorktreeByPath(process.env, params.cwd);
+    const record = await readLiveRegistryWorktreeByPath(context, params.cwd);
+    bound.assertCurrent();
     return record
       ? await withManagedWorktreeGit(
           {

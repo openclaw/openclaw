@@ -3,10 +3,7 @@ import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { canonicalBytes } from "../protocol/canonical.js";
 import { base64, decodeUtf8, fromBase64 } from "../protocol/encoding.js";
 import {
@@ -104,51 +101,21 @@ function prepareReplayCompletion(
   body: MessageBody | undefined,
   key: Uint8Array,
   rng: (length: number) => Uint8Array,
-  freeze: boolean,
 ): () => Pick<ReefReplayRecord, "receipt" | "body"> {
-  type Input = { receipt: SignedReceipt; body?: MessageBody };
-  type Prepared<T> = { ok: true; value: T } | { ok: false; error: unknown };
-  let input: Prepared<Input>;
-  try {
-    input = { ok: true, value: freeze ? structuredClone({ receipt, body }) : { receipt, body } };
-  } catch (error) {
-    input = { ok: false, error };
-  }
-  let prepared: Prepared<Pick<ReefReplayRecord, "receipt" | "body">> | undefined;
-  // Capture inputs before storage waits, but defer validation and randomness until
-  // a matching claim is observed. Conflicts reuse both successful and failed preparation.
-  return () => {
-    if (!prepared) {
-      try {
-        if (!input.ok) {
-          throw input.error;
-        }
-        prepared = {
-          ok: true,
-          value: {
-            receipt: structuredClone(input.value.receipt),
-            ...(input.value.body ? { body: encryptReplayBody(input.value.body, key, rng) } : {}),
-          },
-        };
-      } catch (error) {
-        prepared = { ok: false, error };
-      }
-    }
-    if (!prepared.ok) {
-      throw prepared.error;
-    }
-    return prepared.value;
-  };
+  const input = structuredClone({ receipt, body });
+  let prepared: Pick<ReefReplayRecord, "receipt" | "body"> | undefined;
+  // Freeze input before yielding and reuse ciphertext if a competing write wins.
+  return () =>
+    (prepared ??= {
+      receipt: input.receipt,
+      ...(input.body ? { body: encryptReplayBody(input.body, key, rng) } : {}),
+    });
 }
 
 export class ReefSqliteReplayStore implements ReplayStore {
   readonly #bodyKey: Uint8Array;
   readonly #rng: (length: number) => Uint8Array;
-  readonly #store: PluginStateKeyedStore<ReefReplayRecord>;
-  readonly #legacy: PluginStateSyncKeyedStore<ReefReplayRecord> | undefined;
-  readonly #comparison:
-    | Required<Pick<PluginStateKeyedStore<ReefReplayRecord>, "observe" | "compareAndApply">>
-    | undefined;
+  readonly #store: PluginStateKeyedStore<ReefReplayRecord, 2>;
   readonly #claimOwners = new Map<string, string>();
   readonly #enqueue = createAsyncLock();
 
@@ -171,57 +138,19 @@ export class ReefSqliteReplayStore implements ReplayStore {
       // The margin covers clock skew and delayed local processing.
       defaultTtlMs: REEF_REPLAY_TTL_MS,
     };
-    this.#store = runtime.state.openKeyedStore<ReefReplayRecord>(options);
-    const { observe, compareAndApply } = this.#store;
-    if (observe && compareAndApply) {
-      this.#comparison = { observe, compareAndApply };
-    } else {
-      // Shipped hosts without comparisons retain the uninterrupted native mutation
-      // and owner publication. Available worker failures never select this path.
-      this.#legacy = runtime.state.openSyncKeyedStore<ReefReplayRecord>(options);
-    }
+    this.#store = runtime.state.openKeyedStoreV2<ReefReplayRecord>(options);
   }
 
-  #mutate<T>(key: string, prepare: () => ReplayMutation<T>): T | Promise<T> {
-    const comparison = this.#comparison;
-    if (!comparison) {
-      const mutation = prepare();
-      const update = this.#legacy?.update;
-      if (!update) {
-        throw new Error("Reef replay state requires atomic plugin-state updates");
-      }
-      let decision: ReplayDecision<T> | undefined;
-      update(key, (current) => {
-        decision = mutation.decide(parseReplayRecord(current));
-        return decision.value;
-      });
-      if (!decision) {
-        throw new Error("Reef replay update did not evaluate current state");
-      }
-      mutation.publish?.(decision.result);
-      return decision.result;
-    }
+  #mutate<T>(key: string, prepare: () => ReplayMutation<T>): Promise<T> {
+    const comparison = this.#store;
     return this.#enqueue(async () => {
       // Keep invocation order through durable settlement and local owner publication.
       const mutation = prepare();
       let observation = await comparison.observe(key);
       for (;;) {
-        let decision: ReplayDecision<T>;
-        try {
-          decision = mutation.decide(parseReplayRecord(observation.value));
-        } catch (error) {
-          // A failed native callback rolls back expiry cleanup. Validate this error's
-          // observation without sweeping or writing before exposing it to the caller.
-          const result = await comparison.compareAndApply(key, observation.comparison, {
-            operation: "delete",
-            action: "keep",
-          });
-          if (result.status !== "conflict") {
-            throw error;
-          }
-          observation = result.current;
-          continue;
-        }
+        // A validation/preparation failure has no write to settle. A concurrent
+        // repair can take effect on the next request instead of retrying the error.
+        const decision = mutation.decide(parseReplayRecord(observation.value));
         const result = await comparison.compareAndApply(
           key,
           observation.comparison,
@@ -291,9 +220,7 @@ export class ReefSqliteReplayStore implements ReplayStore {
             existing?.state === "in_flight" && existing.claimOwner === owner
               ? {
                   ...existing,
-                  claimExpiresAt: this.#comparison
-                    ? claimExpiresAt
-                    : Date.now() + REEF_REPLAY_CLAIM_LEASE_MS,
+                  claimExpiresAt,
                 }
               : existing,
           result: existing?.state === "in_flight" && existing.claimOwner === owner,
@@ -319,13 +246,7 @@ export class ReefSqliteReplayStore implements ReplayStore {
       throw new Error("receipt id does not match replay claim");
     }
     validateReplayCompletion(receipt, body);
-    const completion = prepareReplayCompletion(
-      receipt,
-      body,
-      this.#bodyKey,
-      this.#rng,
-      Boolean(this.#comparison),
-    );
+    const completion = prepareReplayCompletion(receipt, body, this.#bodyKey, this.#rng);
     const key = reefReplayStoreKey(peer, id);
     await this.#mutate(key, () => {
       const owner = this.#claimOwners.get(key);
@@ -390,9 +311,6 @@ export class ReefSqliteReplayStore implements ReplayStore {
         : { receipt: structuredClone(existing.receipt) };
     };
     const key = reefReplayStoreKey(peer, id);
-    if (this.#legacy) {
-      return read(this.#legacy.lookup(key));
-    }
     return this.#enqueue(async () => read(await this.#store.lookup(key)));
   }
 }

@@ -3,11 +3,12 @@
 import { createCatalogIoCounters } from "./session-catalog.performance-counters.test-support.js";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import { Session as InspectorSession } from "node:inspector/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type {
   SessionCatalogHost,
   SessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createComposedCatalogFixture } from "./session-catalog.performance.test-support.js";
 
@@ -64,23 +65,43 @@ it("measures 100 composed catalog lists against real session and plugin stores",
     { layout: "state-only", prefix: "composed-catalog-" },
     async (state) => {
       const counters = createCatalogIoCounters();
+      const nativeListEntered = createDeferredCore();
+      const releaseNativeList = createDeferredCore();
       let fixture: Awaited<ReturnType<typeof createComposedCatalogFixture>> | undefined;
       try {
         counters.begin();
-        fixture = await createComposedCatalogFixture(state, counters);
-        // The cold request starts hydration and may return pending before persistence finishes.
-        await fixture.requestList();
+        fixture = await createComposedCatalogFixture(state, counters, {
+          beforeNativeListResponse: async () => {
+            nativeListEntered.resolve();
+            await releaseNativeList.promise;
+          },
+        });
+        let first: SessionCatalogHost;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          const ready = fixture.setupList();
+          // Observe early rejection while the native producer is deliberately held.
+          void ready.catch(() => {});
+          await nativeListEntered.promise;
+          // Cold callers expire after five seconds without cancelling index-owned hydration.
+          await vi.advanceTimersByTimeAsync(5_000);
+          vi.useRealTimers();
+          releaseNativeList.resolve();
+          first = await ready;
+        } finally {
+          vi.useRealTimers();
+          releaseNativeList.resolve();
+        }
         const catalogNamespace = await counters.catalogPersisted;
-        const first = await fixture.list();
         expect(first.sessions.length).toBeGreaterThan(0);
         const sourceHomeId = first.sessions[0]?.sourceHomeId;
         if (!sourceHomeId) {
           throw new Error("Native catalog did not expose its source home identity");
         }
-        let page = await fixture.list();
+        let page = await fixture.setupList();
         let visibleCount = page.sessions.length;
         while (page.nextCursor) {
-          page = await fixture.list({ cursors: { [page.hostId]: page.nextCursor } });
+          page = await fixture.setupList({ cursors: { [page.hostId]: page.nextCursor } });
           visibleCount += page.sessions.length;
         }
         expect(visibleCount).toBe(3_000);
@@ -112,9 +133,9 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         do {
           await fixture.projection.ensureMaterialized();
         } while (fixture.projection.needsMaterialization);
-        const head = await fixture.list();
+        const head = await fixture.setupList();
         expect(head.sessions.filter((session) => session.sessionKey)).toHaveLength(3);
-        const search = await fixture.list({ search: "Project 7", limitPerHost: 32 });
+        const search = await fixture.setupList({ search: "Project 7", limitPerHost: 32 });
         if (!head.nextCursor || !search.nextCursor) {
           throw new Error("Expected native continuation fixtures");
         }
@@ -131,7 +152,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         const warmResponses: SessionCatalogHost[] = [];
         for (const query of variants) {
           for (let warm = 0; warm < 3; warm++) {
-            const result = await fixture.list(query);
+            const result = await fixture.setupList(query);
             if (warm === 2) {
               warmResponses.push(result);
             }
@@ -141,7 +162,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           await fixture.projection.ensureMaterialized();
         } while (fixture.projection.needsMaterialization);
         const cpuReferenceP50Ms = measureHostCpuReference();
-        expect(fixture.setupMaintenance).toEqual({ started: 3, completed: 3 });
+        expect(fixture.setupMaintenance).toEqual({ completed: 3 });
         counters.begin();
         const durations: number[] = [];
         const workPerList = [];
@@ -181,7 +202,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         durations.sort((a, b) => a - b);
 
         const inspector = new InspectorSession();
-        expect(fixture.setupMaintenance).toEqual({ started: 3, completed: 3 });
+        expect(fixture.setupMaintenance).toEqual({ completed: 3 });
         inspector.connect();
         let sampledAllocationBytes: number;
         let cpuSamples: ReturnType<typeof observedCpuSamples>;
@@ -226,7 +247,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
               Object.entries(io).map(([key, value]) => [key, value / 100]),
             ),
             scope:
-              "Explicit local Codex host through Gateway request admission, registered provider, session accessor and plugin stores. Binding authority is acquired through the plugin-state worker; calling-thread SQL and worker operations are counted separately. File counts cover sync, callback and promise fs read/open APIs, including separately attributed live ownership checks. Descriptor classification adds fstat instrumentation cost.",
+              "Explicit local Codex host through Gateway request admission, registered provider, session accessor and plugin stores. Each sample joins its final host publication and tracked provider refresh. Binding authority is acquired through the plugin-state worker; calling-thread SQL and worker operations are counted separately. File counts cover sync, callback and promise fs read/open APIs, including separately attributed live ownership checks. Descriptor classification adds fstat instrumentation cost.",
           }),
         );
         expect(cpuSamples.totalCpuSamples).toBeGreaterThan(0);
@@ -238,16 +259,16 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         expect(io.pluginStateWorkerReadOperations).toBe(100);
         expect(io.sessionEntryReads).toBe(0);
         expect(io.sessionPayloadReads).toBe(0);
-        // Fresh binding authority belongs to the worker, including its freshness probe.
+        // Binding authority stays in the worker; warm reads reuse process-owned admission.
         for (const work of workPerList) {
           expect(work).toEqual({
             sqliteReadCalls: 0,
             sqliteFreshnessReads: 0,
             bindingAuthorityReads: 0,
-            fileReadCalls: 1,
-            ownershipFileReadCalls: 1,
-            fileOpenCalls: 1,
-            ownershipFileOpenCalls: 1,
+            fileReadCalls: 0,
+            ownershipFileReadCalls: 0,
+            fileOpenCalls: 0,
+            ownershipFileOpenCalls: 0,
             pluginStateWorkerOperations: 1,
           });
         }
@@ -257,6 +278,8 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         // composition CPU growth leaves exact SQL budgets green.
         expect(durations[49]).toBeLessThan(cpuReferenceP50Ms * 20);
       } finally {
+        vi.useRealTimers();
+        releaseNativeList.resolve();
         try {
           await fixture?.close();
         } finally {

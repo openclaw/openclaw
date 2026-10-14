@@ -6,6 +6,7 @@ import {
   type AssistantMessageEvent,
   type SimpleStreamOptions,
   type StreamFunction,
+  type ToolCall,
   type Usage,
 } from "openclaw/plugin-sdk/llm";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
@@ -69,10 +70,7 @@ function usage(value: unknown): Usage {
 }
 
 function createEventConverter(partial: AssistantMessage) {
-  const toolJson = new Map<
-    number,
-    { json: string; shouldPreview: ReturnType<typeof createToolArgumentPreviewSchedule> }
-  >();
+  const toolJson = new Map<number, ReturnType<typeof createToolArgumentPreviewSchedule>>();
   return (raw: unknown): AssistantMessageEvent => {
     const event = record(raw);
     const type = string(event.type);
@@ -90,6 +88,11 @@ function createEventConverter(partial: AssistantMessage) {
         return { type, reason, message: partial };
       }
       if (type === "error" && (reason === "error" || reason === "aborted")) {
+        for (const block of partial.content) {
+          if (block.type === "toolCall") {
+            delete block.partialJson;
+          }
+        }
         partial.stopReason = reason;
         partial.errorMessage =
           event.errorMessage === undefined ? "Radius request failed" : string(event.errorMessage);
@@ -117,16 +120,15 @@ function createEventConverter(partial: AssistantMessage) {
       } else if (type === "thinking_start") {
         partial.content.push({ type: "thinking", thinking: "" });
       } else {
-        partial.content.push({
+        const toolCall: ToolCall = {
           type: "toolCall",
           id: string(event.id),
           name: string(event.toolName),
           arguments: {},
-        });
-        toolJson.set(contentIndex, {
-          json: "",
-          shouldPreview: createToolArgumentPreviewSchedule(),
-        });
+          partialJson: "",
+        };
+        partial.content.push(toolCall);
+        toolJson.set(contentIndex, createToolArgumentPreviewSchedule());
       }
       return { type, contentIndex, partial };
     }
@@ -178,9 +180,10 @@ function createEventConverter(partial: AssistantMessage) {
           break;
         }
         const delta = string(event.delta);
-        pending.json += delta;
-        if (pending.shouldPreview(pending.json.length)) {
-          block.arguments = parseStreamingJson(pending.json);
+        const partialJson = (block.partialJson ?? "") + delta;
+        block.partialJson = partialJson;
+        if (pending(partialJson.length)) {
+          block.arguments = parseStreamingJson(partialJson);
         }
         return { type, contentIndex, delta, partial };
       }
@@ -193,6 +196,7 @@ function createEventConverter(partial: AssistantMessage) {
           throw new Error("Radius terminal tool call does not match its start");
         }
         block.arguments = parseTerminalToolCallArguments(call.arguments);
+        delete block.partialJson;
         if (call.thoughtSignature !== undefined) {
           block.thoughtSignature = string(call.thoughtSignature);
         }
@@ -324,6 +328,11 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
         }
         throw new Error("Radius stream ended without a terminal event");
       } catch (error) {
+        for (const block of partial.content) {
+          if (block.type === "toolCall") {
+            delete block.partialJson;
+          }
+        }
         failTransportStream({ stream, output: partial, signal: options?.signal, error });
       } finally {
         await response?.body?.cancel().catch(() => undefined);

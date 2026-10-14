@@ -8,13 +8,8 @@ const MAX_STATS_SAMPLE_LINE_BYTES = 1024 * 1024;
 
 function parseFiniteLimit(raw, name) {
   const text = String(raw ?? "").trim();
-  if (!NON_NEGATIVE_DECIMAL_PATTERN.test(text)) {
-    throw new Error(
-      `${name} must be a finite non-negative number in decimal notation. Got: ${JSON.stringify(raw)}`,
-    );
-  }
   const parsed = Number(text);
-  if (!Number.isFinite(parsed)) {
+  if (!NON_NEGATIVE_DECIMAL_PATTERN.test(text) || !Number.isFinite(parsed)) {
     throw new Error(
       `${name} must be a finite non-negative number in decimal notation. Got: ${JSON.stringify(raw)}`,
     );
@@ -26,10 +21,9 @@ const maxMemoryMiB = parseFiniteLimit(maxMemoryRaw, "max memory MiB");
 const maxCpuPercent = parseFiniteLimit(maxCpuRaw, "max CPU percent");
 
 function parseMemoryMiB(raw) {
-  const value =
-    String(raw || "")
-      .split("/")[0]
-      ?.trim() || "";
+  const value = String(raw || "")
+    .split("/")[0]
+    .trim();
   const match = /^([0-9.]+)\s*([KMGT]?i?B)$/iu.exec(value);
   if (!match) {
     return undefined;
@@ -72,7 +66,7 @@ function isTerminalZeroMemorySample(raw) {
   if (parts.length !== 2) {
     return false;
   }
-  return parts.every((part) => parseMemoryMiB(part.trim()) === 0);
+  return parts.every((part) => parseMemoryMiB(part) === 0);
 }
 
 function assertSampleValue(value, raw, name, labelLocal) {
@@ -111,7 +105,7 @@ async function scanStatsFileLines(file, onLine) {
     pendingBytes += segmentBytes;
   };
   const emitPendingLine = () => {
-    const line = pending.endsWith("\r") ? pending.slice(0, -1) : pending;
+    const line = pending;
     pending = "";
     pendingBytes = 0;
     if (line) {

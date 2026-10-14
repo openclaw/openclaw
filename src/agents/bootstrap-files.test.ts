@@ -37,8 +37,7 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
-import { resolveWorkspaceBootstrapRouting } from "./bootstrap-routing.js";
-import { resolveAttemptBootstrapContext } from "./embedded-agent-runner/run/attempt-context-engine-helpers.js";
+import { buildBootstrapContextFiles } from "./embedded-agent-helpers/bootstrap.js";
 import { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
@@ -695,50 +694,6 @@ describe("hasCompletedBootstrapTurn", () => {
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("carries a completed workspace turn through the real transcript into a skipped continuation", async () => {
-    // The reporter's loop: routing for a setup-complete workspace, the attempt
-    // eligibility and persistence decisions, the finalize transcript write, then
-    // the next turn reading its own marker back.
-    const routing = await resolveWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending: async () => false,
-      trigger: "user",
-      isPrimaryRun: true,
-      isCanonicalWorkspace: true,
-      effectiveWorkspace: tmpDir,
-      resolvedWorkspace: tmpDir,
-      hasBootstrapFileAccess: true,
-    });
-    const contextFiles = [{ path: "AGENTS.md", content: "workspace rules" }];
-    const turnParams = {
-      contextInjectionMode: "continuation-skip" as const,
-      bootstrapContextMode: "full",
-      bootstrapContextRunKind: "default" as const,
-      bootstrapMode: routing.bootstrapMode,
-      deliversCompleteWorkspaceContext: routing.deliversCompleteWorkspaceContext,
-      hasCompletedBootstrapTurn: () => hasCompletedBootstrapTurn(sessionTarget),
-      resolveBootstrapContextForRun: async () => ({
-        bootstrapFiles: [{ name: "AGENTS.md", content: "workspace rules" }],
-        contextFiles,
-      }),
-    };
-
-    const firstTurn = await resolveAttemptBootstrapContext(turnParams);
-    expect(firstTurn.isContinuationTurn).toBe(false);
-    expect(firstTurn.contextFiles).toEqual(contextFiles);
-    expect(firstTurn.shouldRecordCompletedBootstrapTurn).toBe(true);
-
-    // attempt-finalize.ts writes exactly this entry for an eligible clean turn.
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
-      timestamp: Date.now(),
-      runId: "run-1",
-      sessionId: sessionTarget.sessionId,
-    });
-
-    const secondTurn = await resolveAttemptBootstrapContext(turnParams);
-    expect(secondTurn.isContinuationTurn).toBe(true);
-    expect(secondTurn.contextFiles).toStrictEqual([]);
-  });
-
   it("invalidates a completion marker after compaction", async () => {
     const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
@@ -784,6 +739,39 @@ describe("hasCompletedBootstrapTurn", () => {
 });
 
 describe("makeBootstrapWarn", () => {
+  it("keeps content revisions distinct when decorating truncation warnings", () => {
+    const warnings: string[] = [];
+    const workspaceDir = `/tmp/${randomUUID()}`;
+    for (const { sessionLabel, content } of [
+      { sessionLabel: "first", content: "a" },
+      { sessionLabel: "second", content: "a" },
+      { sessionLabel: "first", content: "b" },
+    ]) {
+      buildBootstrapContextFiles(
+        [
+          {
+            name: "AGENTS.md",
+            path: `${workspaceDir}/AGENTS.md`,
+            content: content.repeat(1000),
+            missing: false,
+          },
+        ],
+        {
+          maxChars: 200,
+          warn: makeBootstrapWarn({
+            sessionLabel,
+            workspaceDir,
+            warn: (message) => warnings.push(message),
+          }),
+        },
+      );
+    }
+    expect(warnings).toEqual([
+      "workspace bootstrap file AGENTS.md is 1000 chars (limit 200); truncating in injected context (sessionKey=first)",
+      "workspace bootstrap file AGENTS.md is 1000 chars (limit 200); truncating in injected context (sessionKey=first)",
+    ]);
+  });
+
   it("deduplicates repeated warnings for the same session and message", () => {
     const warnings: string[] = [];
     const warn = makeBootstrapWarn({

@@ -275,19 +275,10 @@ final class RemotePortTunnel: @unchecked Sendable {
         }
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
-              let urlRaw = remote["url"] as? String
-        else {
-            return nil
-        }
-        let trimmed = urlRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed), let port = url.port else {
-            return nil
-        }
-        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty
-        else {
-            return nil
-        }
+              let raw = (remote["url"] as? String)?.trimmedNonEmpty,
+              let url = URL(string: raw), let port = url.port,
+              let host = url.host?.trimmedNonEmpty
+        else { return nil }
         if LoopbackHost.isLoopbackHost(host) {
             return port == defaultRemotePort ? nil : port
         }

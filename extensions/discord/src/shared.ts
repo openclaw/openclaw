@@ -35,6 +35,7 @@ import {
 } from "./security-contract.js";
 import { discordSecurityAdapter } from "./security.js";
 import { deriveLegacySessionChatType } from "./session-contract.js";
+import { parseDiscordTarget } from "./target-parsing.js";
 
 const DISCORD_CHANNEL = "discord" as const;
 const livePolicyConfigPrefixes = Object.keys(selectDiscordLivePolicyConfig({})).flatMap((key) => [
@@ -167,8 +168,8 @@ export function createDiscordPluginBase(params: {
       ...discordConfigAdapter,
       hasConfiguredState: ({ env }) =>
         typeof env?.DISCORD_BOT_TOKEN === "string" && env.DISCORD_BOT_TOKEN.trim().length > 0,
-      isEnabled: (account, cfg) => isDiscordAccountEnabledForRuntime(account, cfg),
-      disabledReason: (account, cfg) => resolveDiscordAccountDisabledReason(account, cfg),
+      isEnabled: isDiscordAccountEnabledForRuntime,
+      disabledReason: resolveDiscordAccountDisabledReason,
       isConfigured: (account) =>
         resolveConfiguredFromCredentialStatuses(account) ?? Boolean(account.token?.trim()),
       describeAccount: (account) =>
@@ -184,6 +185,15 @@ export function createDiscordPluginBase(params: {
     },
     messaging: {
       deriveLegacySessionChatType,
+      directTargetStyle: "user-prefixed",
+      inferTargetChatType: ({ to }) => {
+        try {
+          const parsed = parseDiscordTarget(to, { defaultKind: "channel" });
+          return parsed ? (parsed.kind === "user" ? "direct" : "channel") : undefined;
+        } catch {
+          return undefined;
+        }
+      },
     },
     security: discordSecurityAdapter,
     secrets: {

@@ -10,6 +10,10 @@ import {
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
 import { SessionActivitySummarySchema } from "./sessions-activity-summary.js";
+import {
+  SessionCommunicationPolicySchema,
+  EffectiveSessionCommunicationPolicySchema,
+} from "./sessions-communication.js";
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
@@ -103,11 +107,17 @@ const SessionSwarmSummarySchema = closedObject({
 export const SessionRowSchema = Type.Object(
   {
     key: Type.String(),
-    /** Detail fields omitted in compact lists must not clear a client's full-row cache. */
-    rowMode: Type.Optional(Type.Literal("compact")),
+    /** Fields outside the requested projection must not clear a client's full-row cache. */
+    rowMode: Type.Optional(
+      Type.Union([Type.Literal("compact"), Type.Literal("dashboard"), Type.Literal("sidebar")]),
+    ),
+    /** Response-local indexes into the list's sharedFacts; expand before merging rows. */
+    sharedFacts: Type.Optional(Type.Array(Type.Integer({ minimum: 0 }))),
     sessionId: Type.Optional(Type.String()),
     /** Incarnation revision for invalidating session-scoped client caches after resets. */
     lifecycleRevision: Type.Optional(NonEmptyString),
+    /** Opaque saved model-selection inputs, unaffected by activity or display updates. */
+    sessionModelRevision: Type.Optional(NonEmptyString),
     incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
       Type.Literal("direct"),
@@ -155,6 +165,7 @@ export const SessionRowSchema = Type.Object(
     archivedBy: Type.Optional(SessionCreatedActorSchema),
     archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
+    sidebarRoot: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
     snoozedUntil: Type.Optional(Type.Number()),
     snoozedAt: Type.Optional(Type.Number()),
@@ -209,6 +220,8 @@ export const SessionRowSchema = Type.Object(
     /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
     workspaceDir: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
+    communication: Type.Optional(SessionCommunicationPolicySchema),
+    effectiveCommunication: Type.Optional(EffectiveSessionCommunicationPolicySchema),
     /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
     sandboxMode: Type.Optional(Type.Literal("off")),
     /** Administrator consent to the exact external runtime's own permissions for this incarnation. */
@@ -253,6 +266,9 @@ export const SessionRowSchema = Type.Object(
     previousSessionId: Type.Optional(Type.String()),
     inputTokens: Type.Optional(Type.Number()),
     outputTokens: Type.Optional(Type.Number()),
+    usageReport: Type.Optional(
+      Type.Object({ state: Type.Union([Type.Literal("available"), Type.Literal("unavailable")]) }),
+    ),
     totalTokens: Type.Optional(Type.Number()),
     totalTokensFresh: Type.Optional(Type.Boolean()),
     contextTokens: Type.Optional(Type.Number()),

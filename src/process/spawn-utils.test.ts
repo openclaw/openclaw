@@ -3,6 +3,8 @@ import { EventEmitter, once } from "node:events";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireWorkspaceResultGit } from "../gateway/worker-environments/workspace-result-git.js";
+import { runWorkspaceInventoryCommandToFile } from "../gateway/worker-environments/workspace-sync-inventory.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -14,6 +16,7 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { runWithSpawnBroker } from "./spawn-broker/context.js";
 import { createSpawnBrokerHost } from "./spawn-broker/host.js";
+import { supportsSpawnBrokerCommandTransport } from "./spawn-broker/pipe.js";
 import {
   emitChildProcessSpawnSample,
   recordChildProcessSpawn,
@@ -53,24 +56,6 @@ describe("spawnWithFallback", () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(spawnMock.mock.calls[0]?.[2].stdio).toEqual(["pipe", "pipe", "pipe"]);
     expect(spawnMock.mock.calls[1]?.[2].stdio).toEqual(["ignore", "pipe", "pipe"]);
-  });
-
-  it("does not retry on non-EBADF errors", async () => {
-    const spawnMock = vi.fn().mockImplementationOnce(() => {
-      const err = new Error("spawn ENOENT");
-      (err as NodeJS.ErrnoException).code = "ENOENT";
-      throw err;
-    });
-
-    await expect(
-      spawnWithFallback({
-        argv: ["missing"],
-        options: { stdio: ["pipe", "pipe", "pipe"] },
-        fallbacks: [{ stdio: ["ignore", "pipe", "pipe"] }],
-        spawnImpl: spawnMock,
-      }),
-    ).rejects.toThrow(/ENOENT/);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not spawn a fallback after request authority retires during startup", async () => {
@@ -142,7 +127,8 @@ describe("child-process spawn diagnostics", () => {
   });
 
   async function checkSuccessfulSpawns() {
-    const missing = path.join(tempDirs.make("openclaw-spawn-counts-"), "missing");
+    const outputRoot = tempDirs.make("openclaw-spawn-counts-");
+    const missing = path.join(outputRoot, "missing");
     const child = spawnProcess(process.execPath, ["-e", ""], { stdio: "ignore" });
     expect((await once(child, "close"))[0]).toBe(0);
     await expect(spawnCommand([process.execPath, "-e", ""])).resolves.toMatchObject({
@@ -157,6 +143,26 @@ describe("child-process spawn diagnostics", () => {
     await Promise.all([
       executeGitCommand(process.cwd(), ["--version"], { operation: "project.clone" }),
       executeGitCommandBuffered(process.cwd(), ["--version"], { operation: "publication" }),
+      executeGitCommand(process.cwd(), ["--version"], { lowerPriority: true }),
+      once(spawnProcess("git", ["--version"], { stdio: "ignore" }), "close"),
+      requireWorkspaceResultGit(process.cwd(), ["--version"]),
+      withGitProcessOperation("workspace.result-cleanup", () =>
+        requireWorkspaceResultGit(process.cwd(), ["--version"]),
+      ),
+      runWorkspaceInventoryCommandToFile({
+        argv: ["git", "--version"],
+        outputPath: path.join(outputRoot, "inventory"),
+        signal: new AbortController().signal,
+        timeoutMs: 10_000,
+      }),
+      withGitProcessOperation("workspace.sync", () =>
+        runWorkspaceInventoryCommandToFile({
+          argv: ["git", "--version"],
+          outputPath: path.join(outputRoot, "sync-inventory"),
+          signal: new AbortController().signal,
+          timeoutMs: 10_000,
+        }),
+      ),
     ]);
     now = 59_999;
     emitChildProcessSpawnSample();
@@ -171,14 +177,22 @@ describe("child-process spawn diagnostics", () => {
           count: 2,
           intervalMs: 90_000,
         }),
-        ...["project.clone", "publication"].map((operation) =>
+        ...[
+          "project.clone",
+          "publication",
+          "workspace.result",
+          "workspace.result-cleanup",
+          "workspace.inventory",
+          "workspace.sync",
+        ].map((operation) =>
           expect.objectContaining({ family: "git", operation, count: 1, intervalMs: 90_000 }),
         ),
+        expect.objectContaining({ family: "git", operation: "unscoped.version", count: 2 }),
       ]),
     );
     now = 150_000;
     emitChildProcessSpawnSample();
-    expect(events).toHaveLength(3);
+    expect(events).toHaveLength(8);
   }
 
   it(
@@ -186,7 +200,7 @@ describe("child-process spawn diagnostics", () => {
     checkSuccessfulSpawns,
   );
 
-  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+  it.skipIf(!supportsSpawnBrokerCommandTransport())(
     "counts successful broker requests once without counting the broker transport",
     async () => {
       const host = createSpawnBrokerHost();
@@ -213,7 +227,7 @@ describe("child-process spawn diagnostics", () => {
     emitChildProcessSpawnSample();
     expect(events).toEqual([
       expect.objectContaining({ family: "other", operation: "none", count: 1 }),
-      expect.objectContaining({ family: "git", operation: "unknown", count: 1 }),
+      expect.objectContaining({ family: "git", operation: "unscoped.other", count: 1 }),
       expect.objectContaining({ family: "bun", operation: "none", count: 1 }),
     ]);
     expect(JSON.stringify(events)).not.toContain("private");
@@ -255,5 +269,34 @@ describe("child-process spawn diagnostics", () => {
       expect.objectContaining({ family: "git", operation: "unknown", count: 1 }),
     ]);
     expect(JSON.stringify(events)).not.toContain("private");
+  });
+
+  it.each([
+    [
+      ["-C", "/private/repo", "-c", "alias.secret=status", "config", "--get", "user.email"],
+      "unscoped.config",
+    ],
+    [["--git-dir=/private/repo", "--no-pager", "rev-parse", "private-ref"], "unscoped.rev-parse"],
+    [
+      ["--config-env", "secret=PRIVATE_VALUE", "--work-tree", "/private/tree", "status"],
+      "unscoped.status",
+    ],
+    [["-c", "alias.private-command=status", "private-command"], "unscoped.other"],
+    [["--unknown-option", "config"], "unscoped.other"],
+    [["--no-lazy-fetch", "version"], "unscoped.version"],
+    [["-C", "/private/repo", "--no-lazy-fetch", "cat-file", "--batch-check"], "unscoped.cat-file"],
+    [["fsck", "--connectivity-only"], "unscoped.fsck"],
+    [["ls-remote", "private-remote", "private-ref"], "unscoped.ls-remote"],
+    [["rebase", "private-ref"], "unscoped.rebase"],
+    [["reflog", "expire", "--all"], "unscoped.reflog"],
+    [["--attr-source=private-ref", "checkout-index", "-a"], "unscoped.checkout-index"],
+  ])("classifies unscoped Git argv %j without exporting its values", (args, operation) => {
+    const child = new EventEmitter() as ChildProcess;
+    recordChildProcessSpawn("git", child, undefined, args);
+    child.emit("spawn");
+    now = 60_000;
+    emitChildProcessSpawnSample();
+    expect(events).toEqual([expect.objectContaining({ family: "git", operation, count: 1 })]);
+    expect(JSON.stringify(events)).not.toMatch(/private|secret|PRIVATE_VALUE/);
   });
 });

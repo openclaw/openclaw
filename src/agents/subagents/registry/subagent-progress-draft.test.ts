@@ -1,18 +1,19 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { afterEach, expect, it, vi, type Mock } from "vitest";
-import { getRuntimeConfig } from "../../../config/config.js";
-import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-runtime.js";
+import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
+import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../infra/system-events.js";
+import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   setSubagentAnnounceDeliveryDepsForTest,
   type SubagentAnnounceDeliveryTestDeps,
 } from "../announce/subagent-announce-overrides.test-support.js";
 import { killSessionSubagentRuns } from "./subagent-control-kill.js";
-import type * as ControlRuntime from "./subagent-control.runtime.js";
 import { adoptSubagentProgressDraft } from "./subagent-progress-draft.js";
 import {
   childKey,
@@ -26,18 +27,10 @@ import { testing as registryTesting } from "./subagent-registry.test-helpers.js"
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = useSubagentControlFixture();
-const yieldCohort = useSubagentProgressCohort(fixture);
-
-const runtime = vi.hoisted(() => ({ childRunStaysActive: false }));
-
-vi.mock("./subagent-control.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof ControlRuntime>();
-  return {
-    ...actual,
-    isEmbeddedAgentRunActive: (...args: Parameters<typeof actual.isEmbeddedAgentRunActive>) =>
-      runtime.childRunStaysActive || actual.isEmbeddedAgentRunActive(...args),
-  };
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
 });
+const yieldCohort = useSubagentProgressCohort(fixture);
 
 const CHILD_RESULT = "Private child result marker.";
 
@@ -47,7 +40,6 @@ type DispatchParams = Parameters<Dispatch>[1];
 afterEach(() => {
   setSubagentAnnounceDeliveryDepsForTest();
   resetSystemEventsForTest();
-  runtime.childRunStaysActive = false;
 });
 
 function rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
@@ -220,21 +212,30 @@ it("keeps the card when stop cannot interrupt a child that is still finishing", 
   const spawns = await yieldCohort("parent-turn", ["a"]);
   const draft = newDraft();
   expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-  // The child's run stays active through the abort, so its kill claim is released.
-  runtime.childRunStaysActive = true;
-
-  await killSessionSubagentRuns({
-    cfg: getRuntimeConfig(),
-    sessionKey: requesterKey,
-    agentId: "main",
+  const handle = createEmbeddedRunHandle({
+    runId: "a",
+    isAbortable: false,
   });
-  await fixture.settle();
+  setActiveEmbeddedRun("a-session", handle, childKey("a"), undefined, "main");
+  try {
+    await killSessionSubagentRuns({
+      cfg: getRuntimeConfig(),
+      sessionKey: requesterKey,
+      agentId: "main",
+    });
+    await fixture.settle();
 
-  const child = subagentRuns.get("a");
-  expect(child?.killIntent).toBeUndefined();
-  expect(child?.execution.status).toBe("running");
-  expect(child?.requesterSettleWake).toBeDefined();
-  expect(draft.retire).not.toHaveBeenCalled();
+    const child = subagentRuns.get("a");
+    expect(child?.killIntent).toBeUndefined();
+    expect(child?.execution.status).toBe("running");
+    expect(child?.requesterSettleWake).toBeDefined();
+    expect(draft.retire).not.toHaveBeenCalled();
+  } finally {
+    clearActiveEmbeddedRun("a-session", handle, childKey("a"));
+  }
+  answerWakes(draft, ["The delegated work is done."]);
+  await endRun("a");
+  expect(draft.retire).toHaveBeenCalledOnce();
 });
 
 it("follows a child's resumed execution and retires after the replacement settles", async () => {

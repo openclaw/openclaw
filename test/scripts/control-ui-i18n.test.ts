@@ -601,8 +601,8 @@ describe("control-ui-i18n catalog validation", () => {
     expect(
       collectControlUiRawCopyFromSource(sourceFile).map(({ kind, text }) => ({ kind, text })),
     ).toEqual([
-      { kind: "html-attribute", text: "Archive" },
       { kind: "html-attribute", text: "Preview" },
+      { kind: "html-attribute", text: "Archive" },
       { kind: "html-attribute", text: "Delete" },
       { kind: "html-text", text: "Delete" },
       { kind: "html-attribute", text: "Selection actions" },

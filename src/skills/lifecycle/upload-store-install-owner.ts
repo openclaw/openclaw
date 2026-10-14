@@ -55,19 +55,17 @@ export async function withSkillUploadInstallOwner<T>(
             }
             const errors: unknown[] = [];
             try {
-              if (!released) {
-                const input = {
-                  ...lease,
-                  sharedStateIdentity: identity,
-                };
-                await runSqliteWorkerStoreOperation(
-                  store,
-                  (scope) => scope.execute({ type: "skillUploads.release", input }),
-                  cleanupContext,
-                  assertOwned,
-                );
-                released = true;
-              }
+              const input = {
+                ...lease,
+                sharedStateIdentity: identity,
+              };
+              await runSqliteWorkerStoreOperation(
+                store,
+                (scope) => scope.execute({ type: "skillUploads.release", input }),
+                cleanupContext,
+                assertOwned,
+              );
+              released = true;
             } catch (error) {
               errors.push(error);
             }

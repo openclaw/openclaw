@@ -136,6 +136,7 @@ export function projectSidebarSessionCatalogs(
   ownerId: string | null,
   liveRows: readonly GatewaySessionRow[],
   isSessionHidden?: (row: SessionVisibilityRow) => boolean,
+  involvingSessionKeys?: ReadonlySet<string>,
 ): SidebarSessionCatalog[] {
   // The current list wins over cached agent lists, including an unset live owner.
   const liveRowsByKey = new Map(liveRows.toReversed().map((row) => [row.key, row]));
@@ -143,6 +144,14 @@ export function projectSidebarSessionCatalogs(
     const visibleHosts: SessionCatalogHost[] = [];
     for (const host of catalog.hosts) {
       const sessions = host.sessions.filter((session) => {
+        // Catalog access and creator attribution do not establish involvement.
+        // Only the Gateway-filtered backing roster can admit a catalog row.
+        if (
+          involvingSessionKeys &&
+          (!session.sessionKey || !involvingSessionKeys.has(session.sessionKey))
+        ) {
+          return false;
+        }
         const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
         // A committed archive can leave the loaded roster before the catalog refreshes.
         // Its adopted key still belongs to the canonical session lifecycle owner.

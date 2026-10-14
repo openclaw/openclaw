@@ -230,64 +230,51 @@ export function createWindowsOutputDecoder(params?: {
       ? new TextDecoder(encoding)
       : null;
   const preserveUtf8Bom = params?.preserveUtf8Bom === true;
-  const utf8Decoder =
-    platform === "win32" && legacyDecoder
-      ? new TextDecoder("utf-8", {
+  let decoder = new TextDecoder(
+    "utf-8",
+    legacyDecoder
+      ? {
           fatal: true,
           ...(preserveUtf8Bom ? { ignoreBOM: true } : {}),
-        })
-      : null;
-  const streamingUtf8Decoder = legacyDecoder
-    ? null
-    : new TextDecoder("utf-8", preserveUtf8Bom ? { ignoreBOM: true } : undefined);
-  let useLegacyDecoder = false;
+        }
+      : preserveUtf8Bom
+        ? { ignoreBOM: true }
+        : undefined,
+  );
   let pendingUtf8Bytes = Buffer.alloc(0);
   let pendingBomByte: number | null | undefined = platform === "win32" ? undefined : null;
   let utf16Decoder: TextDecoder | null = null;
 
-  const decodeCurrent = (buffer: Buffer): string => {
-    if (!legacyDecoder || !utf8Decoder) {
-      return streamingUtf8Decoder?.decode(buffer, { stream: true }) ?? "";
-    }
-    if (useLegacyDecoder) {
-      return legacyDecoder.decode(buffer, { stream: true });
+  const decodeCurrent = (buffer?: Buffer): string => {
+    const options = buffer === undefined ? undefined : { stream: true };
+    if (!legacyDecoder || decoder === legacyDecoder) {
+      return decoder.decode(buffer, options);
     }
     // Stay on strict UTF-8 until it fails; replay any pending lead bytes through the legacy
     // decoder so split GBK/Big5/etc. characters are not lost at the fallback boundary.
     try {
-      const decoded = utf8Decoder.decode(buffer, { stream: true });
+      const decoded = decoder.decode(buffer, options);
       // Four trailing bytes contain every possible incomplete UTF-8 sequence.
       const trailingBuffer =
-        buffer.length < 4 && pendingUtf8Bytes.length > 0
+        buffer && buffer.length < 4 && pendingUtf8Bytes.length > 0
           ? Buffer.concat([pendingUtf8Bytes, buffer])
           : buffer;
-      pendingUtf8Bytes = Buffer.from(getTrailingIncompleteUtf8Bytes(trailingBuffer));
+      pendingUtf8Bytes = trailingBuffer
+        ? Buffer.from(getTrailingIncompleteUtf8Bytes(trailingBuffer))
+        : Buffer.alloc(0);
       return decoded;
     } catch {
       const replayBuffer =
-        pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
-      useLegacyDecoder = true;
+        buffer === undefined
+          ? pendingUtf8Bytes
+          : pendingUtf8Bytes.length > 0
+            ? Buffer.concat([pendingUtf8Bytes, buffer])
+            : buffer;
+      decoder = legacyDecoder;
       pendingUtf8Bytes = Buffer.alloc(0);
-      return legacyDecoder.decode(replayBuffer, { stream: true });
-    }
-  };
-
-  const flushCurrent = (): string => {
-    if (!legacyDecoder || !utf8Decoder) {
-      return streamingUtf8Decoder?.decode() ?? "";
-    }
-    if (useLegacyDecoder) {
-      return legacyDecoder.decode();
-    }
-    try {
-      const decoded = utf8Decoder.decode();
-      pendingUtf8Bytes = Buffer.alloc(0);
-      return decoded;
-    } catch {
-      useLegacyDecoder = true;
-      const replayBuffer = pendingUtf8Bytes;
-      pendingUtf8Bytes = Buffer.alloc(0);
-      return replayBuffer.length > 0 ? legacyDecoder.decode(replayBuffer) : "";
+      return buffer !== undefined || replayBuffer.length > 0
+        ? legacyDecoder.decode(replayBuffer, options)
+        : "";
     }
   };
 
@@ -324,7 +311,7 @@ export function createWindowsOutputDecoder(params?: {
       }
       const pending = typeof pendingBomByte === "number" ? Buffer.from([pendingBomByte]) : null;
       pendingBomByte = null;
-      return (pending ? decodeCurrent(pending) : "") + flushCurrent();
+      return (pending ? decodeCurrent(pending) : "") + decodeCurrent();
     },
   };
 }
