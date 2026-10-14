@@ -1099,7 +1099,7 @@ describe("grouped chat rendering", () => {
     expect(view.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
     expect(view.querySelector(".chat-working-indicator")).toBeNull();
     // Usage leads and the duration follows, matching the live indicator's order.
-    expect(elementText(".chat-turn-recap--continuation").replace(/\s+/g, " ").trim()).toBe(
+    expect(elementText(".chat-turn-recap--continuation")?.replace(/\s+/g, " ").trim()).toBe(
       "1 output token · Done in 4 hours, 2 minutes",
     );
     expect(view.querySelector(".chat-turn-recap__claw")).toBeNull();
