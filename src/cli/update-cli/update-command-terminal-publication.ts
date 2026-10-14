@@ -1,5 +1,4 @@
 import { classifyDoctorMaintenanceRefusal } from "../../commands/doctor-maintenance-inspection.js";
-import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
@@ -18,11 +17,7 @@ import {
   recordMutableUpdateInterruption,
 } from "./update-command-mutable-signals.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
-import {
-  isUpdateStateReadContention,
-  resolveAutomaticUpdateTriage,
-  UpdateCommandFailure,
-} from "./update-command-result.js";
+import { isUpdateStateReadContention, UpdateCommandFailure } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { UpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
 import {
@@ -103,18 +98,13 @@ export async function withUpdateProgressSettlement(
   }
 }
 
-export function bindUpdateFinalizationFailure(
-  params: FinishUpdateParams,
-  progressFailure: { cause: unknown } | undefined,
-  readTriage: () => { triageAllowed: boolean; gateway: TriageFailureContext["gateway"] },
-) {
+export function bindUpdateFinalizationFailure(progressFailure: { cause: unknown } | undefined) {
   return (
     result: UpdateRunResult,
     detail?: string,
     options?: ErrorOptions,
     exitCode = resolveManagedServiceUpdateFailureExitCode(result),
   ) => {
-    const { triageAllowed, gateway } = readTriage();
     const failureOptions =
       progressFailure &&
       !collectNestedErrorCandidates(options?.cause).includes(progressFailure.cause)
@@ -128,12 +118,7 @@ export function bindUpdateFinalizationFailure(
                 : progressFailure.cause,
           }
         : options;
-    return new UpdateCommandFailure(result, exitCode, detail, {
-      ...failureOptions,
-      automaticTriage: triageAllowed
-        ? resolveAutomaticUpdateTriage(result, detail, { ...params, gateway })
-        : undefined,
-    });
+    return new UpdateCommandFailure(result, exitCode, detail, failureOptions);
   };
 }
 

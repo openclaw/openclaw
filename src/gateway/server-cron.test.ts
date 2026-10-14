@@ -153,6 +153,7 @@ const {
     },
   })),
   getProcessSupervisorMock: vi.fn(() => ({
+    acquireScopeCleanup: vi.fn(() => async () => {}),
     spawn: vi.fn(),
     cancelScope: vi.fn(),
   })),
@@ -437,15 +438,28 @@ function addScriptJob(
 
 function mockCronSupervisor(...runs: ReturnType<typeof createWatchedRun>[]) {
   let nextRun = 0;
+  const activeRuns = new Map<number, ReturnType<typeof createWatchedRun>>();
   const spawn = vi.fn(async () => {
     const index = nextRun++;
-    return {
-      ...(runs.length ? expectDefined(runs[index], "watched process") : createWatchedRun()),
-      runId: `cron-watch-${index}`,
-    };
+    const run = runs.length ? expectDefined(runs[index], "watched process") : createWatchedRun();
+    activeRuns.set(index, run);
+    void run.exit.promise.then(() => activeRuns.delete(index));
+    return { ...run, runId: `cron-watch-${index}` };
   });
   const cancelScope = vi.fn();
-  getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+  const acquireScopeCleanup = vi.fn(() => {
+    const index = nextRun;
+    let closing: Promise<void> | undefined;
+    return () => {
+      if (!closing) {
+        const run = activeRuns.get(index);
+        run?.cancel();
+        closing = run ? run.wait().then(() => undefined) : Promise.resolve();
+      }
+      return closing;
+    };
+  });
+  getProcessSupervisorMock.mockReturnValue({ acquireScopeCleanup, spawn, cancelScope });
   return { spawn, cancelScope };
 }
 
@@ -519,6 +533,7 @@ describe("buildGatewayCronService", () => {
     requestSafeGatewayRestartMock.mockClear();
     getProcessSupervisorMock.mockReset();
     getProcessSupervisorMock.mockReturnValue({
+      acquireScopeCleanup: vi.fn(() => async () => {}),
       spawn: vi.fn(),
       cancelScope: vi.fn(),
     });
@@ -894,7 +909,7 @@ describe("buildGatewayCronService", () => {
         });
         expect(rearmed.updatedAtMs).toBe(job.updatedAtMs);
         await state.reconcileExitWatchers();
-        expect(spawn).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
 
         if (exitTiming === "before") {
           secondExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
