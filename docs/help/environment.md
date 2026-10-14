@@ -86,7 +86,7 @@ Installed third-party plugins may declare additional credential variables in the
 
 ## ClawHub install telemetry
 
-Installing a skill or a plugin from ClawHub reports that install back to ClawHub.
+Authenticated skill or plugin installs from ClawHub send a best-effort install report.
 See [ClawHub telemetry](/clawhub/telemetry) for what is sent, when it is sent, and
 what is never included.
 
@@ -94,7 +94,7 @@ what is never included.
 | --------------------------- | ------------------------------------------------------------------- |
 | `CLAWHUB_DISABLE_TELEMETRY` | Disable ClawHub install reporting with `1`, `true`, `yes`, or `on`. |
 
-`CLAWDHUB_DISABLE_TELEMETRY` is accepted as a legacy spelling of the same setting.
+`CLAWDHUB_DISABLE_TELEMETRY` is accepted when `CLAWHUB_DISABLE_TELEMETRY` is unset or blank.
 
 ## Provider credentials and workspace `.env`
 
