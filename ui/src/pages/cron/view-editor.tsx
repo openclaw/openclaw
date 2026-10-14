@@ -1,6 +1,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createMemo, For } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
@@ -89,38 +90,40 @@ export function Editor(
         </div>
       ) : undefined}
       {props.canManage && !systemOwned() ? (
-        <div class="cron-editor-actions">
-          <button
-            class="btn primary"
-            data-test-id="cron-submit"
-            disabled={props.busy || !props.canSubmit}
-            onClick={() => props.onSubmit()}
-          >
-            {props.busy
-              ? t("cron.form.saving")
-              : props.mode === "job"
-                ? t("cron.form.saveChanges")
-                : t("cron.form.createTask")}
-          </button>
-          {props.mode === "create" ? (
+        <ShellLayoutBoundary traits={{ cronEditor: true }}>
+          <div class="cron-editor-actions">
             <button
-              class="btn"
-              data-test-id="cron-submit-run"
+              class="btn primary"
+              data-test-id="cron-submit"
               disabled={props.busy || !props.canSubmit}
-              onClick={() => props.onSubmitRunNow()}
+              onClick={() => props.onSubmit()}
             >
-              {t("cron.form.createAndRun")}
+              {props.busy
+                ? t("cron.form.saving")
+                : props.mode === "job"
+                  ? t("cron.form.saveChanges")
+                  : t("cron.form.createTask")}
             </button>
-          ) : undefined}
-          <button class="btn" disabled={props.busy} onClick={() => props.onClosePanel()}>
-            {t("cron.form.cancel")}
-          </button>
-          {submitDisabledReason() ? (
-            <div class="cron-submit-reason" aria-live="polite">
-              {submitDisabledReason()}
-            </div>
-          ) : undefined}
-        </div>
+            {props.mode === "create" ? (
+              <button
+                class="btn"
+                data-test-id="cron-submit-run"
+                disabled={props.busy || !props.canSubmit}
+                onClick={() => props.onSubmitRunNow()}
+              >
+                {t("cron.form.createAndRun")}
+              </button>
+            ) : undefined}
+            <button class="btn" disabled={props.busy} onClick={() => props.onClosePanel()}>
+              {t("cron.form.cancel")}
+            </button>
+            {submitDisabledReason() ? (
+              <div class="cron-submit-reason" aria-live="polite">
+                {submitDisabledReason()}
+              </div>
+            ) : undefined}
+          </div>
+        </ShellLayoutBoundary>
       ) : undefined}
     </fieldset>
   );

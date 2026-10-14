@@ -738,6 +738,13 @@
   color: var(--text-strong);
 }
 
+/* The action bar owns bottom spacing while present. Shell and settings-page
+   padding would leave form content visible beneath it, including at scroll end. */
+.shell main.content.content--cron-editor,
+.content--cron-editor .cron-page--detail > .settings-page {
+  padding-bottom: 0;
+}
+
 /* Sticky save bar: stays visible while the long form scrolls in `.content`. */
 .cron-editor-actions {
   position: sticky;
