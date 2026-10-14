@@ -11,7 +11,6 @@ export {
 export type {
   AgentHarness,
   AgentHarnessV2,
-  AgentHarnessSetupVerificationContext,
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareEvent,
   AnyAgentTool,

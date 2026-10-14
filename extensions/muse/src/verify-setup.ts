@@ -1,8 +1,9 @@
 import { spawnMspConnection } from "@muse-code/sdk";
-import type { AgentHarnessSetupVerificationContext } from "openclaw/plugin-sdk/agent-harness";
+import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { museEnvironment } from "./environment.js";
 
+type AgentHarnessSetupVerificationContext = Parameters<NonNullable<AgentHarness["verifySetup"]>>[0];
 type MuseCatalogEntry = { id: string; name: string; provider: string; nativeRuntime: string };
 
 export async function readMuseCatalog(
