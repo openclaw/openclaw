@@ -644,6 +644,7 @@ export function startGatewayConfigReloader(
       if (
         candidate &&
         acceptedSourceSnapshot &&
+        persistedHash !== lastSourceOnly?.hash &&
         configSourceSnapshotsMatch(sourceSnapshot, acceptedSourceSnapshot) &&
         resolveConfigWriteFollowUp(afterWrite).mode === "auto" &&
         !runtimeRefresh?.includeAuthStoreRefs &&
@@ -654,19 +655,14 @@ export function startGatewayConfigReloader(
       ) {
         // The watcher can publish before the writer's notification arrives. Consume
         // that accepted runtime, not the notification's unresolved SecretRefs.
-        const runtimeApplied = persistedHash !== lastSourceOnly?.hash;
         await acceptCurrentRuntimeEcho(
           initialEpoch,
           sourceSnapshot,
-          runtimeApplied,
+          true,
           assertInvokerOwned,
           candidate,
         );
-        if (runtimeApplied) {
-          settleRuntimeApplication();
-        } else {
-          settleCandidateApplications(candidate, "failed");
-        }
+        settleRuntimeApplication();
         return completeApplication();
       }
       await commitReloadBaseline();
