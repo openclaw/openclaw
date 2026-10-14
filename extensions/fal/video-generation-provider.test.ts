@@ -52,6 +52,35 @@ describe("fal video generation provider", () => {
     expect(fetchGuardMock).not.toHaveBeenCalled();
   });
 
+  it("marks overrides dropped by prompt-only and audio-less models unsupported", async () => {
+    const provider = buildFalVideoGenerationProvider();
+    const resolve = (model: string) =>
+      provider.resolveModelCapabilities?.({ provider: "fal", model, cfg: {} });
+    const promptOnly = {
+      supportsAspectRatio: false,
+      supportsResolution: false,
+      supportsSize: false,
+      supportsAudio: false,
+    };
+
+    for (const model of ["fal-ai/minimax/video-01-live", "fal-ai/heygen/v2/video-agent"]) {
+      const capabilities = await resolve(model);
+      expect(capabilities?.generate).toEqual(promptOnly);
+      expect(capabilities?.imageToVideo).toEqual({ enabled: true, ...promptOnly });
+    }
+
+    for (const model of [
+      "fal-ai/kling-video/v2.1/master/text-to-video",
+      "fal-ai/wan/v2.2-a14b/image-to-video",
+    ]) {
+      const capabilities = await resolve(model);
+      expect(capabilities?.generate).toEqual({ supportsAudio: false });
+      expect(capabilities?.imageToVideo).toEqual({ enabled: true, supportsAudio: false });
+    }
+
+    expect(await resolve("bytedance/seedance-2.0/text-to-video")).toBeUndefined();
+  });
+
   function mockFalProviderRuntime() {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-key",
