@@ -9,6 +9,8 @@ import {
 } from "../../test/helpers/promise.js";
 import * as oauthLocks from "../agents/auth-profiles/oauth-profile-lock.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
+import type { AgentHarness } from "../agents/harness/types.js";
+import * as runtimePluginInstall from "../commands/runtime-plugin-install.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/server-methods/client-types.js";
@@ -19,6 +21,7 @@ import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { createWizardSessionTracker } from "../gateway/server-wizard-sessions.js";
 import * as providerChoices from "../plugins/provider-auth-choices.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -31,6 +34,7 @@ import {
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
 import { saveSetupCredential } from "./setup-inference-credentials.js";
+import { pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -231,5 +235,95 @@ process.exit(1);
         await whenAdmittedWizardSessionSettled(session);
       }
     }
+  });
+
+  it("rejects a Meta proxy before native setup verification or config commit", async () => {
+    const setup = await fixture({ codex: true, homeScope: "user", primaryModel: modelRef });
+    const candidate = "meta/muse-spark-1.3";
+    const proxy = "https://proxy.example/v1";
+    assert.ok(setup.config.models?.providers);
+    setup.config.models.providers.meta = {
+      baseUrl: proxy,
+      api: "openai-responses",
+      models: [
+        {
+          id: "muse-spark-1.3",
+          name: "Muse Spark 1.3",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 1024,
+        },
+      ],
+    };
+    const before = `${JSON.stringify(setup.config, null, 2)}\n`;
+    await fs.writeFile(setup.configPath, before);
+    clearConfigCache();
+    const provider: ProviderPlugin = {
+      id: "meta",
+      pluginId: "meta",
+      label: "Meta",
+      auth: [
+        {
+          id: "fixture-login",
+          label: "Muse Code",
+          kind: "device_code",
+          run: async () => ({ profiles: [], defaultModel: candidate, agentRuntimeId: "muse" }),
+        },
+      ],
+    };
+    setup.deps.resolvePluginProviders = () => [provider];
+    setup.deps.resolveManifestProviderAuthChoice = () => ({
+      pluginId: "meta",
+      providerId: "meta",
+      methodId: "fixture-login",
+      choiceId: "fixture-login",
+      choiceLabel: "Muse Code",
+      appGuidedAuth: "device-code",
+    });
+    setup.deps.loadPluginRegistrySnapshot = () => ({
+      plugins: [
+        pluginRecord("meta"),
+        pluginRecord("muse"),
+        pluginRecord("codex"),
+        pluginRecord("openai"),
+      ],
+    });
+    vi.spyOn(runtimePluginInstall, "ensureModelSelectionRuntimePlugins").mockImplementation(
+      async ({ cfg }) => ({ ok: true, cfg, codexInstalled: false }),
+    );
+    const reason = "Muse requires Meta's official API endpoint.";
+    const supports = vi.fn<AgentHarness["supports"]>(() => ({ supported: false, reason }));
+    const verifySetup = vi.fn(async () => {});
+    setup.pluginRegistry.agentHarnesses.push({
+      pluginId: "muse",
+      source: "test",
+      harness: {
+        id: "muse",
+        label: "Muse Code",
+        authBootstrap: "harness",
+        supports,
+        verifySetup,
+        runAttempt: async () => {
+          throw new Error("Unsupported setup must not run a turn");
+        },
+      },
+    });
+    const result = await setup.activate("provider-auth", undefined, { modelRef: candidate });
+    if (result.ok) {
+      throw new Error("A native proxy route must not activate");
+    }
+    expect(result.error).toContain(reason);
+    expect(supports).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "meta",
+        modelId: "muse-spark-1.3",
+        modelProvider: expect.objectContaining({ baseUrl: proxy, endpointOverrides: "present" }),
+      }),
+    );
+    expect(verifySetup).not.toHaveBeenCalled();
+    expect(setup.run).not.toHaveBeenCalled();
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
   });
 });

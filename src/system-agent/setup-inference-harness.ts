@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { raceWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
+import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import type { PluginCache } from "../plugins/plugin-cache.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
@@ -48,6 +49,16 @@ export async function verifySetupHarness(params: {
     const registration = getRegisteredAgentHarness(runtime);
     const harness = registration?.harness;
     if (!harness?.verifySetup || harness.authBootstrap !== "harness") {
+      return undefined;
+    }
+    const selection = resolveAgentHarnessSelectionDecision({
+      provider: route.provider,
+      modelId: route.model,
+      config: route.runConfig,
+      agentId: route.agentId,
+      agentHarnessRuntimeOverride: runtime,
+    });
+    if (selection.builtIn || selection.harness !== harness) {
       return undefined;
     }
     const verify = harness.verifySetup.bind(harness);
