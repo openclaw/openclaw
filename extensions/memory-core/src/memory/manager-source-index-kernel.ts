@@ -270,7 +270,7 @@ export class MemorySourceIndexKernel {
     }
     flush();
     if (previous?.size) {
-      this.deleteIds(entry.path, source, [...previous]);
+      this.deleteIds(entry.path, source, [...previous], "complete-replacement");
     }
     executeSqliteQuerySync(
       this.database,
@@ -315,11 +315,16 @@ export class MemorySourceIndexKernel {
     return true;
   }
 
-  private deleteIds(pathname: string, source: MemorySource, ids: string[]): void {
+  private deleteIds(
+    pathname: string,
+    source: MemorySource,
+    ids: string[],
+    cleanup: "session-delta" | "complete-replacement" = "session-delta",
+  ): void {
     if (ids.length === 0) {
       return;
     }
-    this.deleteVectors(pathname, source, ids);
+    this.deleteVectors(pathname, source, ids, cleanup);
     // Recall metadata and provenance cascade; the body FTS trigger follows rowids.
     for (let offset = 0; offset < ids.length; offset += SOURCE_WRITE_BATCH_SIZE) {
       executeSqliteQuerySync(
@@ -331,7 +336,12 @@ export class MemorySourceIndexKernel {
     }
   }
 
-  private deleteVectors(pathname: string, source: MemorySource, ids?: readonly string[]): void {
+  private deleteVectors(
+    pathname: string,
+    source: MemorySource,
+    ids?: readonly string[],
+    cleanup: "session-delta" | "complete-replacement" = "session-delta",
+  ): void {
     if (!(this.state.hasVectorTable ?? this.state.vector.available === true)) {
       return;
     }
@@ -353,16 +363,24 @@ export class MemorySourceIndexKernel {
               .where("source", "=", source)
               .limit(MAX_VECTOR_POINT_DELETES + 1),
           ).rows.map((row) => row.id);
-        if (ids === undefined && sparse.length > MAX_VECTOR_POINT_DELETES) {
-          // Reserve full-index scans for large whole-source cleanup. Known
-          // delta IDs always use indexed scalar deletes below.
-          this.database
-            .prepare(
-              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (` +
-                "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?" +
-                ")",
-            )
-            .run(pathname, source);
+        if (
+          (ids === undefined || cleanup === "complete-replacement") &&
+          sparse.length > MAX_VECTOR_POINT_DELETES
+        ) {
+          // Dense complete replacements may scan once, restricted to stale IDs:
+          // retained and newly written rows are already present in this source.
+          // Session deltas always keep indexed scalar deletes, at every size.
+          const deletion = this.database.prepare(
+            `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (` +
+              "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?" +
+              (ids === undefined ? "" : " AND id IN (SELECT value FROM json_each(?))") +
+              ")",
+          );
+          if (ids === undefined) {
+            deletion.run(pathname, source);
+          } else {
+            deletion.run(pathname, source, JSON.stringify(ids));
+          }
           return;
         }
         // sqlite-vec only uses its primary-key lookup for scalar equality.

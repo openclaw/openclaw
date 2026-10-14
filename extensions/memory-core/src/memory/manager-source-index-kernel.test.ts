@@ -228,43 +228,122 @@ describe("memory source index native kernel", () => {
     }
   });
 
-  it("rolls back failed stale-vector cleanup and records rebuild debt during reuse", async () => {
-    const database = await createDatabase();
-    const db = database.db;
-    const value = replacement("memory/current.md", "original", 5);
-    write(database, value);
-    write(database, replacement("memory/sibling.md"));
-    markMemoryVectorIndexClean(db);
-    const vectors = db.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all();
-    let deletes = 0;
-    db.setAuthorizer((action, table) => {
-      if (
-        action === constants.SQLITE_DELETE &&
-        table === "memory_index_chunks_vec_rowids" &&
-        ++deletes === 2
-      ) {
-        return constants.SQLITE_DENY;
-      }
-      return constants.SQLITE_OK;
-    });
-    try {
-      write(database, {
+  it.each([
+    { staleCount: 32, append: true },
+    { staleCount: 33, append: true },
+    { staleCount: 2163, append: true },
+    { staleCount: 2163, append: false },
+  ])(
+    "bounds complete-replacement cleanup of $staleCount stale vectors and preserves surviving vectors (append: $append)",
+    async ({ staleCount, append }) => {
+      const database = await createDatabase();
+      const db = database.db;
+      const value = replacement("memory/current.md", "original", staleCount + 1);
+      write(database, value);
+      const sibling = replacement("memory/sibling.md");
+      write(database, sibling);
+      markMemoryVectorIndexClean(db);
+      const appended = replacement(value.entry.path, "new");
+      const next = {
         ...value,
-        chunks: value.chunks.slice(0, 2),
-        embeddings: value.embeddings.slice(0, 2),
+        chunks: [value.chunks[0]!, ...(append ? [appended.chunks[0]!] : [])],
+        embeddings: [
+          [1, 0, 0],
+          [0, 1, 0],
+        ],
+      };
+      let executions = 0;
+      const statements = observeHostDataSql((sql, preparingDatabase) => {
+        if (!preparingDatabase && /^DELETE FROM memory_index_chunks_vec\b/i.test(sql)) {
+          executions++;
+        }
       });
-    } finally {
-      db.setAuthorizer(null);
-    }
-    expect(deletes).toBe(2);
-    expect(db.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all()).toEqual(vectors);
-    expect(db.prepare("SELECT count(*) AS n FROM memory_index_chunks").get()).toEqual({ n: 3 });
-    expect(
-      db
-        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
-        .get(),
-    ).toEqual({ value: "1" });
-  });
+      try {
+        write(database, next);
+      } finally {
+        statements.restore();
+      }
+      // The new vector writer first deletes its own ID before inserting it.
+      expect(executions).toBe(Number(append) + (staleCount <= 32 ? staleCount : 1));
+      const expected = [
+        ...next.chunks.map((chunk, index) => ({
+          id: memoryChunkRowId(next.source, next.entry.path, chunk, next.model),
+          embedding: Buffer.from(new Float32Array(next.embeddings[index]!).buffer)
+            .toString("hex")
+            .toUpperCase(),
+        })),
+        {
+          id: memoryChunkRowId(
+            sibling.source,
+            sibling.entry.path,
+            sibling.chunks[0]!,
+            sibling.model,
+          ),
+          embedding: Buffer.from(new Float32Array(sibling.embeddings[0]!).buffer)
+            .toString("hex")
+            .toUpperCase(),
+        },
+      ].toSorted((a, b) => a.id.localeCompare(b.id));
+      expect(
+        db
+          .prepare(
+            "SELECT id, hex(embedding) AS embedding FROM memory_index_chunks_vec ORDER BY id",
+          )
+          .all(),
+      ).toEqual(expected);
+      expect(db.prepare("SELECT count(*) AS n FROM memory_index_chunks").get()).toEqual({
+        n: 2 + Number(append),
+      });
+      expect(
+        db
+          .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+          .get(),
+      ).toEqual({ value: "clean" });
+    },
+  );
+
+  it.each([5, 2164])(
+    "rolls back failed stale-vector cleanup and records rebuild debt during reuse (%i chunks)",
+    async (chunks) => {
+      const database = await createDatabase();
+      const db = database.db;
+      const value = replacement("memory/current.md", "original", chunks);
+      write(database, value);
+      write(database, replacement("memory/sibling.md"));
+      markMemoryVectorIndexClean(db);
+      const vectors = db.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all();
+      let deletes = 0;
+      db.setAuthorizer((action, table) => {
+        if (
+          action === constants.SQLITE_DELETE &&
+          table === "memory_index_chunks_vec_rowids" &&
+          ++deletes === 2
+        ) {
+          return constants.SQLITE_DENY;
+        }
+        return constants.SQLITE_OK;
+      });
+      try {
+        write(database, {
+          ...value,
+          chunks: value.chunks.slice(0, 2),
+          embeddings: value.embeddings.slice(0, 2),
+        });
+      } finally {
+        db.setAuthorizer(null);
+      }
+      expect(deletes).toBe(2);
+      expect(db.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all()).toEqual(
+        vectors,
+      );
+      expect(db.prepare("SELECT count(*) AS n FROM memory_index_chunks").get()).toEqual({ n: 3 });
+      expect(
+        db
+          .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+          .get(),
+      ).toEqual({ value: "1" });
+    },
+  );
 
   it.each([2, 129])("keeps the last embedding for repeated IDs across %s rows", async (rows) => {
     const database = await createDatabase();
@@ -324,11 +403,15 @@ describe("memory source index native kernel", () => {
     },
   );
 
-  it.each([false, true])(
-    "rolls back changed vectors and stale cleanup with the source update (clean: %s)",
-    async (clean) => {
+  it.each([
+    { clean: false, chunks: 4 },
+    { clean: true, chunks: 4 },
+    { clean: true, chunks: 2164 },
+  ])(
+    "rolls back changed vectors and stale cleanup with the source update (clean: $clean, chunks: $chunks)",
+    async ({ clean, chunks }) => {
       const database = await createDatabase();
-      const value = replacement("memory/current.md", "original", 4);
+      const value = replacement("memory/current.md", "original", chunks);
       write(database, value);
       write(database, replacement("memory/sibling.md"));
       if (clean) {
