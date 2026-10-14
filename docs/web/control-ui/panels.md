@@ -165,6 +165,8 @@ expand a [Browser dashboard](/web/dashboards#share-a-browser-dashboard-with-your
 
 The Control UI ships a **Browser** tab in the unified Chat side panel that renders the Gateway-controlled browser (the same one agents drive through the [browser tool](/tools/browser-control)) in any regular web browser - no native webview required. It appears in the panel's **+** menu when the connected Gateway advertises `browser.request` to an `operator.admin` connection; the globe action in **Files** toggles it. In a regular web browser, choosing **Browser** again while its panel tab is already open creates another Agent browser tab. The panel shows a live screencast, with screenshot fallback when streaming is unavailable, plus tabs, an editable URL bar, back/forward/reload, and open-in-your-browser, and forwards clicks, wheel scrolling, and basic typing to the remote page. The remote page follows the shared panel: opening it, resizing it, or switching tabs resizes the remote browser viewport to the panel's available space, so the snapshot fills the panel instead of rendering at whatever size an agent last used.
 
+Wheel scrolling targets the scrollable container under the pointer, including reversed chat lists and horizontal lists in left-to-right or right-to-left layouts.
+
 While the panel or a Browser dashboard is visible, a later remote resize also
 resynchronizes the page to the available space. Hidden panels leave the remote
 viewport alone. A browser that cannot honor a requested size is not repeatedly

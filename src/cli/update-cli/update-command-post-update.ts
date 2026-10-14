@@ -34,6 +34,7 @@ import {
   UpdateCommandPendingRecoveryFailure,
   recordUpdateResultNextAction,
   writeControlPlaneUpdateRestartSentinelBestEffort,
+  withUpdateStateRead,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
@@ -507,17 +508,25 @@ async function finishSettledUpdate(
       const restartConfigSnapshot =
         postUpdateConfigSnapshot ??
         (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
-          readConfigFileSnapshot({
-            observe: false,
-            skipPluginValidation: true,
-            suppressFutureVersionWarning: true,
-          }),
+          withUpdateStateRead(
+            () =>
+              readConfigFileSnapshot({
+                observe: false,
+                skipPluginValidation: true,
+                suppressFutureVersionWarning: true,
+              }),
+            params.opts.run?.deadline?.remainingMs() ?? params.updateStepTimeoutMs,
+          ),
         ));
       let restartContext: Awaited<ReturnType<typeof prepareUpdateRestart>>;
       try {
-        restartContext = await prepareUpdateRestart(
-          { ...params, shouldRestart, result: resultWithPostUpdate, assertCurrent },
-          restartConfigSnapshot,
+        restartContext = await withUpdateStateRead(
+          () =>
+            prepareUpdateRestart(
+              { ...params, shouldRestart, result: resultWithPostUpdate, assertCurrent },
+              restartConfigSnapshot,
+            ),
+          params.opts.run?.deadline?.remainingMs() ?? params.updateStepTimeoutMs,
         );
       } catch (error) {
         const message =
