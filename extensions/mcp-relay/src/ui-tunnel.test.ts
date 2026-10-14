@@ -225,7 +225,7 @@ describe("Control UI relay tunnel", () => {
     const chunk = Buffer.alloc(1024, 7);
     const b64 = chunk.toString("base64");
     let copiedBytes = 0;
-    const concat = Buffer.concat;
+    const concat = Buffer.concat.bind(Buffer);
     const copy = Buffer.prototype.copy;
     const concatSpy = vi.spyOn(Buffer, "concat").mockImplementation((list, totalLength) => {
       copiedBytes += totalLength ?? list.reduce((sum, bytes) => sum + bytes.byteLength, 0);
@@ -274,12 +274,12 @@ describe("Control UI relay tunnel", () => {
     expect(await socket.sent.next()).toEqual({ kind: "binary", bytes: Buffer.alloc(0) });
   });
 
-  it("discards partial bytes on cancellation before reusing the stream ID", async () => {
+  it("discards partial bytes on socket close before reusing the stream ID", async () => {
     const f = setup();
     const socket = await opened(f);
     await f.receive({ type: "ui.ws.msg", sid: WS.sid, b64: "AQI=", more: true });
-    await f.receive({ type: "ui.cancel", sid: WS.sid });
-    expect(socket.closes).toHaveLength(1);
+    await f.receive({ type: "ui.ws.close", sid: WS.sid, code: 1000, reason: "browser left" });
+    expect(socket.closes[0]).toEqual({ code: 1000, reason: "browser left" });
     expect(socket.sent.values).toHaveLength(0);
     await f.receive(WS);
     expect(await f.frames.next()).toEqual({ type: "ui.ws.opened", sid: WS.sid });
