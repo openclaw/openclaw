@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type * as KillTreeModule from "../process/kill-tree.js";
 
 type ShellEnvModule = typeof import("./shell-env.js");
 
@@ -185,7 +186,10 @@ describe("async login-shell PATH preparation", () => {
   it("settles a live shell at its deadline and releases the probe for retry", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const killProcessTree = vi.fn();
-    vi.doMock("../process/kill-tree.js", () => ({ killProcessTree }));
+    vi.doMock("../process/kill-tree.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof KillTreeModule>()),
+      killProcessTree,
+    }));
     const probe = await holdProbe();
     const options = { env: {}, timeoutMs: 10, platform: "linux" as const };
     const settled = vi.fn();
