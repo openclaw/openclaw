@@ -307,6 +307,15 @@ shortcut, microphone-test, or browser-import panels.
   permission attribution while the CLI runtime owns shared node policy.
 - Remote-mode SSH tunnels or direct Gateway connections.
 
+For native `system.run`, the app augments its inherited `PATH` with its preferred
+tool folders, including Homebrew and `~/.local/bin`, regardless of whether it
+opens from Finder, the Dock, or login startup. It discovers these folders once
+on first use and reuses them for approval and execution without loading shell
+startup files. Relaunch the app after changing tool installation folders;
+installing a tool into an already listed folder needs no restart. Request-level
+`PATH` overrides remain blocked. The CLI and separately managed node services
+keep their own environment configuration.
+
 In the embedded Control UI, **Dashboard → Settings → Notifications** shows the app's native
 notification permission instead of browser push because the app delivers notifications natively.
 

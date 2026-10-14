@@ -733,7 +733,7 @@ export function restoreAuthProfileStorePersistenceSnapshot(
       );
       deferSqlitePostCommitPublication(database.db, () => {
         noteAuthProfileFileWrite(owner.databasePath);
-        recordRuntimeAuthProfilePersistedStore(owner.databasePath, persisted, owner.env);
+        recordRuntimeAuthProfilePersistedStore(owner.databasePath, persisted);
       });
       const publication: RuntimeSnapshotPublication = {
         ...(agentDir ? { agentDir } : {}),
@@ -907,7 +907,6 @@ export function createAuthProfileStoreRuntime(
     recordRuntimeAuthProfilePersistedStore(
       agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath(),
       store,
-      getScopedAuthProfileEnv(),
     );
     observeCanonicalAuthProfileCredentials(
       agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath(),
@@ -986,7 +985,7 @@ export function createAuthProfileStoreRuntime(
     }
     const store = readStore();
     if (!preparedRows && !effectiveOptions?.database) {
-      recordRuntimeAuthProfilePersistedStore(databasePath, store, env);
+      recordRuntimeAuthProfilePersistedStore(databasePath, store);
     }
     if (store) {
       observeCanonicalAuthProfileCredentials(
@@ -1586,7 +1585,7 @@ export function createAuthProfileStoreRuntime(
       );
       const publishSource = () => {
         noteAuthProfileFileWrite(savedAuthPath);
-        recordRuntimeAuthProfilePersistedStore(savedAuthPath, persisted, owner.env);
+        recordRuntimeAuthProfilePersistedStore(savedAuthPath, persisted);
       };
       if (!deferSqlitePostCommitPublication(database.db, publishSource)) {
         publishSource();

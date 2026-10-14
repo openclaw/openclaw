@@ -14,6 +14,7 @@ import {
 } from "../../failover-error.js";
 import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
+import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
 import { isConfigBackedInlineProviderApiKey } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
@@ -100,8 +101,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
   let outputLimitRetryCount = 0;
   let rateLimitSeen = false;
   let transientRetryBudget: number | undefined;
+  let rateLimitRetriesExhausted: number | undefined;
   // Consecutive outages count failed-request time as well as backoff. A completed
-  // successful model response ends the outage, but never refunds retry attempts.
+  // successful model response ends the outage and replenishes its retry budget.
   let transientRetryWindowStartMs: number | null = null;
 
   const resolveProfileFailureReason = (
@@ -178,9 +180,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
       );
       context.logFallbackDecision("fallback_model", { status });
       throw new FailoverError(
-        "The AI service is temporarily rate-limited. Please try again in a moment.",
+        renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
+          "The AI service is temporarily rate-limited. Please try again in a moment.",
         {
           reason: "rate_limit",
+          rateLimitRetriesExhausted,
           provider: context.failoverProvider,
           model: context.failoverModel,
           profileId: preparedRuntime.snapshot().lastProfileId,
@@ -202,6 +206,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
     get transientRetryCount() {
       return transientRetryCount;
     },
+    get rateLimitRetriesExhausted() {
+      return rateLimitRetriesExhausted;
+    },
     observeAttempt: (
       attempt: Pick<
         EmbeddedRunAttemptResult,
@@ -209,7 +216,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
       >,
     ) => {
       transientRetryBudget = attempt.providerRetryMaxRetries;
+      rateLimitRetriesExhausted = undefined;
       if (attempt.hasSuccessfulModelResponse) {
+        transientRetryCount = 0;
+        rateLimitSeen = false;
         transientRetryWindowStartMs = null;
       }
     },
@@ -267,6 +277,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         reason: TransientRetryReason;
       }) => void | Promise<void>;
     }): Promise<boolean> => {
+      rateLimitRetriesExhausted = undefined;
       const recordDecision = (
         decision: "accepted" | "rejected",
         reason:
@@ -343,6 +354,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
         retryCount >= retryBudget ||
         (retry.reason === "output_limit" && outputLimitRetryCount >= MAX_OUTPUT_LIMIT_RETRIES)
       ) {
+        if (rateLimit) {
+          rateLimitRetriesExhausted = retryBudget === 0 ? 0 : retryCount;
+        }
         recordDecision("rejected", "retry_budget_exhausted");
         return false;
       }
@@ -355,7 +369,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         retryNumber: retryCount + 1,
         retryAfterMs: retry.retryAfterMs,
         // Reaching an output ceiling can take minutes of useful generation.
-        // Keep its count budget and run deadline without the outage time window.
+        // Keep its count budget and timeout controls without the outage time window.
         elapsedMs:
           rateLimit || retry.reason === "output_limit" ? undefined : nowMs - retryWindowStartMs,
       });

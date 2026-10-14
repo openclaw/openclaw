@@ -25,6 +25,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
@@ -226,7 +227,7 @@ function storedIdentityToRow(
 }
 
 function readStoredIdentityRowFromDatabase(
-  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  database: { db: EngineConnection },
   identityKey: string,
 ): DeviceIdentityRow | null {
   const db = getNodeSqliteKysely<DeviceIdentityDatabase>(database.db);
@@ -239,7 +240,7 @@ function readStoredIdentityRowFromDatabase(
 }
 
 function readStoredIdentityFromDatabase(
-  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  database: { db: EngineConnection },
   identityKey: string,
 ): StoredDeviceIdentity | null {
   const row = readStoredIdentityRowFromDatabase(database, identityKey);
@@ -252,7 +253,7 @@ function readStoredIdentityFromDatabase(
 }
 
 function isEmptyBootstrapIdentityTableMiss(
-  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  database: { db: EngineConnection },
   error: unknown,
 ): boolean {
   if (

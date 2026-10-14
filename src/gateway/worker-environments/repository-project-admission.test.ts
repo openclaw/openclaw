@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PreparedGitHubSourceReadIdentity } from "../../agents/github-read-identity.js";
 import {
@@ -205,7 +205,7 @@ describe("repository project admission", () => {
       source: "detected",
       identity,
       inputs: { "yarn.lock": lock, "package.json": packageBlob },
-      env: { COREPACK_ENABLE_AUTO_PIN: "0" },
+      env: { COREPACK_ENABLE_AUTO_PIN: "0", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
       detectedInstall:
         'mkdir -p "$HOME/.local/bin" && corepack enable --install-directory "$HOME/.local/bin" && PATH="$HOME/.local/bin:$PATH" yarn install --immutable',
     });
@@ -227,6 +227,34 @@ describe("repository project admission", () => {
         (path) => !path.includes("/git/trees/") && !path.includes("/git/blobs/"),
       ),
     ).toBe(true);
+  });
+
+  it("reparses pre-secret devcontainer caches before granting repository setup", async () => {
+    const blob = "e".repeat(40);
+    rootEntries.push({ path: ".devcontainer.json", type: "blob", mode: "100644", sha: blob });
+    blobs[blob] = '{"secrets":{"PACKAGE_TOKEN":{}},"onCreateCommand":"npm ci"}';
+    const admitted = await prepareRepositoryWorkerProjectSource(initial);
+    assert.isDefined(admitted.recipe);
+    const legacyRecipe = structuredClone(admitted.recipe);
+    delete legacyRecipe.secretNames;
+    fetchImpl.mockClear();
+    const refreshed = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      knownRecipe: () => ({ project: admitted.project, setupRecipe: blob, recipe: legacyRecipe }),
+    });
+    expect(refreshed.recipe?.secretNames).toEqual(["PACKAGE_TOKEN"]);
+    expect(requestPaths()).toContain(`/repos/acme/project/git/blobs/${blob}`);
+    fetchImpl.mockClear();
+    const reused = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      knownRecipe: () => ({
+        project: refreshed.project,
+        setupRecipe: blob,
+        recipe: refreshed.recipe,
+      }),
+    });
+    expect(reused.recipe?.secretNames).toEqual(["PACKAGE_TOKEN"]);
+    expect(requestPaths().some((path) => path.includes("/git/blobs/"))).toBe(false);
   });
 
   it("rejects cached command facts whose recipe identity disagrees with admission", async () => {

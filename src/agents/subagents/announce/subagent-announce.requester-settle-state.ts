@@ -208,11 +208,12 @@ export function captureRequesterRunOwner(requesterRun: SubagentRunRecord | null 
  * policy is fixed when the yield writes the batch: a batch without the marker came
  * from an earlier build and stays private, so an upgrade cannot republish its input.
  */
-export function resolvePrivateSettlePolicy(
+export function resolveRequesterSettlePolicy(
   completionRows: readonly SubagentRunRecord[],
   requesterYielded: boolean,
   state: RequesterSettleWakeBatchState,
   requester: { sessionId: string; lifecycleRevision?: string },
+  completionRowsMatchRequester: boolean,
 ) {
   // One private result makes the aggregate private; public siblings keep their own route.
   const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
@@ -220,10 +221,13 @@ export function resolvePrivateSettlePolicy(
   const yieldedFinalDeliverable =
     hasPrivateRows && requesterYielded && state.yieldedFinalDeliverable === true;
   const parentOnly = hasPrivateRows && !yieldedFinalDeliverable;
-  // Private findings stay bound to the requester incarnation that produced them.
-  const privateBinding = {
+  // Retained public history keeps its existing admission; it cannot mint a new
+  // own-session alternative from a later reread of the requester key.
+  const bindRequester =
+    hasPrivateRows || (completionRows.length > 0 && completionRowsMatchRequester);
+  const requesterBinding = {
     ...(parentOnly ? { completionTarget: "parent" as const } : {}),
-    ...(hasPrivateRows
+    ...(bindRequester
       ? {
           completionRequesterSessionId: requester.sessionId,
           completionRequesterLifecycleRevision: requester.lifecycleRevision,
@@ -234,5 +238,5 @@ export function resolvePrivateSettlePolicy(
   // A yield owes the conversation a visible final unless private findings let the
   // requester choose silence.
   const requireVisibleReply = requesterYielded && !hasPrivateRows;
-  return { privateRows, requireVisibleReply, parentOnly, privateBinding, admissionMarker };
+  return { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker };
 }

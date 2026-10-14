@@ -17,6 +17,7 @@ import {
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import {
+  readSqliteWorkerMonotonicNs,
   SqliteWorkerError,
   type SqliteWorkerAdmissionRequest,
   type SqliteWorkerExecutionAuthority,
@@ -380,7 +381,10 @@ function createOperationAdmission(
     }
     const decision = new Int32Array(message.decision);
     const expired = () => {
-      if (typeof message.deadlineNs === "bigint" && process.hrtime.bigint() >= message.deadlineNs) {
+      if (
+        typeof message.deadlineNs === "bigint" &&
+        readSqliteWorkerMonotonicNs() >= message.deadlineNs
+      ) {
         if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
           Atomics.notify(decision, 0);
         }

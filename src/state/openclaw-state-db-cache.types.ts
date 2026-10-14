@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import type { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
@@ -16,12 +16,12 @@ export type CachedOpenClawStateDatabase = OpenClawStateDatabase & {
 
 export type StateDatabaseLifecycle = {
   cachedDatabases: Map<string, CachedOpenClawStateDatabase>;
-  retainedDatabaseHandles: Map<DatabaseSync, StateDatabaseHandle>;
-  idleTimers: WeakMap<DatabaseSync, ReturnType<typeof setTimeout>>;
-  idleReferences: WeakMap<DatabaseSync, Set<object>>;
+  retainedDatabaseHandles: Map<EngineConnection, StateDatabaseHandle>;
+  idleTimers: WeakMap<EngineConnection, ReturnType<typeof setTimeout>>;
+  idleReferences: WeakMap<EngineConnection, Set<object>>;
   unregisterRetainedExitClose?: () => void;
-  databaseIdentities: WeakMap<DatabaseSync, DatabasePathIdentity>;
-  borrowers: WeakMap<DatabaseSync, StateDatabaseBorrowers>;
+  databaseIdentities: WeakMap<EngineConnection, DatabasePathIdentity>;
+  borrowers: WeakMap<EngineConnection, StateDatabaseBorrowers>;
   databaseLifecycleListeners: Set<(event: OpenClawStateDatabaseLifecycleEvent) => void>;
   terminalOpenLatch: ReturnType<typeof createSqliteTerminalOpenLatch>;
   asyncResources: ReturnType<typeof createOpenClawStateDatabaseAsyncLifecycle>;

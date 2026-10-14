@@ -841,6 +841,8 @@ recorded contention also defers Gateway recovery verification. Restart the Gatew
 owner, then run `openclaw update status` and `openclaw doctor`; keep recovery backups
 until verification completes. Other failures keep their recovery diagnostics;
 a genuine database incompatibility still fails.
+After a successful update with changed plugins, the final report reminds you to
+restart to activate them, including when the core version also changed.
 
 Interactive updates show phase transitions, the current step, and elapsed time.
 The phases match the Control UI: requested, staging, validating, activating,
@@ -848,9 +850,12 @@ restarting, verifying, and finished. When output is piped or captured in a log,
 progress prints without animation and reports elapsed time every 30 seconds while
 a step is running. Updates, verification, and rollback do not
 require inference or model authentication. Model-auth findings remain warnings.
-Automatic inference repair belongs to triage after an update has finished with
-a failed outcome and released its update ownership; it does not change that
-recorded outcome. Reports from older updaters can still contain a `repairing` phase.
+Unattended updates (`--yes`, `--json`, or no TTY) never start a repair agent.
+After a failed outcome and update cleanup, they save triage diagnostics and print
+`openclaw triage --run --update-result <path>` for explicit opt-in repair. Managed
+handoffs and foreground `gateway run` startup failures also collect diagnostics
+only. Interactive updates retain the **Diagnose update failure** menu and consent
+prompt. Triage does not change the recorded update outcome. Reports from older updaters can still contain a `repairing` phase.
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not

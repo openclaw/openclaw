@@ -93,15 +93,18 @@ describe("Reef captured source authority", () => {
       });
       if (direction === "recovery") {
         const id = "01JZ0000000000000000000161";
-        const preparation = (await trust.prepareOutboundDelivery("alice", id))!;
-        await preparation.record({
-          bodyHash: "a".repeat(64),
-          recipient: {
-            ed25519PublicKey: peer.signing.publicKey,
-            x25519PublicKey: peer.encryption.publicKey,
-            keyEpoch: 1,
+        await trust.operationState.deliveries.register(
+          `${trust.operationState.identityScope}:alice:${id}`,
+          {
+            bodyHash: "a".repeat(64),
+            sentAt: Date.now(),
+            recipient: {
+              ed25519PublicKey: peer.signing.publicKey,
+              x25519PublicKey: peer.encryption.publicKey,
+              keyEpoch: 1,
+            },
           },
-        });
+        );
         const delivery = (await trust.readOutboundDelivery("alice", id))!;
         await delivery.reject("guard_deny");
         const { recovery } = delivery;
@@ -115,7 +118,6 @@ describe("Reef captured source authority", () => {
         expect(await original.readOutboundDelivery("alice", id)).toBeUndefined();
         await expect(
           flow.send("alice", "rephrased coordination", {
-            prepareDelivery: recovery.prepareOutboundDelivery.bind(recovery),
             recovery,
             onPlatformSendDispatch: revokeAndReroute,
           }),

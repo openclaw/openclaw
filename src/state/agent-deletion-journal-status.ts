@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
@@ -20,7 +20,7 @@ function statusKey(agentId: string): SqliteDatabaseAdmissionKey<AgentDeletionJou
 
 /** The journal writer publishes after commit through the existing database-fact transport. */
 export function publishAgentDeletionJournalStatus(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
   status: AgentDeletionJournalStatus,
 ): void {
@@ -29,14 +29,14 @@ export function publishAgentDeletionJournalStatus(
 
 /** Offline repairs and raw fixture mutations discard only the affected agent's fact. */
 export function invalidateAgentDeletionJournalStatus(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): void {
   publishSqliteDatabaseAdmission(database, statusKey(agentId), null);
 }
 
 export function getAgentDeletionJournalStatus(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): AgentDeletionJournalStatus | undefined {
   return getSqliteDatabaseAdmission(database, statusKey(agentId)) ?? undefined;

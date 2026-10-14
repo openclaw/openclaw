@@ -1,11 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { CronRunReceiptDatabase } from "./run-receipt-read.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 /** Record possible delivery for restart diagnostics without deciding effect permissions. */
 export function markCronDeliveryStartedInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   handle: CronRunReceiptHandle;
 }): void {
   executeSqliteQuerySync(

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import { hydrateSkillLibraryWorkerAuthority } from "./service.kernel.js";
 import {
@@ -29,7 +29,7 @@ export function prepareSkillLibraryUploadChunk(params: SkillLibraryUploadInput["
 }
 
 export function uploadSkillLibraryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: SkillLibraryUploadInput,
   bytes?: Buffer,
 ) {

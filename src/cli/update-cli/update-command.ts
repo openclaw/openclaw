@@ -573,9 +573,7 @@ async function updateCommandInternal(
       recoveryState.ledgerHandoffCompleted = true;
       opts.onResult?.(continued.result);
       if (continued.exitCode !== 0) {
-        throw new UpdateCommandFailure(continued.result, continued.exitCode, undefined, {
-          automaticTriage: continued.automaticTriage,
-        });
+        throw new UpdateCommandFailure(continued.result, continued.exitCode);
       }
       return;
     }

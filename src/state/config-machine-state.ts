@@ -1,5 +1,5 @@
 // Machine-owned values retired from openclaw.json live in the shared state database.
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state-row.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
@@ -44,7 +44,7 @@ export function isConfigMachineStateReadCommand(
 }
 
 export function readConfigMachineStateCommandInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   command: ConfigMachineStateReadCommand,
 ) {
   return {
@@ -64,7 +64,7 @@ export function readConfigMachineState<T>(
   options: OpenClawStateDatabaseOptions = {},
   behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): T | undefined {
-  const read = ({ db: database }: { db: DatabaseSync }) => {
+  const read = ({ db: database }: { db: EngineConnection }) => {
     const row = readConfigMachineStateRowInDatabase(database, key);
     // SAFETY: Each key's owner defines its persisted JSON shape.
     return row ? (JSON.parse(row.value_json) as T) : undefined;

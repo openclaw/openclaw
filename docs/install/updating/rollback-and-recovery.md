@@ -381,9 +381,10 @@ and use of your own account/tokens. Only an affirmative Yes proceeds. Enter, `n`
 cancellation, or 30 seconds without an answer skips the launch, prints a manual
 recovery command, and preserves diagnostics and the failed update's exit status.
 Explicit `openclaw triage` does not ask for this confirmation.
-JSON, `--yes`, and non-interactive update invocations can start one owned automatic
-repair after an eligible failure; other failures retain diagnostics and handoff
-commands. For diagnostic collection
+JSON, `--yes`, and update invocations without a TTY never start a repair agent.
+They save diagnostics and print `openclaw triage --run --update-result <path>`
+for explicit opt-in repair. Managed handoffs and foreground `gateway run` startup
+failures also collect diagnostics only. For diagnostic collection
 alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
 include a saved update-failure artifact. See [Triage](/cli/triage) for command
 formatting and installation targeting.
