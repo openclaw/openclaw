@@ -24,6 +24,7 @@ import {
 } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
+import { scanEnvTemplateTokens } from "../config/env-substitution.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -287,7 +288,11 @@ function hasSensitiveKey(name: string): boolean {
 }
 
 function hasLiteralSensitiveValue(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0 && !value.trim().startsWith("$");
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+  const references = scanEnvTemplateTokens(value).filter((token) => token.kind === "substitution");
+  return references.length === 0 || references.some((token) => Boolean(token.defaultValue?.trim()));
 }
 
 function resolveConfiguredPath(filePath: string, cwd: unknown): string {

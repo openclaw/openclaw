@@ -431,11 +431,20 @@ describe("mcp cli", () => {
 
   it("reports MCP doctor setup errors and sensitive literals", async () => {
     await withMcpHome(async () => {
+      vi.stubEnv("MCP_DOCTOR_AUTHORED_TOKEN", "test-token");
       await runMcpCommand([
         "mcp",
         "set",
         "docs",
-        '{"command":"./missing-mcp","env":{"DOCS_API_KEY":"literal"},"headers":{"Authorization":"Bearer literal"}}',
+        JSON.stringify({
+          command: "./missing-mcp",
+          env: { DOCS_API_KEY: "literal" },
+          headers: {
+            Authorization: "Bearer literal",
+            "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-literal-fallback}",
+            "Proxy-Authorization": "$${MCP_DOCTOR_AUTHORED_TOKEN}",
+          },
+        }),
       ]);
       mockLog.mockClear();
 
@@ -459,6 +468,16 @@ describe("mcp cli", () => {
             level: "warning",
             message: expect.stringContaining(
               "headers.Authorization contains a literal sensitive value",
+            ),
+          }),
+          expect.objectContaining({
+            message: expect.stringContaining(
+              "headers.X-API-Key contains a literal sensitive value",
+            ),
+          }),
+          expect.objectContaining({
+            message: expect.stringContaining(
+              "headers.Proxy-Authorization contains a literal sensitive value",
             ),
           }),
         ]),
@@ -486,7 +505,11 @@ describe("mcp cli", () => {
           JSON.stringify({
             docs: {
               url: "https://mcp.example.com/mcp",
-              headers: { Authorization: "${MCP_DOCTOR_AUTHORED_TOKEN}" },
+              headers: {
+                Authorization: "${MCP_DOCTOR_AUTHORED_TOKEN}",
+                "Proxy-Authorization": "Bearer ${MCP_DOCTOR_AUTHORED_TOKEN}",
+                "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-}",
+              },
               env: { DOCS_API_KEY: "${MCP_DOCTOR_AUTHORED_TOKEN}" },
             },
           }),
