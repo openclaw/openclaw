@@ -64,7 +64,7 @@ Public contract between plugins/core; changes can affect bundled + third-party p
   - API diff + export checks
 - Bundled channel/helper crossing package boundaries: first ask whether truly generic. Yes → narrow generic subpath. No → plugin-local `api.ts` / `runtime-api.ts`.
 - Expanding provider-facing seams: update/add matching narrow contract tests — Plugin SDK diff/export checks for public subpaths + most direct provider/plugin tests for centralized behavior.
-- Breaking removals/renames = major-version work, never drive-by cleanup.
+- Breaking removals/renames require a shipped replacement, an announced stable-release deprecation window, and explicit maintainer approval; never drive-by cleanup. Leave removal dates unset until the owner approves them.
 
 ## Choose The Capability Surface
 

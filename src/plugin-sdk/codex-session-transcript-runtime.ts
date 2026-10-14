@@ -122,23 +122,33 @@ function assertCodexSessionSyncAccess(target: SessionTranscriptReadScope, method
   }
 }
 
-/** @deprecated Synchronous SDK compatibility until the next major; bundled readers retain worker validation. */
+/** @deprecated Use createCodexSessionContextReader with the captured admission. Retained during stable deprecation. */
 export function validateCodexSessionTranscriptReadAdmission(
   ...args: Parameters<typeof validateSessionTranscriptContextAdmission>
 ): void {
+  warnPluginSdkDeprecation({
+    family: "codex-session-context",
+    method: "validateCodexSessionTranscriptReadAdmission",
+    replacement: "createCodexSessionContextReader with the captured admission",
+  });
   assertCodexSessionSyncAccess(args[0], "validateCodexSessionTranscriptReadAdmission");
   validateSessionTranscriptContextAdmission(...args);
 }
 
-/** @deprecated Synchronous SDK compatibility until the next major; bundled readers retain worker validation. */
+/** @deprecated Use createCodexSessionContextReader with a prepared current source. Retained during stable deprecation. */
 export function validateCodexSessionTranscriptContextVersion(
   ...args: Parameters<typeof validateSessionTranscriptContextVersion>
 ): void {
+  warnPluginSdkDeprecation({
+    family: "codex-session-context",
+    method: "validateCodexSessionTranscriptContextVersion",
+    replacement: "createCodexSessionContextReader with a prepared current source",
+  });
   assertCodexSessionSyncAccess(args[0], "validateCodexSessionTranscriptContextVersion");
   validateSessionTranscriptContextVersion(...args);
 }
 
-/** @deprecated Use createCodexSessionContextReader; synchronous compatibility is removed in the next SDK major. */
+/** @deprecated Use createCodexSessionContextReader. Retained during stable deprecation. */
 export function readCodexSessionContext<T>(
   target: SessionTranscriptRuntimeTarget,
   read: (
@@ -212,7 +222,7 @@ export type CodexSessionTranscriptMirrorWriteLockContext = Omit<
   }>;
 };
 
-/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Removed at the next Plugin SDK major. */
+/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Retained during stable deprecation. */
 export async function withCodexSessionTranscriptMirrorWriteLock<T>(
   params: InternalSessionTranscriptWriteLockParams,
   run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,

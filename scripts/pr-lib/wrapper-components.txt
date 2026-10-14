@@ -352,8 +352,11 @@ src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
 src/infra/database-engine/admission-scope.ts
+src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
+src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
+src/infra/database-engine/postgres-catalog.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
@@ -362,6 +365,7 @@ src/infra/sql-query-compiler.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts
+src/config/sessions/session-actor-context-metadata.ts
 src/config/sessions/session-actor-executor.ts
 src/config/sessions/session-actor-sqlite.ts
 src/config/sessions/session-actor-transaction.ts
@@ -632,7 +636,6 @@ src/config/sessions/session-accessor.sqlite-status.ts
 src/config/sessions/session-canonical-key-error.ts
 src/config/sessions/session-canonical-key.ts
 src/config/sessions/session-canonical-row.ts
-src/config/sessions/session-canonical-validation-deferral.ts
 src/config/sessions/session-cold-storage-state.ts
 src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-cohort.worker.ts
@@ -686,6 +689,7 @@ src/config/sessions/store-entry-shape.ts
 src/config/sessions/store-entry.ts
 src/config/sessions/targets-collision.ts
 src/config/sessions/targets-configured-agents.ts
+src/config/sessions/targets-discovery.native.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
@@ -762,6 +766,7 @@ src/daemon/constants.ts
 src/daemon/runtime-binary.ts
 src/daemon/service-inspection-error.ts
 src/daemon/service-process-env.ts
+src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-ui-bootstrap-contract.ts
 src/gateway/control-ui-session-prs-git.runtime.ts
 src/gateway/control-ui-session-prs-landing.ts
@@ -1048,6 +1053,7 @@ src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-key.ts
+src/infra/sqlite-database-admission-read.ts
 src/infra/sqlite-database-admission-record.ts
 src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
@@ -1089,6 +1095,7 @@ src/infra/sqlite-readonly-native-resource.client.ts
 src/infra/sqlite-readonly-native-resource.types.ts
 src/infra/sqlite-readonly-operation-registry.ts
 src/infra/sqlite-readonly-worker-context.ts
+src/infra/sqlite-readonly-worker-pool.ts
 src/infra/sqlite-readonly-worker-protocol.ts
 src/infra/sqlite-readonly-worker-session.ts
 src/infra/sqlite-readonly-worker.ts
@@ -1312,8 +1319,10 @@ src/plugins/command-execution-lock.ts
 src/plugins/compat/agent-harness-records.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
 src/plugins/compat/assistant-text-phase-terminal-hint-record.ts
+src/plugins/compat/async-sqlite-preparation-records.ts
 src/plugins/compat/auth-async-record.ts
 src/plugins/compat/channel-pairing-record.ts
+src/plugins/compat/cron-store-path-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
@@ -1330,11 +1339,13 @@ src/plugins/compat/memory-session-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/session-transcript-view-record.ts
 src/plugins/compat/skill-command-discovery-record.ts
 src/plugins/compat/skill-proposal-hooks-record.ts
 src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/transcript-stats-record.ts
 src/plugins/compat/watched-sessions.ts
+src/plugins/compat/web-search-provider-list-record.ts
 src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts
@@ -1477,6 +1488,7 @@ src/plugins/plugin-metadata-snapshot-required.ts
 src/plugins/plugin-metadata-snapshot.runtime.ts
 src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
+src/plugins/plugin-metadata-state.read.worker.ts
 src/plugins/plugin-metadata-state.kernel.ts
 src/plugins/plugin-module-loader-cache.ts
 src/plugins/plugin-module-loader-recovery.ts
@@ -1648,6 +1660,7 @@ src/sessions/session-row-changes.ts
 src/sessions/session-state-events.ambient-read.ts
 src/sessions/session-state-events.prune.ts
 src/sessions/transcript-events.ts
+src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
 src/shared/assistant-error-format.ts
@@ -1699,15 +1712,18 @@ src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts
 src/state/agent-deletion-discovery.ts
 src/state/agent-deletion-journal-history.ts
+src/state/agent-deletion-journal-publication.ts
 src/state/agent-deletion-journal-recovery.kernel.ts
 src/state/agent-deletion-journal-recovery.ts
 src/state/agent-deletion-journal-status.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts
 src/state/agent-provenance.kernel.ts
+src/state/agent-provenance-publication.ts
 src/state/agent-provenance.schema.ts
 src/state/agent-provenance.ts
 src/state/config-machine-state-async.ts
+src/state/config-machine-state-row.ts
 src/state/config-machine-state-write.ts
 src/state/config-machine-state.ts
 src/state/creator-namespace-migration.ts
@@ -1920,6 +1936,7 @@ src/utils/timer-delay.ts
 src/utils/utf8-truncate.ts
 src/utils/zod-parse.ts
 src/version.ts
+src/worker/device-folder.ts
 src/worker/protocol-record.ts
 test/helpers/temp-dir.ts
 test/test-home-context.mts
@@ -2063,6 +2080,7 @@ src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
 src/config/sessions/session-actor-replica.ts
+src/config/sessions/session-actor-replica-receipts.ts
 src/config/sessions/session-actor-bounded-history.ts
 src/config/sessions/session-actor-transcript-anchors.ts
 src/config/sessions/session-actor-transcript-replica.ts
@@ -2181,6 +2199,7 @@ packages/tool-call-repair/src/index.ts
 packages/tool-call-repair/src/payload.ts
 packages/tool-call-repair/src/promote.ts
 packages/tool-call-repair/src/protection-fast-path.ts
+packages/tool-call-repair/src/stream-normalizer-suppression.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/agents/auth-profiles/oauth-refresh-error-format.ts
 src/agents/auth-profiles/oauth-refresh-failure.ts
@@ -2314,12 +2333,12 @@ src/config/sessions/session-transcript-search-policy.ts
 src/config/sessions/session-transcript-turn-state.ts
 src/config/sessions/session-window-created-at.ts
 src/config/sessions/session-work-start.ts
+src/config/sessions/session-worker-receipt.ts
 src/config/sessions/transcript-event-media.ts
 src/config/sessions/transcript-message-equality.ts
 src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
-src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-reply-text.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
@@ -2357,6 +2376,7 @@ src/shared/text/glm-arg-key-payload.ts
 src/shared/text/model-special-tokens.ts
 src/shared/text/reasoning-tags.ts
 src/shared/text/text-projection.ts
+src/shared/text/tool-call-xml.ts
 src/shared/text/xml-tag-at.ts
 src/shared/widget-theme.ts
 packages/markdown-core/package.json

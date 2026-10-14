@@ -91,6 +91,7 @@ it.each([
           "extensions/qa-lab/src/gateway-child.test.ts",
           "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
           "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
+          "extensions/qa-lab/src/suite-runtime-agent-session.test.ts",
         ],
         requiresDist: false,
       }),

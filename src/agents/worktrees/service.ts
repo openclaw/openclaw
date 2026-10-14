@@ -180,13 +180,16 @@ export class ManagedWorktreeService {
   private readonly getConfig: ServiceOptions["getConfig"];
   private readonly capacity: ReturnType<typeof createWorktreeCapacityOwner>;
   private readonly cleanupDeferrals: WorktreeCleanupDeferrals = new Map();
+  private readonly orphanCleanupFailures: Parameters<
+    typeof collectRetiredWorktreeArtifacts
+  >[0]["orphanFailures"] = new Map();
   private readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
 
   constructor(options: ServiceOptions = {}) {
     this.env = options.env ?? process.env;
     this.now = options.now ?? Date.now;
     this.getConfig = options.getConfig;
-    this.maintainGit = createWorktreeGitMaintenance(this.env);
+    this.maintainGit = createWorktreeGitMaintenance(this.env, this.now);
     this.capacity = createWorktreeCapacityOwner({
       env: this.env,
       now: this.now,
@@ -1060,6 +1063,7 @@ export class ManagedWorktreeService {
         // Repair before cleanup can defer the repository for those same missing objects.
         await this.maintainGit(params);
         assertCurrent();
+        this.orphanCleanupFailures.clear();
       }
       const { records, leases } = await readWorktreeCleanupState(this.env);
       const classification = { ...params, ...(await params.prepareOwners?.(records)) };
@@ -1089,7 +1093,7 @@ export class ManagedWorktreeService {
           },
           classification,
         );
-      const { collect, repositoryProtection } = createWorktreeGcRemoval({
+      const { collect } = createWorktreeGcRemoval({
         env: this.env,
         records,
         now,
@@ -1129,6 +1133,7 @@ export class ManagedWorktreeService {
         records,
         expiresBefore: now - SNAPSHOT_RETENTION_MS,
         progress,
+        orphanFailures: this.orphanCleanupFailures,
         withAllocationLease: (run) => this.withAllocationLease(params, run),
       });
       try {
@@ -1141,7 +1146,7 @@ export class ManagedWorktreeService {
       assertCurrent();
       if (!params.retryDeferred) {
         // Cleanup has released allocation ownership and retired its refs before maintenance.
-        await this.maintainGit({ ...params, shouldDeferRepository: repositoryProtection });
+        await this.maintainGit(params);
       }
       assertCurrent();
       return progress.result;

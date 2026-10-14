@@ -483,7 +483,7 @@ function sqliteSessionFileState(
   };
 }
 
-/** @deprecated Await statSessionEntry. Removed at the next Plugin SDK major; prepared statistics do not read SQLite. */
+/** @deprecated Await statSessionEntry. Retained during stable deprecation; prepared statistics do not read SQLite. */
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},

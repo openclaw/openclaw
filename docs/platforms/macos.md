@@ -184,8 +184,21 @@ A failed coordinated update stays in its setup-style window with retry,
 [update guide](/install/updating), and Discord actions. Automatic repair never
 downgrades a newer Gateway or overrides an `extended-stable` channel pin.
 
+Onboarded, update-enabled launches also check the app-owned runtime when the
+post-update receipt is missing, stale, or unreadable. Current runtime ownership
+and version determine the work; receipts preserve interrupted progress and
+notification deduplication. Pending welcome notifications wait for current
+runtime verification. Same-version reconciliation without an app-update receipt
+does not send another welcome.
+
+An interrupted update from an older Mac app may refer to its managed CLI package,
+not the currently selected Gateway or node service. The app verifies ownership
+and repairs that package before reconciling the selected runtime. A newer
+package is preserved without downgrading it; any separately needed service
+update still records its own recovery progress.
+
 After a successful update, the app finds the most recently human-used,
-top-level direct session and gives that agent a one-time update event. Heartbeat
+top-level direct webchat session and gives that agent a one-time update event. Heartbeat
 and cron activity do not affect this choice. The agent can then welcome you back
 from the conversation you were most likely using. In remote mode, a separately
 installed, app-managed node service retains its own runtime update and recovery
@@ -293,6 +306,15 @@ shortcut, microphone-test, or browser-import panels.
 - App-context execution for approved shell commands, preserving the app's macOS
   permission attribution while the CLI runtime owns shared node policy.
 - Remote-mode SSH tunnels or direct Gateway connections.
+
+For native `system.run`, the app augments its inherited `PATH` with its preferred
+tool folders, including Homebrew and `~/.local/bin`, regardless of whether it
+opens from Finder, the Dock, or login startup. It discovers these folders once
+on first use and reuses them for approval and execution without loading shell
+startup files. Relaunch the app after changing tool installation folders;
+installing a tool into an already listed folder needs no restart. Request-level
+`PATH` overrides remain blocked. The CLI and separately managed node services
+keep their own environment configuration.
 
 In the embedded Control UI, **Dashboard → Settings → Notifications** shows the app's native
 notification permission instead of browser push because the app delivers notifications natively.

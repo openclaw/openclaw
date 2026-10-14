@@ -6,13 +6,13 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import * as chatMessage from "./chat-message-group.ts";
+import * as chatMessage from "./chat-message-group.test-support.ts";
 import {
   getTranscriptState,
   renderTranscriptSearch,
   toggleTranscriptSearch,
 } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,

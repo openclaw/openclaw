@@ -2,7 +2,8 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SQLITE_DATABASE_SEAL_SCHEMA } from "../state/openclaw-database-seal-schema.js";
+import { hasPendingAgentStartupColumns } from "../state/openclaw-agent-db-additive-columns.js";
+import { sqliteDatabaseSealSchemaFor } from "../state/openclaw-database-seal-schema.js";
 import {
   invalidateSqliteCleanCloseSeal,
   readSqliteCleanCloseSeal,
@@ -17,6 +18,8 @@ import {
   type Admission,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission-record.js";
+
+const SQLITE_DATABASE_SEAL_SCHEMA = sqliteDatabaseSealSchemaFor();
 
 export const integrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
   name: "sqlite.full-verification",
@@ -127,6 +130,11 @@ export class SqliteDatabaseCleanCloseSeals {
         ) ||
         !facts.some(([name, , value]) => name === "sqlite-schema" && isRecord(value))
       ) {
+        return;
+      }
+      const schema = facts.find(([name]) => name === "sqlite-schema")?.[2];
+      // Reject old completed-validation receipts before publishing any reader-visible facts.
+      if (!(schema.tableSql instanceof Map) || hasPendingAgentStartupColumns(schema.tableSql)) {
         return;
       }
       for (const [name, schemaDependent, value] of facts) {

@@ -2,6 +2,7 @@ import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   prepareUserProfileRoleAuthority,
+  prepareUserProfileRolePolicyAuthority,
   prepareUserProfileSelectionAuthority,
 } from "../../state/user-channel-identity-operations.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
@@ -15,7 +16,7 @@ import type {
   UserModelAccountSelection,
 } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
-import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
+import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
@@ -64,7 +65,7 @@ export async function prepareUserModelAccountAction(
       : undefined);
   const actorIdentity = actorReference
     ? await (profileReference
-        ? prepareUserProfileSelectionAuthority(actorReference)
+        ? prepareUserProfileRolePolicyAuthority(actorReference)
         : prepareUserProfileRoleAuthority(actorReference))
     : undefined;
   assertConnectionCurrent();
@@ -101,7 +102,12 @@ export async function prepareUserModelAccountAction(
     if (roles && !assignment) {
       throw new ModelAccountConnectAuthorityError();
     }
-    const role = resolveOperatorRolePolicyForProfile(actor, context.getRuntimeConfig(), assignment);
+    const role = resolveOperatorRolePolicyForAssignment(
+      actor,
+      assignment ? assignment.role : actorIdentity.role,
+      context.getRuntimeConfig(),
+      actorIdentity.githubLogin ?? null,
+    );
     const grants = [client?.connect.scopes ?? [], ...(role ? [role.scopes] : [])];
     if (
       !grants.every((allowedScopes) =>

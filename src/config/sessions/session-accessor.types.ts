@@ -336,9 +336,9 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   /** Existing parent id owned by a caller with its own session tree. */
   parentId?: string | null;
-  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
+  /** @deprecated Use preparation.prepareMessage. Retained during stable deprecation. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  /** @deprecated Use preparation.source; removed in the next Plugin SDK major. */
+  /** @deprecated Use preparation.source. Retained during stable deprecation. */
   beforeFreshMessageCommit?: () => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
@@ -400,14 +400,11 @@ export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
   TranscriptMessageAppendOptions<TMessage>,
   "prepareMessageAfterIdempotencyCheck"
 > & {
-  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
+  /** @deprecated Use preparation.prepareMessage. Retained during stable deprecation. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   /** Awaited after duplicate detection; undefined suppresses a fresh append. */
   prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
 };
-
-/** Canonical transcript identity owned by the transaction. */
-export type SessionTranscriptWriteTransactionContext = SessionTranscriptRuntimeTarget;
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 

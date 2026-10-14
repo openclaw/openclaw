@@ -24,6 +24,8 @@ import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 async function withCronHistory(
   run: (fixture: {
     jobId: string;
@@ -41,7 +43,7 @@ async function withCronHistory(
   }) => Promise<void>,
   options: { unresolvedDefault?: boolean } = {},
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withOpenClawTestState(profileState, async (state) => {
     const cfg = {
       ...rolePolicyConfig(),
       agents: {
@@ -109,14 +111,21 @@ async function withCronHistory(
       const jobId = expectDefined(jobs[0], "own job").id;
       const foreignJobId = expectDefined(jobs[1], "foreign job").id;
       const rows: Array<
-        Pick<CronRunLogEntry, "sessionKey" | "status" | "summary" | "jobId"> & { agentId?: string }
+        Pick<CronRunLogEntry, "sessionKey" | "status" | "summary" | "jobId"> & {
+          agentId?: string;
+        }
       > = [
         { jobId, sessionKey: foreignKey, status: "error", summary: "needle hidden" },
         { jobId, sessionKey: ownKey, status: "error", summary: "needle first" },
         { jobId, sessionKey: foreignKey, status: "ok", summary: "other hidden" },
         { jobId, status: "error", summary: "needle second" },
         { jobId, sessionKey: ownKey, status: "ok", summary: "other third" },
-        { jobId: foreignJobId, sessionKey: ownKey, status: "error", summary: "needle foreign job" },
+        {
+          jobId: foreignJobId,
+          sessionKey: ownKey,
+          status: "error",
+          summary: "needle foreign job",
+        },
       ];
       const now = Date.now();
       const storeKey = cronStoreKey(storePath);

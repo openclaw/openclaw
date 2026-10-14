@@ -1,5 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("node:dns", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns")>()),
+  getDefaultResultOrder: () => "verbatim",
+}));
+
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   isWSL2Sync: vi.fn(() => false),
@@ -65,7 +70,7 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
         name: "uses the supported runtime default when not on WSL2",
         wsl2: false,
         env: {},
-        expected: { value: true, source: "default-node22" },
+        expected: { value: true, source: "default-dns-order" },
       },
     ])("$name", ({ env, network, expected, wsl2 = true }) => {
       vi.mocked(isWSL2Sync).mockReturnValue(wsl2);

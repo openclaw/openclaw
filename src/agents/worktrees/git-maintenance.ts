@@ -10,10 +10,12 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
+import type { GitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 
 const log = createSubsystemLogger("agents/worktrees");
+const operation: GitProcessOperation = "worktree.maintenance";
 const WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS = 30 * 60 * 1000;
 const PACK_BATCH_BYTES = 512 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
@@ -27,11 +29,11 @@ type MaintenanceParams = {
   signal?: AbortSignal;
   commitGuard?: () => void;
   retryDeferred?: boolean;
-  shouldDeferRepository?: (repoRoot: string) => string | undefined;
 };
 
 async function repairWorktreeObjects(
   repoRoot: string,
+  remote: string,
   params: Pick<MaintenanceParams, "signal" | "commitGuard">,
 ): Promise<void> {
   const started = performance.now();
@@ -43,6 +45,7 @@ async function repairWorktreeObjects(
       throw new Error("Worktree object repair exceeded its five-minute budget");
     }
     return {
+      operation,
       signal: params.signal,
       beforeRun: () => {
         params.signal?.throwIfAborted();
@@ -55,20 +58,6 @@ async function repairWorktreeObjects(
       env: { GIT_NO_LAZY_FETCH: "1" },
     };
   };
-  const config = await runGit(
-    repoRoot,
-    ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"],
-    options(),
-  );
-  if (config.termination === "exit" && config.code === 1) {
-    return;
-  }
-  const remote = /^remote\.(.+)\.promisor true$/m.exec(
-    requireGitCommandOutput("git config promisor", config),
-  )?.[1];
-  if (!remote) {
-    return;
-  }
   const heads = [
     ...new Set(
       (await listGitWorktrees(repoRoot, options())).flatMap((worktree) =>
@@ -163,6 +152,7 @@ async function maintainWorktreePacks(
     params.commitGuard?.();
   };
   const options = {
+    operation,
     signal: params.signal,
     beforeRun: assertCurrent,
     killProcessTree: true,
@@ -345,9 +335,10 @@ async function consolidatePacks(
   }
 }
 
-export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
+export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.now) {
   // Suspend failed tasks without letting graph failures stop bounded pack convergence.
   const failed = new Map<string, "objects" | "packs" | "maintenance">();
+  const nextRunAt = new Map<string, number>();
   return async (params: MaintenanceParams): Promise<void> => {
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
@@ -364,19 +355,85 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
     });
     for (const repoRoot of new Set(records.map((record) => record.repoRoot))) {
       assertCurrent();
-      if (failed.get(repoRoot) === "packs" || params.shouldDeferRepository?.(repoRoot)) {
+      if (failed.get(repoRoot) === "packs") {
         continue;
       }
+      if (!params.retryDeferred && now() < (nextRunAt.get(repoRoot) ?? 0)) {
+        continue;
+      }
+      // Archive notifications also run cleanup; repository housekeeping stays hourly.
+      nextRunAt.set(repoRoot, now() + 60 * 60_000);
       let stage: "objects" | "packs" | "maintenance" = "packs";
       try {
+        const needsIntegrityCheck = records.some(
+          (record) =>
+            record.repoRoot === repoRoot &&
+            record.removedAt === undefined &&
+            record.gcRetry?.stage === "repository-corrupt",
+        );
+        const options = {
+          operation,
+          signal: params.signal,
+          beforeRun: assertCurrent,
+          timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
+          killProcessTree: true,
+          lowerPriority: true,
+          env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+        };
+        let remote: string | undefined;
+        if (needsIntegrityCheck || params.retryDeferred) {
+          const config = await runGit(
+            repoRoot,
+            ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"],
+            options,
+          );
+          if (!(config.termination === "exit" && config.code === 1)) {
+            remote = /^remote\.(.+)\.promisor true$/m.exec(
+              requireGitCommandOutput("git config promisor", config),
+            )?.[1];
+          }
+        }
+        let repaired = false;
+        if (needsIntegrityCheck) {
+          if (!remote) {
+            continue;
+          }
+          // A snapshot needs every blob locally; pack maintenance does not.
+          // Native fsck accepts promised omissions but still checks pack checksums.
+          const verify = () =>
+            withContentGitSlot(
+              () => requireGit(repoRoot, ["fsck", "--full", "--no-dangling"], options),
+              params.signal,
+            );
+          try {
+            await verify();
+          } catch (error) {
+            assertCurrent();
+            if (!params.retryDeferred) {
+              throw error;
+            }
+            // Recover unpromised live/index objects only on explicit retry.
+            stage = "objects";
+            await withContentGitSlot(
+              () => repairWorktreeObjects(repoRoot, remote, params),
+              params.signal,
+            );
+            repaired = true;
+            stage = "packs";
+            await verify();
+          }
+        }
         // Repair lookup before traversing objects: interrupted writers can leave
         // the MIDX referring to pack files that no longer exist.
         await maintainWorktreePacks(repoRoot, params);
         stage = "objects";
         // Only an explicit repair pass may fetch. Successful batches remain in
         // Git if interrupted; the next retry inventories only what is missing.
-        if (params.retryDeferred) {
-          await withContentGitSlot(() => repairWorktreeObjects(repoRoot, params), params.signal);
+        if (params.retryDeferred && remote && !repaired) {
+          await withContentGitSlot(
+            () => repairWorktreeObjects(repoRoot, remote, params),
+            params.signal,
+          );
         }
         stage = "maintenance";
         if (failed.has(repoRoot)) {
@@ -387,15 +444,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             requireGit(
               repoRoot,
               ["maintenance", "run", "--auto", "--task=commit-graph", "--task=loose-objects"],
-              {
-                killProcessTree: true,
-                lowerPriority: true,
-                signal: params.signal,
-                beforeRun: assertCurrent,
-                timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
-                // Missing promisor objects belong to explicit fetches, not hourly housekeeping.
-                env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
-              },
+              options,
             ),
           params.signal,
         );

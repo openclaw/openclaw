@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
 import { registerListener } from "../../shared/listeners.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
@@ -24,8 +25,8 @@ import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
-  resolveSharedAuthStoreOwnership,
 } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import type { SharedAuthStoreOwnership } from "./types.js";
@@ -213,7 +214,7 @@ export function hasPendingSharedAuthCleanup(
 }
 
 export function hasPendingSharedAuthCleanupInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   sourcePath: string,
 ): boolean {
   const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
@@ -249,7 +250,7 @@ export function publishFreshSharedAuthStoreHandoff(
 }
 
 function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
-  const ownership = resolveSharedAuthStoreOwnership(env);
+  const ownership = prepareSharedAuthStoreOwnershipForNative(env);
   if (ownership.location === "state-db" || inspectedLegacySharedAuthOwnerships.has(ownership)) {
     return;
   }

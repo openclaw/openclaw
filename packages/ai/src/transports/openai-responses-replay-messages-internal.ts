@@ -450,6 +450,7 @@ function convertResponsesMessagesWithStyle(
       const sourceFragmentId = msg.content.find((block) => block.type === "toolCall")?.id;
       let textFallbackOrdinal = 0;
       let previousReplayItemWasReasoning = false;
+      let seenReplayableReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
@@ -489,6 +490,9 @@ function convertResponsesMessagesWithStyle(
             }
             output.push(replayableReasoningItem as ResponseInputItem);
             previousReplayItemWasReasoning = true;
+            seenReplayableReasoning ||=
+              typeof replayableReasoningItem.id === "string" &&
+              replayableReasoningItem.id.startsWith("rs_");
           }
         } else if (block.type === "text") {
           const textSignature = parseOpenAIResponsesTextSignature(block.textSignature);
@@ -526,8 +530,10 @@ function convertResponsesMessagesWithStyle(
           const separatorIndex = block.id.indexOf("|");
           const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
           const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
+          // Orphan fc_* ids can be rejected; omit them on the wire without rewriting history.
           const itemId =
-            shouldReplayResponsesItemIds && !(isDifferentModel && itemIdRaw?.startsWith("fc_"))
+            shouldReplayResponsesItemIds &&
+            (!itemIdRaw?.startsWith("fc_") || (seenReplayableReasoning && !isDifferentModel))
               ? itemIdRaw
               : undefined;
           output.push({

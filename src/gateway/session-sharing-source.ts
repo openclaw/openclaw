@@ -1,7 +1,9 @@
 import {
+  bindPublishedSessionSourceAdmission,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
   type SessionSourceAssertion,
+  type SessionSourcePredicate,
   type SessionSourcePredicateFacts,
 } from "../config/sessions/session-source-authority.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -12,6 +14,7 @@ import { SessionMutationAuthorizationChangedError } from "./session-mutation-aut
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   createSessionSharingLookupCaches,
+  findPreparedSharingTarget,
   sessionMutationTargetChanged,
   type AuthorizedSessionMutationTarget,
   type SessionSharingLookupCaches,
@@ -23,6 +26,7 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
+import type { createSessionSharingConsumption } from "./session-sharing-read.js";
 import { captureSessionSharingStore } from "./session-sharing-source-store.js";
 import type {
   SessionMutationTarget,
@@ -182,16 +186,13 @@ export function withPreparedSessionSharingSource(params: {
     changed,
     params.targets,
   );
-  const talkAgentId = params.sourceConfig.talk?.agentId;
   const assertSourceCurrent = () => {
     const cfg = assertSource();
     assertRoutingCurrent(cfg);
-    if (
-      (params.talk && cfg.talk?.agentId !== talkAgentId) ||
-      (params.talk?.kind === "relay" && !params.talk.isCurrent())
-    ) {
+    if (params.talk?.kind === "relay" && !params.talk.isCurrent()) {
       throw changed();
     }
+    return cfg;
   };
   for (const target of params.targets) {
     const facts = captureSessionSharingMemoryFacts(target, assertSourceCurrent);
@@ -200,6 +201,10 @@ export function withPreparedSessionSharingSource(params: {
     }
   }
   const prepare = async (): Promise<PreparedSessionSourceAuthority> => {
+    if (params.targets.every((target) => !target.resolved && !target.absentTarget)) {
+      assertCurrent();
+      return { assertCurrent, checks: [], release: async () => {} };
+    }
     const prepared: Awaited<ReturnType<typeof prepareSessionSharingSource>>[] = [];
     const release = () => releaseSessionSourceAuthorities(prepared);
     try {
@@ -245,32 +250,40 @@ export function withPreparedSessionSharingSource(params: {
       assertPreparedCurrent();
       return {
         assertCurrent: assertPreparedCurrent,
-        checks: prepared.flatMap((read, index) =>
-          read.actorSource
-            ? []
-            : [
-                {
-                  predicate: {
-                    source: read.source,
-                    sessionKey: targets[index]!.storeKey,
-                    fields: [
-                      "sessionId",
-                      "lifecycleRevision",
-                      "createdActor",
-                      "visibility",
-                      "incognito",
-                      "sandbox",
-                    ],
-                    expected: read.target?.entry,
-                    members: read.members,
-                  },
-                  refuse: (facts) => {
-                    assertPrepared(index, facts);
-                    throw targetChanged(params.targets[index]!.sessionKey);
-                  },
-                },
-              ],
-        ),
+        checks: prepared.flatMap((read, index) => {
+          if (read.actorSource) {
+            return [];
+          }
+          const expected = params.targets[index]!;
+          const predicate: SessionSourcePredicate = {
+            source: read.source,
+            sessionKey: targets[index]!.storeKey,
+            fields: [
+              "sessionId",
+              "lifecycleRevision",
+              "createdActor",
+              "visibility",
+              "incognito",
+              "sandbox",
+            ],
+            expected: read.target?.entry,
+            members: read.members,
+          };
+          if (findPreparedSharingTarget(params.request, expected)) {
+            bindPublishedSessionSourceAdmission(predicate, () => {
+              params.assertTargetCurrent(expected, expected, assertSourceCurrent());
+            });
+          }
+          return [
+            {
+              predicate,
+              refuse: (facts: SessionSourcePredicateFacts) => {
+                assertPrepared(index, facts);
+                throw targetChanged(expected.sessionKey);
+              },
+            },
+          ];
+        }),
         release,
       };
     } catch (error) {
@@ -289,11 +302,13 @@ export function captureSessionSharingTalkAuthority({
   input,
   target,
   authorizesAgentRun,
+  preparedPolicy,
 }: {
   request: SessionMutationAuthorizationParams;
   input: ReturnType<typeof resolveTalkSessionTargetInput>;
   target: PreparedTalkSessionTarget | undefined;
   authorizesAgentRun: boolean;
+  preparedPolicy: ReturnType<typeof createSessionSharingConsumption>["policy"];
 }) {
   return (cfg: OpenClawConfig): PreparedTalkSessionTarget | undefined => {
     if (!input || !target) {
@@ -307,15 +322,16 @@ export function captureSessionSharingTalkAuthority({
     } catch {
       throw sessionMutationTargetChanged(request.method, target.sessionKey);
     }
-    const error =
-      authorizesAgentRun &&
-      authorizeGatewaySessionCreation({
-        cfg: request.context.getCommittedRuntimeConfig?.() ?? cfg,
-        client: request.client,
-        agentId: target.agentId,
-      });
-    if (error) {
-      throw new SessionMutationAuthorizationChangedError(error);
+    if (authorizesAgentRun) {
+      const policyConfig = request.context.getCommittedRuntimeConfig?.() ?? cfg;
+      const policy = preparedPolicy(policyConfig);
+      const error = authorizeGatewaySessionCreation(
+        { cfg: policyConfig, client: request.client, agentId: target.agentId },
+        policy ? { policy: policy.policy } : undefined,
+      );
+      if (error) {
+        throw new SessionMutationAuthorizationChangedError(error);
+      }
     }
     return target;
   };

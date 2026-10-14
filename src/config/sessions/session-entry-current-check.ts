@@ -6,6 +6,7 @@ import {
   resolveCurrentConversationSessionAsync,
 } from "./conversation-registry.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type {
@@ -132,316 +133,352 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
       };
     }),
   }));
-  return withSessionEntryReadOnlyInWorker(scope, assertActive, async (read, owner) => {
-    if (!read.ok) {
-      throw read.error;
-    }
-    const selected = read.value;
-    const selectedValues = fields.map((field) => structuredClone(selected?.[field]));
-    if (
-      expected &&
-      (!selected || fields.some((field) => !isDeepStrictEqual(selected[field], expected[field])))
-    ) {
-      refuse();
-    }
-    const readScope = owner.scope ?? scope;
-    const target = {
-      agentId: readScope.agentId ?? params.agentId,
-      sessionKey: resolveSqliteSessionKey(
-        readScope.sessionKey,
-        readScope.agentId ?? params.agentId,
-      ),
-      storePath: owner.scope?.storePath ?? scope.storePath,
-      env: scope.env,
-    };
-    const identity = incognito ? undefined : readDatabasePathIdentitySync(target.storePath);
-    const selectedStore = owner.selectedStore;
-    let active = true;
-    const release = () => {
-      active = false;
-    };
-    const sourceIsCurrent = () => {
-      if (!active) {
-        return false;
+  const entryOnly = alternatives.every((alternative) => alternative.conversations.length === 0);
+  let entryPredicate: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  let predicateRevision = 0;
+  let matchesPreparedEntry: ((entry: SessionEntry | undefined) => boolean) | undefined;
+  return withSessionEntryReadOnlyInWorker(
+    scope,
+    assertActive,
+    async (read, owner) => {
+      if (!read.ok) {
+        throw read.error;
       }
-      if (incognito) {
-        incognito.assertCurrent();
-        return true;
-      }
-      try {
-        if (
-          inputCandidates.some((candidate) => !isSessionStoreReadCandidateCurrent(candidate)) ||
-          alternatives.some((alternative) =>
-            alternative.conversations.some(
-              ({ locator }) => locator && !isSessionStoreReadCandidateCurrent(locator),
-            ),
-          ) ||
-          (selectedStore &&
-            assertSessionStoreReadCandidate(selectedStore.path, inputCandidates) !==
-              selectedStore.physicalPath)
-        ) {
-          return false;
-        }
-        const current = readDatabasePathIdentitySync(target.storePath);
-        return (
-          !identity?.key.startsWith("file:") ||
-          (current.key === identity.key && current.birthtime === identity.birthtime)
-        );
-      } catch {
-        return false;
-      }
-    };
-    const check = () => {
-      if (params.isActive?.() === false || !sourceIsCurrent()) {
-        return false;
-      }
-      if (fields.length > 0) {
-        const current = incognito
-          ? incognito.read(target.sessionKey)
-          : loadSessionEntryReadOnly(readScope);
-        if (
-          (current === undefined) !== (selected === undefined) ||
-          fields.some((field, index) => !isDeepStrictEqual(current?.[field], selectedValues[index]))
-        ) {
-          return false;
-        }
-      }
-      return alternatives.some(
-        (alternative) =>
-          alternative.isActive?.() !== false &&
-          alternative.conversations.every(
-            ({ scope: conversationScope, predicate }) =>
-              (resolveCurrentConversationSession(conversationScope, predicate.conversationRef)
-                ?.sessionKey ?? null) === predicate.sessionKey,
-          ),
-      );
-    };
-    const assertCurrent = () => {
-      if (!check()) {
+      const selected = read.value;
+      const selectedValues = fields.map((field) => structuredClone(selected?.[field]));
+      if (
+        expected &&
+        (!selected || fields.some((field) => !isDeepStrictEqual(selected[field], expected[field])))
+      ) {
         refuse();
       }
-    };
-    // Pending publishers and memory actors have no persistent source row.
-    const nativeSource =
-      incognito ||
-      !identity?.key.startsWith("file:") ||
-      alternatives.some((alternative) =>
-        alternative.conversations.some(
-          ({ locator }) => locator?.physicalPath !== identity?.canonicalPath,
+      const matchesSelectedEntry = (current: SessionEntry | undefined) =>
+        (current === undefined) === (selected === undefined) &&
+        fields.every((field, index) => isDeepStrictEqual(current?.[field], selectedValues[index]));
+      matchesPreparedEntry = matchesSelectedEntry;
+      if (
+        entryPredicate &&
+        !entryPredicate.acknowledge(structuredClone(selected), predicateRevision)
+      ) {
+        refuse();
+      }
+      const readScope = owner.scope ?? scope;
+      const target = {
+        agentId: readScope.agentId ?? params.agentId,
+        sessionKey: resolveSqliteSessionKey(
+          readScope.sessionKey,
+          readScope.agentId ?? params.agentId,
         ),
-      );
-    const source: PreparedSessionSourceAssertion =
-      !identity || nativeSource
-        ? Object.assign(assertCurrent, {
-            nativeSource: true,
-            async prepareSessionSource() {
-              return { nativeSource: true, checks: [], assertCurrent };
-            },
-          })
-        : captureSessionEntrySourceAssertion({
-            scope: target,
-            readSource: {
-              agentId: owner.scope?.databaseAgentId ?? params.agentId,
-              path: identity.canonicalPath,
-              databaseIdentity: identity.key.slice("file:".length),
-              databaseBirthtime: identity.birthtime,
-            },
-            expected: selected,
-            fields,
-            assertCurrent,
-            assertHostCurrent: () => {
-              assertActive();
-              if (!sourceIsCurrent()) {
-                refuse();
-              }
-            },
-            async prepareConversations(readConversations) {
-              const predicates = alternatives.map((alternative) =>
-                alternative.conversations.map(({ predicate }) => predicate),
-              );
-              const refs = [
-                ...new Set(
-                  predicates.flatMap((alternative) =>
-                    alternative.map(({ conversationRef }) => conversationRef),
-                  ),
-                ),
-              ];
-              const rows = await readConversations(refs);
-              if (
-                !alternatives.some(
-                  (alternative, index) =>
-                    alternative.isActive?.() !== false &&
-                    predicates[index]!.every(
-                      (predicate) =>
-                        (rows.get(predicate.conversationRef) ?? null) === predicate.sessionKey,
-                    ),
-                )
-              ) {
-                refuse();
-              }
-              let matches: readonly number[] | undefined;
-              const accepted: number[] = [];
-              return {
-                alternatives: predicates,
-                acceptMatches: (validated) => {
-                  matches = validated;
-                  accepted.length = 0;
-                  return accepted;
-                },
-                assertCurrent: () => {
-                  assertActive();
-                  accepted.length = 0;
-                  for (const [index, alternative] of alternatives.entries()) {
-                    if (
-                      (!matches || matches.includes(index)) &&
-                      alternative.isActive?.() !== false
-                    ) {
-                      accepted.push(index);
-                    }
-                  }
-                  if (accepted.length === 0) {
-                    refuse();
-                  }
-                },
-              };
-            },
-            refuse,
-          });
-    const assertScopeCurrent = () => {
-      assertActive();
-      if (!sourceIsCurrent()) {
-        refuse();
-      }
-    };
-    const preparedSource = Object.assign(source, { assertScopeCurrent });
-    const matchesEntry = (current: Partial<SessionEntryCurrentFacts> | undefined) =>
-      (current === undefined) === (selected === undefined) &&
-      fields.every((field, index) => isDeepStrictEqual(current?.[field], selectedValues[index]));
-    const entryCurrent: SessionEntryCurrentCheck | undefined =
-      !incognito &&
-      identity?.key.startsWith("file:") &&
-      alternatives.every((alternative) => alternative.conversations.length === 0)
-        ? {
-            source: {
-              agentId: owner.scope?.databaseAgentId ?? params.agentId,
-              path: identity.canonicalPath,
-              databaseIdentity: identity.key.slice("file:".length),
-              databaseBirthtime: identity.birthtime,
-              sessionKey: target.sessionKey,
-            },
-            assertCurrent(current) {
-              assertScopeCurrent();
-              if (!matchesEntry(current)) {
-                refuse();
-              }
-            },
-          }
-        : undefined;
-    const isCurrentAsync: AsyncSessionSourceCheck = Object.assign(
-      async () => {
+        storePath: owner.scope?.storePath ?? scope.storePath,
+        env: scope.env,
+      };
+      const identity = incognito ? undefined : readDatabasePathIdentitySync(target.storePath);
+      const selectedStore = owner.selectedStore;
+      let active = true;
+      const release = () => {
+        active = false;
+        entryPredicate?.release();
+      };
+      const sourceIsCurrent = () => {
+        if (!active) {
+          return false;
+        }
         if (incognito) {
-          return check();
+          incognito.assertCurrent();
+          return true;
         }
-        const sameStore =
-          identity?.key.startsWith("file:") &&
-          alternatives.every((alternative) =>
-            alternative.conversations.every(
-              ({ locator }) => locator?.physicalPath === identity.canonicalPath,
-            ),
-          );
-        let matches: readonly number[];
-        if (sameStore && identity) {
-          const result = await withSessionHistoryWorkerDatabase(
-            {
-              agentId: owner.scope?.databaseAgentId ?? params.agentId,
-              path: identity.canonicalPath,
-              env: scope.env,
-            },
-            (reader) =>
-              reader.readExactEntries({
-                sessionKeys: [],
-                env: scope.env ?? process.env,
-                sourceChecks: [
-                  {
-                    source: {
-                      agentId: owner.scope?.databaseAgentId ?? params.agentId,
-                      path: identity.canonicalPath,
-                      databaseIdentity: identity.key.slice("file:".length),
-                      databaseBirthtime: identity.birthtime,
-                    },
-                    sessionKey: target.sessionKey,
-                    fields,
-                    expected: selected,
-                    conversationAlternatives: alternatives.map((alternative) =>
-                      alternative.conversations.map(({ predicate }) => predicate),
-                    ),
-                  },
-                ],
-              }),
-          );
-          if (result.sourceValidation?.refusedSource) {
+        try {
+          if (
+            inputCandidates.some((candidate) => !isSessionStoreReadCandidateCurrent(candidate)) ||
+            alternatives.some((alternative) =>
+              alternative.conversations.some(
+                ({ locator }) => locator && !isSessionStoreReadCandidateCurrent(locator),
+              ),
+            ) ||
+            (selectedStore &&
+              assertSessionStoreReadCandidate(selectedStore.path, inputCandidates) !==
+                selectedStore.physicalPath)
+          ) {
             return false;
           }
-          matches = result.sourceValidation?.conversationMatches[0]?.alternatives ?? [];
-        } else {
-          const current = await withSessionEntryReadOnlyInWorker(
-            readScope,
-            () => {},
-            async (currentRead) => {
-              if (!currentRead.ok) {
-                throw currentRead.error;
-              }
-              return currentRead.value;
-            },
+          const current = readDatabasePathIdentitySync(target.storePath);
+          return (
+            !identity?.key.startsWith("file:") ||
+            (current.key === identity.key && current.birthtime === identity.birthtime)
           );
-          if (!matchesEntry(current)) {
-            return false;
-          }
-          const matching = await Promise.all(
-            alternatives.map(async (alternative, index) => {
-              const bindings = await Promise.all(
-                alternative.conversations.map(
-                  async ({ scope: conversationScope, predicate }) =>
-                    (
-                      await resolveCurrentConversationSessionAsync(
-                        conversationScope,
-                        predicate.conversationRef,
-                      )
-                    )?.sessionKey ?? null,
-                ),
+        } catch {
+          return false;
+        }
+      };
+      const check = () => {
+        if (params.isActive?.() === false || !sourceIsCurrent()) {
+          return false;
+        }
+        if (fields.length > 0) {
+          const currentMatches = entryPredicate
+            ? entryPredicate.isCurrent()
+            : matchesSelectedEntry(
+                incognito ? incognito.read(target.sessionKey) : loadSessionEntryReadOnly(readScope),
               );
-              return bindings.every(
-                (key, position) =>
-                  key === alternative.conversations[position]!.predicate.sessionKey,
-              )
-                ? index
-                : undefined;
-            }),
-          );
-          matches = matching.filter((index): index is number => index !== undefined);
+          if (!currentMatches) {
+            return false;
+          }
         }
-        return (
-          params.isActive?.() !== false &&
-          sourceIsCurrent() &&
-          matches.some((index) => alternatives[index]?.isActive?.() !== false)
+        return alternatives.some(
+          (alternative) =>
+            alternative.isActive?.() !== false &&
+            alternative.conversations.every(
+              ({ scope: conversationScope, predicate }) =>
+                (resolveCurrentConversationSession(conversationScope, predicate.conversationRef)
+                  ?.sessionKey ?? null) === predicate.sessionKey,
+            ),
         );
-      },
-      { sessionSource: preparedSource },
-    );
-    const assertCurrentAsync = async () => {
-      if (!(await isCurrentAsync())) {
-        refuse();
+      };
+      const assertCurrent = () => {
+        if (!check()) {
+          refuse();
+        }
+      };
+      // Pending publishers and memory actors have no persistent source row.
+      const nativeSource =
+        incognito ||
+        !identity?.key.startsWith("file:") ||
+        alternatives.some((alternative) =>
+          alternative.conversations.some(
+            ({ locator }) => locator?.physicalPath !== identity?.canonicalPath,
+          ),
+        );
+      const source: PreparedSessionSourceAssertion =
+        !identity || nativeSource
+          ? Object.assign(assertCurrent, {
+              nativeSource: true,
+              async prepareSessionSource() {
+                return { nativeSource: true, checks: [], assertCurrent };
+              },
+            })
+          : captureSessionEntrySourceAssertion({
+              scope: target,
+              readSource: {
+                agentId: owner.scope?.databaseAgentId ?? params.agentId,
+                path: identity.canonicalPath,
+                databaseIdentity: identity.key.slice("file:".length),
+                databaseBirthtime: identity.birthtime,
+              },
+              expected: selected,
+              fields,
+              preparedEntry: entryPredicate,
+              assertCurrent,
+              assertHostCurrent: () => {
+                assertActive();
+                if (!sourceIsCurrent()) {
+                  refuse();
+                }
+              },
+              async prepareConversations(readConversations) {
+                const predicates = alternatives.map((alternative) =>
+                  alternative.conversations.map(({ predicate }) => predicate),
+                );
+                const refs = [
+                  ...new Set(
+                    predicates.flatMap((alternative) =>
+                      alternative.map(({ conversationRef }) => conversationRef),
+                    ),
+                  ),
+                ];
+                const rows = await readConversations(refs);
+                if (
+                  !alternatives.some(
+                    (alternative, index) =>
+                      alternative.isActive?.() !== false &&
+                      predicates[index]!.every(
+                        (predicate) =>
+                          (rows.get(predicate.conversationRef) ?? null) === predicate.sessionKey,
+                      ),
+                  )
+                ) {
+                  refuse();
+                }
+                let matches: readonly number[] | undefined;
+                const accepted: number[] = [];
+                return {
+                  alternatives: predicates,
+                  acceptMatches: (validated) => {
+                    matches = validated;
+                    accepted.length = 0;
+                    return accepted;
+                  },
+                  assertCurrent: () => {
+                    assertActive();
+                    accepted.length = 0;
+                    for (const [index, alternative] of alternatives.entries()) {
+                      if (
+                        (!matches || matches.includes(index)) &&
+                        alternative.isActive?.() !== false
+                      ) {
+                        accepted.push(index);
+                      }
+                    }
+                    if (accepted.length === 0) {
+                      refuse();
+                    }
+                  },
+                };
+              },
+              refuse,
+            });
+      const assertScopeCurrent = () => {
+        assertActive();
+        if (!sourceIsCurrent()) {
+          refuse();
+        }
+      };
+      const preparedSource = Object.assign(source, { assertScopeCurrent });
+      const matchesEntry = (current: Partial<SessionEntryCurrentFacts> | undefined) =>
+        (current === undefined) === (selected === undefined) &&
+        fields.every((field, index) => isDeepStrictEqual(current?.[field], selectedValues[index]));
+      const entryCurrent: SessionEntryCurrentCheck | undefined =
+        !incognito &&
+        identity?.key.startsWith("file:") &&
+        alternatives.every((alternative) => alternative.conversations.length === 0)
+          ? {
+              source: {
+                agentId: owner.scope?.databaseAgentId ?? params.agentId,
+                path: identity.canonicalPath,
+                databaseIdentity: identity.key.slice("file:".length),
+                databaseBirthtime: identity.birthtime,
+                sessionKey: target.sessionKey,
+              },
+              assertCurrent(current) {
+                assertScopeCurrent();
+                if (!matchesEntry(current)) {
+                  refuse();
+                }
+              },
+            }
+          : undefined;
+      const isCurrentAsync: AsyncSessionSourceCheck = Object.assign(
+        async () => {
+          if (incognito || entryPredicate || (entryOnly && fields.length === 0)) {
+            return check();
+          }
+          const sameStore =
+            identity?.key.startsWith("file:") &&
+            alternatives.every((alternative) =>
+              alternative.conversations.every(
+                ({ locator }) => locator?.physicalPath === identity.canonicalPath,
+              ),
+            );
+          let matches: readonly number[];
+          if (sameStore && identity) {
+            const result = await withSessionHistoryWorkerDatabase(
+              {
+                agentId: owner.scope?.databaseAgentId ?? params.agentId,
+                path: identity.canonicalPath,
+                env: scope.env,
+              },
+              (reader) =>
+                reader.readExactEntries({
+                  sessionKeys: [],
+                  env: scope.env ?? process.env,
+                  sourceChecks: [
+                    {
+                      source: {
+                        agentId: owner.scope?.databaseAgentId ?? params.agentId,
+                        path: identity.canonicalPath,
+                        databaseIdentity: identity.key.slice("file:".length),
+                        databaseBirthtime: identity.birthtime,
+                      },
+                      sessionKey: target.sessionKey,
+                      fields,
+                      expected: selected,
+                      conversationAlternatives: alternatives.map((alternative) =>
+                        alternative.conversations.map(({ predicate }) => predicate),
+                      ),
+                    },
+                  ],
+                }),
+            );
+            if (result.sourceValidation?.refusedSource) {
+              return false;
+            }
+            matches = result.sourceValidation?.conversationMatches[0]?.alternatives ?? [];
+          } else {
+            const current = await withSessionEntryReadOnlyInWorker(
+              readScope,
+              () => {},
+              async (currentRead) => {
+                if (!currentRead.ok) {
+                  throw currentRead.error;
+                }
+                return currentRead.value;
+              },
+            );
+            if (!matchesEntry(current)) {
+              return false;
+            }
+            const matching = await Promise.all(
+              alternatives.map(async (alternative, index) => {
+                const bindings = await Promise.all(
+                  alternative.conversations.map(
+                    async ({ scope: conversationScope, predicate }) =>
+                      (
+                        await resolveCurrentConversationSessionAsync(
+                          conversationScope,
+                          predicate.conversationRef,
+                        )
+                      )?.sessionKey ?? null,
+                  ),
+                );
+                return bindings.every(
+                  (key, position) =>
+                    key === alternative.conversations[position]!.predicate.sessionKey,
+                )
+                  ? index
+                  : undefined;
+              }),
+            );
+            matches = matching.filter((index): index is number => index !== undefined);
+          }
+          return (
+            params.isActive?.() !== false &&
+            sourceIsCurrent() &&
+            matches.some((index) => alternatives[index]?.isActive?.() !== false)
+          );
+        },
+        { sessionSource: preparedSource },
+      );
+      const assertCurrentAsync = async () => {
+        if (!(await isCurrentAsync())) {
+          refuse();
+        }
+      };
+      owner.assertCurrent();
+      return {
+        entry: selected,
+        isCurrentAsync,
+        assertCurrentAsync,
+        source: preparedSource,
+        entryCurrent,
+        release,
+      };
+    },
+    (_database, identity) => {
+      if (!entryOnly || fields.length === 0 || !identity.key.startsWith("file:")) {
+        return;
       }
-    };
-    owner.assertCurrent();
-    return {
-      entry: selected,
-      isCurrentAsync,
-      assertCurrentAsync,
-      source: preparedSource,
-      entryCurrent,
-      release,
-    };
+      // Join the existing publication owner before the initial read can yield.
+      entryPredicate?.release();
+      entryPredicate = retainPreparedSessionEntryPredicate({
+        databaseIdentity: identity.key,
+        sessionKey: resolveSqliteSessionKey(scope.sessionKey, captured.agentId ?? params.agentId),
+        entry: undefined,
+        matches: (_before, current) => matchesPreparedEntry?.(current) ?? false,
+      });
+      predicateRevision = entryPredicate.captureRevision();
+    },
+  ).catch((error: unknown) => {
+    entryPredicate?.release();
+    throw error;
   });
 }
 

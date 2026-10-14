@@ -58,7 +58,7 @@ describe("ui package vitest config", () => {
   afterEach(async () => {
     await fixture.cleanup();
     vi.unstubAllEnvs();
-    vi.doUnmock("node:child_process");
+    vi.doUnmock("../ui/src/test-helpers/playwright-chromium.ts");
     vi.resetModules();
   });
 
@@ -398,19 +398,15 @@ export default {
     );
     vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
     vi.stubEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", runtimeIncludeFile);
-    vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", includeFile);
-    const probe = vi.fn((..._args: unknown[]) => ({ status: 0 }));
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const childProcess = await importOriginal<typeof import("node:child_process")>();
-      return {
-        ...childProcess,
-        spawnSync: (...args: Parameters<typeof childProcess.spawnSync>) =>
-          args[0] === includeFile ? probe(...args) : childProcess.spawnSync(...args),
-      };
-    });
+    // Chromium selection (which spawns the browser) must stay lazy and run once per process.
+    const resolveChromium = vi.fn((_defaultExecutablePath: string) => includeFile);
+    vi.doMock("../ui/src/test-helpers/playwright-chromium.ts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../ui/src/test-helpers/playwright-chromium.ts")>()),
+      resolvePlaywrightChromiumExecutablePath: resolveChromium,
+    }));
     vi.resetModules();
     const { default: config, createUiBrowserVitestConfig } = await import("../ui/vitest.config.ts");
-    expect(probe).not.toHaveBeenCalled();
+    expect(resolveChromium).not.toHaveBeenCalled();
     const uiRoot = path.join(process.cwd(), "ui");
     const projects = (requireTestConfig(config).projects ?? []).map(requireTestConfig);
     const browser = projects.find((project) => project.browser?.enabled);
@@ -441,7 +437,7 @@ export default {
     );
     const unpartitionedBrowser = requireTestConfig(createUiBrowserVitestConfig({}));
     expect(unpartitionedBrowser.browser?.provider?.prewarm).toEqual(expect.any(Function));
-    expect(probe).toHaveBeenCalledWith(includeFile, ["--version"], { stdio: "ignore" });
+    expect(resolveChromium).toHaveBeenCalledOnce();
     expect(unpartitionedBrowser.browser?.provider?.options).toMatchObject({
       launchOptions: {
         executablePath: includeFile,
@@ -476,7 +472,7 @@ export default {
         shouldPrewarm ? "function" : "undefined",
       );
     }
-    expect(probe).toHaveBeenCalledTimes(1);
+    expect(resolveChromium).toHaveBeenCalledTimes(1);
     writeFileSync(includeFile, JSON.stringify([...nativeFiles, ...nodeFiles]));
     const scopedRoot = requireTestConfig(
       createUiVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),

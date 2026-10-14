@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
 import type {
   DB as StateDatabase,
@@ -155,8 +155,9 @@ export function json(value: unknown): string {
   }
   return encoded;
 }
-export const queryWorkerEnvironmentStore = (db: DatabaseSync) => getNodeSqliteKysely<WorkerDb>(db);
-function environmentRows(db: DatabaseSync) {
+export const queryWorkerEnvironmentStore = (db: EngineConnection) =>
+  getNodeSqliteKysely<WorkerDb>(db);
+function environmentRows(db: EngineConnection) {
   // Double precision preserves validation of oversized ports without PostgreSQL REAL rounding.
   return queryWorkerEnvironmentStore(db)
     .selectFrom("worker_environments")
@@ -184,14 +185,14 @@ function recordsFromRows(rows: readonly RowWithFallbackPort[]): WorkerEnvironmen
   }
   return Array.from(groups.values(), ({ row, ports }) => decodeWorkerEnvironmentRow(row, ports));
 }
-export function findWorkerEnvironment(db: DatabaseSync, environmentId: string) {
+export function findWorkerEnvironment(db: EngineConnection, environmentId: string) {
   const rows = executeSqliteQuerySync(
     db,
     environmentRows(db).where("worker_environments.environment_id", "=", environmentId),
   ).rows;
   return recordsFromRows(rows)[0];
 }
-export function findCredential(db: DatabaseSync, environmentId: string) {
+export function findCredential(db: EngineConnection, environmentId: string) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     queryWorkerEnvironmentStore(db)
@@ -201,20 +202,20 @@ export function findCredential(db: DatabaseSync, environmentId: string) {
   );
   return row ? credentialFromRow(row) : undefined;
 }
-export function getRequiredWorkerEnvironment(db: DatabaseSync, environmentId: string) {
+export function getRequiredWorkerEnvironment(db: EngineConnection, environmentId: string) {
   const record = findWorkerEnvironment(db, environmentId);
   if (!record) {
     throw new Error(`Unknown worker environment: ${environmentId}`);
   }
   return record;
 }
-export function listRows(db: DatabaseSync): WorkerEnvironmentRecord[] {
+export function listRows(db: EngineConnection): WorkerEnvironmentRecord[] {
   return recordsFromRows(executeSqliteQuerySync(db, environmentRows(db)).rows);
 }
 
 /** Prepared inside the owning transaction; absent rows are explicit deletion facts. */
 export function readWorkerEnvironmentFacts(
-  db: DatabaseSync,
+  db: EngineConnection,
   ids?: readonly string[],
 ): WorkerEnvironmentFacts {
   const environments = ids
@@ -243,7 +244,7 @@ export function readWorkerEnvironmentFacts(
 }
 
 export function readWorkerEnvironmentPrunePage(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: WorkerEnvironmentPruneReadInput,
 ): WorkerEnvironmentPrunePage {
   const { rows, ...page } = readTerminalWorkerEnvironmentPrunePage(db, input);

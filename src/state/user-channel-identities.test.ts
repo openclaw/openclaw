@@ -28,7 +28,7 @@ import {
 import { readUserProfileAliasRevision } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
   prepareUserProfileCatalog,
 } from "./user-profile-list.js";
 import {
@@ -123,7 +123,7 @@ it.each(["email binding", "stale role reply"] as const)(
       }
       expect(prepared?.isCurrent()).toBe(true);
       releaseCatalog = (await prepareUserProfileCatalog(options)).release;
-      expect(readUserProfileIdentity(source.id, options)?.profileId).toBe(source.id);
+      expect(readResidentUserProfileIdentity(source.id, options)?.profileId).toBe(source.id);
       expect(admin?.isCurrent()).toBe(false);
       expect(rolePolicy?.isCurrent()).toBe(false);
       expect(channel?.isCurrent()).toBe(false);
@@ -346,7 +346,7 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
         expect(rollbackGranted).toBe(true);
         expect(resolveUserChannelIdentity(identity, options)?.role).toBe("admin");
         queries.mockClear();
-        expect(readUserProfileIdentity(ada.id, options)?.role).toBe("admin");
+        expect(readResidentUserProfileIdentity(ada.id, options)?.role).toBe("admin");
         expect(getUserProfileDisplay(ada.id, options)).toEqual(beforeRollback);
         expect(queries).not.toHaveBeenCalled();
         const afterRollback = await prepareUserProfileRoleAuthority(ada.id, options);

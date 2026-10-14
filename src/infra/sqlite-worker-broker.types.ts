@@ -1,5 +1,6 @@
 import type { Worker } from "node:worker_threads";
 import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import type { captureStateDatabaseAccess } from "./gateway-state-owner.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type {
   SqliteWorkerRequest,
@@ -78,6 +79,7 @@ export type Actor = {
   markNativeStopped(): void;
   closeReceipt?: SqliteWorkerCloseReceipt;
   stateDatabasePath?: string;
+  stateAccess: ReturnType<typeof captureStateDatabaseAccess>;
   id: number;
   key: string;
   databasePath: string;

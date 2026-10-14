@@ -52,7 +52,6 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
-import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
@@ -63,6 +62,7 @@ import {
   toWorkerTranscriptMessage,
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { parseWorkerRuntimeResult } from "../../worker/worker-process-protocol.js";
 import {
   measureAgentRuntimeIdentityTokenBytes,
@@ -75,6 +75,7 @@ import {
   bindWorkerTurnOwner,
   type WorkerTurnPromptCacheContext,
 } from "./placement-turn-claim-events.js";
+import type { WorkerTurnProcessResult } from "./tunnel-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
 import type { prepareWorkerTurnPrompt } from "./worker-turn-prompt.js";
@@ -332,7 +333,10 @@ function fitLaunchDescriptor(
   }
 }
 
-function parseWorkerTurnProcessResult(processResult: SpawnResult) {
+function parseWorkerTurnProcessResult(processResult: WorkerTurnProcessResult) {
+  if (processResult.nodeLoss) {
+    throw processResult.nodeLoss;
+  }
   if (processResult.code !== 0 || processResult.signal !== null || processResult.killed) {
     // Boxes are destroyed on failure, so the redacted stderr tail is the only forensics.
     const detail = truncateUtf16Safe(
@@ -349,6 +353,9 @@ function parseWorkerTurnProcessResult(processResult: SpawnResult) {
   if (!result) {
     throw new Error("Worker process returned invalid output");
   }
+  if (result.status === "failed" && result.reason === "node-lost") {
+    throw new WorkerNodeLostError();
+  }
   if (result.status === "not-started") {
     throw new Error(result.errorText);
   }
@@ -362,7 +369,7 @@ function parseWorkerTurnProcessResult(processResult: SpawnResult) {
 export async function finalizeWorkerTurnResult(
   params: Parameters<typeof reconcileWorkspaceAfterTurn>[0] & {
     turn: SessionPlacementTurnParams;
-    processResult: SpawnResult;
+    processResult: WorkerTurnProcessResult;
     modelRef: ReturnType<typeof assertSupportedTurn>;
     baseLeafId: string | null;
     promptContext: Awaited<ReturnType<typeof prepareWorkerTurnPrompt>>;

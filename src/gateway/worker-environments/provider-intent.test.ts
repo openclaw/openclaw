@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type { WorkerProvider } from "../../plugins/types.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import * as support from "./service.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -75,6 +75,17 @@ describe("prepared worker intent admission", () => {
       resumeProvision,
     };
   }
+
+  it("keeps empty workspaces cold on providers with only setup commands", async () => {
+    const f = await fixture();
+    f.provider.supportsProjectPreparation = () => false;
+    f.provider.runSetupCommand = async () => undefined;
+    const intent = await f.owner.prepareIntent("development", { emptyWorkspace: true });
+    expect(intent.profileSnapshot).not.toHaveProperty("project");
+    expect(intent.profileSnapshot).not.toHaveProperty("runtimePreparation");
+    expect(intent.preparationKey).toBeUndefined();
+    expect(f.prepareNodeArtifacts).not.toHaveBeenCalled();
+  });
 
   it("admits exact local source and OS without allocating, and retains reusable facts after caller abort", async () => {
     const f = await fixture();

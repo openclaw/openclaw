@@ -2,6 +2,7 @@ import path from "node:path";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
   sqliteSessionIdWriteScope,
@@ -141,6 +142,33 @@ function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   expect(selected.install(snapshot)).toBe(true);
   return snapshot;
 }
+
+it("keeps actor facts after usage cache writes and pruning", async () => {
+  await withReplica(async (fixture) => {
+    const { database, scope, replica } = fixture;
+    const usage = prepareSessionCostUsageRefreshLock(scope.agentId, database.path, {
+      env: scope.env,
+    });
+    try {
+      expect(await usage.acquire()).toBe(true);
+      const snapshot = hydrate(fixture);
+      const valueJson = new TextEncoder().encode("{}");
+      expect(
+        await usage.writeRollup({
+          rollupId: "usage-rollup",
+          valueJson,
+          blob: null,
+          updatedAt: 1,
+        }),
+      ).toBe(true);
+      expect(replica.read()).toEqual(snapshot);
+      await usage.pruneRows([{ key: "usage-rollup", valueJson, updatedAt: 1 }]);
+      expect(replica.read()).toEqual(snapshot);
+    } finally {
+      await usage.release();
+    }
+  });
+});
 
 it("retains the first creation after restart before any replica reader and applies later writes", async () => {
   await drainGlobalSingletonLifecycleState("restart");
@@ -422,12 +450,10 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
       has_optional_references: 0,
     });
     const shared = replica.read()!;
+    expect(shared).toBe(initial);
     expect(replica.read()).toBe(shared);
     expect(replica.beginRead().install(shared)).toBe(true);
     expect(replica.read()).toBe(shared);
-    expect(() => {
-      shared.entry!.label = "caller edit";
-    }).toThrow(TypeError);
     const detached = structuredClone(shared);
     detached.entry!.label = "caller edit";
     expect(replica.read()?.entry?.label).toBe("before");
@@ -462,8 +488,7 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
       session_started_at: 23,
       has_optional_references: 1,
     });
-    outcome.receipt.postimage.entry!.label = "receipt caller edit";
-    expect(replica.read()?.entry?.label).toBe("before");
+    expect(replica.read()).toBe(outcome.receipt.postimage);
     expect(pending.settle(outcome)).toBe(false);
 
     const rollback = replica.beginCommand();
@@ -525,7 +550,7 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     expect(replica.beginRead().install(opaque)).toBe(true);
     const borrowed = replica.read()!;
     expect(replica.beginRead().install(borrowed)).toBe(true);
-    expect(replica.read()).not.toBe(borrowed);
+    expect(replica.read()).toBe(borrowed);
     expect(replica.read()?.entry?.swarmOutputSchema).toEqual({ value: new Date(0) });
 
     const current = hydrate(fixture, "final");

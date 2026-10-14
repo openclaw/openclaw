@@ -178,7 +178,8 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("rejects a waiting side question when its app-server client closes", async () => {
-    const client = createFakeClient({ completeTurn: false });
+    const turnStarted = createDeferred<void>();
+    const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     const controller = new AbortController();
     let outcome: unknown;
@@ -188,18 +189,16 @@ describe("runCodexAppServerSideQuestion", () => {
       outcome = error;
     });
     try {
-      await vi.waitFor(() =>
-        expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
-      );
+      await Promise.race([
+        turnStarted.promise,
+        run.then(() => {
+          throw new Error("Side-question fixture ended before turn/start", { cause: outcome });
+        }),
+      ]);
       client.close(new Error("app-server transport disconnected"));
-      await vi.waitFor(
-        () =>
-          expect(outcome).toEqual(
-            expect.objectContaining({
-              message: expect.stringContaining("closed"),
-            }),
-          ),
-        { timeout: 200 },
+      await run;
+      expect(outcome).toEqual(
+        expect.objectContaining({ message: expect.stringContaining("closed") }),
       );
       expect(outcome).toBeInstanceOf(AggregateError);
       expect(outcome).toMatchObject({

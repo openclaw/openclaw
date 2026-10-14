@@ -58,6 +58,7 @@ export function createSessionRowSelection(
     rowInvolvements.delete(key);
   };
   const prepareInvolvements = () => {
+    configuredAgentIds ??= new Set(listAgentIds(cfg));
     const context = getContext();
     const revision = context.identityProjection?.revision ?? context.userProfileIdentityById;
     if (involvementRevision !== revision) {
@@ -70,6 +71,7 @@ export function createSessionRowSelection(
       }
       involvementRevision = revision;
     }
+    configuredAgentIds ??= new Set(listAgentIds(cfg));
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;

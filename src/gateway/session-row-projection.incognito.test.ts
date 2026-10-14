@@ -16,9 +16,48 @@ import { identifiedClient } from "./server-methods/sessions-read-cache.test-supp
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 
 afterEach(() => memorySessionActorOwners.reset());
+
+it("finds retained incognito sessions from an explicit root distinct from the ambient root", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const key = "agent:main:dashboard:incognito-retained-root";
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: state.path("previous-root") },
+    });
+    const target = { agentId: "main", sessionKey: key, storePath };
+    await replaceSessionEntry(target, {
+      sessionId: "private-original",
+      updatedAt: 1,
+      incognito: true,
+    });
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      const query = { agentId: "main", sessionId: "private-original", federated: true };
+      expect(projection.findBySessionId(query)).toMatchObject([
+        { key, storeTarget: { storePath }, entry: { sessionId: "private-original" } },
+      ]);
+      expect(
+        projection.findBySessionId({ ...target, sessionId: "private-original" }),
+      ).toMatchObject([{ key, entry: { sessionId: "private-original" } }]);
+      await replaceSessionEntry(target, {
+        sessionId: "private-current",
+        updatedAt: 2,
+        incognito: true,
+      });
+      expect(projection.findBySessionId(query)).toEqual([]);
+      expect(projection.findBySessionId({ ...query, sessionId: "private-current" })).toMatchObject([
+        { key, storeTarget: { storePath }, entry: { sessionId: "private-current" } },
+      ]);
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it("reads a private parent once despite multiple durable store candidates", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -54,7 +93,7 @@ it("reads a private parent once despite multiple durable store candidates", asyn
       { agentId: "work", sessionKey: key },
       { sessionId: "private-child", updatedAt: 2, incognito: true, parentSessionKey: parent },
     );
-    const selected = resolveGatewaySessionStoreTargetWithStore({
+    const selected = await resolveGatewaySessionStoreTargetWithStoreAsync({
       cfg,
       key,
       agentId: "work",
@@ -116,6 +155,7 @@ it("keeps archived incognito rows private and retires captures when their sessio
         touchSessionEntry: false,
       },
     );
+    const viewer = identifiedClient("incognito-observer");
     const projection = await createSessionRowProjection({ cfg, getModelCatalog: async () => [] });
     try {
       const original = projection.capture(query)!;
@@ -150,7 +190,6 @@ it("keeps archived incognito rows private and retires captures when their sessio
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
       expect(projection.selectEntries()).toEqual([]);
-      const viewer = identifiedClient("incognito-observer");
       await projection.withPreparedExactRows(
         () => [query],
         (read) => {

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
@@ -11,7 +11,11 @@ import {
   retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -421,9 +425,13 @@ describe("initSessionState guarded initialization", () => {
         },
         cfg: { session: { store: storePath } } as OpenClawConfig,
       }),
-    ).rejects.toThrow(
-      'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
-    );
+    ).rejects.toMatchObject({
+      name: "SessionWorkStartError",
+      reason: "archived",
+      retryable: false,
+      message:
+        'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
+    });
   });
 
   it.each(["/new"] as const)(
@@ -1341,6 +1349,33 @@ describe("initSessionState RawBody", () => {
     },
   );
 
+  it.each(["hello again", "/reset"])(
+    "preserves device-folder affinity through reply-session rollover (%s)",
+    async (body) => {
+      const storePath = await makeStorePath("openclaw-rollover-device-folder-");
+      const sessionKey = "agent:main:dashboard:device-folder-rollover";
+      const deviceFolder = { deviceId: "rollover-device", path: "/existing/project" };
+      const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: "device-folder-before-rollover",
+          updatedAt: staleStartedAt,
+          sessionStartedAt: staleStartedAt,
+          lastInteractionAt: staleStartedAt,
+          deviceFolder,
+        },
+      });
+      const result = await initSessionState({
+        ctx: { RawBody: body, ChatType: "direct", SessionKey: sessionKey },
+        cfg: { session: { store: storePath, reset: { mode: "daily", atHour: 4 } } },
+      });
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(body === "/reset");
+      expect(result.sessionEntry.deviceFolder).toEqual(deviceFolder);
+      expect(loadSessionEntry({ storePath, sessionKey })?.deviceFolder).toEqual(deviceFolder);
+    },
+  );
+
   it("preserves the session-owned worktree binding across an implicit daily stale rollover (#159452)", async () => {
     // Regression: a worker-placed session's worktree reference was dropped at
     // the implicit daily/idle rollover boundary even though the underlying
@@ -1387,7 +1422,9 @@ describe("initSessionState RawBody", () => {
     // Boundary proof: worker placement, which failed with "dispatch requires
     // a session-owned workspace" before the fix, now resolves the rolled-over
     // entry against its live worktree.
-    const placement = await resolveWorkerPlacementSessionTarget({
+    setRuntimeConfigSnapshot(cfg, cfg);
+    onTestFinished(clearRuntimeConfigSnapshot);
+    using placement = await resolveWorkerPlacementSessionTarget({
       sessionRuntime: {
         resolveGatewaySessionStoreTargetInWorker,
         resolveCanonicalSessionEntryFromStoreKeys,
@@ -1847,7 +1884,7 @@ describe("initSessionState reset policy", () => {
   let clearBootstrapSnapshotOnSessionRolloverSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     clearBootstrapSnapshotOnSessionRolloverSpy = vi.spyOn(
       bootstrapCache,
       "clearBootstrapSnapshotOnSessionBoundary",

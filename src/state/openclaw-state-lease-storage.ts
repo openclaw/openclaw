@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { computeBackoff } from "../infra/backoff.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
@@ -57,7 +57,7 @@ export function resolveLeaseDatabasePath(database: OpenClawStateLeaseDatabase): 
 }
 function readLeaseDatabase<T>(
   database: OpenClawStateLeaseDatabase,
-  operation: (db: DatabaseSync) => T,
+  operation: (db: EngineConnection) => T,
 ): T {
   return database.schemaPolicy === "existing"
     ? withOpenClawStateDatabaseReadOnly(({ db }) => operation(db), database.options)
@@ -67,7 +67,7 @@ function readLeaseDatabase<T>(
 export function withLeaseWriteTransaction<T>(
   database: OpenClawStateLeaseDatabase,
   operationLabel: string,
-  operation: (db: DatabaseSync) => T,
+  operation: (db: EngineConnection) => T,
   busyTimeoutMs = 0,
 ): T {
   const transactionOptions = {
@@ -120,7 +120,7 @@ export function renewOpenClawStateLease(
 }
 
 function assertOpenClawStateLeaseOwnedInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   params: OpenClawStateLeaseOwnerIdentity,
 ): number {
   const expiresAt = readOpenClawStateLeaseExpiry(database, params);
@@ -133,7 +133,7 @@ function assertOpenClawStateLeaseOwnedInDatabase(
 export function verifyOpenClawStateLeaseOwnership(
   params: OpenClawStateLeaseOwnerIdentity & {
     database?: OpenClawStateLeaseDatabase;
-    transaction?: DatabaseSync;
+    transaction?: EngineConnection;
   },
 ): number {
   try {

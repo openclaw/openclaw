@@ -63,7 +63,7 @@ const executePhase: {
     scope: TransportScope,
     input: SessionActorCommandContext &
       SessionActorPhaseInputs[Phase] & { target: SessionActorTarget },
-  ) => Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>>;
+  ) => Promise<SessionActorOperations[`session.actor.${Phase}`]["output"]>;
 } = {
   acceptInput: (scope, input) => scope.execute({ type: "session.actor.acceptInput", input }),
   adoptRun: (scope, input) => scope.execute({ type: "session.actor.adoptRun", input }),
@@ -210,18 +210,29 @@ export function createSqliteSessionActorExecutor(
       }
       candidate = value;
     });
-    const unknown = (error: unknown): Outcome => ({
-      kind: "unknown",
-      target,
-      commandId: captured.commandId,
-      error: errorFacts(error),
-    });
+    const unknown = (error: unknown): Outcome => {
+      if (target.database.kind === "file") {
+        publishRetainedSessionEntryChange(
+          target.database.physicalIdentity,
+          target.sessionKey,
+          undefined,
+          previousEntry,
+          false,
+        );
+      }
+      return {
+        kind: "unknown",
+        target,
+        commandId: captured.commandId,
+        error: errorFacts(error),
+      };
+    };
     const preserveFailure = (error: unknown, origin?: "response"): Outcome => {
       if (!committed) {
         return unknown(error);
       }
       const failure = { ...errorFacts(error), ...(origin ? { origin } : {}) };
-      committed = freezeJsonSnapshot({
+      committed = {
         ...committed,
         failure: committed.failure
           ? {
@@ -229,7 +240,7 @@ export function createSqliteSessionActorExecutor(
               message: `${committed.failure.message}; ${failure.message}`,
             }
           : failure,
-      });
+      };
       return committed;
     };
     let outcome: Outcome;
@@ -268,11 +279,11 @@ export function createSqliteSessionActorExecutor(
                 receipt.phase === name
               ) {
                 // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
-                committed = freezeJsonSnapshot(evidence) as Extract<Outcome, { kind: "committed" }>;
+                committed = evidence as Extract<Outcome, { kind: "committed" }>;
                 if (!reply.ok) {
                   preserveFailure(reply.error, "response");
                 } else if (reply.value.kind === "committed" && reply.value.failure) {
-                  committed = freezeJsonSnapshot({ ...committed, failure: reply.value.failure });
+                  committed = { ...committed, failure: reply.value.failure };
                 }
                 result = committed;
                 try {

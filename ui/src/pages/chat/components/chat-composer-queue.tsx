@@ -1,4 +1,4 @@
-import { For, createMemo, createRenderEffect, onCleanup } from "solid-js";
+import { For, createEffect, createMemo, createRenderEffect, onCleanup } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
   chatQueueMovableSegments,
@@ -344,6 +344,20 @@ function ChatQueueItem(rowProps: {
   );
   const segment = createMemo(() => reorder().segments.find((ids) => ids.includes(item().id)) ?? []);
   const moveIndex = createMemo(() => segment().indexOf(item().id));
+  let keyboardMoveHandle: HTMLButtonElement | undefined;
+  createEffect(reorder, () => {
+    const handle = keyboardMoveHandle;
+    keyboardMoveHandle = undefined;
+    // Keyed moves can blur descendants after the handler's microtask. Restore
+    // the retained handle only after this reorder projection commits its DOM.
+    if (
+      handle?.isConnected &&
+      !handle.disabled &&
+      handle.ownerDocument.activeElement === handle.ownerDocument.body
+    ) {
+      handle.focus({ preventScroll: true });
+    }
+  });
   const move = createMemo(() => rowProps.controls.onQueueMove);
   // Queue-level: once any row can move, every row's own state icon becomes the
   // handle so text stays on one x without adding a second grabber column.
@@ -475,18 +489,10 @@ function ChatQueueItem(rowProps: {
             const targetId = segment()[moveIndex() + delta];
             if (targetId) {
               const handle = event.currentTarget;
+              if (handle instanceof HTMLButtonElement) {
+                keyboardMoveHandle = handle;
+              }
               move()?.(item().id, targetId);
-              // A keyed DOM move can blur its focused descendant. Preserve the
-              // same handle for repeated arrow presses after the queued commit.
-              queueMicrotask(() => {
-                if (
-                  handle.isConnected &&
-                  !handle.disabled &&
-                  handle.ownerDocument.activeElement === handle.ownerDocument.body
-                ) {
-                  handle.focus({ preventScroll: true });
-                }
-              });
             }
           }}
         >

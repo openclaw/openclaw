@@ -23,6 +23,7 @@ import {
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../tts/voice-models.js";
+import { resolveTalkFileTranscriptionConfig } from "./file-transcription.js";
 
 export async function resolveTalkRealtimeProviderInstructions(params: {
   config: OpenClawConfig;
@@ -201,6 +202,7 @@ export async function buildTalkTranscriptionConfig(
   config: OpenClawConfig,
   requestedProvider?: string,
   requestedModel?: string,
+  agentId?: string,
 ) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
@@ -213,10 +215,18 @@ export async function buildTalkTranscriptionConfig(
     providers: listTalkTranscriptionProviders(config, configuredProviderIds),
     requestedModel: normalizeOptionalString(requestedModel),
   });
+  const file =
+    !provider &&
+    !voiceModelDefault &&
+    !normalizeOptionalString(requestedModel) &&
+    Object.keys(providerConfigs).length === 0
+      ? await resolveTalkFileTranscriptionConfig(config, agentId)
+      : undefined;
   return {
     provider: provider ?? voiceModelDefault?.provider,
     providers: providerConfigs,
     model: voiceModelDefault?.model,
+    file,
   };
 }
 

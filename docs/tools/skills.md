@@ -782,7 +782,9 @@ skill eligibility. Remote workspace discovery stays with the host that owns
 those files. Configuration changes replace source plans and subscriptions on the
 healthy discovery worker; they do not wait for an unnecessary worker restart.
 
-The worker publishes a complete snapshot after discovery. Existing sessions
+The worker publishes a complete snapshot after discovery. While a scan is running,
+turns reuse the last published skills without waiting for other workspaces. First
+discovery and explicit refresh actions still wait for publication. Existing sessions
 pick up changed file-backed skills on their next agent turn. If the effective
 agent allowlist changes, OpenClaw refreshes the snapshot to keep visible skills
 aligned.

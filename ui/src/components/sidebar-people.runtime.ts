@@ -151,7 +151,7 @@ export class SidebarPeopleRuntime {
       client: gateway.snapshot.client,
     };
     this.portal.markTrigger(trigger);
-    this.observer.observe(this.host, { childList: true, subtree: true });
+    this.observer.observe(this.host.hostElement, { childList: true, subtree: true });
     document.addEventListener("pointerdown", this.outsideInteraction, true);
     document.addEventListener("focusin", this.outsideInteraction, true);
     document.addEventListener("keydown", this.outsideKey, true);

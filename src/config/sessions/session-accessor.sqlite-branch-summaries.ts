@@ -29,7 +29,7 @@ export function readSessionBranchSummaries(
   const db = getSessionKysely(database.db);
   const navigationQuery = db
     .selectFrom("transcript_events")
-    .select(["seq", transcriptEventNavigationSql().as("event_json")])
+    .select(["seq", transcriptEventNavigationSql(database.db).as("event_json")])
     .select((eb) =>
       eb
         .selectFrom("transcript_event_identities")

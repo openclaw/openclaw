@@ -8,6 +8,7 @@ import {
 import { isPointInPolygon } from "@zag-js/rect-utils";
 import { VanillaMachine, normalizeProps } from "@zag-js/vanilla";
 import { createEffect, createSignal, onSettled, untrack } from "solid-js";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
 
@@ -119,7 +120,12 @@ export function useMenuMachine(
           ? value == null
             ? null
             : `${params.scope.id}:${value}`
-          : computed.highlightedId(params);
+          : // Submenu triggers keep the caller's logical value and their own DOM id.
+            ((value == null
+              ? null
+              : params.scope.query(
+                  `[data-menu-item="${CSS.escape(overlay.id)}"][data-value="${CSS.escape(value)}"]`,
+                )?.id) ?? computed.highlightedId(params));
       },
     },
     implementations: {
@@ -233,6 +239,8 @@ export function useMenuMachine(
       }
     },
     onSelect: ({ value }) => onSelect(value),
+    // Zag's default link click is not cancelable; native click keeps selection vetoable.
+    navigate: ({ node }) => queueMicrotask(() => node.click()),
   };
   const service = new VanillaMachine(adapted, props);
   createEffect(direction, (dir) => service.updateProps({ ...props, dir, open: overlay.open }));
@@ -377,6 +385,24 @@ export function useMenuMachine(
         : api.getItemProps({ value, valueText: label, disabled, closeOnSelect: false });
       return {
         ...result,
+        onClick: (event: MouseEvent) => {
+          if (event.currentTarget instanceof HTMLAnchorElement) {
+            if (disabled) {
+              event.preventDefault();
+              return;
+            }
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+          }
+          result.onClick?.(event);
+        },
+        onContextMenu: (event: MouseEvent) => {
+          if (event.currentTarget instanceof HTMLAnchorElement) {
+            event.stopPropagation();
+          }
+        },
         onPointerMove: (event: PointerEvent) => {
           if (event.movementX === 0 && event.movementY === 0) {
             return;

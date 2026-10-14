@@ -33,6 +33,17 @@ export type SqliteWorkerAdmissionRequest = {
   deadlineMs?: number;
 };
 
+// Admission deadlines cross threads, so both sides keep the process monotonic
+// clock captured at import. Fake timers replace `process.hrtime` on one thread
+// with a clock that starts at zero; reading that replacement would expire, or
+// extend, every deadline the other thread set.
+const processMonotonicClock = process.hrtime;
+
+/** Monotonic nanoseconds shared by every thread of this process. */
+export function readSqliteWorkerMonotonicNs(): bigint {
+  return processMonotonicClock.bigint();
+}
+
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };

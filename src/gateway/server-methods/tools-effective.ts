@@ -51,7 +51,7 @@ import {
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
-import { resolveSessionModelRef, type loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { resolveSessionModelRef, type GatewaySessionEntryRead } from "../session-utils.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -435,10 +435,7 @@ async function resolveTrustedToolsEffectiveContext(
     requestedAgentId?: string;
     respond: RespondFn;
   },
-  loaded: Pick<
-    ReturnType<typeof loadGatewaySessionEntryReadOnly>,
-    "entry" | "canonicalKey" | "cfg"
-  >,
+  loaded: Pick<GatewaySessionEntryRead, "entry" | "canonicalKey" | "cfg">,
 ) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
@@ -552,10 +549,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
       }
       const authority = readGatewayRequestMutationAuthority(options);
       const consume = async (
-        loaded: Pick<
-          ReturnType<typeof loadGatewaySessionEntryReadOnly>,
-          "entry" | "canonicalKey" | "cfg"
-        >,
+        loaded: Pick<GatewaySessionEntryRead, "entry" | "canonicalKey" | "cfg">,
         assertSourceCurrent: () => void,
       ) => {
         const trustedContext = await resolveTrustedToolsEffectiveContext(

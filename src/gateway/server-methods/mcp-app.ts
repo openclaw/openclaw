@@ -120,7 +120,7 @@ function operationHandler(
     const cfg = context.getRuntimeConfig();
     const requesterId = resolveMcpAppRequesterId(client);
     const active = await resolveRequestedMcpAppView(options, { cfg, requesterId });
-    const read = retainSessionScopedRead(
+    const read = await retainSessionScopedRead(
       options,
       requireString(params, "sessionKey"),
       active.view.agentId,
@@ -199,7 +199,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     const sessionKey = requireString(params, "sessionKey");
     const agentId = resolveMcpAppSessionOwner(params, context.getRuntimeConfig());
     const requesterId = resolveMcpAppRequesterId(client);
-    const read = retainSessionScopedRead(options, sessionKey, agentId);
+    const read = await retainSessionScopedRead(options, sessionKey, agentId);
     const assertRequestCurrent = () => {
       read?.assertCurrent();
       if (requesterId !== resolveMcpAppRequesterId(client)) {

@@ -2,6 +2,8 @@
 
 import { html, LitElement, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
@@ -129,6 +131,32 @@ afterEach(() => {
 });
 
 describe("chat pane sidebar layout", () => {
+  it("keeps the parent layout writable after a panel context replacement", async () => {
+    // SAFETY: the region transports application context; this fixture's panel reads no capabilities.
+    const container = createApplicationContextProvider({} as ApplicationContext);
+    containers.push(container);
+    document.body.append(container);
+    const layout = openSlot({ columns: [] }, "detail");
+    await renderLayout(container, layout);
+    const region = container.querySelector("openclaw-chat-sidebar-region")!;
+    const primary = container.querySelector("[data-primary]");
+    const detail = container.querySelector("[data-detail]");
+
+    // SAFETY: a new context identity exercises the bridge's supported root replacement.
+    container.setContext({} as ApplicationContext);
+    await region.updateComplete;
+    expect(container.querySelector("[data-detail]")).not.toBe(detail);
+
+    await renderLayout(container, promoteSidebarPanel(layout, "detail"));
+    expect(container.querySelector("[data-primary]")).toBe(primary);
+    expect(
+      container
+        .querySelector("[data-detail]")
+        ?.closest("[data-region]")
+        ?.getAttribute("data-region"),
+    ).toBe("main");
+  });
+
   it("keeps tab targets within split and retained conversation presentations", async () => {
     const layout = openSlot({ columns: [] }, "detail");
     const presentations = [

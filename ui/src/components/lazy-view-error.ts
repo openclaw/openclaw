@@ -1,13 +1,9 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { solidContent } from "../lit/solid-content.tsx";
 import { icon } from "./icons.ts";
 import { renderLoadingState } from "./loading-state.ts";
-import {
-  AgentStartupState,
-  LazyViewError,
-  LegacyPanelErrorState,
-} from "./solid/lazy-view-error.tsx";
+import { AgentStartupState, LazyViewError } from "./solid/lazy-view-error.tsx";
 
 export function renderAgentStartupState() {
   return html`${solidContent(AgentStartupState, {})}`;
@@ -97,17 +93,4 @@ export function renderLazyViewError(params: {
       inline: inline ?? Boolean(render),
     })}
   `;
-}
-
-export function renderPanelErrorState(params: {
-  actions?: TemplateResult;
-  className?: string;
-  detail?: string;
-  inline?: boolean;
-  role?: "alert" | "status";
-  stale?: boolean;
-  subtitle: string;
-  title: string;
-}) {
-  return html`${solidContent(LegacyPanelErrorState, params)}`;
 }

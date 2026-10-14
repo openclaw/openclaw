@@ -432,13 +432,6 @@ describe("post-activation failure settlement without inference", () => {
           root: activeRoot,
           after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
         },
-        automaticTriage: restoredHealthy
-          ? undefined
-          : expect.objectContaining({
-              kind: "update",
-              phase: reason,
-              installationRoot: activeRoot,
-            }),
       });
       // Plugin writes remain in the original stopped interval and never rerun after restoration.
       expect(mocks.converge).toHaveBeenCalledOnce();

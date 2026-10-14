@@ -18,6 +18,7 @@ export type SessionMutationsHost = PendingRowHost &
     reconcileMutation: (
       agentId?: string | null,
       isErrorCurrent?: () => boolean,
+      immediate?: boolean,
     ) => Promise<SessionRefreshOutcome>;
     publishedRow: (key: string) => GatewaySessionRow | undefined;
     archiveFields: Pick<ReturnType<typeof createSessionRowProvenance>, "inheritRow">;

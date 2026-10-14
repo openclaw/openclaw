@@ -3,7 +3,10 @@ import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "../../gateway/server-methods/sessions-sharing.js";
 import {
@@ -33,6 +36,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -50,6 +54,8 @@ import { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-ent
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+import { captureDurableSessionActor } from "./session-actor-durable.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { assignSessionOwnerInWorker } from "./session-metadata-write.async.js";
@@ -297,6 +303,21 @@ it("commits aliased worker membership and participant facts before publishing, a
       createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
     };
     replaceSessionEntrySync(scope, entry);
+    const identity = readOpenClawAgentDatabaseIdentity(database);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Participant publication proof requires a physical database");
+    }
+    const actorTarget = {
+      sessionKey: scope.sessionKey,
+      database: {
+        kind: "file" as const,
+        physicalIdentity: identity.identity,
+        birthtime: identity.birthtime,
+        nativeLocation: database.path,
+      },
+    };
+    const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
+    let actor: ReturnType<typeof captureDurableSessionActor> | undefined;
     const expectedEntry = {
       sessionId: entry.sessionId,
       createdActor: entry.createdActor,
@@ -311,19 +332,8 @@ it("commits aliased worker membership and participant facts before publishing, a
         participantLifecycle(event);
       }
     });
-    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const queries: string[] = [];
-    const methods = (["all", "get", "run", "iterate"] as const).map((method) => {
-      const original = prototype[method];
-      return vi.spyOn(prototype, method).mockImplementation(
-        new Proxy(original, {
-          apply(target, receiver: StatementSync, args) {
-            queries.push(receiver.sourceSQL);
-            return Reflect.apply(target, receiver, args);
-          },
-        }),
-      );
-    });
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const sql = observeHostDataSql();
     try {
       expect(
         await addSessionMember(scope, {
@@ -354,6 +364,12 @@ it("commits aliased worker membership and participant facts before publishing, a
           },
         },
       });
+      actor = captureDurableSessionActor({
+        database: { agentId: "main", path: database.path },
+        target: actorTarget,
+        lifetime: authority,
+      });
+      const before = await actor.read(authority);
       const publications = changes.length;
       expect(
         await recordSessionParticipant(scope, {
@@ -364,9 +380,24 @@ it("commits aliased worker membership and participant facts before publishing, a
       expect(changes).toHaveLength(publications + 1);
       expect(changes.at(-1)).toMatchObject({
         sessionKey: scope.sessionKey,
-        facts: { kind: "participants" },
+        facts: {
+          kind: "participants",
+          projectionChanged: false,
+          records: [
+            {
+              identity: { type: "agent", id: "peer" },
+              contributionCount: 2,
+              firstPromptedAt: 3,
+              lastPromptedAt: 4,
+            },
+          ],
+        },
       });
       expect(changes.at(-1)).not.toHaveProperty("facts.projection");
+      const after = actor.snapshot(authority);
+      expect(after?.participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 4 }]);
+      expect(after?.version).toEqual({ ...before.version, sequence: before.version.sequence + 1 });
+      expect(readSessionActorEntryFacts(actorTarget)?.participants).toEqual(after?.participants);
       expect(participantLifecycle).toHaveBeenCalledTimes(2);
       await expect(
         addSessionMember(scope, {
@@ -393,15 +424,15 @@ it("commits aliased worker membership and participant facts before publishing, a
         sessionKey: scope.sessionKey,
         facts: { kind: "member", identityId: "guest", present: false },
       });
-      expect(
-        queries.filter((sql) => /\b(session_members|session_participants)\b/.test(sql)),
-      ).toEqual([]);
+      expect(actor.snapshot(authority)).toBeUndefined();
+      expect((await actor.read(authority)).participants).toEqual(after?.participants);
+      expect(sql.queries).toEqual([]);
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main" })).toBeUndefined();
     } finally {
+      await actor?.release();
       stop();
       stopLifecycle();
-      for (const method of methods) {
-        method.mockRestore();
-      }
+      sql.restore();
     }
     expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
   });

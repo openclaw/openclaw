@@ -14,12 +14,12 @@ to OpenClaw.
 Runtimes are easy to confuse with providers because both show up near model
 configuration. They are different layers:
 
-| Layer         | Examples                                     | Meaning                                                             |
-| ------------- | -------------------------------------------- | ------------------------------------------------------------------- |
-| Provider      | `anthropic`, `github-copilot`, `openai`      | How OpenClaw authenticates, discovers models, and names model refs. |
-| Model         | `claude-opus-4-6`, `gpt-6-astra`             | The model selected for the agent turn.                              |
-| Agent runtime | `claude-cli`, `codex`, `copilot`, `openclaw` | The low-level loop or backend that executes the prepared turn.      |
-| Channel       | Discord, Slack, Telegram, WhatsApp           | Where messages enter and leave OpenClaw.                            |
+| Layer         | Examples                                             | Meaning                                                             |
+| ------------- | ---------------------------------------------------- | ------------------------------------------------------------------- |
+| Provider      | `anthropic`, `github-copilot`, `openai`              | How OpenClaw authenticates, discovers models, and names model refs. |
+| Model         | `claude-opus-4-6`, `gpt-6-astra`                     | The model selected for the agent turn.                              |
+| Agent runtime | `claude-cli`, `codex`, `copilot`, `muse`, `openclaw` | The low-level loop or backend that executes the prepared turn.      |
+| Channel       | Discord, Slack, Telegram, WhatsApp                   | Where messages enter and leave OpenClaw.                            |
 
 A **harness** is the implementation that provides an agent runtime (code
 term). For example, the bundled Codex harness implements the `codex` runtime.
@@ -32,7 +32,7 @@ Two runtime families:
 
 - **Embedded harnesses** run inside OpenClaw's prepared agent loop: the
   built-in `openclaw` runtime, plus registered plugin harnesses such as
-  `codex` and `copilot`.
+  `codex`, `copilot`, and `muse`.
 - **CLI backends** run a local CLI process while keeping the model ref
   in its standard form. For example, `anthropic/claude-opus-5` with a model-scoped
   `agentRuntime.id: "claude-cli"` means "select the Anthropic model, execute
@@ -269,6 +269,13 @@ code. For configuration, auth, transcript mirroring, compaction, the
 declarative doctor contract, and the broader PI vs Codex vs Copilot SDK
 decision, see [GitHub Copilot agent runtime](/plugins/copilot).
 
+## Muse Code agent runtime
+
+The external `@openclaw/muse` plugin registers an opt-in `muse` runtime backed
+by the Muse Code CLI for the standard `meta` provider. It is never selected by
+`auto`; set `agentRuntime.id: "muse"` on a `meta/*` model or provider. See
+[Muse Code agent runtime](/plugins/muse).
+
 ## Compatibility contract
 
 When a runtime is not OpenClaw, its docs should state which OpenClaw surfaces
@@ -308,6 +315,7 @@ reject the turn. The completed result records the runtime that actually ran.
 - [Codex harness](/plugins/codex-harness)
 - [Codex harness runtime](/plugins/codex-harness-runtime)
 - [GitHub Copilot agent runtime](/plugins/copilot)
+- [Muse Code agent runtime](/plugins/muse)
 - [OpenAI](/providers/openai)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
 - [Agent loop](/concepts/agent-loop)

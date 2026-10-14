@@ -175,6 +175,24 @@ read-worker snapshot. Unrelated secrets and agent-readable `env` entries are not
 loaded or registered. A missing or non-secret selection fails before launching
 the job; changes to the store apply to the next job's snapshot.
 
+Cloud worker profiles select these jobs with `settings.setupSecrets`, a bounded
+map of POSIX environment names to store SecretRefs. Only protected entries with
+exact destination bindings qualify. A committed devcontainer `secrets` property
+requests names from this approved map; it cannot select another store entry or
+grant destinations. Missing mappings are reported together before repository
+commands run. See [cloud environment files](/gateway/cloud-workers/environment-file).
+
+Profile setup, preparation, and post-create/start use Crabbox native `egress run`
+on the worker's owned coordinator Linux lease. Crabbox 0.77.0 or newer permits
+public destinations for ordinary HTTPS package downloads, while the Gateway
+substitutes each sentinel only at that secret's bound host. This job does not
+require `secrets.egressProxy.enabled`. Unsupported leases, unavailable helpers or
+proxy service, and old CLIs fail with repair guidance before repository code.
+No-secret jobs retain their existing transport.
+Protected setup exports only HTTPS proxy settings and unsets inherited
+`HTTP_PROXY` and `http_proxy` values. Plain HTTP downloads go directly from the
+lease and never receive substituted secrets.
+
 The job receives remote sentinel environment values and public CA bundle
 contents. Its authenticated upstream proxy environment belongs only on the
 credential-owning host, never in the remote environment or a snapshot. The host
@@ -183,6 +201,14 @@ same worker-owned grant lifecycle: cancellation revokes access synchronously
 before process termination, and completion or failure revokes the grant, stops
 the proxy, and removes temporary CA files. See the
 [SDK runtime contract](/plugins/sdk-runtime#setup-secret-egress).
+
+Setup secrets no longer disable snapshots. Compatibility records use sorted
+environment names and store references with a protected-egress identity, never
+values or sentinel bytes. Capture removes runner-owned CA files and Crabbox
+command staging. No runner-generated credential config is retained; repository
+configuration stays owned by the repository. Legacy `setupEnv` requires Doctor
+repair against existing bound store entries; values are never forwarded or
+rewritten by that migration.
 
 ## Model credentials for Crabbox commands
 

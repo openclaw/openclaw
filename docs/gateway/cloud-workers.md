@@ -7,23 +7,39 @@ status: active
 doc-schema-version: 1
 ---
 
-Cloud workers move a session's coding work onto a throwaway cloud machine while the session stays visible in the sidebar and its transcript remains owned by the Gateway. The bundled Crabbox provider boots the box, runs profile setup, and starts `openclaw connect --ephemeral`. For Gateway-source projects with warm images enabled, it prepares the committed checkout and node runtime for capture before enrolling the node. One configured Crabbox profile supports both OpenClaw `worker-turn` and Codex `remote-exec` over the same enrolled outbound-node transport. OpenClaw launches a restricted `openclaw worker` child; Codex runs its managed exec-server on the node while keeping app-server and model authentication on the Gateway.
+Cloud workers run a session's coding work on a disposable machine while its transcript and accepted workspace changes stay with the Gateway. With Crabbox configured on the Gateway host, OpenClaw can select a machine, prepare the repository, and save a snapshot without a custom setup script.
 
-Enrollment is environment-owned and replay-safe. The Gateway persists one setup identity before node enrollment, binds the first authenticated device identity to that exact environment, and reuses the durable device token when provisioning resumes. Initial enrollment and replay both enable worker hosting only for that node process; they do not change durable worker-host configuration. Reclaim or destroy releases the cloud lease and removes the environment-owned node pairing. If provisioning fails before returning a lease, cleanup resolves the original operation’s handle without rerunning provisioning, setup, or enrollment. The handle may refer to an operation that never created a machine; cleanup completes only after the provider confirms release or absence. Teardown waits for in-flight provider operations and heartbeat processes to settle. Crabbox's release request and cleanup observation have separate deadlines; OpenClaw reserves both before terminating a stalled stop command.
+## Quick start
 
-When the work is done (or the box dies), the machine is discarded. The transcript, accepted workspace changes, and placement records remain with the Gateway.
+Open **New Session**, select a repository or **New workspace**, and choose **Cloud**. If no cloud profile exists, OpenClaw can suggest one from your configured Crabbox backend and save it when you select it. Viewing the suggestion does not save configuration or allocate a machine. Saving requires administrator access; existing profiles take precedence.
 
-A cloud session can start from a GitHub repository URL and optional ref without a Gateway checkout. The selected node fetches the repository, pins the resolved commit, and creates the session branch. The Gateway keeps source metadata and immutable checkpoints of accepted changes, not a checked-out copy. Both OpenClaw and Codex support this flow on managed cloud nodes and paired nodes; providers with only an SSH carrier cannot prepare repository-only sessions. The node-host runtime must be current as well as the worker bundle: an older host cannot complete the required workspace drain and remains fenced. Update the paired node host or reprovision the cloud worker, then retry.
+The suggested `cloud` profile uses Linux, the smallest advertised standard class, an 8-hour lifetime, and 45-minute idle timeout and suspend. Warm images are enabled. Edit it later in **Settings → Connections → Cloud environments**. If config reload is disabled, saving schedules a Gateway restart; wait for the profile to become active and retry selection.
 
-Sessions created from an existing Gateway checkout still retain their session-owned [managed-worktree mirror](/concepts/managed-worktrees). That flow preserves local and unpublished source content. Its default count of 100 is a cleanup target, not an admission cap, and its Gateway disk-space checks still apply.
+### First session
 
-Choose **New workspace** to start empty without supplying a repository. OpenClaw creates an isolated session workspace with its own internal Git metadata and the same managed snapshots, reclaim, restore, and cleanup behavior. It does not copy the agent's normal workspace. Git remains an internal dependency, but no user repository or initial commit is required.
+For an eligible Linux repository, the first session provisions its own machine, prepares the selected commit and dependencies, installs the OpenClaw runtime, and starts snapshot capture before enrolling the node. The startup line shows **Preparing cloud environment…**, then **Saving snapshot…**. On supported AWS workers, upload can finish while the session runs; later sessions reuse the snapshot once available. See [first-capture requirements](/gateway/cloud-workers/warm-images#first-session-for-a-repository).
 
-A missing setup environment value, a current Crabbox CLI/backend refusal, or changed provider metadata does not prove that an earlier attempt allocated nothing. These failures remain retryable with the original operation identity. Cleanup resolves that operation's handle and retries teardown until the provider confirms release or absence; it never reruns provisioning, setup, or enrollment to discover the lease. Malformed immutable profiles still fail permanently; policy and setup rejections become permanent only after confirmed cleanup.
+A repository-only GitHub session needs no Gateway checkout. A session started from a Gateway checkout preserves local and unpublished content through its [managed worktree](/concepts/managed-worktrees), applying session changes after capture. **New workspace** starts empty and uses shared runtime images instead of a repository snapshot.
 
-<Note>
-Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud destination and profile dispatch is unavailable. `sessions.dispatch` may still be advertised for eligible paired-device targets. The `cloudWorkers` config schema and the read-only `environments.list` and `environments.status` methods remain available for configuration and environment discovery.
-</Note>
+### Later sessions
+
+A later session adopts a matching ready worker or forks a compatible snapshot. Forks refresh the checkout and top up the current runtime before enrollment. Runtime updates alone do not invalidate repository snapshots; changed setup recipes or machine settings can require a cold build. [Warm images](/gateway/cloud-workers/warm-images) explains reuse, refresh, reserves, storage charges, and recovery.
+
+### Customize preparation and startup
+
+Commit [`.devcontainer/devcontainer.json`](/gateway/cloud-workers/environment-file) for repository setup and per-start commands. OpenClaw runs a host-mode subset: `onCreateCommand` and `updateContentCommand` prepare the snapshot; `postCreateCommand` and `postStartCommand` run after session binding. Without a devcontainer file, it uses an executable `.openclaw/worktree-setup.sh`, then JavaScript lockfile detection.
+
+Linux x64 and arm64 workers receive a verified Node toolchain when needed, and the runtime comes from the running Gateway. No global OpenClaw installation or package URL is needed in your profile. Use optional `settings.setup` for additional machine prerequisites; see [Setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation).
+
+For private dependencies, configure [setup secrets](/gateway/config-cloud-workers#setup-secrets). Commands receive opaque placeholders; protected egress substitutes credentials at approved HTTPS destinations. Secrets do not disable snapshots.
+
+## Configuration
+
+**Settings → Connections → Cloud environments** groups snapshots, setup results, and prepared workers by repository. Select a repository to inspect it or use **Machine → Change** to choose its default profile. The page updates after the worker plugin activates, including after saving the first suggested profile.
+
+Expand **Advanced** to manage **Machines**, inspect the **Pool**, change **Snapshot retention**, or inspect **Machine images** without a repository. See [the page's actions](/gateway/cloud-workers/warm-images#inspect-snapshots-in-the-control-ui), [per-repository defaults](/gateway/cloud-workers/per-project-default-profiles), and the [cloud worker configuration reference](/gateway/config-cloud-workers) for profile fields and examples.
+
+Saved settings apply without restarting the Gateway under the default reload policy. With `gateway.reload.mode: "off"`, saving from this page restarts the Gateway; direct config edits require a manual restart. Saving machine settings does not start a build; **Rebuild** prepares an eligible recorded local project.
 
 ## What each page covers
 
@@ -76,7 +92,7 @@ Node and SSH workspace access and reconciliation outlive worker RPC credential e
 
 ## Requirements
 
-- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://crabbox.sh/) CLI; Crabbox owns the supported cloud backends and their configuration. The plugin automatically prepares its supported CLI for the Gateway user, keeping the managed distribution separate from operator-installed binaries. It can also use a supported executable from `PATH` or `settings.binary`. See [Crabbox configuration](/gateway/config-cloud-workers#crabbox-profile) for the version requirement, Doctor preparation, and restricted-host upgrades.
+- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://crabbox.sh/) CLI; Crabbox owns the supported cloud backends and their configuration. The plugin automatically prepares its supported CLI for the Gateway user, keeping the managed distribution separate from operator-installed binaries. It can also use a supported executable from `PATH` or `settings.binary`. See [Crabbox configuration](/gateway/config-cloud-workers#crabbox-profile) for managed CLI installation and restricted-host upgrades.
 - For Crabbox AWS workers, the effective `aws.instanceProfile` must be empty. The provider checks `crabbox config show --json` before allocation, then requires `crabbox inspect --json` to report `providerMetadata.instanceProfileAttached: false` from EC2 `DescribeInstances`. Leases with an instance role or without authoritative metadata are stopped and rejected. Local CLI/configuration preparation failures finish before the allocation boundary and do not leave a cleanup request for a nonexistent lease. Failures after an allocation request still retain their exact cleanup owner until Stop proves release.
 - On Linux x64/arm64, OpenClaw installs a verified official Node.js toolchain automatically when needed; the image must provide compatible glibc, `curl`, `tar`, and `sha256sum`, with HTTPS access to nodejs.org. macOS and Windows require supported Node.js and npm supplied by the image or optional profile `setup`. Native Windows requires them on the machine `PATH`. Headless Windows workers also require Crabbox's managed detached-process launcher; see [Windows prerequisites](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites). The machine also needs registry access to install the runtime's dependencies for its operating system and CPU.
 - GitHub CLI (`gh`) on the worker's `PATH` for GitHub commands and HTTPS pushes. The sealed worker bundle includes the credential-binding launcher, not GitHub CLI. Crabbox developer images include `gh`; install it in `settings.setup` for other images.
@@ -105,68 +121,6 @@ crabbox doctor --provider <backend> --json
 ```
 
 Read-only readiness does not prove allocation, setup, enrollment, or cleanup. Verify the complete session flow before relying on a new profile; see [Verify the profile](/gateway/cloud-workers/verify-the-profile).
-
-## Quick start
-
-With Crabbox logged in on the Gateway host, open **New Session** and pick **Cloud**
-in the where picker. OpenClaw discovers the configured backend, then saves a
-`cloud` profile when you select it. You can edit that profile later in
-**Settings → Connections → Cloud workers**. An explicitly configured direct
-provider can supply the same suggestion; discovery checks configuration, while
-allocation still performs the provider's normal preflight checks.
-
-The suggested profile uses Linux, the smallest advertised standard machine
-class, an 8-hour lifetime, a 45-minute idle timeout and idle suspend, and warm
-images. Viewing the suggestion does not save config or allocate a machine.
-Saving requires administrator access. Existing profiles take precedence, and
-adopting an existing `cloud` profile leaves it unchanged.
-If config reload is disabled, saving schedules a Gateway restart. Until the
-saved profile becomes active, selection reports that the profile is saved and
-asks you to wait for the restart and retry; retrying does not save it again.
-
-## Configuration
-
-Open **Settings → Connections → Cloud environments** to see one row per repository with a snapshot, a repository default profile, or a prepared worker. Select a repository to inspect its snapshots and setup or change its default machine. The sheet appears beside the list on wide screens and below it on narrow screens. Before any environments exist, the page explains that the first cloud session prepares the repository and saves a snapshot.
-
-Expand **Advanced** at the bottom for **Machines**, **Pool**, **Snapshot retention**, and **Machine images**, in that order. Machines lets you add, edit, or delete profiles; Pool shows ready workers and the shared pool cap. Snapshot retention applies to all repositories. Machine images keeps snapshots without a repository, including uncertain captures, available for inspection and recovery. Profile changes write `cloudWorkers.profiles`, the same keys you can edit directly in `openclaw.json`. Saved changes apply without restarting the Gateway. With `gateway.reload.mode: "off"`, a save from this page restarts the Gateway to apply it, while direct edits to `openclaw.json` wait for a manual `openclaw gateway restart`.
-
-**Machine class** is required in the class-based editor. Enter a class accepted by the selected Crabbox backend and binary; the provider determines its effective sizing. Changing the backend or binary leaves the class unchanged, so verify that it is accepted before saving. To configure a classless profile, use **Settings → Advanced** and omit `settings.class`; **Edit** on an existing classless profile opens Advanced. OpenClaw then omits `--class` unless the placement supplies a class, leaving resource selection to Crabbox without claiming a default size. Explicit `null`, empty or whitespace strings, and nonstring class values are invalid.
-
-The **Operating system** select sets `settings.target` using the profile's advertised operating systems. It appears when at least two systems are advertised, or when a saved target is no longer advertised so you can clear it with **Provider default**. The bundled Crabbox provider defaults to Linux and also accepts Windows (WSL2), native Windows, and macOS; see [operating-system selection](/gateway/cloud-workers/placement-and-machine-selection#choose-an-operating-system-and-machine-class-per-session). Unavailable choices remain visible with the provider's repair hint and cannot be selected. New profiles without an advertised catalog show no selector. Advanced JSON preserves the same setting.
-
-Add a profile under `cloudWorkers.profiles` in `openclaw.json`. Linux x64 and arm64 workers automatically install a verified official Node.js toolchain when the image has no supported Node on `PATH`. `settings.setup` is optional; use it for additional machine prerequisites such as GitHub CLI. macOS and Windows keep using image-provided Node and npm. The runtime requires Node.js 24.16.0 or newer on the 24.x line, or 26.1.0 or newer; Node.js 22 and 25 are unsupported.
-
-```json
-{
-  "cloudWorkers": {
-    "profiles": {
-      "aws": {
-        "provider": "crabbox",
-        "install": "bundle",
-        "suspendAfter": "45m",
-        "settings": {
-          "provider": "aws",
-          "class": "standard",
-          "ttl": "8h",
-          "idleTimeout": "45m",
-          "warmImage": true
-        }
-      }
-    }
-  }
-}
-```
-
-Profile fields:
-
-| Key                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `provider`           | Worker provider id registered by a plugin (`crabbox` for the bundled plugin).                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `install`            | Installation preference for SSH-backed providers. The bundled Crabbox provider bootstraps the node from the current Gateway's runtime artifact, then installs the worker bundle when needed, reusing a matching prepared-image archive or downloading it through the authenticated node channel.                                                                                                                                                                                                                                           |
-| `suspendAfter`       | Optional idle duration, such as `45m`, `90m`, or `2h`; minimum `1m`. Automatically suspend an idle worker using the same safe stop as manual reclaim. The next message provisions a replacement, warm when a snapshot exists. While suspended, only retained snapshot storage is billed; omit this field to keep workers running until explicitly stopped.                                                                                                                                                                                 |
-| `settings`           | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `target` (operating system), `ttl`, `idleTimeout` (Go durations), optional `setup` (safe to repeat), optional `desktop`, and absolute `binary` path. While a session remains placed, OpenClaw heartbeats its lease at a safe fraction of `idleTimeout`; teardown stops the heartbeat before releasing the machine. `desktop: true` asks Crabbox to warm the lease with its browser and loopback RFB desktop before node enrollment.                       |
-| `settings.target`    | Default operating system: `linux` when omitted, or `windows/wsl2`, `windows/normal`, or `macos`. A placement can supply `os`; unsupported values are rejected.                                                                                                                                                                                                                                                                                                                                                                             |
-| `settings.warmImage` | Optional. Captures a prepared project and node runtime before enrollment, then starts later workers for that project and profile from the image. Linux only. Enabled by default when a configured or placement class is known and `setupEnv` is empty or omitted; set `true` or `false` explicitly to override. Pair it with `suspendAfter` so suspended sessions can wake warm. Images incur provider snapshot storage charges. See [Warm images](/gateway/cloud-workers/warm-images) for capture boundaries, refresh, and prerequisites. |
 
 ## Where each section moved
 

@@ -4,7 +4,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import {
+  assertTransactionUsable,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
 import {
   SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_PREPARE_ADMITTED,
@@ -78,6 +81,7 @@ import {
   loadAgentPendingInputOperations,
   loadAgentArchivePruningOperations,
   loadUsageCacheOperations,
+  loadSessionRowBackfillOperations,
   type RegisteredAgentWorkerOperations,
 } from "./openclaw-agent-execution-operations.js";
 import {
@@ -397,6 +401,7 @@ function openAgentDatabaseBackend(
     operationLabel: string,
     owner: string,
     write: (current: OpenClawAgentDatabase) => T,
+    diagnosticContext?: SqliteTransactionOptions["diagnosticContext"],
   ): T => {
     const opened = openWriter();
     return runOpenClawAgentWriteTransaction(
@@ -408,7 +413,7 @@ function openAgentDatabaseBackend(
         return write(current);
       },
       options,
-      { operationLabel },
+      { operationLabel, diagnosticContext },
     );
   };
   const maintenance = createAgentDatabaseMaintenanceOwner({
@@ -476,6 +481,7 @@ function openAgentDatabaseBackend(
     "session.maintenance.release": loadMaintenanceOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,
+    "session.rowTranscript.backfill": loadSessionRowBackfillOperations,
   });
   const context: AgentWorkerOperationContext = {
     open: openWriter,

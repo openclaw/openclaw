@@ -286,12 +286,20 @@ export function createChatSendWorkAdmission(params: {
   const inStorage = <T>(run: () => T): T =>
     storage ? runWithSessionActorStorage(storage, run) : run();
   let references = 1;
+  const cleanup: Array<() => void> = [];
   let admittedSource = params.terminal?.target.readSource;
   let admittedLifecycleRevision = params.terminal?.lifecycleRevision;
   let finishPendingInput: (() => void | Promise<void>) | undefined;
   let inputActor: ReturnType<typeof acquireSessionInputActor> | undefined;
   let actorLifetimeActive = true;
   const releaseAdmission = () => {
+    for (const dispose of cleanup.splice(0)) {
+      try {
+        dispose();
+      } catch (error) {
+        warnCleanupFailure(error);
+      }
+    }
     try {
       params.admission.release();
     } finally {
@@ -442,6 +450,7 @@ export function createChatSendWorkAdmission(params: {
       }
       return inputActor;
     },
+    addCleanup: (dispose: () => void) => cleanup.push(dispose),
     isActive: () => references > 0,
     release: hold(),
     retain,

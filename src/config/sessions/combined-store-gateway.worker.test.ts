@@ -259,7 +259,7 @@ it("retains selection and sentinel options while the worker read is queued", asy
   });
 });
 
-it("keeps stored addresses and foreign lineage stable after main-alias changes", async () => {
+it("prepares foreign lineage without host SQL after main-alias changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const parents = ["agent:main:main", "agent:main:home", "agent:main:global"];
     for (const [index, parent] of [...parents, "global"].entries()) {
@@ -308,6 +308,24 @@ it("keeps stored addresses and foreign lineage stable after main-alias changes",
           observed.restore();
         }
       }
+    }
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parents[0]! },
+      { sessionId: "parent-after-write", updatedAt: 3 },
+    );
+    const observed = observeHostDataSql();
+    try {
+      const result = await loadCombinedSessionStoreForGatewayCoreAsync(
+        { agents: { entries: { main: {}, work: {} } } },
+        { agentId: "work" },
+      );
+      expect(
+        result.targetsBySessionKey.get("agent:work:child-0")?.readSourceEntry(parents[0]!)
+          ?.sessionId,
+      ).toBe("parent-after-write");
+      expect(observed.queries).toEqual([]);
+    } finally {
+      observed.restore();
     }
   });
 });

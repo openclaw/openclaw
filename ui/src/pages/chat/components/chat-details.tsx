@@ -1,4 +1,3 @@
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { Portal } from "@solidjs/web";
 import { Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -10,8 +9,10 @@ import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
 
-type Props = { props?: ChatDetailsProps; presented: boolean };
-export type ChatDetails = SolidBridgeElement<Props>;
+type Props = { props?: ChatDetailsProps; presented: boolean; mobile: boolean };
+type Methods = { open(source: HTMLElement): void };
+export type ChatDetails = SolidBridgeElement<Props, Methods>;
+const controls = new WeakMap<HTMLElement, Methods>();
 let nextId = 0;
 
 const DETAILS_WIDTH = 352;
@@ -19,7 +20,7 @@ const DETAILS_WIDTH = 352;
 const DETAILS_DOCK_MIN_WIDTH = 1200;
 
 /** Pane-local adaptive presentation. Data and mutations remain with the pane. */
-export const ChatDetails = defineSolidBridge<Props>(
+export const ChatDetails = defineSolidBridge<Props, Methods>(
   "openclaw-chat-details",
   (props, host) => {
     const [intent, setIntent] = createSignal<"auto" | "open" | "closed">("auto");
@@ -30,17 +31,27 @@ export const ChatDetails = defineSolidBridge<Props>(
     const surface = document.createElement("div");
     surface.style.display = "contents";
     let frame: HTMLElement | null = null;
+    let pane: HTMLElement | null = null;
     const panelId = `chat-details-${++nextId}`;
     let panel!: HTMLDivElement;
     let trigger!: HTMLButtonElement;
+    let opener: HTMLElement | undefined;
+    const focusSource = (mobile: boolean) => (mobile ? opener : trigger);
     let progressMenu: MenuHandle | undefined;
-    const position = () => {
-      const footer = frame?.querySelector(".chat-footer");
-      const bounds = frame?.getBoundingClientRect();
+    const mountSurface = (mobile: boolean) => {
+      // The mobile header stays visible when a full-width panel hides the conversation.
+      const parent = mobile ? host : (frame ?? host);
+      if (surface.parentElement !== parent) {
+        parent.append(surface);
+      }
+    };
+    const position = (mobile: boolean) => {
+      const footerBounds = frame?.querySelector(".chat-footer")?.getBoundingClientRect();
+      const bounds = (mobile ? (pane ?? frame) : frame)?.getBoundingClientRect();
       if (!panel || !bounds) {
         return;
       }
-      setCanDock(bounds.width >= DETAILS_DOCK_MIN_WIDTH);
+      setCanDock(!mobile && bounds.width >= DETAILS_DOCK_MIN_WIDTH);
       if (panel.classList.contains("chat-details--docked")) {
         return;
       }
@@ -53,26 +64,24 @@ export const ChatDetails = defineSolidBridge<Props>(
       );
       const bottom =
         Math.min(
-          footer?.getBoundingClientRect().top ?? bounds.bottom,
+          footerBounds && footerBounds.height > 0 ? footerBounds.top : bounds.bottom,
           bounds.bottom,
           (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight),
         ) - 8;
-      const triggerBounds = trigger?.getBoundingClientRect();
+      const triggerBounds = focusSource(mobile)?.getBoundingClientRect();
       // Retain the gutter clearance when the trigger sits above the conversation.
       const triggerBottom = triggerBounds
         ? Math.max(triggerBounds.bottom, minimumTop + triggerBounds.height)
         : minimumTop + 28;
       const top = Math.max(minimumTop, Math.min(triggerBottom + 6, bottom - 120));
-      panel.style.left = `${Math.max(left, right - DETAILS_WIDTH)}px`;
+      const width = mobile ? right - left : Math.min(DETAILS_WIDTH, right - left);
+      panel.style.left = `${Math.max(left, right - width)}px`;
       panel.style.top = `${top}px`;
-      panel.style.width = `${Math.max(0, Math.min(DETAILS_WIDTH, right - left))}px`;
+      panel.style.width = `${Math.max(0, width)}px`;
       panel.style.maxHeight = `${Math.max(0, bottom - top)}px`;
     };
     const hide = () => {
       progressMenu?.overlay.request(false);
-      for (const menu of surface.querySelectorAll<WaDropdown>("wa-dropdown")) {
-        menu.open = false;
-      }
       if (panel?.matches(":popover-open")) {
         panel.hidePopover?.();
       }
@@ -81,7 +90,7 @@ export const ChatDetails = defineSolidBridge<Props>(
       hide();
       setIntent("closed");
       if (restoreFocus && host.isConnected) {
-        trigger?.focus({ preventScroll: true });
+        focusSource(props.mobile)?.focus({ preventScroll: true });
       }
     };
     const toggle = () => {
@@ -94,6 +103,15 @@ export const ChatDetails = defineSolidBridge<Props>(
       }
       setIntent("open");
     };
+    controls.set(host, {
+      open(source) {
+        if (!props.presented) {
+          return;
+        }
+        opener = source;
+        setIntent("open");
+      },
+    });
     const outside = (event: PointerEvent) => {
       if (
         opened() &&
@@ -110,8 +128,7 @@ export const ChatDetails = defineSolidBridge<Props>(
         opened() &&
         (!docked() || panel.contains(document.activeElement)) &&
         !event.defaultPrevented &&
-        !progressMenu?.overlay.open &&
-        ![...surface.querySelectorAll<WaDropdown>("wa-dropdown")].some((menu) => menu.open)
+        !progressMenu?.overlay.open
       ) {
         event.preventDefault();
         close(true);
@@ -134,6 +151,7 @@ export const ChatDetails = defineSolidBridge<Props>(
       () => presentation(),
       () => {
         setIntent("auto");
+        opener = undefined;
       },
     );
     createEffect(
@@ -145,52 +163,57 @@ export const ChatDetails = defineSolidBridge<Props>(
       },
     );
     createEffect(
-      () => [opened(), docked()] as const,
-      ([open, dock]) => {
+      () => [opened(), docked(), props.mobile] as const,
+      ([open, dock, mobile]) => {
         hide();
+        mountSurface(mobile);
         panel.hidden = !open;
         panel.popover = dock ? null : "manual";
         panel.style.cssText = "";
         panel.classList.toggle("chat-details--docked", dock);
         frame?.style.setProperty("--chat-details-space", dock ? DETAILS_WIDTH + "px" : "0px");
         if (open && !dock) {
-          position();
+          position(mobile);
           // Keep native Tab entry beside its header trigger after portaling the content.
-          panel.showPopover({ source: trigger });
+          panel.showPopover({ source: focusSource(mobile) });
         }
       },
     );
+    const reposition = () => {
+      mountSurface(props.mobile);
+      position(props.mobile);
+    };
     onSettled(() => {
+      pane = host.closest<HTMLElement>(".sidebar-region");
       frame =
         host.closest<HTMLElement>(".chat-main__conversation-frame") ??
         host
           .closest("openclaw-chat-pane")
           ?.querySelector<HTMLElement>(".chat-main__conversation-frame") ??
         null;
-      // Keep one content tree across overlay/dock transitions, outside the header's clipping.
-      (frame ?? host).append(surface);
       const resize =
-        typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(position);
-      for (const element of [frame, frame?.querySelector(".chat-footer")]) {
+        typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(reposition);
+      for (const element of [pane, frame, frame?.querySelector(".chat-footer")]) {
         if (element) {
           resize?.observe(element);
         }
       }
-      position();
+      reposition();
       return () => resize?.disconnect();
     });
-    window.addEventListener("resize", position);
-    window.visualViewport?.addEventListener("resize", position);
-    window.visualViewport?.addEventListener("scroll", position);
+    window.addEventListener("resize", reposition);
+    window.visualViewport?.addEventListener("resize", reposition);
+    window.visualViewport?.addEventListener("scroll", reposition);
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
     onCleanup(() => {
+      controls.delete(host);
       hide();
       frame?.style.removeProperty("--chat-details-space");
       surface.remove();
-      window.removeEventListener("resize", position);
-      window.visualViewport?.removeEventListener("resize", position);
-      window.visualViewport?.removeEventListener("scroll", position);
+      window.removeEventListener("resize", reposition);
+      window.visualViewport?.removeEventListener("resize", reposition);
+      window.visualViewport?.removeEventListener("scroll", reposition);
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("keydown", escape);
     });
@@ -201,6 +224,7 @@ export const ChatDetails = defineSolidBridge<Props>(
             trigger = element;
           }}
           class="chat-details-toggle"
+          hidden={props.mobile}
           type="button"
           aria-label={t("chat.sessionDetails.title")}
           aria-controls={panelId}
@@ -257,7 +281,9 @@ export const ChatDetails = defineSolidBridge<Props>(
     properties: {
       props: { default: undefined, attribute: false },
       presented: { default: false, type: Boolean },
+      mobile: { default: false, type: Boolean, reflect: true },
     },
+    methods: { open: (host, source) => controls.get(host)?.open(source) },
   },
 );
 

@@ -1,12 +1,16 @@
 import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
-import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -20,11 +24,16 @@ import type {
   SessionActorHotState,
   SessionActorTarget,
   SessionActorOperations,
+  SessionActorOutcome,
+  SessionActorPhase,
+  SessionActorPhaseResults,
 } from "./session-actor-contract.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
-import type { SessionEntryPatchReduction } from "./session-entry-patch.types.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
+import { commitSessionLifecycleProjection } from "./session-lifecycle-projection.worker.js";
+import type { SessionParticipantRecordInput } from "./session-sharing-store.types.js";
+import { bindSqliteWorkerBackend as bindSharingBackend } from "./session-sharing-store.worker.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 export type Mutation = Exclude<Command, { type: "session.actor.read" }>;
@@ -71,15 +80,32 @@ function createFixture() {
     admit?: AgentWorkerOperationContext["admit"];
     withCommit?: (commit: () => void) => void;
     afterTransaction?: () => void;
+    transactionOptions?: SqliteTransactionOptions;
     transactions: number;
   } = { transactions: 0 };
+  let commitFacts: unknown;
+  let transferredOutcome: unknown;
+  let outcomeTransfer: ReturnType<typeof createSqliteWorkerTransferCollector> | undefined;
+  let lastReply: SessionActorOperations["session.actor.patch"]["output"] | undefined;
   const context: AgentWorkerOperationContext = {
     open: () => database,
     options: { agentId: "main", path: database.path },
-    admit: (stage, facts) => hooks.admit?.(stage, facts),
-    writeTransaction(_label, _owner, write) {
+    admit(stage, facts) {
+      hooks.admit?.(stage, facts);
+      if (
+        isRecord(facts) &&
+        isRecord(facts.publication) &&
+        facts.publication.kind === "session-actor-outcome"
+      ) {
+        outcomeTransfer?.accept(facts.publication.transfer);
+      }
+    },
+    writeTransaction(operationLabel, _owner, write, diagnosticContext) {
       hooks.transactions += 1;
       const result = runSqliteImmediateTransactionSync(database.db, () => write(database), {
+        ...hooks.transactionOptions,
+        operationLabel,
+        diagnosticContext,
         withCommit: (commit) => (hooks.withCommit ? hooks.withCommit(commit) : commit()),
       });
       hooks.afterTransaction?.();
@@ -101,6 +127,9 @@ function createFixture() {
     }
     if (received.kind === "native-commit" || received.kind === "native-settlement") {
       receipts.push(received);
+      if (received.kind === "native-commit" && isRecord(received.committed)) {
+        commitFacts = received.committed.facts;
+      }
       return;
     }
     // Preserve real admission exchanges while their native caller blocks on this isolate.
@@ -126,16 +155,55 @@ function createFixture() {
       }
       return value;
     },
-    mutate(command: Mutation) {
+    mutate(command: Mutation): SessionActorOutcome<SessionActorPhaseResults[SessionActorPhase]> {
+      commitFacts = undefined;
+      transferredOutcome = undefined;
+      outcomeTransfer = createSqliteWorkerTransferCollector("outcome", (value) => {
+        transferredOutcome = value;
+      });
       const value = execute(command);
       if (!("kind" in value)) {
         throw new Error("Actor mutation returned a read snapshot");
       }
-      return value;
+      lastReply = value;
+      if (value.kind !== "committed") {
+        return value;
+      }
+      const evidence =
+        isRecord(commitFacts) && commitFacts.kind === "session-actor-committed-transfer"
+          ? outcomeTransfer.completed && outcomeTransfer.id === commitFacts.transferId
+            ? transferredOutcome
+            : undefined
+          : commitFacts;
+      if (!isRecord(evidence) || evidence.kind !== "committed") {
+        throw new Error("Actor acknowledgement has no native committed outcome");
+      }
+      // The worker's native receipt is the typed outcome; the command reply carries only failure.
+      const committed = evidence as Extract<
+        SessionActorOutcome<SessionActorPhaseResults[SessionActorPhase]>,
+        { kind: "committed" }
+      >;
+      return value.failure ? { ...committed, failure: value.failure } : committed;
     },
-    patchEntry(input: SessionEntryPatchReduction) {
+    reply: () => lastReply,
+    participant(params: SessionParticipantRecordInput) {
+      const backend = bindSharingBackend(undefined, {
+        database: database.db,
+        databasePath: database.path,
+        admit: (stage) => hooks.admit?.(stage),
+      });
+      return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+        backend.execute({ type: "participant", input: { scope: seed.scope, params } }),
+      );
+    },
+    patchEntry(input: Parameters<typeof commitSessionEntryPatch>[0]) {
       return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
         commitSessionEntryPatch(input, context),
+      );
+    },
+    commitLifecycle(input: Parameters<typeof commitSessionLifecycleProjection>[0]) {
+      return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+        commitSessionLifecycleProjection(input, context),
       );
     },
     receipt(): unknown {

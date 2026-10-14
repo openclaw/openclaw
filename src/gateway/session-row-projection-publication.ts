@@ -50,6 +50,7 @@ export function createSessionRowPublication(owner: {
           publishedSource: row.publishedSource,
           storedEntry: entry,
           sharingEntry: entry,
+          entryAcquisitionPending: true,
         });
         return;
       }
@@ -154,6 +155,10 @@ export function createSessionRowPublication(owner: {
     const activitySummaryWatermark =
       projection?.activitySummaryWatermark ??
       (sameSession ? previousFacts.activitySummaryWatermark : undefined);
+    const sameTranscript =
+      sameSession &&
+      previousFacts.activitySummaryWatermark?.generation === activitySummaryWatermark?.generation &&
+      previousFacts.activitySummaryWatermark?.maxSeq === activitySummaryWatermark?.maxSeq;
     // Entry-only writes preserve Board/transcript facts. Shared facets retain their
     // independent lifetime; a changed binding requires preparation by that owner.
     const databaseFacts: records.RetainedSessionRowDatabaseFacts | undefined =
@@ -163,13 +168,10 @@ export function createSessionRowPublication(owner: {
             entry,
             hasBoard: projection.hasBoard,
             activitySummaryWatermark,
-            transcriptPreview:
-              sameSession &&
-              previousFacts.activitySummaryWatermark?.generation ===
-                activitySummaryWatermark?.generation &&
-              previousFacts.activitySummaryWatermark?.maxSeq === activitySummaryWatermark?.maxSeq
-                ? previousFacts.transcriptPreview
-                : undefined,
+            transcriptPreview: sameTranscript ? previousFacts.transcriptPreview : undefined,
+            transcriptTerminalModel: sameTranscript
+              ? previousFacts.transcriptTerminalModel
+              : undefined,
             runtimeOwnership: sameRuntimeOwner ? previousFacts.runtimeOwnership : undefined,
             runtimeOwnershipDependencies: sameRuntimeOwner
               ? previousFacts.runtimeOwnershipDependencies
@@ -339,17 +341,14 @@ export function subscribeSessionRowPublications({
         ) {
           continue;
         }
-        row.databaseFactsRevision++;
-        row.pendingDatabaseFacts = undefined;
-        if (row.retainedDatabaseFacts) {
-          row.retainedDatabaseFacts = {
+        records.invalidateDatabaseFacts(
+          row,
+          row.retainedDatabaseFacts && {
             ...row.retainedDatabaseFacts,
             runtimeOwnership: undefined,
             runtimeOwnershipDependencies: undefined,
-          };
-        }
-        row.preparedRuntimeOwnership = undefined;
-        row.runtimeOwnershipDependencies = undefined;
+          },
+        );
         dirty.add(records.identity(row));
         changed.push(row);
       }

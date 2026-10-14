@@ -4,7 +4,6 @@ import { ok } from "@openclaw/normalization-core/result";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { resolveTimestamp } from "./lifecycle-timestamps.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
@@ -26,7 +25,7 @@ import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker.types.js";
-import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 
 type Database = { agentId: string; path: string };
 type WriterReads = {
@@ -112,7 +111,8 @@ function eligible(request: Selection): request is Selection & { sessionKeys: rea
   return (
     !request.selection &&
     request.sessionKeys !== undefined &&
-    request.sessionKeys.length <= MAX_SESSION_ROW_FACTS_KEYS &&
+    request.sessionKeys.length + (request.replyInitializationSessionKey ? 1 : 0) <=
+      MAX_SESSION_ROW_FACTS_KEYS &&
     request.sessionKeys.every((key) => {
       const candidates = collectSessionEntryLookupKeys(key);
       return candidates.length === 1 && candidates[0] === key;
@@ -121,11 +121,9 @@ function eligible(request: Selection): request is Selection & { sessionKeys: rea
       request.projection === "full" ||
       request.projection === "sharing" ||
       request.projection === "exact") &&
-    !request.replyInitializationSessionKey &&
     !request.manualCompact &&
     !request.transcript &&
     !request.includeAuthProfileSource &&
-    !request.includeColdMetadata &&
     (request.projection !== "sharing" || (!request.lifecycleSessionKey && !request.runtimeTarget))
   );
 }
@@ -155,8 +153,7 @@ export function readRetainedSessionEntryFacts(
   if (!eligible(request)) {
     return undefined;
   }
-  const validation = captureOpenClawAgentDatabaseReadValidation(database);
-  if (!validation || Atomics.load(new Int32Array(validation.validation.canonicalReady), 0) !== 1) {
+  if (!readSqliteDatabaseWriteTokenForPath(database.path)) {
     return undefined;
   }
   nativeOwner?.assertCurrent();
@@ -167,7 +164,8 @@ export function readRetainedSessionEntryFacts(
   const participantRecords: NonNullable<SessionEntryCohortResult["participantRecords"]> = {};
   let source: SessionEntryCohortResult["source"] | undefined;
   let databaseIdentity: SessionEntryCohortResult["databaseIdentity"] | undefined;
-  for (const key of request.sessionKeys) {
+  const sessionKeys = [...request.sessionKeys];
+  for (const key of sessionKeys) {
     const target = captureTarget(database, key);
     if (
       !target ||
@@ -186,7 +184,8 @@ export function readRetainedSessionEntryFacts(
       (facts.snapshots !== "full" &&
         (projection === "full" || projection.some((field) => !facts.snapshots.includes(field)))) ||
       (request.includeMembers && facts.members === undefined) ||
-      (request.includeParticipantRecords && facts.participants === undefined)
+      (request.includeParticipantRecords && facts.participants === undefined) ||
+      (request.includeColdMetadata && facts.entry && !facts.coldArchiveAbsent)
     ) {
       return undefined;
     }
@@ -208,6 +207,16 @@ export function readRetainedSessionEntryFacts(
       birthtime: target.database.birthtime,
     };
     if (facts.entry) {
+      if (key === request.replyInitializationSessionKey && facts.entry.parentSessionKey) {
+        const parentKey = normalizeStoreSessionKey(facts.entry.parentSessionKey);
+        if (parentKey && !sessionKeys.includes(parentKey)) {
+          const candidates = collectSessionEntryLookupKeys(parentKey);
+          if (candidates.length !== 1 || candidates[0] !== parentKey) {
+            return undefined;
+          }
+          sessionKeys.push(parentKey);
+        }
+      }
       entries.push({
         sessionKey: key,
         entry: facts.entry,
@@ -269,6 +278,7 @@ export function readRetainedSessionEntryFacts(
     members,
     participantRecords,
     lifecycleTimestamps,
+    ...(request.includeColdMetadata ? { coldArchives: [] } : {}),
     ...(runtimeTarget ? { runtimeTarget: { ...runtimeTarget, storePath: database.path } } : {}),
     source,
     databaseIdentity,
@@ -304,7 +314,18 @@ export function retainSessionEntryReadFacts(
   const byKey = new Map(
     result.entries.map(({ sessionKey, entry }) => [toUSVString(sessionKey), entry]),
   );
-  for (const key of request.sessionKeys) {
+  const sessionKeys = [...request.sessionKeys];
+  const parent = request.replyInitializationSessionKey
+    ? byKey.get(request.replyInitializationSessionKey)?.parentSessionKey
+    : undefined;
+  const parentKey = parent ? normalizeStoreSessionKey(parent) : undefined;
+  if (parentKey && !sessionKeys.includes(parentKey)) {
+    const candidates = collectSessionEntryLookupKeys(parentKey);
+    if (candidates.length === 1 && candidates[0] === parentKey) {
+      sessionKeys.push(parentKey);
+    }
+  }
+  for (const key of sessionKeys) {
     const target = captureTarget(database, key);
     if (
       !target ||

@@ -217,6 +217,9 @@
       "@openclaw/normalization-core/result": [
         "./packages/normalization-core/src/result.ts"
       ],
+      "@openclaw/normalization-core/session-key-comparison": [
+        "./packages/normalization-core/src/session-key-comparison.ts"
+      ],
       "@openclaw/normalization-core/stable-node-path": [
         "./packages/normalization-core/src/stable-node-path.ts"
       ],

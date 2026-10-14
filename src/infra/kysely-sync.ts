@@ -16,7 +16,11 @@ import {
   kyselyByDatabase,
   queryErrorHandlerByDatabase,
 } from "./kysely-sync-cache-state.js";
-import { isPostgresSqlConnection, type PostgresSqlConnection } from "./sql-connection.js";
+import {
+  isPostgresSqlConnection,
+  type EngineConnection,
+  type PostgresSqlConnection,
+} from "./sql-connection.js";
 import {
   OpenClawPostgresDialect,
   sqliteStringSetEntriesFragments,
@@ -56,8 +60,7 @@ const compileOnlyPostgresDialect = new OpenClawPostgresDialect({
 export function getNodeSqliteKysely<Database>(
   db: DatabaseSync | PostgresSqlConnection,
 ): Kysely<Database>;
-// Keep the native signature last for existing callers deriving their handle type with Parameters.
-export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database>;
+export function getNodeSqliteKysely<Database>(db: EngineConnection): Kysely<Database>;
 export function getNodeSqliteKysely<Database>(
   db: DatabaseSync | PostgresSqlConnection,
 ): Kysely<Database> {
@@ -229,7 +232,7 @@ type SqliteQueryBindingBuilder<Params, Row> = (
 /** Cache compiled query functions or bundles by native connection. */
 export function createSqliteQueryCache<
   Queries extends object,
-  Connection extends DatabaseSync | PostgresSqlConnection = DatabaseSync,
+  Connection extends DatabaseSync | PostgresSqlConnection = EngineConnection,
 >(create: (database: Connection) => Queries): (database: Connection) => Queries {
   const queriesByDatabase = new WeakMap<Connection, Queries>();
   return (database) => {

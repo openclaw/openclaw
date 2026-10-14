@@ -19,6 +19,7 @@ import { LitContent as LegacyOutlet } from "./solid-bridge.ts";
 import {
   LitContent,
   mountLitContent,
+  renderLegacyTemplate,
   solidContent,
   SolidContentPresentation,
 } from "./solid-content.tsx";
@@ -64,8 +65,8 @@ describe("Lit and Solid content boundaries", () => {
       expect(button.textContent).toBe("Second");
       expect(disconnected).not.toHaveBeenCalled();
 
-      mounted.dispose();
-      mounted.dispose();
+      renderLegacyTemplate(undefined, container);
+      renderLegacyTemplate(undefined, container);
       expect(container.childNodes).toHaveLength(0);
       expect(disconnected).toHaveBeenCalledOnce();
 
@@ -133,6 +134,37 @@ describe("Lit and Solid content boundaries", () => {
     flush();
     expect(view.container.querySelector("section > div")?.textContent).toBe("Updated");
     expect(view.container.querySelector("article")).toBeNull();
+  });
+
+  it("mounts and retires a delegated Solid default from a settled plugin callback", async () => {
+    const disposed = vi.fn();
+    function DefaultView() {
+      onCleanup(disposed);
+      return <button>Default composer</button>;
+    }
+    function DelegatedView() {
+      return <LitContent value={html`${solidContent(DefaultView, {})}`} />;
+    }
+    function PluginSlot() {
+      const owner = getOwner();
+      let slot!: HTMLDivElement;
+      onSettled(() => {
+        runWithOwner(owner, () => render(solidContent(DelegatedView, {}), slot));
+        return () => render(nothing, slot);
+      });
+      return (
+        <div
+          ref={(element) => {
+            slot = element;
+          }}
+        />
+      );
+    }
+    const view = mountSolid(() => <PluginSlot />);
+    expect(view.getByRole("button", { name: "Default composer" })).toBeTruthy();
+    view.unmount();
+    await Promise.resolve();
+    expect(disposed).toHaveBeenCalledOnce();
   });
 
   it("updates a stable Solid component through Lit without resetting focus or local state", async () => {

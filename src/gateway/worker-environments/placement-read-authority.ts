@@ -16,12 +16,16 @@ export function hasPendingPublication(owner: PlacementAuthorityOwner, sessionId?
 }
 
 export function affectsPlacementObservation(change: ClaimChange, sessionId?: string): boolean {
-  return (
-    change.kind !== "tools" &&
-    (sessionId === undefined
-      ? change.kind !== "claim" || !change.localOnly
-      : change.sessionId === sessionId)
-  );
+  if (change.kind === "tools") {
+    return false;
+  }
+  if (sessionId !== undefined) {
+    return change.sessionId === sessionId;
+  }
+  // Turn, ACK, result, and journal bookkeeping leave preservation ownership unchanged.
+  return change.kind === "claim"
+    ? !change.localOnly && (!change.inventoryUnchanged || change.indeterminate === true)
+    : change.indeterminate === true;
 }
 
 export function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): void {
@@ -158,6 +162,7 @@ export function retainProjection(
   sessionId: string,
   projection: WorkerSessionPlacementReadResult,
 ) {
+  const retained = owner.projections.get(sessionId);
   owner.projections.delete(sessionId);
   const placement = projection.projection.placements.get(sessionId);
   // Environment lifecycle has its own owner. Keep its changing facts on direct reads.
@@ -170,7 +175,10 @@ export function retainProjection(
   ) {
     return;
   }
-  owner.projections.set(sessionId, structuredClone(projection));
+  owner.projections.set(
+    sessionId,
+    retained === projection ? projection : structuredClone(projection),
+  );
   // Cold sessions can always rehydrate; residency is independent of durable ownership.
   if (owner.projections.size > 256) {
     owner.projections.delete(owner.projections.keys().next().value!);
@@ -193,12 +201,10 @@ export function projectCachedLocalPlacementTurnClaim(
   if (!retained) {
     return undefined;
   }
-  const projection = structuredClone(retained.projection);
-  projection.placements = new Map(projection.placements).set(
-    placement.sessionId,
-    structuredClone(placement),
-  );
-  return projection;
+  return structuredClone({
+    ...retained.projection,
+    placements: new Map(retained.projection.placements).set(placement.sessionId, placement),
+  });
 }
 
 /** The authority owner retains exact reads until one of its writers publishes a change. */
@@ -294,10 +300,11 @@ export async function readCachedPlacementRecoveryCandidates(
     const signal = getAsyncWorkSignal();
     signal?.throwIfAborted();
     assertUsable();
-    const candidates = owner.recoveryCandidatesEmpty ? [] : await read();
+    // Candidate discovery is a snapshot; each recovery effect acquires its exact owner.
+    const candidates =
+      owner.recoveryCandidatesEmpty && !hasPendingPublication(owner) ? [] : await read();
     signal?.throwIfAborted();
     assertUsable();
-    // Discovery may overlap Stop; recovery acquires exact session authority before acting.
     if (
       candidates.length === 0 &&
       observation.revokedBy.size === 0 &&

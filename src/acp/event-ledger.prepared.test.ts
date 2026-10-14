@@ -8,6 +8,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { expectAcpReplayUtf8Accounting } from "./event-ledger.test-support.js";
 import { normalizeAcpLedgerOptions } from "./event-ledger.types.js";
@@ -31,7 +32,7 @@ describe("ACP replay worker", () => {
       for (let index = 0; index < 3; index++) {
         await ledger.recordUpdate({ ...session, update: update(`warm-${index}`) });
       }
-      const { db } = openOpenClawStateDatabase(options);
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
       for (let index = 0; index < 4; index++) {
         await ledger.recordUpdate({
           sessionId: session.sessionId,
@@ -65,7 +66,9 @@ describe("ACP replay worker", () => {
       await ledger.recordUpdate({ ...session, update: update("after reopen") });
       const reopened = await ledger.readReplayBySessionId(session);
       expect(reopened.events.at(-1)).toMatchObject({ seq: 8, update: update("after reopen") });
-      expectAcpReplayUtf8Accounting(openOpenClawStateDatabase(options).db);
+      expectAcpReplayUtf8Accounting(
+        requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db),
+      );
     });
   });
 
@@ -78,6 +81,7 @@ describe("ACP replay worker", () => {
       await ledger.recordUpdate({ ...session, update: update("prior payload") });
       await closeOpenClawStateDatabaseAsync();
       const database = openOpenClawStateDatabase(options);
+      const db = requireNativeSqliteDatabase(database.db);
       const context: WorkerWriteOperationContext = {
         open: () => database,
         stateOptions: () => ({ path: options.path, env: process.env }),
@@ -85,7 +89,7 @@ describe("ACP replay worker", () => {
         writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
       };
       const { now: _now, ...limits } = normalizeAcpLedgerOptions();
-      database.db.setAuthorizer((action, table, column) =>
+      db.setAuthorizer((action, table, column) =>
         action === constants.SQLITE_READ &&
         table === "acp_replay_events" &&
         column === "update_json"
@@ -98,12 +102,12 @@ describe("ACP replay worker", () => {
           context,
         );
       } finally {
-        database.db.setAuthorizer(null);
+        db.setAuthorizer(null);
       }
       expect(database.db.prepare("SELECT COUNT(*) AS count FROM acp_replay_events").get()).toEqual({
         count: 2,
       });
-      expectAcpReplayUtf8Accounting(database.db);
+      expectAcpReplayUtf8Accounting(db);
     });
   });
 
@@ -119,7 +123,7 @@ describe("ACP replay worker", () => {
       const large = "漢".repeat(32 * 1024);
       await ledger.recordUpdate({ ...session, update: update(large) });
       await ledger.recordUpdate({ ...session, update: update("small after large") });
-      const { db } = openOpenClawStateDatabase(options);
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
       db.exec(`CREATE TRIGGER reject_replay_event BEFORE INSERT ON acp_replay_events
         BEGIN SELECT RAISE(ABORT, 'replay event rejected'); END`);
       try {
@@ -154,7 +158,7 @@ describe("ACP replay worker", () => {
           { type: "text", text: "tail" },
         ],
       });
-      const { db } = openOpenClawStateDatabase(options);
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
       expect(db.prepare("SELECT seq, update_json FROM acp_replay_events").all()).toEqual([
         {
           seq: 2,
@@ -192,7 +196,7 @@ describe("ACP replay worker", () => {
           await roomy.recordUpdate({ ...session, update: update(`${sessionId}-${index}`) });
         }
       }
-      const { db } = openOpenClawStateDatabase(options);
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
       // Imported/retained history can have gaps; next_seq is not an event count.
       db.exec(
         "UPDATE acp_replay_events SET seq = seq * 10; UPDATE acp_replay_sessions SET next_seq = 31",

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type {
   AcpSessionReadCommand,
@@ -69,6 +68,7 @@ import type {
   ConversationRef,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding.types.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type {
@@ -166,6 +166,13 @@ export type OpenClawStateReadCommand =
       type: "operatorApprovals.history";
       input: ListTerminalOperatorApprovalsInput;
     }
+  | {
+      type: "operatorApprovals.pending";
+      input: Parameters<
+        typeof import("../gateway/operator-approval-store.kernel.worker.js").readPendingOperatorApprovalsInDatabase
+      >[0];
+    }
+  | { type: "operatorApprovals.hasDue"; nowMs: number }
   | { type: "operatorApprovals.listCronGrants"; input: { limit?: number } }
   | { type: "operatorApprovals.validateCronGrant"; input: CronStandingGrantLookupInput }
   | { type: "operatorApprovals.placementGrant"; input: PlacementGrantReadInput }
@@ -193,10 +200,6 @@ export type OpenClawStateReadCommand =
   | { type: "cron.jobNames"; jobIds: string[]; storePath?: string }
   | { type: "cron.quarantine"; storeKey: string }
   | { type: "exec-approvals.read" }
-  | {
-      type: "plugins.metadata.read";
-      input: { stateKeys: readonly ("plugins.installedIndex" | "plugins.bundledDiscovery")[] };
-    }
   | SqliteWorkerCommand<SkillLibraryReadOnlyOperations>
   | { type: "agentDatabaseRegistry.read" }
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
@@ -337,11 +340,17 @@ export type OpenClawStateReadResult =
       type: "operatorApprovals.history";
       history: ListTerminalOperatorApprovalsResult;
     }
+  | {
+      type: "operatorApprovals.pending";
+      pending: ReturnType<
+        typeof import("../gateway/operator-approval-store.kernel.worker.js").readPendingOperatorApprovalsInDatabase
+      >;
+    }
+  | { type: "operatorApprovals.hasDue"; hasDue: boolean }
   | { type: "operatorApprovals.listCronGrants"; grants: CronStandingGrantListing[] }
   | { type: "operatorApprovals.validateCronGrant"; result: ConsumeCronStandingGrantResult }
   | { type: "operatorApprovals.placementGrant"; rows: PlacementGrantRows }
   | ReadResult<PluginBlobReadReply>
-  | { type: "plugins.metadata.read"; rows: Array<{ state_key: string; value_json: string }> }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
         type: Kind;
@@ -400,7 +409,6 @@ export type OpenClawStateReadResult =
       type: "subagents.runs";
       projection?: never;
       runs: Map<string, SubagentRunRecord>;
-      versions?: Map<string, string | null>;
       descendants?: { sessionKeys: Set<string>; runIds: readonly string[] };
     }
   | {
@@ -536,6 +544,6 @@ export type RetainedReadScope = {
 };
 
 export type OpenClawStateReadOnlyDatabase = {
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
 };

@@ -9,6 +9,7 @@ import {
   beginAgentDeletionJournal,
   removeAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "./agent-deletion-discovery.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
@@ -65,8 +66,10 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
           [survivor.path],
         ),
       ).toBe(true);
-      const reads = trackSqliteStatementExecutions(database.db, ["journal"], (sql) =>
-        /^select\b.*from "agent_deletion_journal"/iu.test(sql) ? "journal" : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["journal"],
+        (sql) => (/^select\b.*from "agent_deletion_journal"/iu.test(sql) ? "journal" : null),
       );
       try {
         expect(completeAgentDeletionJournalInDatabase(database, "retired", "retained-owner")).toBe(

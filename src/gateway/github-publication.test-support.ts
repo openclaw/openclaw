@@ -14,7 +14,9 @@ import {
 } from "../agents/worktrees/registry.js";
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  loadSessionEntryReadOnly,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -129,11 +131,6 @@ vi.mock("../agents/worktrees/service.js", () => ({
 vi.mock("../agents/worktrees/registry-read.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/worktrees/registry-read.js")>()),
   readLiveRegistryWorktreeByOwner: mocks.readWorktree,
-}));
-
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadGatewaySessionEntryReadOnly: mocks.loadSession,
 }));
 
 vi.mock("./session-utils-store-worker.js", async (importOriginal) => {
@@ -408,8 +405,6 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
     // Publication fixtures exercise lifecycle writes without unrelated maintenance workers.
     session: { maintenance: { mode: "warn" } },
   });
-  const { loadGatewaySessionEntryReadOnly } =
-    await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   const original = mocks.loadSession.getMockImplementation()!;
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
@@ -430,14 +425,18 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
       lastActiveAt: Date.now(),
     });
   }
-  mocks.loadSession.mockImplementation(
-    (key: string, options: Parameters<typeof loadGatewaySessionEntryReadOnly>[1]) =>
-      key === sessionKey ? loadGatewaySessionEntryReadOnly(key, options) : original(key, options),
+  const storePath = resolveSessionStorePathCore(currentGitHubPublicationConfig().session?.store, {
+    agentId: "main",
+  });
+  const read = () => loadSessionEntryReadOnly({ agentId: "main", sessionKey, storePath })!;
+  mocks.loadSession.mockImplementation((key: string, options?: { agentId?: string }) =>
+    key === sessionKey
+      ? { ...original(key, options), storePath, entry: read() }
+      : original(key, options),
   );
   mocks.persistedSessionKeys.add(sessionKey);
-  const read = () => loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).entry!;
   return {
-    storePath: loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).storePath,
+    storePath,
     read,
     async reset(placements: WorkerSessionPlacementStore) {
       const before = read();

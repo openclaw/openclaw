@@ -291,11 +291,9 @@ describe("exact session transcript FTS ownership", () => {
           db.exec("BEGIN");
           const result = deletePreparedSessionTranscriptProjectionChunkInTransaction(db, {
             sessionId: "target",
-            claimId,
             maxRowsPerTable: 2,
           });
           more = result.hasMore;
-          expect(result.owned).toBe(true);
           db.exec("COMMIT");
           expectMapped(
             db,
@@ -303,14 +301,11 @@ describe("exact session transcript FTS ownership", () => {
           );
         }
         db.exec("BEGIN");
-        expect(
-          appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
-            sessionId: "target",
-            claimId,
-            activeRows: claimId === -1 ? [] : plan.activeRows,
-            ftsRows: claimId === -1 ? plan.ftsRows.slice(0, 1) : plan.ftsRows,
-          }),
-        ).toBe(true);
+        appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
+          sessionId: "target",
+          activeRows: claimId === -1 ? [] : plan.activeRows,
+          ftsRows: claimId === -1 ? plan.ftsRows.slice(0, 1) : plan.ftsRows,
+        });
         if (claimId === -2) {
           expect(finalizePreparedSessionTranscriptProjectionInTransaction(db, plan, claimId)).toBe(
             true,

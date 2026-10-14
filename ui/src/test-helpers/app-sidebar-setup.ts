@@ -1,9 +1,10 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { flush } from "solid-js";
 import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/context.ts";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
 import { settleLitElements } from "./lit-settle.ts";
 import { createStorageMock } from "./storage.ts";
@@ -27,6 +28,8 @@ export function setupSidebarTest() {
       // Fake clocks must leave this fixture's frame scheduler in place.
       vi.setConfig({
         fakeTimers: {
+          // jsdom can retire its native frame timer after the fake clock is installed.
+          shouldClearNativeTimers: true,
           toFake: [
             "setTimeout",
             "clearTimeout",
@@ -127,8 +130,7 @@ export function setupSidebarTest() {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.resetConfig();
-    const sidebars =
-      document.body.querySelectorAll<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
+    const sidebars = document.body.querySelectorAll<AppSidebarElement>("openclaw-app-sidebar");
     // Open native menus keep scheduling frames while imports settle.
     for (const sidebar of sidebars) {
       // Lazy shell fixtures can retain an unupgraded sidebar tag.
@@ -143,6 +145,8 @@ export function setupSidebarTest() {
     }
     await vi.dynamicImportSettled();
     document.body.replaceChildren();
+    await Promise.resolve();
+    flush();
     disposeSidebarContextLifecycles();
     // Disconnection queues Lit updates; finish them before retiring the DOM globals.
     await settleLitElements(sidebars);
@@ -180,7 +184,7 @@ export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
 
 /** Select a view through its actual fixed rail control. */
 export async function selectSidebarView(
-  sidebar: HTMLElement & Pick<AppSidebarSessionNavigationElement, "updateComplete">,
+  sidebar: HTMLElement & Pick<AppSidebarElement, "updateComplete">,
   view: "pages" | "sessions" | "online",
 ): Promise<void> {
   const button = sidebar.querySelector<HTMLButtonElement>(`[data-navigation-view="${view}"]`);

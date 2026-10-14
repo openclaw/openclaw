@@ -20,6 +20,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   withLocalWorkspaceProjection,
   withSettledLocalWorkspace,
@@ -215,7 +216,7 @@ describe("local sandbox workspace reconciliation", () => {
       "",
     );
     expect(() =>
-      assertSqliteSchemaContains(db, "prior schema", priorSchema, {
+      assertSqliteSchemaContains(requireNativeSqliteDatabase(db), "prior schema", priorSchema, {
         allowedMissingTables: FIRST_USE_STATE_TABLES,
       }),
     ).not.toThrow();

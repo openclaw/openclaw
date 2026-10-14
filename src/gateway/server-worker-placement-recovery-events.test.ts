@@ -146,6 +146,8 @@ async function withRecoveryRuntime(
     runtimeMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: vi.fn(() => 0),
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => Infinity,
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     runtimeMocks.createSessionEvidenceResolver.mockResolvedValue(
@@ -200,6 +202,8 @@ async function withRecoveryRuntime(
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         getAsync: async (sessionId: string) => placements.get(sessionId),
+        getManyAsync: async (sessionIds: readonly string[]) =>
+          new Map([...placements].filter(([sessionId]) => sessionIds.includes(sessionId))),
         listAsync: async () => [...placements.values()],
         readChangeSnapshot,
         subscribeChanges: (listener: PublishPlacementChange) => {

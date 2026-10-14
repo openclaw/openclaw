@@ -4,16 +4,9 @@ import {
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../../config/sessions/session-actor-storage-binding.js";
-import type { SessionActorStorageOutcome } from "../../config/sessions/session-actor-storage-contract.js";
+import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import type { ContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox.js";
-
-function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
-  if (outcome.kind === "rolled-back") {
-    throw new Error(outcome.error.message);
-  }
-  return outcome.value;
-}
 
 /** Plugin callbacks run outside the FIFO; only their intent acknowledgments reenter it. */
 export function openMemoryContextEngineTurnOutboxStore(
@@ -84,25 +77,25 @@ export function openMemoryContextEngineTurnOutboxStore(
     },
     prepareRun: async (input) =>
       run(async ({ actor }) =>
-        committed(
+        readSessionActorStorageResult(
           await actor.storage!.mutate({ type: "session.outbox.prepareRun", input }, authority),
         ),
       ),
     enqueueIntent: async (input) =>
       run(async ({ actor }) =>
-        committed(
+        readSessionActorStorageResult(
           await actor.storage!.mutate({ type: "session.outbox.enqueueIntent", input }, authority),
         ),
       ),
     acceptIntent: async (input) =>
       run(async ({ actor }) =>
-        committed(
+        readSessionActorStorageResult(
           await actor.storage!.mutate({ type: "session.outbox.acceptIntent", input }, authority),
         ),
       ),
     publishClosedTurn: async (input) =>
       run(async ({ actor }) =>
-        committed(
+        readSessionActorStorageResult(
           await actor.storage!.mutate(
             { type: "session.outbox.publishClosedTurn", input },
             authority,
@@ -111,7 +104,7 @@ export function openMemoryContextEngineTurnOutboxStore(
       ),
     discardIntent: async (input) =>
       run(async ({ actor }) =>
-        committed(
+        readSessionActorStorageResult(
           await actor.storage!.mutate({ type: "session.outbox.discardIntent", input }, authority),
         ),
       ),
@@ -129,7 +122,7 @@ export function openMemoryContextEngineTurnOutboxStore(
       ),
     complete: async (advancementKey) => {
       await run(async ({ actor }) =>
-        committed(
+        readSessionActorStorageResult(
           await actor.storage!.mutate(
             { type: "session.outbox.complete", input: { advancementKey } },
             authority,
@@ -139,7 +132,7 @@ export function openMemoryContextEngineTurnOutboxStore(
     },
     recordFailure: async (advancementKey, message, attemptedAt) => {
       await run(async ({ actor }) =>
-        committed(
+        readSessionActorStorageResult(
           await actor.storage!.mutate(
             {
               type: "session.outbox.recordFailure",

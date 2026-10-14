@@ -82,14 +82,12 @@ type PromptCacheTracker = {
 };
 
 type PromptHistoryFingerprint = {
-  digest: string;
   role: string;
   envelopeFields: Map<string, string>;
-  contentDigest: string;
+  envelopeDigest: string;
   contentKind: "string" | "blocks";
-  blockCount: number;
   blocks: string[];
-  remainingBlocksDigest?: string;
+  blockFields: Map<string, string>[];
   stringBlock?: WeakRef<PromptStringFingerprint>;
 };
 
@@ -97,10 +95,13 @@ type PromptStringFingerprint = { value: string; digest: string };
 
 const trackers = new Map<string, PromptCacheTracker>();
 const stringFingerprints = new WeakMap<Message, PromptStringFingerprint>();
-const blockFingerprints = new WeakMap<
-  object,
-  { digest: string; primitives: [string, unknown][] }
->();
+type RecordFingerprint = {
+  digest: string;
+  fields: Map<string, string>;
+  primitives: Map<string, unknown>;
+};
+// Primitive revisions avoid rehashing retained text; nested values remain mutable.
+const recordFingerprints = new WeakMap<object, RecordFingerprint>();
 // Schemas are provider-owned declarations; unlike transcript blocks, they do not mutate in place.
 const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
@@ -125,21 +126,71 @@ const HISTORY_ENVELOPE_FIELDS = new Set([
   "runtimeContextCarrier",
   "operatorMessage",
 ]);
+const HISTORY_BLOCK_FIELDS = new Set([
+  "type",
+  "text",
+  "textSignature",
+  "thinking",
+  "thinkingSignature",
+  "openclawReasoningReplay",
+  "id",
+  "name",
+  "arguments",
+  "partialJson",
+  "async",
+  "thoughtSignature",
+  "data",
+  "mimeType",
+  "index",
+]);
 
-function fingerprintEnvelope(envelope: object): Map<string, string> {
-  const fields = new Map<string, string>();
-  const other: [string, unknown][] = [];
-  for (const [key, value] of Object.entries(envelope)) {
-    if (HISTORY_ENVELOPE_FIELDS.has(key)) {
-      fields.set(key, sha256Hex(stableStringify({ [key]: value })));
+function fingerprintText(value: string): string {
+  // UTF-8 replaces lone surrogates; escape those without serializing ordinary prompt text.
+  return value.isWellFormed()
+    ? `text:${sha256Hex(value)}`
+    : `escaped:${sha256Hex(stableStringify(value))}`;
+}
+
+function fingerprintRecord(record: object, omit?: string): RecordFingerprint {
+  const previous = recordFingerprints.get(record);
+  let fields = previous ? undefined : new Map<string, string>();
+  const primitives = previous?.primitives ?? new Map<string, unknown>();
+  for (const [key, value] of Object.entries(record)) {
+    if (key === omit) {
+      continue;
+    }
+    const primitive = value === null || typeof value !== "object";
+    const digest =
+      primitive && previous?.primitives.has(key) && Object.is(previous.primitives.get(key), value)
+        ? previous.fields.get(key)!
+        : typeof value === "string"
+          ? fingerprintText(value)
+          : sha256Hex(stableStringify(value));
+    if (!previous || previous.fields.get(key) !== digest) {
+      (fields ??= new Map(previous?.fields)).set(key, digest);
+    }
+    if (primitive) {
+      primitives.set(key, value);
     } else {
-      other.push([key, value]);
+      primitives.delete(key);
     }
   }
-  if (other.length) {
-    fields.set("other", sha256Hex(stableStringify(Object.fromEntries(other))));
+  for (const key of previous?.fields.keys() ?? []) {
+    if (!Object.hasOwn(record, key)) {
+      (fields ??= new Map(previous?.fields)).delete(key);
+      primitives.delete(key);
+    }
   }
-  return fields;
+  if (!fields && previous) {
+    return previous;
+  }
+  const fingerprint = {
+    digest: sha256Hex(stableStringify(Object.fromEntries(fields!))),
+    fields: fields!,
+    primitives,
+  };
+  recordFingerprints.set(record, fingerprint);
+  return fingerprint;
 }
 
 function describeHistoryChange(
@@ -153,93 +204,100 @@ function describeHistoryChange(
   if (previous.contentKind !== next.contentKind) {
     fields.push("content.type");
   }
-  if (previous.contentDigest !== next.contentDigest) {
+  if (
+    previous.blocks.length !== next.blocks.length ||
+    previous.blocks.some((digest, index) => digest !== next.blocks[index])
+  ) {
     if (previous.contentKind === "string" || next.contentKind === "string") {
       fields.push("content");
     } else {
-      if (previous.blockCount !== next.blockCount) {
+      if (previous.blocks.length !== next.blocks.length) {
         fields.push("content.length");
       }
-      for (let index = 0; index < Math.max(previous.blocks.length, next.blocks.length); index++) {
+      for (
+        let index = 0;
+        index <
+        Math.min(MAX_HISTORY_DIFF_FIELDS, Math.max(previous.blocks.length, next.blocks.length));
+        index++
+      ) {
         if (previous.blocks[index] !== next.blocks[index]) {
-          fields.push(`content[${index}]`);
+          const before = previous.blockFields[index];
+          const after = next.blockFields[index];
+          const changed = [
+            ...new Set([...(before?.keys() ?? []), ...(after?.keys() ?? [])]),
+          ].filter((key) => before?.get(key) !== after?.get(key));
+          fields.push(
+            ...(changed.length
+              ? new Set(
+                  changed.map(
+                    (key) => `content[${index}].${HISTORY_BLOCK_FIELDS.has(key) ? key : "other"}`,
+                  ),
+                )
+              : [`content[${index}]`]),
+          );
         }
       }
-      if (previous.remainingBlocksDigest !== next.remainingBlocksDigest) {
+      if (
+        previous.blocks.some(
+          (digest, index) => index >= MAX_HISTORY_DIFF_FIELDS && digest !== next.blocks[index],
+        ) ||
+        (previous.blocks.length !== next.blocks.length &&
+          Math.max(previous.blocks.length, next.blocks.length) > MAX_HISTORY_DIFF_FIELDS)
+      ) {
         fields.push("content[remaining]");
       }
     }
   }
   for (const key of new Set([...previous.envelopeFields.keys(), ...next.envelopeFields.keys()])) {
     if (previous.envelopeFields.get(key) !== next.envelopeFields.get(key)) {
-      fields.push(`envelope.${key}`);
+      const field = `envelope.${HISTORY_ENVELOPE_FIELDS.has(key) ? key : "other"}`;
+      if (!fields.includes(field)) {
+        fields.push(field);
+      }
     }
   }
   return `changed fields: ${fields.slice(0, MAX_HISTORY_DIFF_FIELDS).join(", ")}${fields.length > MAX_HISTORY_DIFF_FIELDS ? ", …" : ""}`;
-}
-
-function fingerprintBlock(block: object): string {
-  const primitives: [string, unknown][] = [];
-  const nested: [string, unknown][] = [];
-  for (const entry of Object.entries(block)) {
-    const value = entry[1];
-    const primitive =
-      value === null || ["string", "number", "boolean", "undefined"].includes(typeof value);
-    (primitive ? primitives : nested).push(entry);
-  }
-  const previous = blockFingerprints.get(block);
-  const unchanged =
-    previous &&
-    previous.primitives.length === primitives.length &&
-    primitives.every(([key, value], index) => {
-      const cached = previous.primitives[index];
-      return cached?.[0] === key && cached[1] === value;
-    });
-  const memo = unchanged
-    ? previous
-    : { digest: sha256Hex(stableStringify(Object.fromEntries(primitives))), primitives };
-  if (!unchanged) {
-    blockFingerprints.set(block, memo);
-  }
-  return nested.length
-    ? sha256Hex(`${memo.digest}:${stableStringify(Object.fromEntries(nested))}`)
-    : memo.digest;
 }
 
 function fingerprintMessage(
   message: Message,
   previous?: PromptHistoryFingerprint,
 ): PromptHistoryFingerprint {
-  const { content, ...envelope } = message;
+  const { content } = message;
   let stringBlock: PromptHistoryFingerprint["stringBlock"];
   let blocks: string[];
+  let fingerprints: RecordFingerprint[] = [];
   if (typeof content === "string") {
     // Transcript messages own text memos; diagnostics retain only weak references.
     const previousMemo = previous?.stringBlock?.deref() ?? stringFingerprints.get(message);
     const memo =
       previousMemo?.value === content
         ? previousMemo
-        : { value: content, digest: sha256Hex(stableStringify(content)) };
+        : { value: content, digest: fingerprintText(content) };
     stringFingerprints.set(message, memo);
     stringBlock = new WeakRef(memo);
     blocks = [memo.digest];
   } else {
     stringFingerprints.delete(message);
-    blocks = content.map(fingerprintBlock);
+    fingerprints = content.map((block) => fingerprintRecord(block));
+    blocks = fingerprints.map(({ digest }) => digest);
   }
-  const envelopeFields = fingerprintEnvelope(envelope);
-  const contentDigest = sha256Hex(stableStringify(blocks));
+  const envelope = fingerprintRecord(message, "content");
+  if (
+    previous?.envelopeDigest === envelope.digest &&
+    previous.contentKind === (typeof content === "string" ? "string" : "blocks") &&
+    previous.blocks.length === blocks.length &&
+    previous.blocks.every((digest, index) => digest === blocks[index])
+  ) {
+    return previous;
+  }
   return {
-    digest: sha256Hex(stableStringify([Object.fromEntries(envelopeFields), contentDigest])),
     role: message.role,
-    envelopeFields,
-    contentDigest,
+    envelopeFields: envelope.fields,
+    envelopeDigest: envelope.digest,
     contentKind: typeof content === "string" ? "string" : "blocks",
-    blockCount: blocks.length,
-    blocks: blocks.slice(0, MAX_HISTORY_DIFF_FIELDS),
-    ...(blocks.length > MAX_HISTORY_DIFF_FIELDS
-      ? { remainingBlocksDigest: sha256Hex(stableStringify(blocks.slice(MAX_HISTORY_DIFF_FIELDS))) }
-      : {}),
+    blocks,
+    blockFields: fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS).map(({ fields }) => fields),
     stringBlock,
   };
 }
@@ -548,7 +606,7 @@ export function beginPromptCacheObservation(
     ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
   );
   const divergence = previous
-    ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
+    ? previous.history.findIndex((message, index) => message !== history[index])
     : -1;
   const violation =
     divergence < 0 || restarted || previous?.declaredRewrites?.size

@@ -29,7 +29,7 @@ const authSqlite = "src/agents/auth-profiles/sqlite.ts";
 const authStore = "src/agents/auth-profiles/store.ts";
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
 const authUpdate = "src/agents/auth-profiles/store-update.ts";
-const authKernel = "src/agents/auth-profiles/store-update-kernel.ts";
+const authKernel = "src/agents/auth-profiles/store-update.worker.ts";
 const authProfiles = "src/agents/auth-profiles/profiles.ts";
 const authStorage = "src/agents/sessions/auth-storage.ts";
 const catalogWorker = "src/agents/prepared-model-catalog.worker.ts";
@@ -132,6 +132,8 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     key(authUpdate, "runAuthProfileStoreUpdate"),
     [
       key(authUpdate, "createAuthProfileStoreUpdater/updateAuthProfileStoreWithLock"),
+      key(authProfiles, "removeAuthProfileTargetsWithLocks"),
+      key(authProfiles, "removeAuthProfileTargetsWithLocks/publish"),
       key("src/agents/auth-profiles/upsert-with-lock.ts", "persistAuthProfileBatch"),
       key("src/agents/auth-profiles/candidate-stores.ts", "runCandidateAuthProfileUpdate"),
       key("src/agents/sessions/auth-storage.ts", "SqliteAuthStorageBackend/updateAsync"),
@@ -207,10 +209,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(authStore, "restoreAuthProfileStorePersistenceSnapshot"),
-    [
-      key(authProfiles, "removeAuthProfileTargetsWithLocks"),
-      key("src/secrets/apply.ts", "runSecretsApply"),
-    ],
+    [key("src/secrets/apply.ts", "runSecretsApply")],
   ],
   [
     key(authRuntime, "saveAuthProfileStore"),
@@ -232,10 +231,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(authRuntime, "saveAuthProfileStoreIfPersistenceSnapshotMatches"),
-    [
-      key(authProfiles, "removeAuthProfileTargetsWithLocks"),
-      key("src/secrets/apply.ts", "runSecretsApply"),
-    ],
+    [key("src/secrets/apply.ts", "runSecretsApply")],
   ],
   [
     key(authProfiles, "upsertAuthProfile"),
@@ -283,7 +279,11 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(machineState, "writeConfigMachineStateInDatabase"),
-    [key("src/state/config-machine-state.worker.ts", "machineState.write")],
+    [
+      key("src/state/config-machine-state.worker.ts", "machineState.write"),
+      // localOnboardingStateKey always uses the onboarding.local. namespace.
+      key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
+    ],
   ],
   [
     key(machineState, "updateConfigMachineStateInDatabase"),
@@ -746,6 +746,8 @@ function mayWriteAuthMachineState(
           selected = mayIncludeAuthKey(property.initializer, checker);
         }
       }
+    } else if (method === "onConflict") {
+      changesKey ||= conflictUpdateMayIncludeAuthKey(call.arguments[0], checker);
     } else if (
       method === "where" &&
       call.arguments[0] &&
@@ -761,6 +763,44 @@ function mayWriteAuthMachineState(
     query = call;
   }
   return selected || changesKey;
+}
+
+function conflictUpdateMayIncludeAuthKey(
+  callback: ts.Node | undefined,
+  checker: NativeTypeScriptProject["project"]["checker"],
+): boolean {
+  if (!callback || !(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) {
+    return false;
+  }
+  const parameter = callback.parameters[0]?.name;
+  const body = callback.body;
+  if (!parameter || !ts.isIdentifier(parameter) || !body) {
+    return false;
+  }
+  const statement =
+    ts.isBlock(body) && body.statements.length === 1 ? body.statements[0] : undefined;
+  let query = ts.isBlock(body)
+    ? statement && ts.isReturnStatement(statement)
+      ? statement.expression
+      : undefined
+    : body;
+  let changesKey = false;
+  while (query && ts.isCallExpression(query) && ts.isPropertyAccessExpression(query.expression)) {
+    if (query.expression.name.text === "doUpdateSet") {
+      const values = query.arguments[0];
+      if (values && ts.isObjectLiteralExpression(values)) {
+        changesKey ||= values.properties.some(
+          (entry) =>
+            ts.isPropertyAssignment(entry) &&
+            (ts.isIdentifier(entry.name) || ts.isStringLiteralLikeNode(entry.name)) &&
+            entry.name.text === "state_key" &&
+            mayIncludeAuthKey(entry.initializer, checker),
+        );
+      }
+    }
+    query = query.expression.expression;
+  }
+  return Boolean(query && ts.isIdentifier(query) && query.text === parameter.text && changesKey);
 }
 
 const credentialCommandOwners = new Map([
@@ -1101,7 +1141,9 @@ export function inspectPersonalCredentialWriters(
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
-        ["insertInto", "updateTable", "deleteFrom"].includes(node.expression.name.text)
+        ["insertInto", "replaceInto", "updateTable", "deleteFrom"].includes(
+          node.expression.name.text,
+        )
       ) {
         let table = node.arguments[0];
         const seen = new Set<ts.Node>();
@@ -1160,7 +1202,7 @@ export function inspectPersonalCredentialWriters(
       }
       if (ts.isStringLiteralLikeNode(node) || ts.isTemplateHead(node)) {
         const writes = node.text.matchAll(
-          /\b(?:insert\s+(?:or\s+\w+\s+)?into|update|delete\s+from)\s+["`[]?(session_members|secret_store_entries|auth_profile_store|config_machine_state|github_(?:(?:personal_|repository_)?publication_requests|publication_session_lifecycles))\b/gi,
+          /\b(?:(?:insert\s+(?:or\s+\w+\s+)?|replace\s+)into|update(?:\s+or\s+\w+)?|delete\s+from)\s+["`[]?(session_members|secret_store_entries|auth_profile_store|config_machine_state|github_(?:(?:personal_|repository_)?publication_requests|publication_session_lifecycles))\b/gi,
         );
         for (const write of writes) {
           const id = key(file, operation(node));

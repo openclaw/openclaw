@@ -45,4 +45,5 @@ Bundled plugins. Same boundary as third-party plugins.
 
 - Extension needing new seam: add/replace typed Plugin SDK subpath, never reach into core.
 - ALL bundled plugins → modern SDK seams in same change. No extension-local compat paths for internal callers.
+- First-party plugins always release together with the host: support only the current host version. No older-host fallbacks, capability probes or legacy adapters for released hosts. Third-party SDK compatibility follows the SDK deprecation policy instead.
 - Intentional contract expansion: update docs, exported subpath list, package exports, API/contract checks in same change.

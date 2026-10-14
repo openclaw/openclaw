@@ -19,7 +19,7 @@ import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
 import "../styles/settings-native-controls.css";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 setupSidebarTest();
 
@@ -271,7 +271,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect.element(panel).toBeVisible();
     await Promise.all(panel.getAnimations().map((animation) => animation.finished));
     expect(panel.getAttribute("aria-modal")).toBe("true");
-    expect(sidebar.querySelector(".sidebar-session-sort-menu wa-popup")).toBeNull();
+    expect(panel.matches(":popover-open")).toBe(true);
     const sheet = panel.getBoundingClientRect();
     expect(sheet.left).toBe(0);
     expect(sheet.width).toBe(innerWidth);

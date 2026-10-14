@@ -1,4 +1,5 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import "../../claws/tool-policy-runtime.js";
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -7,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createDispatchReplyOperationCoordinator } from "../../auto-reply/reply/dispatch-from-config.lifecycle.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -15,6 +17,7 @@ import {
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
@@ -29,15 +32,20 @@ type PlacementContext = Pick<SessionWorkerPlacementContext, "workerSessionPlacem
 let storePath: string;
 let env: NodeJS.ProcessEnv;
 
-beforeAll(() => {
+beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: dirs.make("archive-incognito-") };
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  setRuntimeConfigSnapshot(cfg);
   storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  // The Gateway admits shared lifecycle state before serving an actor's human turn.
+  await readAgentDeletionJournalStatusInWorker("main");
 });
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
 });
 afterAll(() => {
   memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 

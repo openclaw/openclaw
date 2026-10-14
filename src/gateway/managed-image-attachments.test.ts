@@ -133,8 +133,7 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils-store.js")>()),
-  loadGatewaySessionEntry: loadSessionEntryMock,
-  loadGatewaySessionEntryReadOnly: loadSessionEntryMock,
+  loadGatewaySessionEntryReadOnlyAsync: async (...args: unknown[]) => loadSessionEntryMock(...args),
 }));
 
 vi.mock("./session-transcript-readers.js", () => ({

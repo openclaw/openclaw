@@ -44,6 +44,7 @@ export function resolveWorkerPlacementSessionRuntime(params: {
 }): string {
   const { provider, model } = resolveSessionSelectedModelRef({
     ...params,
+    preparedRuntimeOwnership: params.preparedRuntimeOwnership,
     source: {
       entry: params.entry,
       readSourceEntry: params.readSourceEntry,
@@ -293,14 +294,6 @@ export function resolveDefaultWorkerPlacementExecutionMode(params: {
     sessionKey: `agent:${params.agentId}:dashboard:prepared-pool-presence`,
   });
   return resolveWorkerPlacementExecutionMode(runtime);
-}
-
-export async function resolveWorkerPlacementSessionRuntimeCapabilitiesAsync(
-  params: Parameters<typeof resolveWorkerPlacementSessionRuntimeAsync>[0],
-) {
-  return resolveWorkerPlacementCapabilities(
-    await resolveWorkerPlacementSessionRuntimeAsync(params),
-  );
 }
 
 export function projectWorkerPlacementAgentRuntime(

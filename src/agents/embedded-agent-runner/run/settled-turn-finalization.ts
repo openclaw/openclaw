@@ -192,6 +192,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     `settled post-tool turn lacked a final answer: ${describeRun()} — running isolated finalization`,
   );
   let finalizationOutcome: "answered" | "empty" | "failed" | "silent-fallback" = "failed";
+  // A host-synthesized fallback is delivery text, never model-authored output.
+  let hostFallbackSynthesized = false;
   try {
     let finalization: Awaited<ReturnType<typeof runPreparedSettledTurnFinalization>>;
     let finalizationAttempt = 0;
@@ -283,6 +285,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       agentHarnessId: input.finalization.preparedAttempt.agentHarnessId,
       runtimePlan: input.finalization.preparedAttempt.runtimePlan,
     });
+    hostFallbackSynthesized = true;
     const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
       text: attempt.assistantTexts.join("\n\n"),
       attempt: input.finalization.preparedAttempt,
@@ -360,8 +363,16 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     // undelivered model answer. Automatic-delivery callers retain their fallback.
     ...(finalizationOutcome !== "answered" &&
     runParams.sourceReplyDeliveryMode === "message_tool_only"
-      ? { finalAssistantVisibleText: "", finalAssistantRawText: "" }
+      ? {
+          finalAssistantVisibleText: "",
+          finalAssistantRawText: "",
+          finalAssistantMessageRawText: "",
+        }
       : {}),
+    // The host placeholder (or synthetic cron NO_REPLY) is never the model's
+    // own final message, so diagnostics capture excludes it in every delivery
+    // mode; delivery fields above keep the fallback for stranded-reply recovery.
+    ...(hostFallbackSynthesized ? { finalAssistantMessageRawText: "" } : {}),
     attemptToolSummary: prepared.attemptToolSummary,
     failureSignal: prepared.failureSignal,
     terminalToolFailure: prepared.terminalToolFailure,

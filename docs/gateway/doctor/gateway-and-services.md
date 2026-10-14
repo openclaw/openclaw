@@ -14,6 +14,10 @@ app-owned installation. Doctor reports the host's name and update hint and leave
 package, bundled UI, and runtime replacement to that host, including when a
 standalone CLI inspects an app-owned Gateway service. For OpenClaw.app payloads,
 update the app to update the Gateway; normal config and state checks still apply.
+When the app-owned Gateway is verified offline, standalone `openclaw doctor --fix`
+can repair that same account's config and state under the existing database
+maintenance leases. Doctor leaves the app's service definition, package, and
+startup unchanged; restart or update the Gateway through OpenClaw.app.
 
 After repair, Doctor waits for the managed Gateway within a bounded readiness
 budget. If the service manager still reports it running but its listener has not
