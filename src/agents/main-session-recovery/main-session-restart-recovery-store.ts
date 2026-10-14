@@ -189,6 +189,7 @@ export async function recoverStore(params: {
       entries = await readSessionEntrySummariesInWorker({
         agentId: params.storeAgentId,
         storePath: params.storePath,
+        includeParticipants: false,
       });
     }
   } catch (err) {
