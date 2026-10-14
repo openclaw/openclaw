@@ -222,6 +222,7 @@ export const usersHandlers: GatewayRequestHandlers = {
         : undefined;
       const assertCurrent = () => {
         assertPersonal();
+        options.sessionMutationAuthorization?.assertCurrent();
         backgroundAction?.assertCurrent();
       };
       const result = await setCanonicalUserPreferences(profileId, params.entries, {

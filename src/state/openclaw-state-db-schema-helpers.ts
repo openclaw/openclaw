@@ -1,4 +1,4 @@
-import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
 // Provides shared SQLite schema probes and additive column migration helpers.
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -24,7 +24,18 @@ export function tableHasColumn(
 
 export function readTableColumns(db: EngineConnection, tableName: string): Set<string> {
   if (isPostgresSqlConnection(db)) {
-    requireNativeDatabaseFile("postgres", "repair");
+    return new Set(
+      getPostgresPhysicalFacts(db)?.catalog.flatMap((fact) =>
+        fact.table === tableName &&
+        fact.kind === "column" &&
+        fact.value &&
+        typeof fact.value === "object" &&
+        "name" in fact.value &&
+        typeof fact.value.name === "string"
+          ? [fact.value.name]
+          : [],
+      ) ?? [],
+    );
   }
   const schema = getAdmittedSqliteSchemaFacts(db);
   const sql = schema?.tableSql.get(tableName);
@@ -94,7 +105,12 @@ export function classifySqliteTableReadError(
 
 export function tablePrimaryKeyColumns(db: EngineConnection, tableName: string): string[] {
   if (isPostgresSqlConnection(db)) {
-    requireNativeDatabaseFile("postgres", "repair");
+    const value = getPostgresPhysicalFacts(db)?.catalog.find(
+      (fact) => fact.table === tableName && fact.kind === "primaryKey",
+    )?.value;
+    return Array.isArray(value)
+      ? value.filter((column): column is string => typeof column === "string")
+      : [];
   }
   const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return rows
@@ -105,7 +121,11 @@ export function tablePrimaryKeyColumns(db: EngineConnection, tableName: string):
 
 export function tableExists(db: EngineConnection, tableName: string): boolean {
   if (isPostgresSqlConnection(db)) {
-    requireNativeDatabaseFile("postgres", "repair");
+    return (
+      getPostgresPhysicalFacts(db)?.catalog.some(
+        (fact) => fact.table === tableName && fact.kind === "table",
+      ) ?? false
+    );
   }
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
@@ -132,6 +152,9 @@ export function ensureColumn(db: EngineConnection, tableName: string, columnSql:
 
 /** Missing runtime tables are empty only before state grows beyond checkpoint bootstrap. */
 export function hasOpenClawStateTablesBeyondStartupCheckpoint(db: EngineConnection): boolean {
+  if (isPostgresSqlConnection(db)) {
+    return true;
+  }
   return (
     /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
       .prepare(

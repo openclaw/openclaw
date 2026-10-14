@@ -318,12 +318,12 @@ describe("OpenAI realtime voice browser authentication", () => {
     ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
   });
 
-  it("does not configure Azure realtime sessions without a Platform API key", () => {
+  it("does not configure Azure realtime sessions without a Platform API key", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = { agents: { defaults: {} } } as never;
 
     expect(
-      provider.isConfigured({
+      await provider.isConfiguredAsync?.({
         cfg,
         providerConfig: {
           azureEndpoint: "https://example.openai.azure.com",

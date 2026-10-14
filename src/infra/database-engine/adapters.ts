@@ -8,10 +8,10 @@ import {
   runSqliteImmediateTransactionSync,
   runSqliteReadSnapshotSync,
 } from "../sqlite-transaction.js";
-import type { DatabaseEngineInput } from "./config.js";
 import type { DatabaseEngineAdapter, DatabaseErrorKind } from "./contract.js";
 import { observeConnection } from "./observation.js";
 import { POSTGRES_LOCK_TIMEOUT_MS, POSTGRES_STATEMENT_TIMEOUT_MS } from "./policy.js";
+import type { DatabaseEngineInput } from "./types.js";
 
 function classifyError(error: unknown): DatabaseErrorKind {
   if (!(error instanceof Error)) {

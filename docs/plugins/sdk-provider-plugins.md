@@ -338,7 +338,7 @@ a saved policy is not proof that the running Gateway applied it.
     from `openclaw/plugin-sdk/agent-runtime`. It reads persisted profiles in a
     database worker and preserves the optional third `env` argument for
     service-owned state directories. The synchronous `loadAuthProfileStoreForRuntime`
-    is deprecated and will be removed at the next Plugin SDK major.
+    is deprecated through 2026-12-31 and will be removed in the first January 2027 stable release.
 
     `createProviderApiKeyAuthMethod` accepts an optional `validateApiKey` callback.
     Return an error message to reject a resolved key before any auth profile is

@@ -4,7 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
+import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 

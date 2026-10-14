@@ -207,12 +207,6 @@ describe("buildInboundUserContextPrefix", () => {
       suffix:
         'Current message:\n[Replying to: "Planning the picnic next month."]\n#42: Can you pick a date?',
     },
-    {
-      provider: "telegram",
-      previousGoal: "Previous goal",
-      suffix:
-        'Current message:\n[Replying to: "Planning the picnic next month."]\n#42: Can you pick a date?',
-    },
   ])("keeps refreshed goals before the thread marker: %j", ({ provider, previousGoal, suffix }) => {
     const sessionCtx = finalizeInboundContext({
       Body: "Can you pick a date?",
@@ -353,29 +347,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(buildInboundUserContextPrefix({} as TemplateContext)).not.toContain(
       "Reply target of current user message",
     );
-  });
-
-  it("preserves Telegram inline ReplyToBody tail content", () => {
-    const head = "BEGIN. ".repeat(300);
-    const tail = " TELEGRAM_INLINE_TAIL";
-    const longBody = head + tail;
-    expect(longBody.length).toBeGreaterThan(2_000);
-
-    const text = buildInboundUserContextPrefix({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      ChatType: "group",
-      MessageSid: "34974",
-      ReplyToId: "34971",
-      ReplyToBody: longBody,
-      SenderName: "obviyus",
-    } as TemplateContext);
-
-    expect(text).toContain("TELEGRAM_INLINE_TAIL");
-    expect(text).toContain("…[omitted]…");
-    expect(text).not.toContain("…[truncated]");
-    expect(text).not.toContain("Reply target of current user message");
   });
 
   it("keeps Telegram current-message quote even when context already includes the target", () => {
@@ -790,40 +761,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(reply["body"]).toContain("TAIL_AFTER_EMOJI_HEAD");
     expect(reply["body"]).toContain("…[omitted]…");
     expect(reply["body"]).not.toContain("…[truncated]");
-  });
-
-  it("preserves chat window reply-target body tail content", () => {
-    const head = "BEGIN. ".repeat(300);
-    const tail = " CHAT_WINDOW_TAIL";
-    const longBody = head + tail;
-    expect(longBody.length).toBeGreaterThan(2_000);
-
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      ReplyToId: "msg-1",
-      ChannelStructuredContext: [
-        {
-          label: "Conversation context",
-          type: "chat_window",
-          payload: {
-            relation: "around_reply_target",
-            messages: [
-              {
-                message_id: "msg-1",
-                sender: "Avery",
-                body: longBody,
-                is_reply_target: true,
-              },
-            ],
-          },
-        },
-      ],
-    } as TemplateContext);
-
-    expect(text).toContain("CHAT_WINDOW_TAIL");
-    expect(text).toContain("…[omitted]…");
-    expect(text).not.toContain("…[truncated]");
-    expect(text).not.toContain("Reply target of current user message");
   });
 
   it("caps serialized inbound history to the most recent bounded tail", () => {

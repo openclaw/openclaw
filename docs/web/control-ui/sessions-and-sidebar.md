@@ -188,6 +188,10 @@ opens the home folder. Errors for paths you enter remain visible.
 
 For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
+Guests with session access can save these choices in their own profile without
+broader Gateway write permission. This does not allow changing another person's
+preferences or private background resources.
+
 A custom worktree **Name** applies to the submitted session. Once its start is
 accepted, New session clears that name while remembering the repository, checkout
 mode, and base branch. Background starts do the same. Failed admission leaves the

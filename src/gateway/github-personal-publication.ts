@@ -43,7 +43,7 @@ import {
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-/** @deprecated Use PersonalGitHubSessionActionV2; removed in the next Plugin SDK major. */
+/** @deprecated Use PersonalGitHubSessionActionV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   sessionId: string;
   sessionKey: string;
@@ -496,7 +496,7 @@ export function createPersonalGitHubPublicationCoordinator(
   };
   return {
     ...methods,
-    /** @deprecated Await personalStatusAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Await personalStatusAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     personalStatus(
       _action: PersonalGitHubAction,
       _session: SessionIdentity & { archivedAt?: number | null },
@@ -510,7 +510,7 @@ export function createPersonalGitHubPublicationCoordinator(
       });
       throw new Error("GitHub publication requires awaiting personalStatusAsync.");
     },
-    /** @deprecated Use requestPersonalForSessionV2; removed in the next Plugin SDK major. */
+    /** @deprecated Use requestPersonalForSessionV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     async requestPersonalForSession(
       _input: SessionGitHubPublishParams,
       _action: PersonalGitHubSessionAction,
@@ -525,7 +525,7 @@ export function createPersonalGitHubPublicationCoordinator(
         "GitHub publication requires requestPersonalForSessionV2 with a host-prepared V2 action.",
       );
     },
-    /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
+    /** @deprecated Use confirmPersonalV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     async confirmPersonal(
       _input: SessionGitHubConfirmParams,
       _action: PersonalGitHubSessionAction,

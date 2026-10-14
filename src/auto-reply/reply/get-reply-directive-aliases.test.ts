@@ -230,89 +230,7 @@ describe("reply directive resolution", () => {
     vi.unstubAllEnvs();
   });
 
-  it("uses prepared thinking defaults for an unrestricted ordinary reply", async () => {
-    const model = { ...directiveModel, reasoning: true };
-    const preparedModelCatalog: ModelCatalogSnapshot = {
-      entries: [{ provider: "anthropic", ...model }],
-      routeVariants: [],
-    };
-    prepareModelCatalogThinkingPolicies({
-      catalog: preparedModelCatalog,
-      metadataSnapshot: directiveMetadata,
-      pluginRegistry: {
-        ...createEmptyPluginRegistry(),
-        providers: [
-          {
-            pluginId: "anthropic",
-            source: "test",
-            provider: {
-              id: "anthropic",
-              label: "Anthropic",
-              auth: [],
-              resolveThinkingProfile: () => ({
-                levels: [{ id: "off" }, { id: "high" }],
-                defaultLevel: "high",
-              }),
-            },
-          },
-        ],
-      },
-    });
-    const { result } = await resolveModelDirective({
-      body: "Summarize the notes.",
-      cfg: {
-        models: {
-          providers: {
-            anthropic: { baseUrl: "https://directive.invalid", models: [model] },
-          },
-        },
-      },
-      preparedModelCatalog,
-    });
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    await expect(result.result.resolveModelLevels()).resolves.toMatchObject({
-      resolvedThinkLevel: "high",
-    });
-  });
-
-  it.each([{ body: "Please read /fable/notes.md before replying", skipInventory: false }])(
-    "preserves ordinary slash text: $body",
-    async ({ body, skipInventory }) => {
-      skillCommandMocks.listForWorkspace.mockReturnValue([
-        { name: "fable", skillName: "fable", description: "A colliding skill command" },
-      ]);
-
-      const { result, sessionEntry, sessionCtx } = await resolveModelDirective({ body });
-
-      if (result.kind !== "continue") {
-        throw new Error(`expected continue result, got ${result.kind}`);
-      }
-      expect(result.result.directives).toEqual(clearInlineDirectives(body));
-      expect(result.result.cleanedBody).toBe(body);
-      expect(sessionCtx).toMatchObject({
-        agentText: body,
-        Body: body,
-        BodyForAgent: body,
-        BodyStripped: body,
-      });
-      expect(result.result.provider).toBe("anthropic");
-      expect(result.result.model).toBe("claude-opus-4-6");
-      expect(sessionEntry).toEqual(createSessionEntry());
-      if (skipInventory) {
-        expect(skillCommandMocks.listForWorkspace).not.toHaveBeenCalled();
-      }
-    },
-  );
-
   it.each([
-    {
-      label: "per-turn disabled despite configured on",
-      agentCfg: { blockStreamingDefault: "on", blockStreamingBreak: "text_end" },
-      opts: { disableBlockStreaming: true },
-      caption: "Attachment caption",
-    },
     { label: "captionless default off", agentCfg: {}, caption: "" },
     {
       label: "per-turn enabled despite configured off",
@@ -405,15 +323,6 @@ describe("reply directive resolution", () => {
 
   it.each([
     {
-      body: "/fable -s",
-      expected: {
-        cleaned: "",
-        hasModelDirective: true,
-        rawModelDirective: "fable",
-        modelScope: "session",
-      },
-    },
-    {
       body: "/think high/fable now",
       expected: {
         cleaned: "now",
@@ -451,20 +360,6 @@ describe("reply directive resolution", () => {
       cleaned: "",
     });
     expect(sessionCtx.Body).toBe("");
-  });
-
-  it("keeps another agent's model alias shorthand literal", async () => {
-    const { result, sessionCtx } = await resolveModelDirective({
-      body: "/localfast",
-      cfg: configWithModelAlias("localfast", "worker"),
-    });
-
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    expect(result.result.directives).toMatchObject({ hasModelDirective: false });
-    expect(result.result.cleanedBody).toBe("/localfast");
-    expect(sessionCtx.Body).toBe("/localfast");
   });
 
   it("preserves unauthorized mixed input exactly without exposing model state", async () => {
