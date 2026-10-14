@@ -93,8 +93,9 @@ object equality, the prepared-head delta, and operator evidence may be reused
 only within the uninterrupted, lock-owning invocation and their pinned identities.
 
 Historical proof precedes the shared check inventory and final main read.
-Current review and security authority are verified afterward, followed by the
-final writer check. Local-only
+Current review and security authority are verified afterward. Effective policy
+is reread after that work, before the final writer check, so a CI-only grant
+cannot waive newly tightened requirements. Local-only
 verification proves main's ancestry and merge tree, checks overlap and
 critical-path drift, and compares the Security Review publisher's protected
 sources against that exact tip. Missing

@@ -39,6 +39,60 @@ function expectFinalAuthority(calls: ReturnType<Candidate["state"]>["calls"]) {
 }
 
 describePosix("prior-CI whole REST observation fallback", () => {
+  it.each([false, true])(
+    "rechecks delegated policy after final security qualification (tightens=%s)",
+    (tightens) => {
+      const f = unknownGraphqlCandidate();
+      const state = f.state();
+      state.mode = "unapplied";
+      state.repoAuthority.permissions = { admin: false, maintain: true, push: true };
+      state.priorCi.membership = "member";
+      state.priorCi.rulesetBypass = "always";
+      state.tightenPolicyAfterSecurity = tightens;
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+      const final = f.state();
+
+      expect(result.status, result.output).toBe(1);
+      if (tightens) {
+        expect(final.policyTightenedAt).toBeGreaterThan(0);
+        expect(final.priorCi.reviewCount).toBe(2);
+        expectNoDispatch(f);
+        expect(result.output).toContain(
+          "writer policy or delegated bypass changed during admission",
+        );
+      } else {
+        expect(result.output).toContain("prior dispatch unresolved");
+        expect(final).toMatchObject({
+          mutations: 1,
+          posts: 0,
+          restMergePayload: { sha: f.head, merge_method: "squash" },
+        });
+        expect(f.record()).toMatchObject({
+          phase: "intent",
+          head: f.head,
+          accepted: false,
+          priorCiAdmin: {
+            delegation: { kind: "ci-ruleset-bypass", rulesets: [{ id: 41, mode: "always" }] },
+          },
+        });
+      }
+      const calls = tightens ? final.calls : readsBeforeDispatch(f);
+      const finalSecurityRead = calls.findLastIndex((call) =>
+        call.some((arg) => arg.startsWith(`repos/fixture/repo/commits/${f.head}/statuses?`)),
+      );
+      const finalPolicyRead = calls.findLastIndex((call) =>
+        call.some((arg) => arg.startsWith("repos/fixture/repo/rules/branches/main?")),
+      );
+      const finalWriterRead = calls.findLastIndex((call) =>
+        call.includes("repos/fixture/repo/rulesets/41"),
+      );
+      expect(finalPolicyRead).toBeGreaterThan(finalSecurityRead);
+      expect(finalWriterRead).toBeGreaterThan(finalPolicyRead);
+    },
+  );
+
   it.each([
     "stable",
     "missing REST commit",

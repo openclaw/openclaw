@@ -192,6 +192,8 @@ export function createMergeOutcomeFixtureHarness() {
       restMainFault: "",
       restMainFaultAfterReads: 0,
       restMainReads: 0,
+      tightenPolicyAfterSecurity: false,
+      policyTightenedAt: -1,
       restMainAdvance: null as null | {
         boundary: "before-evidence" | "during-evidence";
         observed: boolean;
@@ -454,7 +456,14 @@ const applyRestObservation=(next=s.restObservation)=>{
   s.restObservationAppliedAt=s.restMainReads;s.restObservation=null;save();
 };
 ${priorCiSecurityFixtureSource}
-if(securityResponse()) {}
+if(securityResponse()) {
+  if(s.tightenPolicyAfterSecurity&&s.restMainReads>0&&args.includes("repos/fixture/repo/actions/runs/901")) {
+    s.priorCi.reviewCount=2;
+    s.policyTightenedAt=s.calls.length-1;
+    s.tightenPolicyAfterSecurity=false;
+    save();
+  }
+}
 else if(args[0]==="browse") out(s.repo.url);
 else if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
 else if(args[0]==="api"&&args.includes("rate_limit")) out({resources:{graphql:{remaining:0,limit:5000,reset:1900000000},core:{remaining:4999,limit:5000,reset:1900000000}}});

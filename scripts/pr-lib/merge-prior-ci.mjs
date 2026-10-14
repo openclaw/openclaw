@@ -957,8 +957,7 @@ async function verifyPriorCiAdmin({
   if (!preExisting(evidence) && !deferFinalAuthority) {
     verifyChecks(checks);
   }
-  const complete = async (observedPolicy, qualifiedMain = observedMain, currentChecks = checks) => {
-    const finalPolicy = observedPolicy ?? (await readMergePolicyAsync(repo));
+  const complete = async (qualifiedMain = observedMain, currentChecks = checks) => {
     if (!preExisting(evidence) && deferFinalAuthority) {
       verifyChecks(currentChecks);
     }
@@ -973,8 +972,9 @@ async function verifyPriorCiAdmin({
     if (deferFinalAuthority) {
       verifyReview(finalReview);
     }
-    // The snapshot owner invokes this after its final main observation. Grants
-    // remain fresh even when all of the historical proof was reused.
+    // Security qualification awaits external work. Re-read effective policy
+    // afterward so a CI-only grant cannot waive newly tightened requirements.
+    const finalPolicy = await readMergePolicyAsync(repo);
     const current = await readWriterAuthority(repository, actor, evidence, finalPolicy, writerRead);
     requireEvidence(
       isDeepStrictEqual(finalPolicy, policy) && isDeepStrictEqual(current.delegation, delegation),
@@ -1018,8 +1018,7 @@ async function verifyMode(mode, options) {
   const result = await withPriorCiObservation(repo, options.pr, {
     prepare: (sharedSnapshot) =>
       verifyPriorCiAdmin({ ...options, immutable, sharedSnapshot, deferFinalAuthority: true }),
-    finish: (prepared, snapshot) =>
-      prepared.complete(snapshot.policy, snapshot.main, snapshot.checks),
+    finish: (prepared, snapshot) => prepared.complete(snapshot.main, snapshot.checks),
   });
   return {
     proof: result.value,
