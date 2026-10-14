@@ -65,7 +65,7 @@ async function openNestedParent() {
   return { context, page, gateway, modal };
 }
 
-function archivedKeys(requests: readonly { params: unknown }[]) {
+function archivedKeys(requests: readonly { params?: unknown }[]) {
   return requests.flatMap((request) => {
     const params = requireRecord(request.params);
     if (Array.isArray(params.targets)) {
