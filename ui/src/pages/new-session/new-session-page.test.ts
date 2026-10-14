@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
+import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { NewSessionPageOwner } from "./new-session-page-owner.ts";
 import "./new-session-page-entry.ts";
 
 type NewSessionElement = HTMLElement & {
@@ -59,6 +61,21 @@ afterEach(() => {
 });
 
 describe("new session draft route ownership", () => {
+  it("prepares composer options once per draft revision rather than per prop read", async () => {
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector("textarea");
+    const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
+    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
+
+    await enterMessage(page, "Keep typing without rebuilding options");
+
+    expect(message(page)).toBe("Keep typing without rebuilding options");
+    expect(page.querySelector("textarea")).toBe(textarea);
+    expect(prepare.mock.calls.length).toBeGreaterThan(0);
+    expect(prepare.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
   it.each([false, true])(
     "retires composer frames through detach and reattach (reduced motion: %s)",
     async (reducedMotion) => {
