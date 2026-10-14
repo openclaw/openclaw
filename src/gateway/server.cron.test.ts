@@ -31,6 +31,7 @@ import {
 } from "./server-cron.events.test-support.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { expectCronJobIdFromResponse } from "./server.cron.assertions.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -273,14 +274,6 @@ async function directCronReq(
     });
   }
   return expectDefined(result, `${method} did not respond`);
-}
-
-function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
-  expect(response.ok, JSON.stringify((response as { error?: unknown }).error ?? null)).toBe(true);
-  const value = (response.payload as { id?: unknown } | null)?.id;
-  const id = typeof value === "string" ? value : "";
-  expect(id.length > 0).toBe(true);
-  return id;
 }
 
 async function addWebhookCronJob(params: {

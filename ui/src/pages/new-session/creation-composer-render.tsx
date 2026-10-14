@@ -2,7 +2,6 @@ import { createMemo, Show } from "solid-js";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { getChatComposerState } from "../chat/components/chat-composer-state.ts";
 import { ChatComposer, resetChatComposerState } from "../chat/components/chat-composer.tsx";
@@ -117,11 +116,4 @@ function CreationComposerContent(props: {
       <ChatComposer {...prepared()} renderRevision={props.renderRevision} />
     </section>
   );
-}
-
-export function renderCreationComposer(
-  composer: CreationComposerOwner | undefined,
-  onOpenImage: (item: ImageLightboxItem) => void,
-) {
-  return solidContent(CreationComposer, { composer, onOpenImage, renderRevision: {} });
 }

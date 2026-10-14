@@ -136,6 +136,7 @@ describe("OpenClaw setup detection protocol", () => {
         sessionId: "setup-1",
         agentId: "research",
         authChoice: "openai-api-key",
+        selectModel: true,
         nativeSessionCatalogsEnabled: false,
       }),
     ).toBe(true);

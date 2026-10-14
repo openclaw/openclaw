@@ -23,7 +23,7 @@ import {
 } from "./deletion-participant.js";
 
 /**
- * @deprecated Use createNativeSessionBindingLifecycleV2; removed in the next Plugin SDK major.
+ * @deprecated Use createNativeSessionBindingLifecycleV2; removal follows a stable deprecation period.
  */
 export function createNativeSessionBindingLifecycle<TRecord extends NativeSessionBindingRecord>(
   state: NativeSessionBindingStateStore<TRecord>,
@@ -203,9 +203,6 @@ function createNativeSessionBindingLifecycleOwner<TRecord extends NativeSessionB
           custody.add(custodian);
         },
         unknown: false,
-        async refreshCommittedFacts() {
-          await owner?.facts?.refresh();
-        },
         settle(outcome, error) {
           if (outcome === "unknown") {
             participant.unknown = true;

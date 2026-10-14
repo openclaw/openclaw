@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import type {
@@ -12,7 +12,7 @@ import type { DB } from "./openclaw-state-db.generated.js";
 
 /** Capture deletion status and retained-store discovery in the worker's shared read transaction. */
 export function readAgentDatabaseDeletionWorkerSnapshot(
-  database: DatabaseSync,
+  database: EngineConnection,
   statePath: string,
   purpose: AgentDeletionJournalPurpose,
 ): AgentDatabaseDeletionWorkerSnapshot {

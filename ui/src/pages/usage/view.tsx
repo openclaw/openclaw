@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import { Menu } from "../../components/solid/menu.tsx";
 import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
 import {
   SettingsSection,
@@ -8,7 +9,6 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../components/tooltip.ts";
-import "../../components/web-awesome.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/usage.css";
 import { resolveUsageOverviewState } from "./cache-status.ts";
@@ -93,157 +93,117 @@ function renderProviderUsage(
 }
 
 export function renderUsage(props: UsageProps) {
-  const state = createMemo(() => {
-    const data = props.data;
-    const filters = props.filters;
-    const display = props.display;
-    const filterActions = props.callbacks.filters;
-
-    const { hasOverviewData, loadingOverview } = resolveUsageOverviewState(data);
-    const isTokenMode = display.chartMode === "tokens";
-    const hasQuery = filters.query.trim().length > 0;
-    const hasDraftQuery = filters.queryDraft.trim().length > 0;
-    const overview = data.overview;
-    const filteredSessions = data.sessions;
-    const queryWarnings = overview?.queryWarnings ?? [];
-    const filterOptions = overview?.filterOptions ?? {
-      agent: [],
-      channel: [],
-      provider: [],
-      model: [],
-      tool: [],
-    };
-    const querySuggestions = buildQuerySuggestions(filters.queryDraft, filterOptions);
-    const queryTerms = extractQueryTerms(filters.queryDraft);
-    const primarySelectedEntry =
-      filters.selectedSessions.length === 1 && overview?.selectedRowCount !== 0
-        ? (data.selectedSession ??
-          data.sessions.find((session) => session.key === filters.selectedSessions[0]))
-        : null;
-    const filteredDaily = data.costDaily;
-    const displayTotals = hasOverviewData ? data.totals : null;
-    const totalSessions =
-      overview?.unfilteredSessionCount ?? data.aggregates?.sessionCount ?? data.sessions.length;
-    const activeAggregates = data.aggregates ?? {
-      messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-      tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-      byModel: [],
-      byProvider: [],
-      byAgent: [],
-      byChannel: [],
-      daily: [],
-    };
-    const displaySessionCount =
-      overview?.selectedSessionCount ??
-      overview?.total ??
-      data.aggregates?.sessionCount ??
-      data.sessions.length;
-    const exportSessionCount = overview?.selectedRowCount ?? displaySessionCount;
-    const insightTotals = displayTotals;
-    const insightAggregates = activeAggregates;
-    const costWindowComparison = renderCostWindowComparison(
-      data.costDaily,
-      filters.startDate,
-      filters.endDate,
-      filters.timeZone,
-    );
-    const durationMs = overview?.durationMs ?? 0;
-    const durationCount = overview?.durationCount ?? 0;
-    const insightStats = {
+  const overview = createMemo(() => resolveUsageOverviewState(props.data));
+  const displayTotals = createMemo(() => (overview().hasOverviewData ? props.data.totals : null));
+  const filterOptions = createMemo(
+    () =>
+      props.data.overview?.filterOptions ?? {
+        agent: [],
+        channel: [],
+        provider: [],
+        model: [],
+        tool: [],
+      },
+  );
+  const querySuggestions = createMemo(() =>
+    buildQuerySuggestions(props.filters.queryDraft, filterOptions()),
+  );
+  const queryTerms = createMemo(() => extractQueryTerms(props.filters.queryDraft));
+  const primarySelectedEntry = createMemo(() =>
+    props.filters.selectedSessions.length === 1 && props.data.overview?.selectedRowCount !== 0
+      ? (props.data.selectedSession ??
+        props.data.sessions.find((session) => session.key === props.filters.selectedSessions[0]))
+      : null,
+  );
+  const totalSessions = createMemo(
+    () =>
+      props.data.overview?.unfilteredSessionCount ??
+      props.data.aggregates?.sessionCount ??
+      props.data.sessions.length,
+  );
+  const activeAggregates = createMemo(
+    () =>
+      props.data.aggregates ?? {
+        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+        byModel: [],
+        byProvider: [],
+        byAgent: [],
+        byChannel: [],
+        daily: [],
+      },
+  );
+  const displaySessionCount = createMemo(
+    () =>
+      props.data.overview?.selectedSessionCount ??
+      props.data.overview?.total ??
+      props.data.aggregates?.sessionCount ??
+      props.data.sessions.length,
+  );
+  const exportSessionCount = createMemo(
+    () => props.data.overview?.selectedRowCount ?? displaySessionCount(),
+  );
+  const insightStats = createMemo(() => {
+    const durationMs = props.data.overview?.durationMs ?? 0;
+    const durationCount = props.data.overview?.durationCount ?? 0;
+    const totals = displayTotals();
+    const messages = activeAggregates().messages;
+    return {
       durationCount,
       avgDurationMs: durationCount ? durationMs / durationCount : 0,
       throughputTokensPerMin:
-        displayTotals && durationMs > 0
-          ? displayTotals.totalTokens / (durationMs / 60000)
-          : undefined,
+        totals && durationMs > 0 ? totals.totalTokens / (durationMs / 60000) : undefined,
       throughputCostPerMin:
-        displayTotals && durationMs > 0
-          ? displayTotals.totalCost / (durationMs / 60000)
-          : undefined,
-      errorRate: activeAggregates.messages.total
-        ? activeAggregates.messages.errors / activeAggregates.messages.total
-        : 0,
-    };
-    // The gateway always returns a totals object (all-zero when idle), so key
-    // the empty state off content — and never render it under an error callout,
-    // where "no usage data yet" would misexplain the failure.
-    const isEmpty =
-      data.cacheRefresh === "complete" &&
-      data.totals !== null &&
-      !data.loading &&
-      !data.error &&
-      data.sessions.length === 0 &&
-      (overview?.unfilteredSessionCount ?? 0) === 0 &&
-      (data.totals?.totalTokens ?? 0) === 0;
-    const hasMissingCost = (displayTotals?.missingCostEntries ?? 0) > 0;
-    const datePresets = [
-      { label: t("usage.presets.today"), days: 1 },
-      { label: t("usage.presets.last7d"), days: 7 },
-      { label: t("usage.presets.last30d"), days: 30 },
-      { label: t("usage.presets.last90d"), days: 90 },
-      { label: t("usage.presets.last1y"), days: 365 },
-    ];
-    const presetRange = (days: number) => {
-      const end = new Date();
-      const start = new Date(end);
-      if (filters.timeZone === "utc") {
-        start.setUTCDate(start.getUTCDate() - (days - 1));
-      } else {
-        start.setDate(start.getDate() - (days - 1));
-      }
-      return {
-        start: formatIsoDate(start, filters.timeZone),
-        end: formatIsoDate(end, filters.timeZone),
-      };
-    };
-    const isPresetSelected = (days: number) => {
-      const range = presetRange(days);
-      return filters.startDate === range.start && filters.endDate === range.end;
-    };
-    const applyPreset = (days: number) => {
-      const range = presetRange(days);
-      filterActions.onDatesChange({ startDate: range.start });
-      filterActions.onDatesChange({ endDate: range.end });
-    };
-    const applyAllRange = () => {
-      filterActions.onDatesChange({ startDate: "1970-01-01" });
-      filterActions.onDatesChange({ endDate: formatIsoDate(new Date(), filters.timeZone) });
-    };
-
-    return {
-      activeAggregates,
-      applyAllRange,
-      applyPreset,
-      costWindowComparison,
-      datePresets,
-      displaySessionCount,
-      exportSessionCount,
-      displayTotals,
-      // Known subtotals cannot drive complete cumulative charts or comparisons.
-      usageUnavailable:
-        displayTotals?.usageReport?.state === "unavailable" ||
-        overview?.usageReport?.state === "unavailable",
-      filterOptions,
-      filteredDaily,
-      filteredSessions,
-      hasDraftQuery,
-      hasMissingCost,
-      hasOverviewData,
-      hasQuery,
-      insightAggregates,
-      insightStats,
-      insightTotals,
-      isEmpty,
-      isPresetSelected,
-      isTokenMode,
-      loadingOverview,
-      primarySelectedEntry,
-      querySuggestions,
-      queryTerms,
-      queryWarnings,
-      totalSessions,
+        totals && durationMs > 0 ? totals.totalCost / (durationMs / 60000) : undefined,
+      errorRate: messages.total ? messages.errors / messages.total : 0,
     };
   });
+  // Zero totals are normal while idle; an error must keep its own explanation.
+  const isEmpty = createMemo(
+    () =>
+      props.data.cacheRefresh === "complete" &&
+      props.data.totals !== null &&
+      !props.data.loading &&
+      !props.data.error &&
+      props.data.sessions.length === 0 &&
+      (props.data.overview?.unfilteredSessionCount ?? 0) === 0 &&
+      (props.data.totals?.totalTokens ?? 0) === 0,
+  );
+  const datePresets = [
+    { labelKey: "usage.presets.today", days: 1 },
+    { labelKey: "usage.presets.last7d", days: 7 },
+    { labelKey: "usage.presets.last30d", days: 30 },
+    { labelKey: "usage.presets.last90d", days: 90 },
+    { labelKey: "usage.presets.last1y", days: 365 },
+  ];
+  const presetRange = (days: number) => {
+    const end = new Date();
+    const start = new Date(end);
+    if (props.filters.timeZone === "utc") {
+      start.setUTCDate(start.getUTCDate() - (days - 1));
+    } else {
+      start.setDate(start.getDate() - (days - 1));
+    }
+    return {
+      start: formatIsoDate(start, props.filters.timeZone),
+      end: formatIsoDate(end, props.filters.timeZone),
+    };
+  };
+  const isPresetSelected = (days: number) => {
+    const range = presetRange(days);
+    return props.filters.startDate === range.start && props.filters.endDate === range.end;
+  };
+  const applyPreset = (days: number) => {
+    const range = presetRange(days);
+    props.callbacks.filters.onDatesChange({ startDate: range.start });
+    props.callbacks.filters.onDatesChange({ endDate: range.end });
+  };
+  const applyAllRange = () => {
+    props.callbacks.filters.onDatesChange({ startDate: "1970-01-01" });
+    props.callbacks.filters.onDatesChange({
+      endDate: formatIsoDate(new Date(), props.filters.timeZone),
+    });
+  };
   return (
     <SettingsPage wide>
       <div class="usage-page">
@@ -251,10 +211,10 @@ export function renderUsage(props: UsageProps) {
           <div class="settings-section__header">
             <h2 class="settings-section__heading">{t("usage.filters.rangeTitle")}</h2>
             <div class="settings-section__actions">
-              {state().loadingOverview
+              {overview().loadingOverview
                 ? renderUsageLoadingStatus(t("usage.loading.badge"))
                 : undefined}
-              {state().isEmpty ? (
+              {isEmpty() ? (
                 <>
                   {" "}
                   <span class="usage-query-hint">{t("usage.empty.hint")}</span>{" "}
@@ -272,21 +232,21 @@ export function renderUsage(props: UsageProps) {
               <div class="usage-controls">
                 {renderFilterChips(props.data.overview?.selectedRows ?? props.data.sessions, props)}
                 <div class="usage-presets">
-                  <For each={state().datePresets} keyed={(preset) => preset.days}>
+                  <For each={datePresets}>
                     {(preset) => (
                       <button
-                        class={["btn btn--sm", { active: state().isPresetSelected(preset().days) }]}
-                        aria-pressed={state().isPresetSelected(preset().days) ? "true" : "false"}
-                        onClick={() => state().applyPreset(preset().days)}
+                        class={["btn btn--sm", { active: isPresetSelected(preset.days) }]}
+                        aria-pressed={isPresetSelected(preset.days) ? "true" : "false"}
+                        onClick={() => applyPreset(preset.days)}
                       >
-                        {preset().label}
+                        {t(preset.labelKey)}
                       </button>
                     )}
                   </For>
                   <button
                     class={["btn btn--sm", { active: props.filters.startDate === "1970-01-01" }]}
                     aria-pressed={props.filters.startDate === "1970-01-01" ? "true" : "false"}
-                    onClick={() => state().applyAllRange()}
+                    onClick={() => applyAllRange()}
                   >
                     {t("usage.presets.all")}
                   </button>
@@ -348,7 +308,7 @@ export function renderUsage(props: UsageProps) {
                 <SettingsSegmented
                   mode="buttons"
                   variant="accent"
-                  value={state().isTokenMode ? "tokens" : "cost"}
+                  value={props.display.chartMode === "tokens" ? "tokens" : "cost"}
                   onChange={(chartMode) => props.callbacks.display.onChange({ chartMode })}
                   onReselect={(chartMode) => props.callbacks.display.onChange({ chartMode })}
                   options={[
@@ -368,7 +328,7 @@ export function renderUsage(props: UsageProps) {
 
             <div class="usage-header-row">
               <div class="usage-header-metrics">
-                <Show when={state().displayTotals}>
+                <Show when={displayTotals()}>
                   {(totals) => (
                     <For
                       each={[
@@ -381,9 +341,9 @@ export function renderUsage(props: UsageProps) {
                           t("usage.metrics.cost"),
                         ],
                         [
-                          state().displaySessionCount,
+                          displaySessionCount(),
                           t(
-                            state().displaySessionCount === 1
+                            displaySessionCount() === 1
                               ? "usage.metrics.session"
                               : "usage.metrics.sessions",
                           ),
@@ -404,52 +364,48 @@ export function renderUsage(props: UsageProps) {
                 >
                   {props.display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
                 </button>
-                <wa-dropdown
+                <Menu
+                  id="usage-export"
+                  label={t("usage.export.label")}
                   class="usage-export-menu"
+                  triggerClass="btn btn--sm"
                   placement="bottom-end"
-                  onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
-                    const value = event.detail.item.value;
-                    switch (value) {
+                  triggerAttributes={{ "aria-busy": props.data.exporting ? "true" : "false" }}
+                  trigger={
+                    <>{props.data.exporting ? t("common.loading") : t("usage.export.label")} ▾</>
+                  }
+                  items={[
+                    {
+                      id: "sessions-csv",
+                      label: t("usage.export.sessionsCsv"),
+                      disabled: props.data.exporting || exportSessionCount() === 0,
+                    },
+                    {
+                      id: "daily-csv",
+                      label: t("usage.export.dailyCsv"),
+                      disabled: props.data.costDaily.length === 0,
+                    },
+                    {
+                      id: "json",
+                      label: t("usage.export.json"),
+                      disabled:
+                        props.data.exporting ||
+                        props.data.loading ||
+                        (exportSessionCount() === 0 && props.data.costDaily.length === 0),
+                    },
+                  ]}
+                  onSelect={(item) => {
+                    switch (item.id) {
                       case "sessions-csv":
                       case "daily-csv":
-                        props.callbacks.display.onExportCsv(value);
+                        props.callbacks.display.onExportCsv(item.id);
                         break;
                       case "json":
                         props.callbacks.display.onExportJson();
                         break;
-                      case undefined:
-                        break;
                     }
                   }}
-                >
-                  <button
-                    slot="trigger"
-                    type="button"
-                    class="btn btn--sm"
-                    aria-busy={props.data.exporting ? "true" : "false"}
-                  >
-                    {props.data.exporting ? t("common.loading") : t("usage.export.label")} ▾
-                  </button>
-                  <wa-dropdown-item
-                    value="sessions-csv"
-                    disabled={props.data.exporting || state().exportSessionCount === 0}
-                  >
-                    {t("usage.export.sessionsCsv")}
-                  </wa-dropdown-item>
-                  <wa-dropdown-item value="daily-csv" disabled={state().filteredDaily.length === 0}>
-                    {t("usage.export.dailyCsv")}
-                  </wa-dropdown-item>
-                  <wa-dropdown-item
-                    value="json"
-                    disabled={
-                      props.data.exporting ||
-                      props.data.loading ||
-                      (state().exportSessionCount === 0 && state().filteredDaily.length === 0)
-                    }
-                  >
-                    {t("usage.export.json")}
-                  </wa-dropdown-item>
-                </wa-dropdown>
+                />
               </div>
             </div>
 
@@ -457,19 +413,19 @@ export function renderUsage(props: UsageProps) {
               filters={props.filters}
               actions={props.callbacks.filters}
               loading={props.data.loading}
-              hasDraftQuery={state().hasDraftQuery}
-              hasQuery={state().hasQuery}
-              hasOverviewData={state().hasOverviewData}
+              hasDraftQuery={props.filters.queryDraft.trim().length > 0}
+              hasQuery={props.filters.query.trim().length > 0}
+              hasOverviewData={overview().hasOverviewData}
               matchingSessions={
                 props.data.sessionPage?.total ??
                 props.data.overview?.total ??
-                state().filteredSessions.length
+                props.data.sessions.length
               }
-              totalSessions={state().totalSessions}
-              filterOptions={state().filterOptions}
-              queryTerms={state().queryTerms}
-              querySuggestions={state().querySuggestions}
-              queryWarnings={state().queryWarnings}
+              totalSessions={totalSessions()}
+              filterOptions={filterOptions()}
+              queryTerms={queryTerms()}
+              querySuggestions={querySuggestions()}
+              queryWarnings={props.data.overview?.queryWarnings ?? []}
             />
 
             {props.data.error ? (
@@ -494,8 +450,8 @@ export function renderUsage(props: UsageProps) {
           </div>
         </section>
 
-        {!state().hasOverviewData ? (
-          state().loadingOverview ? (
+        {!overview().hasOverviewData ? (
+          overview().loadingOverview ? (
             <div class="usage-panel usage-loading-card">
               <div class="usage-loading-grid">
                 <div class="skeleton usage-skeleton-block usage-skeleton-block--tall" />
@@ -504,18 +460,23 @@ export function renderUsage(props: UsageProps) {
               </div>
             </div>
           ) : undefined
-        ) : state().isEmpty ? (
+        ) : isEmpty() ? (
           renderUsageEmptyState(props.callbacks.filters.onRefresh)
         ) : (
           <>
             <Show
-              when={!state().usageUnavailable}
+              when={
+                !(
+                  displayTotals()?.usageReport?.state === "unavailable" ||
+                  props.data.overview?.usageReport?.state === "unavailable"
+                )
+              }
               fallback={<div class="callout warning usage-callout">{t("usage.unavailable")}</div>}
             >
               <div class="settings-group usage-panel usage-left-card usage-trend-section">
                 {
                   <DailyChartCompact
-                    dailyEntries={state().filteredDaily}
+                    dailyEntries={props.data.costDaily}
                     selectedDays={props.filters.selectedDays}
                     chartMode={props.display.chartMode}
                     dailyChartMode={props.display.dailyChartMode}
@@ -530,23 +491,23 @@ export function renderUsage(props: UsageProps) {
                     }}
                   />
                 }
-                <Show when={state().displayTotals}>
+                <Show when={displayTotals()}>
                   {(totals) => (
                     <CostBreakdownCompact totals={totals()} mode={props.display.chartMode} />
                   )}
                 </Show>
               </div>
               <UsageCreators
-                groups={state().activeAggregates.byCreator ?? []}
+                groups={activeAggregates().byCreator ?? []}
                 selectedKey={props.filters.creatorKey}
                 mode={props.display.chartMode}
                 onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
               />
               <UsageInsights
-                totals={state().insightTotals}
-                aggregates={state().insightAggregates}
-                stats={state().insightStats}
-                showCostHint={state().hasMissingCost}
+                totals={displayTotals()}
+                aggregates={activeAggregates()}
+                stats={insightStats()}
+                showCostHint={(displayTotals()?.missingCostEntries ?? 0) > 0}
                 showCostShares={
                   /* Daily buckets are exact; category rollups remain full-session totals. */
                   props.filters.selectedDays.length === 0
@@ -555,12 +516,17 @@ export function renderUsage(props: UsageProps) {
                   props.data.overview?.hourlyMessages ?? [],
                   props.data.overview?.hourlyErrors ?? [],
                 )}
-                sessionCount={state().displaySessionCount}
-                totalSessions={state().totalSessions}
+                sessionCount={displaySessionCount()}
+                totalSessions={totalSessions()}
               />
-              {state().costWindowComparison}
+              {renderCostWindowComparison(
+                props.data.costDaily,
+                props.filters.startDate,
+                props.filters.endDate,
+                props.filters.timeZone,
+              )}
               {renderUsageHeatmap(
-                state().filteredDaily,
+                props.data.costDaily,
                 props.filters.startDate,
                 props.filters.endDate,
               )}
@@ -577,14 +543,14 @@ export function renderUsage(props: UsageProps) {
             <div class="usage-grid">
               <div class="usage-grid-column">
                 <SessionsCard
-                  sessions={state().filteredSessions}
+                  sessions={props.data.sessions}
                   usage={props}
-                  totalSessions={props.data.overview?.total ?? state().totalSessions}
+                  totalSessions={props.data.overview?.total ?? totalSessions()}
                   overview={props.data.sessionPage ?? props.data.overview}
                   loading={props.data.loading}
                 />
               </div>
-              <Show when={state().primarySelectedEntry}>
+              <Show when={primarySelectedEntry()}>
                 {(selectedSession) => (
                   <div class="usage-grid-column">
                     <SessionDetailPanel

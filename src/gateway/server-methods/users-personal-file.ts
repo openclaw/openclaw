@@ -20,9 +20,9 @@ import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError } from "../../infra/fs-safe.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
-  hasMultipleSessionSharingIdentities,
+  hasMultipleResidentSessionSharingIdentities,
   readResidentUserProfileId,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
 } from "../../state/user-profile-list.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
@@ -57,7 +57,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       );
     }
     options.sessionMutationCommitGuard?.();
-    if (!hasMultipleSessionSharingIdentities()) {
+    if (!hasMultipleResidentSessionSharingIdentities()) {
       throw new PersonalFileAccessError(
         "Personal instructions are only available on multi-user Gateways. Use the agent workspace USER.md on a single-user Gateway.",
       );
@@ -116,7 +116,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       );
     }
     const cfg = context.getRuntimeConfig();
-    const profile = readUserProfileIdentity(canonicalId);
+    const profile = readResidentUserProfileIdentity(canonicalId);
     const policy = resolveOperatorRolePolicyForAssignment(
       canonicalId,
       profile?.role ?? null,

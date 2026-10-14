@@ -135,21 +135,17 @@ export async function removePairedDevice(deviceId: string, baseDir?: string) {
 export async function pruneSupersededSilentPairedDevices(params: {
   deviceId: string;
   baseDir?: string;
+  protectedDeviceIds?: readonly string[];
   isDeviceConnected?: (deviceId: string) => boolean;
   nowMs?: number;
 }): Promise<PrunedSupersededPairedDevice[]> {
   return await withDevicePairingLock(async () => {
-    const protectedDeviceIds = params.isDeviceConnected
-      ? (await listDevicePairing(params.baseDir)).paired
-          .filter((device) => params.isDeviceConnected?.(device.deviceId))
-          .map((device) => device.deviceId)
-      : [];
     return await executeDevicePairingMutation(
       {
         type: "devicePairing.pruneSilent",
         input: {
           deviceId: params.deviceId,
-          protectedDeviceIds,
+          protectedDeviceIds: params.protectedDeviceIds ?? [],
           nowMs: params.nowMs ?? Date.now(),
         },
       },

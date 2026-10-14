@@ -82,7 +82,7 @@ export function enrichHarnessRows(
   let donorsPrepared = false;
   return rows.map((entry) => {
     // Native discovery owns these capabilities; host donors cannot invent its transport.
-    if (entry.nativeRuntime) {
+    if (entry.nativeRuntime && entry.name !== entry.id) {
       return entry;
     }
     if (!donorsPrepared) {
@@ -115,6 +115,9 @@ export function enrichHarnessRows(
         : undefined);
     if (!donor) {
       return entry;
+    }
+    if (entry.nativeRuntime) {
+      return { ...entry, name: donor.name };
     }
     const compat = mergeHarnessCompat(entry.compat, donor.compat);
     const mergedParams =

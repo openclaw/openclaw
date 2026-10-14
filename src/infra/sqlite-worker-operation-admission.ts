@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { sqlPublicationAnchor, type PostgresSqlConnection } from "./sql-connection.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -16,6 +17,7 @@ import {
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import {
+  readSqliteWorkerMonotonicNs,
   SqliteWorkerError,
   type SqliteWorkerAdmissionRequest,
   type SqliteWorkerExecutionAuthority,
@@ -38,6 +40,7 @@ import {
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 
 export type { SqliteWorkerAdmissionRequest } from "./sqlite-worker-contract.js";
 export { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
@@ -49,6 +52,7 @@ const TIMED_OUT = 3;
 
 type AdmissionFailureSource = "authority" | "domain" | "protocol";
 type DatabaseAuthority = {
+  /** Canonical identity captured when the database owner was admitted. */
   databasePath: string;
   /** Only the broker can identify an initial open of its captured primary database. */
   coldOpenPath?: string;
@@ -148,6 +152,7 @@ function createOperationAdmission(
     try {
       // This message moves with port2; command payloads retain their v8 encoding.
       port1.postMessage({ kind: "sqlite-operation-attachment", value: attachment }, []);
+      recordWorkerMessage("authority", "to_worker");
     } catch (error) {
       port1.close();
       port2.close();
@@ -161,7 +166,7 @@ function createOperationAdmission(
   let closed = false;
   let started = false;
   let observeRequest: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
-  let observeCommit: ((committed: { facts: unknown }) => void) | undefined;
+  const commitObservers: CommitObserver[] = [];
   let observingCommit = false;
   let failure: { error: unknown; source: AdmissionFailureSource } | undefined;
   let committed: SqliteWorkerNativeSettlementOwner["committed"];
@@ -199,7 +204,11 @@ function createOperationAdmission(
     committed = publication;
     observingCommit = true;
     try {
-      inOwnerContext(() => observeCommit?.(publication));
+      inOwnerContext(() => {
+        for (const observer of commitObservers) {
+          observer(publication);
+        }
+      });
     } catch (error) {
       recordFailure(
         Object.assign(
@@ -213,6 +222,12 @@ function createOperationAdmission(
     }
   };
   const receive = (message: unknown) => {
+    recordWorkerMessage(
+      isRecord(message) && message.kind === "sqlite-database-admissions"
+        ? "admission"
+        : "authority",
+      "from_worker",
+    );
     started = true;
     if (isRecord(message) && message.kind === "sqlite-database-admissions") {
       if (
@@ -312,6 +327,7 @@ function createOperationAdmission(
           message.location === undefined ? undefined : { location: message.location, admissions };
         const reply = captureSqliteDatabaseAdmissions(databaseAdmissionCursor, scope);
         message.port.postMessage(reply, []);
+        recordWorkerMessage("admission", "to_worker");
         Atomics.store(decision, 0, GRANTED);
       } catch (error) {
         if (
@@ -374,7 +390,10 @@ function createOperationAdmission(
     }
     const decision = new Int32Array(message.decision);
     const expired = () => {
-      if (typeof message.deadlineNs === "bigint" && process.hrtime.bigint() >= message.deadlineNs) {
+      if (
+        typeof message.deadlineNs === "bigint" &&
+        readSqliteWorkerMonotonicNs() >= message.deadlineNs
+      ) {
         if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
           Atomics.notify(decision, 0);
         }
@@ -532,10 +551,7 @@ function createOperationAdmission(
           "closed",
         );
       }
-      databaseAuthority = {
-        ...authority,
-        databasePath: resolveIdentityPathViaExistingAncestorSync(authority.databasePath),
-      };
+      databaseAuthority = { ...authority };
     },
     get failure() {
       return failure?.error;
@@ -600,13 +616,10 @@ function createOperationAdmission(
     },
   };
   commitObserverBindings.set(admission, (observer) => {
-    if (closed || observeCommit || started) {
-      throw new SqliteWorkerError(
-        "SQLite commit observation is already bound or started",
-        "closed",
-      );
+    if (closed || started) {
+      throw new SqliteWorkerError("SQLite commit observation is closed or started", "closed");
     }
-    observeCommit = observer;
+    commitObservers.push(observer);
   });
   return admission;
 }
@@ -658,7 +671,7 @@ function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation
 
 /** Record facts only after the real transaction commits, before native settlement is announced. */
 export function deferSqliteWorkerCommitReceipt(
-  database: DatabaseSync,
+  database: DatabaseSync | PostgresSqlConnection,
   facts: unknown,
   delivery: "commit" | "settlement" = "commit",
 ): void {
@@ -670,9 +683,11 @@ export function deferSqliteWorkerCommitReceipt(
 }
 
 /** A typed fenced write cannot commit without its destination owner's settlement evidence. */
-export function assertSqliteWorkerCommitReceiptPending(database: DatabaseSync): void {
+export function assertSqliteWorkerCommitReceiptPending(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
   const scope = currentAdmission.getStore();
-  if (!scope?.active || !scope.owner.pendingReceipts?.get(database)) {
+  if (!scope?.active || !scope.owner.pendingReceipts?.get(sqlPublicationAnchor(database))) {
     throw new SqliteWorkerError(
       "SQLite source fence requires a destination commit receipt",
       "closed",

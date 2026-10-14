@@ -141,7 +141,7 @@ describe("cron timer maintenance admission", () => {
     sqliteTransactionLabels.length = 0;
     const result = scheduler.tick();
     expect(result.accepted).toHaveLength(1);
-    expect(scheduler.read().jobs[0]?.state.queuedAtMs).toBe(NOW);
+    expect(scheduler.read().jobs[0]?.state.runningAtMs).toBe(NOW);
     expect(sqliteTransactionLabels).not.toContain("cron.schedule-unowned");
     expect(result.nextWakeAtMs).toBeGreaterThan(NOW);
     expect(scheduler.tick().accepted).toEqual([]);

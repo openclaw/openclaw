@@ -45,6 +45,7 @@ import {
   type WorkboardCardDatabase,
 } from "./sqlite-store-records.js";
 import { createWorkboardDatabase, type WorkboardSqlConnection } from "./sqlite-store-schema.js";
+import { readSessionLinkedCardIds } from "./sqlite-store-session-links.js";
 import { WorkboardSqliteSessionsBoardStore } from "./sqlite-store-sessions-board.js";
 import { bindNull, insertCard, prepareWorkboardUpsert } from "./sqlite-store-write.js";
 import {
@@ -267,8 +268,8 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   }
 
   entries(scope?: WorkboardCardReadScope): Array<{ key: string; value: PersistedWorkboardCard }> {
-    // Selection and hydration must agree if another connection changes a parent or sibling.
-    return scope?.kind === "worker-context"
+    // Keep lightweight selection and full hydration in one consistent snapshot.
+    return scope?.kind === "worker-context" || scope?.kind === "session-links"
       ? runEngineStoreReadSnapshot(this.db, () => this.readEntries(scope))
       : this.readEntries(scope);
   }
@@ -295,6 +296,12 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
           ]),
         ]),
       );
+    } else if (scope?.kind === "session-links") {
+      const ids = readSessionLinkedCardIds(this.db, scope);
+      if (ids.length === 0) {
+        return [];
+      }
+      query = query.where("id", "in", sqliteStringSet(ids));
     } else if (scope?.kind === "worker-context") {
       const ids = this.workerContextCardIds(scope);
       if (ids.length === 0) {

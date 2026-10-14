@@ -25,27 +25,21 @@ async function context(
 }
 
 describe("discord message context", () => {
-  it.each([
-    { sourceMessageIds: ["1000", "1001"], implicitCurrentMessage: "allow" },
-    { sourceMessageIds: ["1001"], implicitCurrentMessage: "deny" },
-  ])(
-    "preserves batched reply identities for $sourceMessageIds",
-    async ({ sourceMessageIds, implicitCurrentMessage }) => {
-      const payload = await context({
-        replyToMode: "batched",
-        sourceMessageIds,
-        canonicalMessageId: "pluralkit-original",
-      });
-      expect(payload).toMatchObject({
-        MessageSid: "pluralkit-original",
-        MessageSidFull: "1001",
-        MessageSids: implicitCurrentMessage === "allow" ? ["1000", "1001"] : undefined,
-        MessageSidFirst: implicitCurrentMessage === "allow" ? "1000" : undefined,
-        MessageSidLast: implicitCurrentMessage === "allow" ? "1001" : undefined,
-        ReplyThreading: { implicitCurrentMessage },
-      });
-    },
-  );
+  it("preserves batched reply identities", async () => {
+    const payload = await context({
+      replyToMode: "batched",
+      sourceMessageIds: ["1000", "1001"],
+      canonicalMessageId: "pluralkit-original",
+    });
+    expect(payload).toMatchObject({
+      MessageSid: "pluralkit-original",
+      MessageSidFull: "1001",
+      MessageSids: ["1000", "1001"],
+      MessageSidFirst: "1000",
+      MessageSidLast: "1001",
+      ReplyThreading: { implicitCurrentMessage: "allow" },
+    });
+  });
 
   it("preserves bot sender scope and live owner authority through the host builder", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

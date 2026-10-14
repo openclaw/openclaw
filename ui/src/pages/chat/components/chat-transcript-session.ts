@@ -2,6 +2,7 @@
 // virtualizer host owned by ChatTranscriptController.
 import type { Virtualizer } from "@tanstack/virtual-core";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { ApplicationContext } from "../../../app/context.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
@@ -22,6 +23,8 @@ export type ChatTranscriptPendingScrollOffset = {
 };
 
 export type TranscriptCallbacks = {
+  /** Sidebar commits originate on the pane element, separate from its state owner. */
+  geometryEventTarget?: HTMLElement;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
@@ -57,6 +60,7 @@ export type ChatTranscriptSession = {
     overlay?: unknown,
     header?: TranscriptHeader | null,
     presented?: PresentationValue,
+    applicationContext?: ApplicationContext,
   ): HTMLDivElement;
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
@@ -82,6 +86,7 @@ export type TranscriptRenderSnapshot<T> = {
   renderKeyRows: ReadonlyMap<string, string>;
   entryKeys: ChatMessageEntryAnimations["projectedKeys"];
   presented: PresentationValue;
+  applicationContext?: ApplicationContext;
 };
 
 /** Session-owned deferred measurements after width changes and smooth scrolling. */

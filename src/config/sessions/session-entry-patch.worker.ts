@@ -12,6 +12,7 @@ import {
   writeSessionEntryPatchInDatabase,
 } from "./session-accessor.sqlite-entry-mutation.js";
 import {
+  normalizeLifecycleTarget,
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -57,7 +58,7 @@ export function createSessionWorkerOperationContext(
         dispatch({ ...request, facts: { ...request.facts, publication } });
       });
     },
-    writeTransaction(operationLabel, owner, write) {
+    writeTransaction(operationLabel, owner, write, diagnosticContext) {
       return runOpenClawAgentWriteTransaction(
         (current) => {
           if (current.db !== native) {
@@ -67,7 +68,7 @@ export function createSessionWorkerOperationContext(
           return write(current);
         },
         options,
-        { operationLabel },
+        { operationLabel, diagnosticContext },
       );
     },
   };
@@ -79,6 +80,20 @@ export function readSessionEntryPatchSnapshot(
   selection: SessionEntryPatchSelection,
   includeWindowFacts?: true,
 ) {
+  let sessionKey: string | undefined;
+  if (selection.kind === "entry") {
+    sessionKey = selection.exact ? selection.sessionKey : selection.sessionKey.trim();
+  } else {
+    const target = normalizeLifecycleTarget(selection.target);
+    if (target.storeKeys.length === 1) {
+      sessionKey = target.canonicalKey;
+    }
+  }
+  const actor =
+    sessionKey === undefined ? undefined : prepareSessionActorEntryPatch(database, sessionKey);
+  if (actor) {
+    return [actor.snapshot()];
+  }
   return selection.kind === "target"
     ? readLifecycleTargetSnapshot(database, selection.target, { includeWindowFacts })
     : readSessionEntrySelectionSnapshot(
@@ -107,11 +122,10 @@ export function commitSessionEntryPatch(
       | ReturnType<typeof readSessionPendingInputAuthorityFactsInTransaction>
       | undefined;
     let result: SessionEntryPatchCommitted;
-    const predicate = readSessionEntryPatchPredicate(
-      database,
-      input.sessionKey,
-      input.shouldCommitIf,
-    );
+    const actorPatch = prepareSessionActorEntryPatch(database, input.sessionKey);
+    const predicate = actorPatch
+      ? actorPatch.readPredicate(input.shouldCommitIf)
+      : readSessionEntryPatchPredicate(database, input.sessionKey, input.shouldCommitIf);
     if (!predicate.matches) {
       // A false predicate precedes CAS and the throwing guard, including for a null patch.
       result = { kind: "session-entry-patch", entry: null, applied: false };
@@ -139,7 +153,6 @@ export function commitSessionEntryPatch(
           });
         },
       };
-      const publishActor = prepareSessionActorEntryPatch(database, input.sessionKey);
       let mutation;
       if ("operation" in input) {
         if (input.validateCanonicalKeys) {
@@ -217,7 +230,7 @@ export function commitSessionEntryPatch(
         publishRetention?.();
       }
       if (publication && mutation.postimages) {
-        publishActor?.(mutation.postimages, publication);
+        actorPatch?.publish(mutation.postimages, publication);
       }
       result = {
         kind: "session-entry-patch",

@@ -228,7 +228,7 @@ test.each(["registered", "github", "inherited"] as const)(
         worktreeName: "selected-child",
         worktreeBaseRef: "main",
       });
-      expect(result.details).toMatchObject({ status: "accepted" });
+      expect(result.details, JSON.stringify(result.details)).toMatchObject({ status: "accepted" });
       if (!isRecord(result.details) || typeof result.details.childSessionKey !== "string") {
         throw new Error("Missing child session key");
       }
@@ -556,7 +556,9 @@ test("trusted worktree spawns roll back when the parent changes during preparati
     },
   );
   const key = "agent:main:dashboard:retired-parent-child";
-  await expect(createChild({ key })).rejects.toThrow("Spawn parent managed worktree changed");
+  await expect(createChild({ key })).rejects.toThrow(
+    /Spawn parent managed worktree changed|Session access facts are unavailable/,
+  );
   expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
 });

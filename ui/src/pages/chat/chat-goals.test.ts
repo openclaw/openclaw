@@ -648,12 +648,12 @@ describe("Goal control requests", () => {
       pending.reject(
         new GatewayRequestError({
           code: "INVALID_REQUEST",
-          message: "goal is already complete",
+          message: "Goal update is invalid",
           details: reason === "invalid" ? { code: "GOAL_OPERATION_REJECTED", reason } : { reason },
         }),
       );
       expect(await submitted).toBe(false);
-      expect(host.chatError).toContain("goal is already complete");
+      expect(host.chatError).toContain("Goal update is invalid");
       expect(chatGoalRecovery(host)).toBeUndefined();
       expect(sessionStorage.length).toBe(0);
       await captured?.onCheck();

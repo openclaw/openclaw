@@ -226,9 +226,11 @@ export async function handleCompactCommand(
   });
   let expectedSession: InternalSessionEntry = targetSessionEntry;
   let compactionAccepted = false;
+  let ingressAdopted = false;
   const assertOwnerBeforeAcceptance = () => {
     operatorAuthority?.assertCurrent();
     if (!compactionAccepted) {
+      params.command.assertOwnerCurrent?.();
       assertOwnerCurrent?.();
     }
   };
@@ -270,6 +272,9 @@ export async function handleCompactCommand(
       if (!(await prepareCurrentEntry())) {
         return compactionUnavailable("command session changed", interruptionNotice);
       }
+      params.opts?.turnAdoptionLifecycle?.abortSignal?.throwIfAborted();
+      await params.opts?.turnAdoptionLifecycle?.onAdopted();
+      ingressAdopted = true;
       failure = authorityFailure();
       if (failure) {
         return failure;
@@ -312,14 +317,24 @@ export async function handleCompactCommand(
     entry: prepared.entry,
     cfg: params.cfg,
   });
-  const replyOperation = params.opts?.replyOperation;
-  replyOperation?.setPhase("preflight_compacting");
   const assertActive = () => {
     assertOwnerBeforeAcceptance();
     params.opts?.abortSignal?.throwIfAborted();
     params.commandInvocationSignal?.throwIfAborted();
     currentRead?.assertCurrent();
   };
+  // Keep read-only preflight retryable; adopt before the first compaction effect.
+  if (!ingressAdopted) {
+    params.opts?.turnAdoptionLifecycle?.abortSignal?.throwIfAborted();
+    await params.opts?.turnAdoptionLifecycle?.onAdopted();
+  }
+  failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
+  assertActive();
+  const replyOperation = params.opts?.replyOperation;
+  replyOperation?.setPhase("preflight_compacting");
   const compaction = runtime.compactEmbeddedAgentSession(
     {
       abortSignal: params.opts?.abortSignal,

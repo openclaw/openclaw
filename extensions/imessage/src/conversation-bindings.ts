@@ -25,7 +25,7 @@ function toIMessageTargetKind(raw: BindingTargetKind): IMessageBindingTargetKind
   return raw === "subagent" ? "subagent" : "acp";
 }
 
-/** @deprecated Use createIMessageConversationBindingManagerV2; removed in the next Plugin SDK major. */
+/** @deprecated Use createIMessageConversationBindingManagerV2; removal follows a stable deprecation period. */
 export function createIMessageConversationBindingManager(params: {
   accountId?: string;
   cfg: OpenClawConfig;

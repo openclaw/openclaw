@@ -334,7 +334,12 @@ async function warmedPluginContext(
   try {
     await executePreparedCliRun({ ...context, openClawHistoryPrompt: undefined }, undefined);
     context.requiredClaudeLiveSessionGeneration = liveHandle?.generation;
-    return { context, close, attempts: () => attempts };
+    // The warmup is a separate turn and must not consume this run's recovery budget.
+    return {
+      context: { ...context, ...captureCliRunStartTime() },
+      close,
+      attempts: () => attempts,
+    };
   } catch (error) {
     close();
     throw error;

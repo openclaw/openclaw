@@ -8,8 +8,9 @@ import {
 } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveApprovalRequestChannelAccountId } from "../infra/approval-request-account-binding.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
-import { readGitHubPublicationSession } from "./github-publication-availability.js";
+import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import { withSessionFileRoot } from "./server-methods/sessions-files.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -37,7 +38,10 @@ afterEach(() => {
 async function fixture() {
   const owner = createMemorySessionActorOwner({
     agentId: "main",
-    path: "/synthetic/agents/main/sessions/incognito.sqlite",
+    path: resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: "/synthetic" },
+    }),
   });
   owners.push(owner);
   const actor = await owner.acquire(
@@ -109,7 +113,9 @@ it("checks current metadata at the effect without sending memory predicates to S
   const { binding, patch } = await fixture();
   await runWithSessionActorStorage(binding, async () => {
     const scope = { sessionKey, agentId: binding.agentId, storePath: binding.path };
-    const metadata = captureSessionEntryMetadataRead(scope);
+    const metadata = captureSessionEntryMetadataRead(scope, () =>
+      binding.authority.assertCurrent(),
+    );
     const assertion = captureSessionEntrySourceAssertion({
       scope,
       expected: metadata?.readCurrent(),
@@ -125,9 +131,8 @@ it("checks current metadata at the effect without sending memory predicates to S
     expect(() => prepared.assertCurrent()).not.toThrow();
     await patch({ spawnedCwd: "/synthetic/replacement" });
     expect(() => prepared.assertCurrent()).toThrow("Workspace authority changed");
-    expect(readGitHubPublicationSession(sessionKey).entry?.spawnedCwd).toBe(
-      "/synthetic/replacement",
-    );
+    using publicationSession = await prepareGitHubPublicationSession(sessionKey);
+    expect(publicationSession.readCurrent().entry?.spawnedCwd).toBe("/synthetic/replacement");
   });
 });
 

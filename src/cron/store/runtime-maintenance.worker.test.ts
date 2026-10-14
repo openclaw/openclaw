@@ -3,6 +3,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { maintainCronRunHistoryInWorker } from "./runtime-maintenance.worker.js";
 
@@ -27,7 +28,7 @@ it.each(["empty", "retained", "expired"] as const)(
         expect(revision).toBeTypeOf("number");
         const exec = vi.spyOn(database.db, "exec");
         const reads = trackSqliteStatementExecutions(
-          database.db,
+          requireNativeSqliteDatabase(database.db),
           ["history", "receipts"],
           (sql) => {
             if (!/^select\b/i.test(sql)) {
@@ -51,7 +52,11 @@ it.each(["empty", "retained", "expired"] as const)(
               }),
           );
           expect(result).toEqual({
-            outcome: { reconciled: 0, pruned: history === "expired" ? 1 : 0 },
+            outcome: {
+              reconciled: 0,
+              pruned: history === "expired" ? 1 : 0,
+              nextSweepAtMs: history === "retained" ? nowMs + 6 * day : null,
+            },
           });
           expect(reads.counts).toEqual({ history: 1, receipts: 0 });
           expect(exec.mock.calls.some(([sql]) => /^\s*BEGIN\b/i.test(sql))).toBe(

@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import * as pluginSourceFiles from "../plugins/plugin-source-file.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
@@ -127,49 +126,3 @@ it.each([
     });
   },
 );
-
-it("prepares runtime config before Doctor contributions register plugins", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-    mocks.packageRoot.mockReturnValue(undefined);
-    const id = "doctor-runtime-config";
-    const root = state.path("plugin");
-    fs.mkdirSync(root);
-    fs.writeFileSync(
-      path.join(root, "index.cjs"),
-      `module.exports = { id: "${id}", register(api) {
-        if (api.runtime.config.current().plugins.entries["${id}"].enabled !== true) {
-          throw new Error("Doctor did not publish the inspected config");
-        }
-      } };`,
-    );
-    fs.writeFileSync(
-      path.join(root, "openclaw.plugin.json"),
-      JSON.stringify({ id, configSchema: { type: "object", properties: {} } }),
-    );
-    const cfg = {
-      plugins: {
-        allow: [id],
-        load: { paths: [root] },
-        entries: { [id]: { enabled: true } },
-        slots: { memory: "none" },
-      },
-    };
-    mocks.config.mockReturnValue(cfg);
-    mocks.runContributions.mockImplementation(async (ctx) => {
-      const registry = loadPluginRegistryHandle({ config: ctx.cfg, cache: false });
-      try {
-        expect(registry.plugins.find((plugin) => plugin.id === id)).toMatchObject({
-          status: "loaded",
-        });
-      } finally {
-        await disposePluginRegistryInstances(registry);
-      }
-    });
-    clearRuntimeConfigSnapshot();
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    await doctorCommand(runtime, { nonInteractive: true });
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-});

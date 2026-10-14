@@ -316,6 +316,10 @@ from the new installation before restarting through the service manager.
 
 ## `update repair`
 
+If state ownership or a maintenance lock is held, repair refuses before that
+maintenance and reports `Stop the Gateway first (openclaw gateway stop)`. Stop
+the Gateway for the same profile/state directory before retrying.
+
 Repair exits nonzero with the original recovery command when an older package
 journal remains pending and the current CLI cannot settle it. It does not report
 successful repair or continue post-update maintenance while that record remains.
@@ -871,7 +875,8 @@ create or change WAL/SHM sidecars, invalidating cleanup's destination check even
 when session content is unchanged. If cleanup reports `Recovery destination
 database changed; preview cleanup again.`, stop those readers, preview again,
 and retry. Cleanup requires exclusive offline state ownership and never stops
-or restarts a service itself.
+or restarts a service itself. On owner or maintenance-lock contention, cleanup
+reports `Stop the Gateway first (openclaw gateway stop)` before any removal.
 
 <Warning>
 Cleanup permanently removes the selected rollback originals, including branches
@@ -902,7 +907,8 @@ cleanup and remains gated on a compatible serving bridge. Its descriptor policy
 and release-generation inventory record ownership without deleting directories
 or snapshots. They do not make immutable releases eligible for `update cleanup`; see the
 [immutable release-retention inventory](/reference/database-schemas/layout#immutable-release-retention-inventory).
-Doctor's `<database>.pre-startup-migration-<id>.bak` groups become eligible only
+Doctor's `<database>.pre-startup-migration-<id>.bak` groups, including their
+`.scoped.bak` members, become eligible only
 after Doctor verifies migration completion and update history records a successful
 update that started later. Until then they appear as protected. Changed or
 unrecorded backups remain protected or blocked; cleanup never infers permission

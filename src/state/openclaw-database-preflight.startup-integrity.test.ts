@@ -1,23 +1,37 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSelectedSessionEntryRows } from "../config/sessions/session-accessor.sqlite-entry-select.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  readSqliteCleanCloseSeal,
+  writeSqliteCleanCloseSeal,
+} from "../infra/sqlite-clean-close-seal.js";
+import {
   revokeSqliteDatabaseAdmissionsForPath,
+  retireSqliteDatabaseAdmissionForPath,
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import * as integrity from "../infra/sqlite-integrity.js";
+import * as schemaContracts from "../infra/sqlite-schema-contract.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { VERSION } from "../version.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
+import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
+import { sqliteDatabaseSealSchemaFor } from "./openclaw-database-seal-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabase,
@@ -25,6 +39,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -33,7 +48,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it("reuses a clean closed-WAL receipt without copying the agent database", async () => {
+it("cold-loads a complete prior-build seal without validation SQL or snapshots", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-clean-startup-") };
   const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env });
   closeOpenClawAgentDatabaseByPath(agentPath);
@@ -41,7 +56,19 @@ it("reuses a clean closed-WAL receipt without copying the agent database", async
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
   expect(fs.existsSync(`${agentPath}-wal`)).toBe(false);
   expect(fs.existsSync(`${agentPath}-shm`)).toBe(false);
+  const file = fs.statSync(agentPath, { bigint: true });
+  const seal = readSqliteCleanCloseSeal(agentPath, sqliteDatabaseSealSchemaFor(), file)!;
+  // Persist the predecessor's identity format independently of the current helper.
+  const previousBuildIdentity = createHash("sha256")
+    .update(JSON.stringify([2, VERSION]))
+    .update(OPENCLAW_AGENT_SCHEMA_SQL)
+    .update(OPENCLAW_STATE_SCHEMA_SQL)
+    .digest("hex");
+  expect(writeSqliteCleanCloseSeal(agentPath, previousBuildIdentity, file, seal)).toBe(true);
+  retireSqliteDatabaseAdmissionForPath(agentPath);
   const before = fs.readFileSync(agentPath);
+  const validate = vi.spyOn(integrity, "assertSqliteIntegrity");
+  const templates = vi.spyOn(schemaContracts, "getCanonicalSqliteTableNames");
   const prepare = snapshots.prepareSqliteReadOnlyLocation;
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((pathname, options) => {
     if (pathname === agentPath) {
@@ -59,10 +86,158 @@ it("reuses a clean closed-WAL receipt without copying the agent database", async
     }),
   ).resolves.toBeUndefined();
   expect(onAgentInspection).toHaveBeenLastCalledWith(
-    expect.objectContaining({ schemaSnapshotCount: 0 }),
+    expect.objectContaining({ schemaSnapshotCount: 0, schemaProcessCount: 0 }),
   );
+  expect(templates).not.toHaveBeenCalled();
+  expect(validate).not.toHaveBeenCalled();
   expect(fs.readFileSync(agentPath)).toEqual(before);
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
+});
+
+it("admits every previously sealed same-version agent before transcript readers run", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("startup-additive-seal-") };
+  const ids = ["claude", "codex", "openclaw", "node-livetest", "roboclaw-x"];
+  const agents = ids.map((agentId) => ({
+    agentId,
+    path: openOpenClawAgentDatabase({ agentId, env }).path,
+  }));
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  for (const agent of agents) {
+    const identity = sqliteDatabaseSealSchemaFor();
+    const seal = readSqliteCleanCloseSeal(
+      agent.path,
+      identity,
+      fs.statSync(agent.path, { bigint: true }),
+    )!;
+    expect(seal).toBeDefined();
+    revokeSqliteDatabaseAdmissionsForPath(agent.path);
+    const old = new (requireNodeSqlite().DatabaseSync)(agent.path);
+    old.exec(`
+      ALTER TABLE session_windows DROP COLUMN row_transcript_json;
+      ALTER TABLE session_windows DROP COLUMN row_transcript_updated_at;
+      PRAGMA wal_checkpoint(TRUNCATE);
+    `);
+    const tableSql = old
+      .prepare("SELECT sql FROM sqlite_schema WHERE name='session_windows'")
+      .get()!.sql;
+    const schemaVersion = old.prepare("PRAGMA schema_version").get()!.schema_version;
+    old.close();
+    retireSqliteDatabaseAdmissionForPath(agent.path);
+    // Previous-build completed facts describe the actual older catalog. Keep the
+    // current identity too: a matching hash alone must not bless missing columns.
+    const facts = JSON.parse(String(seal.facts), (key, value) => {
+      if (key === "tableSql" && value?.sealType === "map") {
+        value.entries = value.entries.map(([name, sql]: [string, string]) => [
+          name,
+          name === "session_windows" ? tableSql : sql,
+        ]);
+      }
+      if (value?.tableSql) {
+        value.schemaVersion = schemaVersion;
+      }
+      return value;
+    });
+    expect(
+      writeSqliteCleanCloseSeal(agent.path, identity, fs.statSync(agent.path, { bigint: true }), {
+        verifiedAt: seal.verifiedAt,
+        facts: JSON.stringify(facts),
+      }),
+    ).toBe(true);
+    expect(() => {
+      const reader = openOpenClawAgentDatabaseReadOnly({ ...agent, env });
+      if (reader.found) {
+        try {
+          readSelectedSessionEntryRows(reader.database, ["synthetic"], "full", undefined, {
+            includeRowTranscriptProjection: true,
+          });
+        } finally {
+          reader.database.close();
+        }
+      }
+    }).toThrow("requires writable startup admission before session reads");
+    expect(readSqliteDatabaseCleanClose(agent.path)).toBe(false);
+  }
+  const config = {
+    agents: {
+      entries: Object.fromEntries(ids.map((id) => [id, {}])),
+      defaults: { systemAgent: { agentId: "claude" } },
+    },
+  };
+  await withAgentDatabaseStartupAdmission(async (admission) => {
+    await expect(
+      assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
+    ).resolves.toBeUndefined();
+    const owner = admission.adopt();
+    try {
+      for (const { agentId } of agents) {
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })?.code).toBe(
+          "agent-database-inspection-pending",
+        );
+      }
+      admission.activate({
+        isCurrent: () => true,
+        preparationReady: Promise.resolve(),
+        openAgent: async ({ agentId, paths, assertCurrent }) => {
+          for (const pathname of paths) {
+            await withOpenClawAgentDatabaseAsync(
+              { agentId, path: pathname, env },
+              () => {},
+              assertCurrent,
+            );
+          }
+        },
+        migrateAgent: async ({ agentId, paths }) => {
+          for (const pathname of paths) {
+            const reader = openOpenClawAgentDatabaseReadOnly({ agentId, path: pathname, env });
+            expect(reader.found).toBe(true);
+            if (reader.found) {
+              try {
+                expect(
+                  readSelectedSessionEntryRows(reader.database, ["synthetic"], "full", undefined, {
+                    includeRowTranscriptProjection: true,
+                  }),
+                ).toEqual([]);
+                expect(
+                  reader.database.db.prepare("PRAGMA table_info(session_windows)").all(),
+                ).toEqual(
+                  expect.arrayContaining([
+                    expect.objectContaining({ name: "row_transcript_json" }),
+                    expect.objectContaining({ name: "row_transcript_updated_at" }),
+                  ]),
+                );
+              } finally {
+                reader.database.close();
+              }
+            }
+          }
+        },
+        publishAgent: async () => {},
+      });
+      await admission.pendingPreparation;
+      for (const { agentId } of agents) {
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
+      }
+    } finally {
+      await owner.stop();
+    }
+  });
+});
+
+it("prioritizes newer schema refusal over missing same-version reader columns", () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("startup-newer-additive-") };
+  const agent = openOpenClawAgentDatabase({ agentId: "main", env });
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  revokeSqliteDatabaseAdmissionsForPath(agent.path);
+  using writer = new (requireNodeSqlite().DatabaseSync)(agent.path);
+  const version = Number(writer.prepare("PRAGMA user_version").get()!.user_version);
+  writer.exec(
+    `ALTER TABLE session_windows DROP COLUMN row_transcript_json; PRAGMA user_version=${version + 1};`,
+  );
+  expect(() =>
+    openOpenClawAgentDatabaseReadOnly({ agentId: "main", path: agent.path, env }),
+  ).toThrow(/newer schema version/iu);
 });
 
 it("reads a replacement database's committed WAL after loading the old clean seal", async () => {

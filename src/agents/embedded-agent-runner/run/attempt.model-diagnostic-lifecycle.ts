@@ -30,6 +30,7 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic-trace-propagation.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import { withModelTransportContext } from "../../../llm/model-transport-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -255,6 +256,11 @@ export function createModelLifecycle(params: {
   createObserver: (capturePromptStats: boolean) => ModelCallObserver;
 }) {
   const callId = params.ctx.nextCallId();
+  const transportContext = {
+    sessionKey: params.ctx.sessionKey,
+    runId: params.ctx.runId,
+    requestId: callId,
+  };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(areDiagnosticsEnabledForProcess());
   const eventBase: ModelCallEventBase = {
@@ -393,6 +399,9 @@ export function createModelLifecycle(params: {
     eventBase,
     observer,
     propagatedOptions,
+    runInTransportContext<T>(run: () => T): T {
+      return withModelTransportContext(transportContext, run);
+    },
     startedAt,
     observeChunk(chunk: unknown) {
       observer.observeResponseChunk(startedAt, chunk);

@@ -67,7 +67,7 @@ function installWorkerTransport() {
       taskId: 7,
       interactive: Boolean(options.onRequest),
       nativeSections: new SharedArrayBuffer(4),
-      taskContext: { deletedAgentDatabaseFences: [], databaseAdmissions: [] },
+      taskContext: { deletedAgentDatabaseFences: [] },
     });
     const reply = await posted.promise;
     assert(reply && typeof reply === "object" && "status" in reply);
@@ -110,6 +110,7 @@ afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
   await Promise.all([historyLane, targetDiscoveryLane].map((lane) => rotateDatabaseWorkers(lane)));
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   expect(observed.nativeWorker).not.toHaveBeenCalled();

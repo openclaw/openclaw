@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyRateLimitWindow, resolveRetryAfterMs } from "./retry-evidence.js";
+import {
+  classifyRateLimitWindow,
+  hasOrganizationTpmRateLimitEvidence,
+  resolveRetryAfterMs,
+} from "./retry-evidence.js";
 
 const NOW_MS = Date.parse("2015-10-21T07:27:00.000Z");
 const MULTIPLE_FLOORS =
@@ -36,6 +40,28 @@ describe("resolveRetryAfterMs", () => {
 });
 
 describe("classifyRateLimitWindow", () => {
+  it.each([
+    [
+      "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM). Please try again in 1s.",
+      true,
+    ],
+    [
+      "429 Rate limit reached for mock-1 in organization org-example on requests per min (RPM).",
+      false,
+    ],
+    [
+      "429 Request too large for mock-1 in organization org-example on tokens per min (TPM).",
+      false,
+    ],
+    [
+      "429 Rate limit reached for mock-1 in organization org-example on requests per minute (RPM): Limit 30, Used 30, Requested 100. Please try again in 2s. See the tokens per minute (TPM) guidance for details.",
+      false,
+    ],
+    ["429 Rate limit reached on tokens per minute (TPM).", false],
+  ])("distinguishes exhausted organization TPM from request throttles: %s", (message, expected) => {
+    expect(hasOrganizationTpmRateLimitEvidence(message)).toBe(expected);
+  });
+
   it("compares converted fractions against the one-minute short-window limit", () => {
     expect(classifyRateLimitWindow("429 Try again in 0.5 minutes", NOW_MS)).toEqual({
       kind: "short",

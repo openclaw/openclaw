@@ -21,6 +21,7 @@ import {
 export { setSpeechRuntimeAvailabilityGuard } from "./runtime-availability.js";
 export {
   buildTtsSystemPromptHint,
+  buildTtsSystemPromptHintAsync,
   getTtsMaxLength,
   getTtsPersona,
   isSummarizationEnabled,

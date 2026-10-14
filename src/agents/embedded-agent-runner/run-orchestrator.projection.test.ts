@@ -251,6 +251,7 @@ describe("embedded retry transcript ownership", () => {
     ["detached", false, "absent", false, "output-limit"],
     ["durable", false, "active", false, "output-limit"],
     ["detached", false, "absent", false, "output-limit-repeat"],
+    ["detached", false, "absent", false, "output-limit-empty"],
   ] as const)(
     "%s metadata, caller manager=%s, projection=%s, abort=%s, failure=%s",
     async (sessionPersistence, suppliedManager, projection, abort, failure) => {
@@ -289,15 +290,16 @@ describe("embedded retry transcript ownership", () => {
           arguments: '{"command":',
           status: "incomplete",
         };
+        const emptyOutput = failure === "output-limit-empty";
         const events = [
-          { type: "response.output_item.added", output_index: 0, item },
+          ...(emptyOutput ? [] : [{ type: "response.output_item.added", output_index: 0, item }]),
           {
             type: "response.incomplete",
             response: {
               id: "response-output-limit",
               status: "incomplete",
               incomplete_details: { reason: "max_output_tokens" },
-              output: [item],
+              output: emptyOutput ? [] : [item],
               usage: { input_tokens: 440_445, output_tokens: 128_000 },
             },
           },
@@ -345,7 +347,9 @@ describe("embedded retry transcript ownership", () => {
       expect(fetchMock).toHaveBeenCalledOnce();
       if (failure.startsWith("output-limit")) {
         expect(erroredAssistant).toMatchObject({
-          errorCode: "incomplete_tool_call",
+          ...(failure === "output-limit-empty"
+            ? { stopReason: "length", content: [] }
+            : { errorCode: "incomplete_tool_call" }),
           usage: { output: 128_000 },
           diagnostics: [
             expect.objectContaining({
@@ -370,10 +374,15 @@ describe("embedded retry transcript ownership", () => {
           return pending;
         });
       let firstManager: EmbeddedRunAttemptParams["sessionManager"];
+      let nextRequestNumber = 0;
       const controller = new AbortController();
       runAttempt
         .mockImplementationOnce(async (attempt) => {
           expect(attempt).toMatchObject({ provider: model.provider, modelId: model.id });
+          if (!attempt.modelCallSequence) {
+            throw new Error("The run must carry its model request sequence");
+          }
+          nextRequestNumber = ++attempt.modelCallSequence.value;
           firstManager = attempt.sessionManager;
           if (callerOwned) {
             expect(firstManager).toBeDefined();
@@ -409,6 +418,7 @@ describe("embedded retry transcript ownership", () => {
         .mockImplementationOnce(async (attempt) => {
           secondAttempt.resolve();
           expect(attempt).toMatchObject({ provider: model.provider, modelId: model.id });
+          expect(attempt.modelCallSequence).toEqual({ value: nextRequestNumber });
           expect(attempt.prompt).toContain(
             "Continue the current task from the existing transcript",
           );
@@ -432,9 +442,16 @@ describe("embedded retry transcript ownership", () => {
                 role: "custom",
                 customType: "incomplete-tool-call",
                 content: expect.stringContaining(
-                  "Split the remaining work into smaller tool calls",
+                  failure === "output-limit-empty"
+                    ? "The model response reached the provider's output limit"
+                    : "Split the remaining work into smaller tool calls",
                 ),
-                details: { reason: "max_output_tokens", toolCallId: "unfinished|fc_unfinished" },
+                details: {
+                  reason: "max_output_tokens",
+                  ...(failure === "output-limit-empty"
+                    ? {}
+                    : { toolCallId: "unfinished|fc_unfinished" }),
+                },
               }),
             ]);
             expect(JSON.stringify(resumedHistory.at(-1))).toContain("provider's output limit");

@@ -246,7 +246,36 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     }
   };
 
+  const dispatch = (type: string, cancelable = false) =>
+    host.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true, cancelable }));
+
   const overlay = createOverlay("modal-dialog", undefined, {
+    dispatchLifecycleEvent(type, cancelable) {
+      if (type === "overlay-hide") {
+        dismissing = true;
+        try {
+          let accepted = true;
+          if (!programmatic && !detaching && cancelable) {
+            accepted = host.dispatchEvent(
+              new CustomEvent("modal-cancel", {
+                bubbles: true,
+                composed: true,
+                cancelable: true,
+              }),
+            );
+          }
+          return dispatch(type, cancelable) && accepted;
+        } finally {
+          dismissing = false;
+        }
+      }
+      if (type === "overlay-after-show") {
+        focusInitialContent();
+      } else if (type === "overlay-after-hide") {
+        restoreReturnFocus();
+      }
+      return dispatch(type, cancelable);
+    },
     onRootChange: (root) => retainShadowStyles(root, [overlayStyles, modalStyles]),
     native: {
       isOpen: () => dialog.open,
@@ -364,55 +393,6 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     },
   );
 
-  const dispatch = (type: string, cancelable = false) =>
-    host.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true, cancelable }));
-
-  const beforeShow = (event: Event) => {
-    if (event.target === dialog) {
-      event.stopPropagation();
-      if (!dispatch("wa-show", true)) {
-        event.preventDefault();
-      }
-    }
-  };
-  const beforeHide = (event: Event) => {
-    if (event.target !== dialog) {
-      return;
-    }
-    event.stopPropagation();
-    dismissing = true;
-    try {
-      if (!programmatic && !detaching && event.cancelable) {
-        const cancel = new CustomEvent("modal-cancel", {
-          bubbles: true,
-          composed: true,
-          cancelable: true,
-        });
-        if (!host.dispatchEvent(cancel)) {
-          event.preventDefault();
-        }
-      }
-      if (!dispatch("wa-hide", event.cancelable)) {
-        event.preventDefault();
-      }
-    } finally {
-      dismissing = false;
-    }
-  };
-  const afterShow = (event: Event) => {
-    if (event.target === dialog) {
-      event.stopPropagation();
-      focusInitialContent();
-      dispatch("wa-after-show");
-    }
-  };
-  const afterHide = (event: Event) => {
-    if (event.target === dialog) {
-      event.stopPropagation();
-      restoreReturnFocus();
-      dispatch("wa-after-hide");
-    }
-  };
   const cancel = (event: Event) => {
     if (event.target === dialog) {
       event.preventDefault();
@@ -452,10 +432,6 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   };
   onSettled(() => {
     mounted = true;
-    dialog.addEventListener("overlay-show", beforeShow);
-    dialog.addEventListener("overlay-hide", beforeHide);
-    dialog.addEventListener("overlay-after-show", afterShow);
-    dialog.addEventListener("overlay-after-hide", afterHide);
     dialog.addEventListener("cancel", cancel);
     dialog.addEventListener("pointerdown", pointerdown, true);
     dialog.addEventListener("mousedown", mousedown, true);
@@ -483,10 +459,6 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       overlay.dispose();
       setModalLayer(host, false);
       restoreReturnFocus();
-      dialog.removeEventListener("overlay-show", beforeShow);
-      dialog.removeEventListener("overlay-hide", beforeHide);
-      dialog.removeEventListener("overlay-after-show", afterShow);
-      dialog.removeEventListener("overlay-after-hide", afterHide);
       dialog.removeEventListener("cancel", cancel);
       dialog.removeEventListener("pointerdown", pointerdown, true);
       dialog.removeEventListener("mousedown", mousedown, true);

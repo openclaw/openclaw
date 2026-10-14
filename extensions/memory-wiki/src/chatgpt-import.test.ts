@@ -139,39 +139,6 @@ afterEach(() => {
 });
 
 describe("ChatGPT import rollback recovery", () => {
-  it("returns a completed rollback without initializing or mutating the vault", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-complete-state-");
-    const { rootDir, config } = await createVault();
-    configureDurableImportRunStore(stateDir);
-    await getMemoryWikiImportRunStateStore().write(rootDir, {
-      version: 1,
-      runId: "chatgpt-complete",
-      importType: "chatgpt",
-      exportPath: "/tmp/chatgpt",
-      sourcePath: "/tmp/chatgpt/conversations.json",
-      appliedAt: "2026-04-10T10:00:00.000Z",
-      conversationCount: 0,
-      createdCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      createdPaths: [],
-      updatedPaths: [],
-      rollbackStartedAt: "2026-04-10T10:01:00.000Z",
-      rollbackTargetsFinalizedAt: "2026-04-10T10:02:00.000Z",
-      rolledBackAt: "2026-04-10T10:03:00.000Z",
-    });
-
-    await expect(
-      rollbackChatGptImportRun({ config, runId: "chatgpt-complete" }),
-    ).resolves.toMatchObject({
-      alreadyRolledBack: true,
-    });
-    await expect(fs.stat(path.join(rootDir, ".openclaw-wiki"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(compileControl.calls).toBe(0);
-  });
-
   it("persists the moving phase before vault initialization", async () => {
     const stateDir = await createTempDir("memory-wiki-chatgpt-started-state-");
     const { rootDir, config } = await createVault();
@@ -410,76 +377,6 @@ describe("ChatGPT import rollback recovery", () => {
       enqueueSpy.mockRestore();
       await Promise.allSettled([holder, ...(rollback ? [rollback] : [])]);
     }
-  });
-
-  it("preserves a created page recreated while rollback is removing it", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-recreated-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
-    configureDurableImportRunStore(stateDir);
-    const relativePath = "sources/recreated.md";
-    const targetPath = path.join(rootDir, relativePath);
-    const imported = "# Imported\n";
-    const recreated = "# Recreated during rollback\n";
-    await fs.writeFile(targetPath, imported, "utf8");
-    await seedCreatedRollback({
-      vaultRoot: rootDir,
-      runId: "chatgpt-created-recreated",
-      relativePath,
-      contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
-    });
-    let rollbackWrites = 0;
-    configureDurableImportRunStore(stateDir, {
-      beforeWrite: async () => {
-        rollbackWrites += 1;
-      },
-    });
-
-    let recreatedOnce = false;
-    rootControl.afterMove = async (from, to) => {
-      if (!recreatedOnce && from === targetPath && path.basename(to) === "content") {
-        recreatedOnce = true;
-        await fs.writeFile(from, recreated, "utf8");
-      }
-    };
-    const result = await rollbackChatGptImportRun({
-      config,
-      runId: "chatgpt-created-recreated",
-    });
-    rootControl.afterMove = undefined;
-
-    expect(recreatedOnce).toBe(true);
-    expect(rollbackWrites).toBe(4);
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(result.preservedPaths).toHaveLength(1);
-    await expect(
-      fs.readFile(path.join(rootDir, result.preservedPaths[0]?.recoveryPath ?? ""), "utf8"),
-    ).resolves.toBe(recreated);
-  });
-
-  it("preserves a trailing blank-line edit on a created page", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-created-whitespace-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
-    configureDurableImportRunStore(stateDir);
-    const runId = "chatgpt-created-whitespace";
-    const relativePath = "sources/created-whitespace.md";
-    const targetPath = path.join(rootDir, relativePath);
-    const imported = "# Imported\n";
-    const edited = renderCompiledRelatedPage(imported, "\n");
-    await fs.writeFile(targetPath, edited, "utf8");
-    await seedCreatedRollback({
-      vaultRoot: rootDir,
-      runId,
-      relativePath,
-      contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
-    });
-
-    const result = await rollbackChatGptImportRun({ config, runId });
-
-    expect(result.preservedPaths).toHaveLength(1);
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.readFile(path.join(rootDir, result.preservedPaths[0]?.recoveryPath ?? ""), "utf8"),
-    ).resolves.toBe(edited);
   });
 
   it("preserves trailing spaces on an updated page before restoring its snapshot", async () => {

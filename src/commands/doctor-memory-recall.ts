@@ -6,6 +6,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
+import { readMemorySearchManagerStatus } from "../memory-host-sdk/host/types.js";
 import {
   auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
@@ -38,7 +39,7 @@ async function resolveRuntimeMemoryWorkspaceDir(
     return undefined;
   }
   try {
-    return manager.status().workspaceDir?.trim();
+    return (await readMemorySearchManagerStatus(manager)).workspaceDir?.trim();
   } finally {
     await manager.close?.().catch(() => undefined);
   }

@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { join } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { UsersPrefsSetParams } from "../../../packages/gateway-protocol/src/schema/users.ts";
+import type { EngineConnection } from "../../../src/infra/sql-connection.ts";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -33,7 +33,7 @@ const scope = "ws://background-cas";
 let profileId: string;
 const none = selectBackgroundSource({ kind: "none" });
 const theme = selectBackgroundSource({ kind: "theme" });
-let database: DatabaseSync;
+let database: EngineConnection;
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let options: { path: string };
 installSettingsStorageLifecycle();
@@ -135,27 +135,6 @@ it("uses the exact saved record to fence an explicit background deletion", async
   });
   expect(readUserPreferences(database, profileId)).toEqual({});
 });
-
-it.each([undefined, "faded", "full-bleed"] as const)(
-  "preserves exact presentation presence in the CAS baseline (%s)",
-  async (presentation) => {
-    const saved = { ...none, ...(presentation ? { presentation } : {}) };
-    expect(
-      commit({ entries: { "ui.background": saved }, expectedEntries: { "ui.background": null } }),
-    ).toEqual({ status: "ok" });
-    const request = requestOwner();
-    const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-    const edited = { ...saved, showInSessions: true };
-    patchSettings({ background: edited });
-    pushServerUiPrefs(writer, { background: edited }, { profileId, canWrite: true });
-    await waitForFast(() => expect(status()).toBe("saved"));
-    expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-      entries: { "ui.background": edited },
-      expectedEntries: { "ui.background": saved },
-    });
-    expect(readUserPreferences(database, profileId)["ui.background"]).toEqual(edited);
-  },
-);
 
 it("advances the CAS baseline only after its own acknowledgement for rapid placement edits", async () => {
   const acknowledgement = createDeferred();

@@ -28,10 +28,12 @@ export function LitContent(props: { value: unknown }) {
         style={{ display: "contents" }}
         ref={(node) => {
           element = node;
-          // The unowned ref lets nested Solid adapters mount outside component evaluation.
-          renderComposerContent(
-            untrack(() => props.value),
-            node,
+          // Lazy content can construct native children while this ref is unowned.
+          runWithOwner(owner, () =>
+            renderComposerContent(
+              untrack(() => props.value),
+              node,
+            ),
           );
         }}
       />

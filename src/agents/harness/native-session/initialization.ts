@@ -114,7 +114,7 @@ export function createNativeSessionInitializationOwner<TStore, TIdentity, TBindi
           }
           initialization.assertCurrent();
         },
-        /** @deprecated Use linkAsync. Retained for released official harnesses until the next Plugin SDK major. */
+        /** @deprecated Await linkAsync. Retained for released harnesses during stable deprecation. */
         link(input: Parameters<typeof upsertSessionUpstreamLink>[0]) {
           initialization.assertCurrent();
           const prepared = prepareLink(input);

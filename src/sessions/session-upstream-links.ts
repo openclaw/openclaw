@@ -23,7 +23,7 @@ export type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 const log = createSubsystemLogger("sessions/upstream-links");
 
-/** @deprecated Use upsertSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Await upsertSessionUpstreamLinkAsync. Retained during stable deprecation. */
 export function upsertSessionUpstreamLink(
   input: SessionUpstreamLinkInput,
   options: OpenClawStateDatabaseOptions & {
@@ -53,7 +53,7 @@ export function upsertSessionUpstreamLink(
   }
 }
 
-/** @deprecated Use deleteSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Await deleteSessionUpstreamLinkAsync. Retained during stable deprecation. */
 export function deleteSessionUpstreamLink(
   sessionKey: string,
   agentId: string,

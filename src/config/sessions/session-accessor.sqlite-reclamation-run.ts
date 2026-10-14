@@ -13,10 +13,7 @@ import { captureOpenClawAgentDatabaseValidationTransfer } from "../../state/open
 import {
   deferOpenClawAgentPostCommitPublication,
   getOpenClawAgentDatabaseIfOpen,
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
@@ -28,10 +25,7 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
-import {
-  captureNativeSessionWorkerDeletion,
-  preparedSessionDeletionRequiresNativeTransaction,
-} from "./session-accessor.sqlite-deletion.js";
+import { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-worker-publication.js";
 import type {
   SessionDeletionPlanningOperation,
@@ -69,14 +63,14 @@ import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.
 import { captureSessionEntryNativeMutationWitness } from "./session-entry-read-ordered.js";
 import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
 
-function hasNativeReclamationOwner(options: OpenClawAgentDatabaseOptions): boolean {
+function hasNativeReclamationOwner(): boolean {
   return (
     !isMainThread ||
     (!isOpenClawDatabaseMaintenanceWorkerAccess() &&
       (getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true ||
-        hasAgentDatabaseMaintenanceAuthority())) ||
-    isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)
+        hasAgentDatabaseMaintenanceAuthority()))
   );
 }
 
@@ -88,12 +82,8 @@ export async function runSessionDeletionPlanning(
   diagnostics?: SqliteSessionReclamationDiagnostics,
 ): Promise<SessionDeletionPlanningResult> {
   const databaseOptions = toDatabaseOptions(resolved);
-  // Boot migration handoffs and the remaining incognito owner retain native planning.
-  if (
-    preparedSessionDeletionRequiresNativeTransaction() ||
-    params.expectedDatabaseIdentity !== undefined ||
-    hasNativeReclamationOwner(databaseOptions)
-  ) {
+  // Boot migration handoffs and maintenance owners retain native planning.
+  if (params.expectedDatabaseIdentity !== undefined || hasNativeReclamationOwner()) {
     return await runExclusiveSqliteSessionWrite(
       resolved,
       async () =>
@@ -131,6 +121,7 @@ export async function runSqliteSessionReclamation(params: {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
+  assertMaintenanceCommitAllowed?: (plans?: readonly SessionMaintenancePreservationPlan[]) => void;
   consumeReadOnlyMaintenancePlan?: (
     result: Extract<SessionMaintenanceReadResult, { kind: "maintenance-plan" }>,
     assertCurrent: () => void,
@@ -146,7 +137,7 @@ export async function runSqliteSessionReclamation(params: {
     params.diagnostics.kind = params.plan.kind;
   }
   // Doctor/migrations retain exclusive native ownership; worker callers cannot redispatch.
-  const native = hasNativeReclamationOwner(params.plan.databaseOptions);
+  const native = hasNativeReclamationOwner();
   if (
     !native &&
     (params.plan.kind === "entry" ||
@@ -181,7 +172,12 @@ export async function runSqliteSessionReclamation(params: {
           () => {
             params.assertCommitAllowed?.();
             return reclaimSqliteSessionInTransaction(params.plan, {
-              beforeMutation: params.assertCommitAllowed,
+              beforeMutation() {
+                params.assertCommitAllowed?.();
+                if (params.plan.kind === "maintenance-plan") {
+                  params.assertMaintenanceCommitAllowed?.();
+                }
+              },
               onCommit: (database, result) => {
                 // The native connection now sees its own removals; row guards ran before mutation.
                 const publish = prepareReclamationPublication(
@@ -389,6 +385,7 @@ export async function runSqliteSessionReclamation(params: {
             plan,
             claim,
             refreshMaintenanceProtection: params.refreshMaintenanceProtection,
+            assertMaintenanceCommitAllowed: params.assertMaintenanceCommitAllowed,
             assertCurrent: () => {
               assertRequestCurrent();
               claim.assertCurrent();

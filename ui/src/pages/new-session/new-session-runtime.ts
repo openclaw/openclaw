@@ -1,4 +1,5 @@
 import type { PresenceEntry } from "../../api/types.ts";
+import { closeMenusWithin } from "../../components/solid/menu.tsx";
 
 const PLACE_TOPOLOGY_EVENTS = new Set([
   "config.changed",
@@ -26,26 +27,14 @@ export function nodePresenceStateSignature(entries: PresenceEntry[]): string {
 }
 
 export function closeAgentPicker(root: ParentNode) {
-  const dropdown = root.querySelector<HTMLElement & { open: boolean }>(
-    ".new-session-page__select--agent wa-dropdown",
-  );
-  if (dropdown) {
-    dropdown.open = false;
+  const picker = root.querySelector(".new-session-page__select--agent");
+  if (picker) {
+    closeMenusWithin(picker);
   }
 }
 
-export function closeSessionMenus(root: Pick<ParentNode, "querySelectorAll">) {
-  for (const selector of ["wa-dropdown[open]", "wa-popover.new-session-page__picker-popover"]) {
-    for (const menu of root.querySelectorAll<HTMLElement & { open: boolean }>(selector)) {
-      menu.open = false;
-    }
-  }
-}
-
-export function onOwnPopoverEvent(callback: (event: Event) => void) {
-  return (event: Event) => {
-    if (event.target === event.currentTarget) {
-      callback(event);
-    }
-  };
+export function closeSessionMenus(
+  root: Pick<ParentNode, "querySelectorAll"> & { ownerDocument: Document },
+) {
+  closeMenusWithin(root);
 }

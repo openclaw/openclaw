@@ -408,6 +408,7 @@ export function createCronPromptExecutor(
             finalizePromptForResolvedTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
+            thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),
@@ -468,7 +469,7 @@ export function createCronPromptExecutor(
                   ? undefined
                   : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
                 const authProfileId = allowCliAuthProfileForwarding
-                  ? resolveCliExecutionAuthProfileId({
+                  ? await resolveCliExecutionAuthProfileId({
                       cliExecutionProvider: executionProvider,
                       authProfileProvider: providerOverride,
                       config: params.cfgWithAgentDefaults,

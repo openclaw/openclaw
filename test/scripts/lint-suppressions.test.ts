@@ -243,6 +243,10 @@ describe("production lint suppressions", () => {
         "src/infra/sqlite-database-admission.worker.test-support.ts|typescript/unbound-method|1",
         // Iterator wrappers capture native next/return and invoke them with the caller's receiver.
         "src/infra/sqlite-native-observer.ts|typescript/unbound-method|2",
+        // The dispatch observer captures postMessage before mocking and supplies its worker receiver.
+        "src/infra/sqlite-worker-shared-state-admission.test-support.ts|typescript/unbound-method|1",
+        // Worker hooks preserve custom methods and later prototype instrumentation with .call(this).
+        "src/infra/worker-cpu.ts|typescript/unbound-method|4",
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -267,6 +271,8 @@ describe("production lint suppressions", () => {
         "src/plugins/registry-registrars.ts|typescript/unbound-method|1",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
+        // Basic credentials must reject C0 controls and DEL before sentinel substitution.
+        "src/secrets/egress-proxy/proxy-server.ts|no-control-regex|1",
         "src/secrets/egress-proxy/proxy-server.ts|no-warning-comments|1",
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
         // Synchronous acquisition failures reject with the acquiring owner's original value.

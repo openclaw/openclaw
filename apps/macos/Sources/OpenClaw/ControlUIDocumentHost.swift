@@ -18,7 +18,6 @@ final class ControlUIDocumentHost {
     }
 
     private(set) var nativeStartupObservation: Task<Void, Never>?
-    private var nativeStartupRevision: UInt64 = 0
     var nativeAuthScript: WKUserScript?
     private(set) var nativeGatewayAuthRevision: UInt64 = 0
     let tlsParams: GatewayTLSParams?
@@ -30,7 +29,6 @@ final class ControlUIDocumentHost {
     private(set) var pendingLoad: Task<Void, Never>?
     /// The latest converted image paste; the next one waits for it to keep paste order.
     var imagePasteDelivery: Task<Void, Never>?
-    private var loadGeneration: UInt64 = 0
     var isAvailable: () -> Bool = { true }
     // A retained document may outlive its presentation while WebKit stops it.
     var isNativeAuthAvailable: () -> Bool = { false }
@@ -91,16 +89,14 @@ final class ControlUIDocumentHost {
     }
 
     private func observeNativeStartupCredentials() {
-        self.nativeStartupRevision &+= 1
         self.nativeStartupObservation?.cancel()
         self.nativeStartupObservation = nil
         self.retireInvalidNativeStartupCredentials()
         guard let credentials = self.legacyNativeCredentials,
               let waitForInvalidation = credentials.waitForInvalidation else { return }
-        let revision = self.nativeStartupRevision
         self.nativeStartupObservation = Task { @MainActor [weak self] in
             await waitForInvalidation()
-            guard !Task.isCancelled, let self, self.nativeStartupRevision == revision else { return }
+            guard !Task.isCancelled, let self else { return }
             self.retireInvalidNativeStartupCredentials()
         }
     }
@@ -142,18 +138,17 @@ final class ControlUIDocumentHost {
             self.webView.load(URLRequest(url: url))
             return
         }
-        let generation = self.loadGeneration
         let controller = self.webView.configuration.userContentController
         self.pendingLoad = Task { @MainActor [weak self] in
             do {
                 try await browserSessionLease.prepare(
                     for: url,
                     in: controller)
-                guard let self, self.loadGeneration == generation, self.isAvailable() else { return }
+                guard !Task.isCancelled, let self, self.isAvailable() else { return }
                 self.pendingLoad = nil
                 self.webView.load(URLRequest(url: url))
             } catch {
-                guard !Task.isCancelled, let self, self.loadGeneration == generation else { return }
+                guard !Task.isCancelled, let self else { return }
                 self.pendingLoad = nil
                 self.onAuthenticationFailure?(error)
             }
@@ -161,7 +156,6 @@ final class ControlUIDocumentHost {
     }
 
     func retirePendingLoad() {
-        self.loadGeneration &+= 1
         self.pendingLoad?.cancel()
         self.pendingLoad = nil
     }

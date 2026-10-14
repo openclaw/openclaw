@@ -130,6 +130,14 @@ function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boo
         )
       );
     }
+    // Capability metadata is not an authored request override. Explicit temperature
+    // parameters still count as transport; native runtimes own their tool strategy.
+    if (key === "supportsTemperature") {
+      return typeof value !== "boolean";
+    }
+    if (key === "codeMode") {
+      return value !== "preferred" && value !== "capable";
+    }
     return true;
   });
 }

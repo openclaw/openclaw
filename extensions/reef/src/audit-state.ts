@@ -1,4 +1,3 @@
-import { randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
   PluginStateKeyedStore,
@@ -16,7 +15,6 @@ import {
   type ReefAuditStateRecord,
 } from "./audit-state-format.js";
 import type { ReefAuditOperationConfig, ReefAuditOperations } from "./audit-state-operation.js";
-import { ReefLegacySqliteAuditStore } from "./audit-state.legacy.js";
 
 export {
   REEF_AUDIT_NAMESPACE,
@@ -130,16 +128,5 @@ export function openReefAuditStore(
     maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,
     overflowPolicy: "reject-new",
   });
-  // Retain released-host support until the approved minimum-host increase.
-  // A present worker capability's failure never selects native execution.
-  if (!head.createOperation) {
-    return new ReefLegacySqliteAuditStore(
-      runtime,
-      auditKey,
-      randomBytes,
-      maxEntries,
-      authoritySignal,
-    );
-  }
   return new ReefSqliteAuditStore(runtime, auditKey, head, maxEntries, authoritySignal);
 }

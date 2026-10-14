@@ -537,35 +537,25 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
   let inQuote = false;
   for (let i = 0; i < s.length; i++) {
     const c = s.charAt(i);
-    if (inQuote) {
-      if (c === '"') {
-        inQuote = false;
-      }
-      if (onChar(c, i, false) === "stop") {
-        return;
-      }
-      continue;
-    }
+    const quoted = inQuote || c === '"';
     if (c === '"') {
-      inQuote = true;
-      if (onChar(c, i, false) === "stop") {
-        return;
+      inQuote = !inQuote;
+    }
+    if (!quoted) {
+      if (c === "[") {
+        depthBracket++;
+      } else if (c === "]") {
+        depthBracket--;
+      } else if (c === "{") {
+        depthBrace++;
+      } else if (c === "}") {
+        depthBrace--;
       }
-      continue;
+      if (depthBracket < 0 || depthBrace < 0) {
+        onUnbalanced();
+      }
     }
-    if (c === "[") {
-      depthBracket++;
-    } else if (c === "]") {
-      depthBracket--;
-    } else if (c === "{") {
-      depthBrace++;
-    } else if (c === "}") {
-      depthBrace--;
-    }
-    if (depthBracket < 0 || depthBrace < 0) {
-      onUnbalanced();
-    }
-    if (onChar(c, i, depthBracket === 0 && depthBrace === 0) === "stop") {
+    if (onChar(c, i, !quoted && depthBracket === 0 && depthBrace === 0) === "stop") {
       return;
     }
   }
@@ -599,24 +589,22 @@ export function splitRespectingBrackets(
   originalInput?: string,
 ): string[] {
   const out: string[] = [];
-  let buf = "";
+  let start = 0;
   const ctx = originalInput ?? s;
   const onUnbalanced = (): never => {
     fail(`Unbalanced bracket/brace in oc:// path: ${ctx}`, ctx, "OC_PATH_UNBALANCED");
   };
   scanBracketAware(
     s,
-    (c, _i, atTop) => {
+    (c, i, atTop) => {
       if (atTop && c === delim) {
-        out.push(buf);
-        buf = "";
-        return;
+        out.push(s.slice(start, i));
+        start = i + 1;
       }
-      buf += c;
     },
     onUnbalanced,
   );
-  out.push(buf);
+  out.push(s.slice(start));
   return out;
 }
 

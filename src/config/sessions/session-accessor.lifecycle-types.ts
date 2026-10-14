@@ -144,6 +144,8 @@ type SessionEntryLifecycleRemovalBase = {
   archiveRemovedTranscript?: boolean;
   /** Omit removal when the transcript changed after the caller's positive classification. */
   expectedTranscriptSnapshot?: SessionStateDeleteSnapshot;
+  /** Memory cleanup rechecks message absence at the actor deletion boundary. */
+  requiresMissingTranscript?: true;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   expectedUpdatedAt?: number;

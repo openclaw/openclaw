@@ -21,6 +21,7 @@ import { locked } from "./locked.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
+import { waitForCronRunQueue } from "./run-queue.js";
 import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const opsRegressionFixtures = setupCronRegressionFixtures({
@@ -298,19 +299,14 @@ describe("cron service run admission cleanup", () => {
   );
 
   it("does not start a scheduled run when stop wins the activation write", async () => {
-    const { store, dueAt, clock, job, state, runIsolatedAgentJob, execute } =
+    const { store, dueAt, job, state, runIsolatedAgentJob, execute } =
       await activationFixture("scheduled");
-    let reservationPersisted = false;
-    const markerTransitions: Array<"queued" | "running" | "idle"> = [];
+    const markerTransitions: Array<"running" | "idle"> = [];
     const stopObserving = observeCronJobCommits(job.id, ({ queuedAtMs, runningAtMs }) => {
-      if (!reservationPersisted && queuedAtMs === dueAt) {
-        reservationPersisted = true;
-        markerTransitions.push("queued");
-        clock.now = dueAt + 1;
-      } else if (reservationPersisted && runningAtMs === dueAt + 1) {
+      if (markerTransitions.length === 0 && runningAtMs === dueAt) {
         markerTransitions.push("running");
         stop(state);
-      } else if (markerTransitions.length === 2 && !queuedAtMs && !runningAtMs) {
+      } else if (markerTransitions.length === 1 && !queuedAtMs && !runningAtMs) {
         markerTransitions.push("idle");
       }
     });
@@ -320,7 +316,7 @@ describe("cron service run admission cleanup", () => {
       stopObserving();
     }
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-    expect(markerTransitions).toEqual(["queued", "running", "idle"]);
+    expect(markerTransitions).toEqual(["running", "idle"]);
     const persisted = (await loadCronStore(store.storePath)).jobs.find(
       (entry) => entry.id === job.id,
     );
@@ -435,9 +431,10 @@ describe("cron service run admission cleanup", () => {
     "releases $trigger ownership after $failure persistence fails",
     async ({ trigger, failure }) => {
       const terminal = failure === "cleanup-terminal";
-      const { store, dueAt, clock, job, state, runIsolatedAgentJob, execute } =
-        await activationFixture(trigger, !terminal);
-      let reservationPersisted = false;
+      const { store, dueAt, job, state, runIsolatedAgentJob, execute } = await activationFixture(
+        trigger,
+        !terminal,
+      );
       let activationPersisted = false;
       let failureInjected = false;
       const errorText = terminal ? "terminal cleanup persist failed" : "activation persist failed";
@@ -454,11 +451,8 @@ describe("cron service run admission cleanup", () => {
           SELECT RAISE(ABORT, '${errorText}');
         END;
       `);
-      const stopObserving = observeCronJobCommits(job.id, ({ queuedAtMs, runningAtMs }) => {
-        if (!reservationPersisted && queuedAtMs === dueAt) {
-          reservationPersisted = true;
-          clock.now = dueAt + 1;
-        } else if (reservationPersisted && runningAtMs === dueAt + 1 && terminal) {
+      const stopObserving = observeCronJobCommits(job.id, ({ runningAtMs }) => {
+        if (runningAtMs === dueAt && terminal) {
           activationPersisted = true;
           stop(state);
         }
@@ -472,8 +466,9 @@ describe("cron service run admission cleanup", () => {
         ).rejects.toThrow(errorText);
         expect(failureInjected).toBe(true);
         expect(activationPersisted).toBe(terminal);
-        // Keep the storage fault active until every stopped launch cleanup has settled.
+        // The stop observer runs before launch registration; join the later cleanup too.
         await state.schedulerDrain;
+        await waitForCronRunQueue(state);
       } finally {
         stopObserving();
         database.exec("DROP TRIGGER fail_cron_activation_or_cleanup");
@@ -483,7 +478,7 @@ describe("cron service run admission cleanup", () => {
         (entry) => entry.id === job.id,
       );
       if (terminal) {
-        expect(persisted?.state.runningAtMs).toBe(dueAt + 1);
+        expect(persisted?.state.runningAtMs).toBe(dueAt);
       } else {
         expect(persisted?.state.runningAtMs).toBeUndefined();
         expect(persisted?.state.lastError).toBe("prior failure");

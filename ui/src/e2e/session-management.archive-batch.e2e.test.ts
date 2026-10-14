@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -56,14 +56,18 @@ suite.define(() => {
       const rowFor = (key: string) =>
         sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       const readPinnedSessionState = () =>
-        page.evaluate((key) => {
-          const row = document
-            .querySelector<AppSidebarSessionNavigationElement>("openclaw-app-sidebar")
-            ?.sessionData.sessionsResult?.sessions.find((session) => session.key === key);
-          return row
-            ? { archived: row.archived, pinned: row.pinned, pinnedAt: row.pinnedAt }
-            : null;
-        }, batchKeys[0]);
+        evaluateControlUiContext(
+          page,
+          ({ sessions }, key) => {
+            const row = sessions.presentation.result?.sessions.find(
+              (session) => session.key === key,
+            );
+            return row
+              ? { archived: row.archived, pinned: row.pinned, pinnedAt: row.pinnedAt }
+              : null;
+          },
+          batchKeys[0],
+        );
       await rowFor(batchKeys[0]).waitFor({ state: "visible", timeout: 10_000 });
       for (const key of batchKeys.slice(1)) {
         await rowFor(key).waitFor({ state: "visible" });

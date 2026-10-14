@@ -61,6 +61,7 @@ export function applyNodesToolWorkspaceGuard(
 
 type ProgressCardToolRegistrationParams = {
   agentId?: string;
+  sandboxAgentId?: string;
   agentSessionKey?: string;
   config?: OpenClawConfig;
   modelId?: string;
@@ -95,7 +96,7 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
   const effective = resolveEffectiveToolPolicy({
     config: params.config,
     sessionKey: params.agentSessionKey,
-    agentId: params.agentId,
+    agentId: params.sandboxAgentId ?? params.agentId,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });

@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   })),
   isAvailable: vi.fn(() => true),
   isToolError: vi.fn((_error: unknown) => false),
+  isShutdownError: vi.fn((_error: unknown) => false),
   moveCursor: vi.fn(async () => ({})),
   pressKey: vi.fn(async () => ({})),
   scroll: vi.fn(async () => ({})),
@@ -53,7 +54,10 @@ const sdk = {
   ClickPosition: { Coordinates: { new: mocks.createClickPosition } },
   ClickButton: { Left: 0, Right: 1, Middle: 2 },
   CuaDriver: { create: mocks.create, createConfigured: mocks.createConfigured },
-  DriverError: { Tool: { instanceOf: mocks.isToolError } },
+  DriverError: {
+    Tool: { instanceOf: mocks.isToolError },
+    Shutdown: { instanceOf: mocks.isShutdownError },
+  },
   InputDeliveryMode: { Foreground: 1 },
   ScrollBy: { Line: 0 },
   ScrollDirection: { Up: 0, Down: 1, Left: 2, Right: 3 },
@@ -75,6 +79,7 @@ describe("CUA Driver direct session", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.isToolError.mockReturnValue(false);
+    mocks.isShutdownError.mockReturnValue(false);
     mocks.createConfigured.mockReturnValue({
       isAvailable: mocks.isAvailable,
       shutdown: mocks.shutdown,
@@ -339,5 +344,206 @@ describe("CUA Driver direct session", () => {
 
     expect(loadSdk).toHaveBeenCalledTimes(2);
     await driver.dispose();
+  });
+  const expired = () =>
+    Object.assign(new Error("DriverError.Tool"), {
+      inner: {
+        tool: "get_session_state",
+        errorCode: "permission_denied",
+        message: "Permission denied: authorization context expired",
+      },
+    });
+
+  it("re-establishes an expired session on the next provider action without replaying input", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    const computer = await execution(driver);
+    mocks.getCursorPosition.mockResolvedValueOnce(cuaToolResult({ x: 10, y: 20 }));
+    await computer.act('{"action":"get_cursor_position"}');
+    const generation = driver.generation;
+    mocks.isToolError.mockReturnValue(true);
+    mocks.getSessionState.mockRejectedValueOnce(expired());
+    mocks.endSession.mockRejectedValueOnce(expired());
+
+    mocks.typeText.mockResolvedValueOnce(cuaToolResult({}));
+    expect(JSON.parse(await computer.act('{"action":"type","text":"hello"}'))).toMatchObject({
+      ok: true,
+    });
+    expect(driver.generation).not.toBe(generation);
+    expect(mocks.createConfigured).toHaveBeenCalledTimes(2);
+    expect(mocks.createConfigured).toHaveBeenNthCalledWith(2, {
+      claudeCodeCompatibility: false,
+      authorization,
+    });
+    expect(mocks.createTrustedSession).toHaveBeenCalledTimes(2);
+    const first = mocks.createTrustedSession.mock.calls[0]?.[1];
+    const second = mocks.createTrustedSession.mock.calls[1]?.[1];
+    expect(second).toMatchObject({ ttlSeconds: 3_600n, idleTtlSeconds: 300n });
+    expect(second.publicSession).not.toBe(first.publicSession);
+    expect(mocks.close).toHaveBeenCalledTimes(1);
+    expect(mocks.shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.typeText).toHaveBeenCalledTimes(1);
+    await computer.close("completion");
+  });
+
+  it("does not renew a real permission denial and exposes its structured cause", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    const computer = await execution(driver);
+    await driver.prepareExecution?.();
+    const generation = driver.generation;
+    const denied = expired();
+    denied.inner.message = "Desktop scope denied";
+    mocks.isToolError.mockReturnValue(true);
+    mocks.getSessionState.mockRejectedValueOnce(denied);
+    await expect(computer.act('{"action":"type","text":"must not type"}')).rejects.toMatchObject({
+      message: "CUA_DRIVER_TOOL_ERROR: get_session_state: Desktop scope denied (permission_denied)",
+      cause: denied,
+    });
+    expect(driver.generation).toBe(generation);
+    expect(mocks.createConfigured).toHaveBeenCalledTimes(1);
+    expect(mocks.close).not.toHaveBeenCalled();
+    expect(mocks.typeText).not.toHaveBeenCalled();
+    await computer.close("completion");
+  });
+
+  it("shares concurrent preparation and performs at most one replacement", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    await driver.prepareExecution?.();
+    mocks.isToolError.mockReturnValue(true);
+    mocks.getSessionState.mockRejectedValueOnce(expired());
+    await Promise.all([driver.prepareExecution?.(), driver.prepareExecution?.()]);
+    expect(mocks.createConfigured).toHaveBeenCalledTimes(2);
+    expect(mocks.getSessionState).toHaveBeenCalledTimes(3);
+    const generation = driver.generation;
+    await driver.prepareExecution?.();
+    expect(driver.generation).toBe(generation);
+    expect(mocks.createConfigured).toHaveBeenCalledTimes(2);
+    await driver.dispose();
+  });
+
+  it.each(["disposal", "cancellation", "revocation"] as const)(
+    "does not reopen when %s interrupts expired-session cleanup",
+    async (interruption) => {
+      const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+      await driver.prepareExecution?.();
+      mocks.isToolError.mockReturnValue(true);
+      mocks.getSessionState.mockRejectedValueOnce(expired());
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      mocks.endSession.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        throw expired();
+      });
+      const controller = new AbortController();
+      let admitted = true;
+      const preparing = driver.prepareExecution?.(controller.signal, () => {
+        if (!admitted) {
+          throw new Error("owning execution revoked");
+        }
+      });
+      const rejected = expect(preparing).rejects.toThrow(/stopping|cancelled|revoked/);
+      await entered.promise;
+      const disposal = interruption === "disposal" ? driver.dispose() : undefined;
+      if (interruption === "cancellation") {
+        controller.abort(new Error("cancelled"));
+      }
+      admitted = interruption !== "revocation";
+      release.resolve();
+      await rejected;
+      await disposal;
+      expect(mocks.createConfigured).toHaveBeenCalledTimes(1);
+      expect(mocks.close).toHaveBeenCalledTimes(1);
+      expect(mocks.shutdown).toHaveBeenCalledTimes(1);
+      if (interruption === "cancellation") {
+        await driver.prepareExecution?.();
+        expect(mocks.createConfigured).toHaveBeenCalledTimes(2);
+      }
+      await driver.dispose();
+    },
+  );
+
+  it("reports failed expired-session cleanup and recovers on the next provider action", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    const computer = await execution(driver);
+    await driver.prepareExecution?.();
+    const generation = driver.generation;
+    const denied = expired();
+    denied.inner.message = "Desktop scope denied";
+    mocks.isToolError.mockReturnValue(true);
+    mocks.getSessionState.mockRejectedValueOnce(expired());
+    mocks.endSession.mockRejectedValueOnce(denied);
+    const action = '{"action":"type","text":"hello"}';
+    await expect(computer.act(action)).rejects.toBe(denied);
+    expect(driver.generation).not.toBe(generation);
+    expect(mocks.close).toHaveBeenCalledTimes(1);
+    expect(mocks.shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.typeText).not.toHaveBeenCalled();
+    mocks.typeText.mockResolvedValueOnce(cuaToolResult({}));
+    expect(JSON.parse(await computer.act(action))).toMatchObject({ ok: true });
+    expect(mocks.typeText).toHaveBeenCalledTimes(1);
+    await computer.close("completion");
+  });
+
+  it("does not loop if the replacement session also refuses authority", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    await driver.prepareExecution?.();
+    mocks.isToolError.mockReturnValue(true);
+    const refusal = expired();
+    mocks.getSessionState.mockRejectedValueOnce(expired()).mockRejectedValueOnce(refusal);
+    await expect(driver.prepareExecution?.()).rejects.toMatchObject({
+      message:
+        "CUA_DRIVER_TOOL_ERROR: get_session_state: Permission denied: authorization context expired (permission_denied)",
+      cause: refusal,
+    });
+    expect(mocks.createConfigured).toHaveBeenCalledTimes(2);
+    await driver.dispose();
+  });
+  it("does not admit native authority for an already-revoked owner", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    await expect(
+      driver.prepareExecution?.(undefined, () => {
+        throw new Error("owning execution revoked");
+      }),
+    ).rejects.toThrow("owning execution revoked");
+    expect(mocks.createConfigured).not.toHaveBeenCalled();
+    expect(mocks.startSession).not.toHaveBeenCalled();
+    await driver.dispose();
+  });
+
+  it("does not start a native session when the execution closes during SDK loading", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const driver = createCuaDriver({
+      loadSdk: async () => {
+        entered.resolve();
+        await release.promise;
+        return sdk as never;
+      },
+    });
+    const computer = await execution(driver);
+    const acting = computer.act('{"action":"type","text":"must not type"}');
+    const rejected = expect(acting).rejects.toThrow("provider execution is closing");
+    await entered.promise;
+    const closing = computer.close("cancelled");
+    release.resolve();
+    await rejected;
+    await closing;
+    expect(mocks.startSession).not.toHaveBeenCalled();
+    expect(mocks.typeText).not.toHaveBeenCalled();
+  });
+
+  it("does not renew a terminally revoked native session and still releases its runtime", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    await driver.prepareExecution?.();
+    const shutdown = new Error("DriverError.Shutdown");
+    mocks.isShutdownError.mockImplementation((error) => error === shutdown);
+    mocks.getSessionState.mockRejectedValueOnce(shutdown);
+    await expect(driver.prepareExecution?.()).rejects.toBe(shutdown);
+    expect(mocks.createConfigured).toHaveBeenCalledTimes(1);
+    expect(mocks.click).not.toHaveBeenCalled();
+    mocks.endSession.mockRejectedValueOnce(shutdown);
+    await expect(driver.dispose()).resolves.toBeUndefined();
+    expect(mocks.close).toHaveBeenCalledTimes(1);
+    expect(mocks.shutdown).toHaveBeenCalledTimes(1);
   });
 });

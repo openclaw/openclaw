@@ -19,6 +19,7 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
   const requirement = (${resolveRepositoryNodeRequirement.toString()})(files);
   const manifest = files["package.json"] ? JSON.parse(files["package.json"]) : {};
   let nodeBin = path.dirname(process.execPath);
+  let semver, version;
   const fetchText = async (url) => {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(120000), redirect: "error" });
@@ -29,7 +30,7 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
   if (requirement && requirement !== "system") {
     const npm = spawnSync("sh", ["-c", "command -v npm"], { encoding: "utf8" });
     if (npm.status !== 0) throw new Error("Repository Node resolution requires npm beside bootstrap Node; repair the image or profile setup and retry");
-    const semver = require(require.resolve("semver", { paths: [path.dirname(fs.realpathSync(npm.stdout.trim()))] }));
+    semver = require(require.resolve("semver", { paths: [path.dirname(fs.realpathSync(npm.stdout.trim()))] }));
     const releases = JSON.parse(await fetchText("https://nodejs.org/dist/index.json"));
     let candidates = releases.filter((release) => release.files.includes("linux-" + process.arch) && semver.valid(release.version));
     if (requirement === "node" || requirement === "latest") {}
@@ -42,7 +43,7 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
       candidates = candidates.filter((release) => semver.satisfies(release.version, range));
     }
     candidates.sort((a, b) => semver.rcompare(a.version, b.version));
-    const version = candidates[0]?.version.slice(1);
+    version = candidates[0]?.version.slice(1);
     if (!version) throw new Error("No official Linux Node.js release matches " + requirement + "; fix the repository Node declaration and retry");
     const filename = "node-v" + version + "-linux-" + process.arch + ".tar.gz";
     const sums = await fetchText("https://nodejs.org/dist/v" + version + "/SHASUMS256.txt");
@@ -57,11 +58,33 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
   }
   const bin = path.join(homeDir, ".local", "bin");
   fs.mkdirSync(bin, { recursive: true, mode: 0o700 });
+  // A repository release without Corepack uses the worker's. When its engines reject the repository
+  // Node, run a copy whose entry stubs exec the worker Node: enable links shims into the running
+  // package, so its shims and any later enable stay on a supported Node.
+  const supportedCorepack = (launcher) => {
+    const root = path.dirname(path.dirname(fs.realpathSync(launcher)));
+    let corepack;
+    try { corepack = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")); } catch { return launcher; }
+    const engines = corepack.name === "corepack" ? corepack.engines?.node : undefined;
+    if (!version || !engines || semver.satisfies(version, engines)) return launcher;
+    const copy = path.join(homeDir, ".local", "lib", "openclaw-corepack");
+    fs.rmSync(copy, { recursive: true, force: true });
+    fs.cpSync(root, copy, { recursive: true });
+    // System packages are read-only; cpSync keeps their modes, which would block these rewrites and the next refresh.
+    for (const entry of ["", ...fs.readdirSync(copy, { recursive: true })]) fs.chmodSync(path.join(copy, entry), 0o700);
+    // Shell runs line two and execs the worker Node; JavaScript reads it as a string and a comment.
+    const header = "#!/bin/sh\\n':' //; exec '" + process.execPath.replaceAll("'", "'\\\\''") + "' \\"$0\\" \\"$@\\"\\n";
+    for (const entry of fs.readdirSync(path.join(copy, "dist"))) {
+      const file = path.join(copy, "dist", entry);
+      if (entry.endsWith(".js")) fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace(/^(#!.*\\n)?/, () => header));
+    }
+    return path.join(copy, "dist", "corepack.js");
+  };
   for (const name of ["node", "npm", "npx", "corepack"]) {
     let target = path.join(nodeBin, name);
     if (name === "corepack" && !fs.existsSync(target)) {
       const corepack = spawnSync("sh", ["-c", "command -v corepack"], { encoding: "utf8" });
-      if (corepack.status === 0) target = corepack.stdout.trim();
+      if (corepack.status === 0) target = supportedCorepack(corepack.stdout.trim());
     }
     if (!fs.existsSync(target)) continue;
     const link = path.join(bin, name);

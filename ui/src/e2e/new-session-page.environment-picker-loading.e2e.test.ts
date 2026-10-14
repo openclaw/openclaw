@@ -32,7 +32,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         await openEnvironmentPicker(page);
-        const picker = page.locator("wa-popover.new-session-page__where-popover");
+        const picker = page.locator(".oc-popover.new-session-page__where-popover");
         const loading = picker.locator(".new-session-page__environment-skeletons");
         await loading.first().waitFor();
         expect(await loading.count()).toBe(2);
@@ -85,6 +85,8 @@ suite.define(() => {
         expect(await picker.locator(".new-session-page__cloud-configuration").count()).toBe(1);
         const plus = picker.locator('[data-action="manage-cloud-workers"]');
         const chevron = daytona.locator(".new-session-page__submenu-chevron");
+        await plus.waitFor({ state: "visible" });
+        await chevron.waitFor({ state: "visible" });
         const [plusBox, chevronBox] = await Promise.all([
           plus.boundingBox(),
           chevron.boundingBox(),

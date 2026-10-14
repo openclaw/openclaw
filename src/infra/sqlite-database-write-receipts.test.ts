@@ -21,6 +21,7 @@ it("invalidates a scope registered by another isolate during an accepted write",
     ),
     facts: new Map(),
     writeScopes: new Map(),
+    writeScopeRevision: 0,
     references: new Map(),
   };
   const worker = { ...host, writeScopes: new Map(host.writeScopes) };
@@ -30,11 +31,10 @@ it("invalidates a scope registered by another isolate during an accepted write",
     readRevision: () => 0,
     writer: () => worker,
     suspended: () => false,
-    exchange: () => {},
     publish: (record) => {
       Atomics.store(
         new Int32Array(record.generation),
-        SqliteDatabaseGenerationSlot.writeScopeCount,
+        SqliteDatabaseGenerationSlot.writeScopeRevision,
         record.writeScopes.size,
       );
     },

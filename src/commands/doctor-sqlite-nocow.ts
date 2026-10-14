@@ -15,6 +15,7 @@ import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wa
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
+import { reconcileNoCowRecoveryIdentities } from "./doctor-sqlite-nocow-recovery-identity.js";
 
 const TOOL_TIMEOUT_MS = 2_000;
 const FUSER_MAX_PATHS = 2_000;
@@ -223,22 +224,10 @@ function readStoreEntries(directory: string): fs.Dirent[] {
 export async function repairDoctorSqliteNoCow(params: {
   paths: readonly string[];
   stateDir: string;
+  env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
 }): Promise<MigrationMessages> {
-  const help = spawnSync("mv", ["--help"], { encoding: "utf8", timeout: TOOL_TIMEOUT_MS });
-  if (
-    help.error ||
-    help.status !== 0 ||
-    !help.stdout.includes("--exchange") ||
-    !help.stdout.includes("--no-copy")
-  ) {
-    return {
-      changes: [],
-      warnings: [
-        "SQLite NOCOW repair skipped: GNU mv with --exchange and --no-copy is required. Stores remain unchanged.",
-      ],
-    };
-  }
+  const preflighted = new Set<bigint>();
   const result: MigrationMessages = { changes: [], warnings: [] };
   for (const directory of new Set(params.paths.map((pathname) => path.dirname(pathname)))) {
     let backup: string | undefined;
@@ -258,6 +247,38 @@ export async function repairDoctorSqliteNoCow(params: {
         [directory],
         [params.stateDir],
       );
+      const device = fs.statSync(path.dirname(directory), { bigint: true }).dev;
+      if (!preflighted.has(device)) {
+        const scratch = fs.mkdtempSync(`${directory}.nocow-probe-`);
+        let descriptor: number | undefined;
+        try {
+          const [left, right] = [path.join(scratch, "a"), path.join(scratch, "b")] as const;
+          fs.mkdirSync(left);
+          fs.mkdirSync(right);
+          const probe = path.join(left, "open");
+          descriptor = fs.openSync(probe, "wx");
+          const options = { encoding: "utf8" as const, timeout: TOOL_TIMEOUT_MS };
+          const fuser = spawnSync("fuser", [probe], options);
+          const pids = (fuser.stdout ?? "").split(/\s+/u);
+          if (fuser.error || fuser.status !== 0 || !pids.includes(String(process.pid))) {
+            throw new Error("fuser cannot inspect processes");
+          }
+          const exchange = spawnSync(
+            "mv",
+            ["--exchange", "--no-copy", "-T", "--", left, right],
+            options,
+          );
+          if (exchange.error || exchange.status !== 0) {
+            throw new Error("kernel/filesystem lacks RENAME_EXCHANGE or mv is unsupported");
+          }
+          preflighted.add(device);
+        } finally {
+          if (descriptor !== undefined) {
+            fs.closeSync(descriptor);
+          }
+          fs.rmSync(scratch, { recursive: true, force: true });
+        }
+      }
       const entries = readStoreEntries(directory);
       const files = entries.map((entry) => path.join(entry.parentPath, entry.name));
       const inventory = new Map(
@@ -401,6 +422,7 @@ export async function repairDoctorSqliteNoCow(params: {
       // Offline maintenance excludes writers; unsupported outside writes remain in the retained original.
       const original = fs.statSync(directory);
       const replacement = fs.statSync(backup);
+      assertNoOpenFiles(regularPaths);
       params.assertCurrent();
       exchangeAttempted = true;
       const exchange = spawnSync("mv", ["--exchange", "--no-copy", "-T", "--", backup, directory], {
@@ -432,6 +454,21 @@ export async function repairDoctorSqliteNoCow(params: {
         await syncDirectory(path.dirname(directory)),
         "SQLite NOCOW store parent",
       );
+      // Keep recovery-manifest identities truthful for the originals this rewrite relocated.
+      // Bookkeeping only: a failure leaves cleanup conservative and never unsettles the store.
+      try {
+        result.warnings.push(
+          ...reconcileNoCowRecoveryIdentities({
+            env: params.env,
+            previousIdentities: inventory,
+            assertCurrent: params.assertCurrent,
+          }),
+        );
+      } catch (error) {
+        result.warnings.push(
+          `NOCOW recovery-identity reconciliation failed for ${directory}: ${String(error)}`,
+        );
+      }
       result.changes.push(
         `Rewrote SQLite store directory with NOCOW: ${directory}. Original retained at ${backup}; verified WAL-aware snapshots at ${snapshotRoot}.`,
       );
@@ -463,7 +500,7 @@ export async function repairDoctorSqliteNoCow(params: {
         }
       }
       result.warnings.push(
-        `SQLite NOCOW repair refused for ${directory}: ${String(error)}${backup ? ` Recovery directory: ${backup}.` : ". Original store remains in place."}${snapshotRoot ? ` WAL-aware backup directory: ${snapshotRoot}.` : ""}`,
+        `SQLite NOCOW repair refused for ${directory}: ${String(error)}${backup ? ` Recovery directory: ${backup}.` : ". Original store remains in place."}${snapshotRoot ? ` WAL-aware backup directory: ${snapshotRoot}.` : ""} Required: GNU mv with --exchange/--no-copy, fuser (psmisc), getfacl/setfacl (acl). See https://docs.openclaw.ai/reference/database-schemas/integrity-and-recovery#btrfs-and-nocow.`,
       );
     }
   }

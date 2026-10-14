@@ -23,9 +23,9 @@ import {
   readUserProfileVersion,
 } from "./user-profile-events.js";
 import {
-  getUserProfileDisplay,
+  getResidentUserProfileDisplay,
   isUserProfileCatalogReady,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
 } from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
@@ -268,7 +268,7 @@ export async function prepareUserProfileRolePolicyAuthority(
   return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
     const source = { path: context.admission.databasePath };
     if (isUserProfileCatalogReady(source)) {
-      const profile = readUserProfileIdentity(profileId, source);
+      const profile = readResidentUserProfileIdentity(profileId, source);
       return (
         profile && {
           profileId: profile.profileId,
@@ -309,7 +309,7 @@ async function prepareUserProfileAuthority(
     ): Promise<(UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined> => {
       const source = { path: context.admission.databasePath };
       if (!includeProfile && isUserProfileCatalogReady(source)) {
-        const profile = readUserProfileIdentity(profileId, source);
+        const profile = readResidentUserProfileIdentity(profileId, source);
         return (
           profile && {
             ...profile,
@@ -317,7 +317,7 @@ async function prepareUserProfileAuthority(
               profile.profileId,
               ...[...profile.aliases].filter((id) => id !== profile.profileId).toSorted(),
             ],
-            display: getUserProfileDisplay(profile.profileId, source),
+            display: getResidentUserProfileDisplay(profile.profileId, source),
           }
         );
       }

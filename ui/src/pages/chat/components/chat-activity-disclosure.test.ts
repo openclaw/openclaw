@@ -7,8 +7,8 @@ import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-f
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { buildChatItems } from "../chat-thread-build.ts";
 import { createProps } from "../chat-thread.test-support.ts";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
-import { renderWorkGroupSummary } from "./chat-message-stream.ts";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
+import { renderWorkGroupSummary } from "./chat-message-stream.test-support.ts";
 import {
   createAssistantMessage,
   createMessageEntry,

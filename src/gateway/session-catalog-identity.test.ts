@@ -89,7 +89,7 @@ it("links every verified account to one person while exporting only the primary 
     expect(linker.resolveOwner("github:secondary")?.id).toBe(primary.id);
     const database = openOpenClawStateDatabase();
     const prepare = database.db.prepare.bind(database.db);
-    const hostSql = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+    const hostSql = vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
       if (/user_profiles|user_profile_identities/.test(sql)) {
         throw new Error("Profile catalog projection executed SQL on the host");
       }

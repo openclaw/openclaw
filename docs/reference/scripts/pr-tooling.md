@@ -22,7 +22,9 @@ never link an installation or resolve workspace packages from another checkout.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
 an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,
-and installed with `pnpm install --frozen-lockfile` once before rechecking. A stale
+and installed with `pnpm install --frozen-lockfile` once before rechecking. Fetch and
+fast-forward output streams to stderr, without a diffstat, instead of being captured,
+so a root thousands of commits behind refreshes regardless of output size. A stale
 dirty or non-main root cannot refresh; sparse and unrelated roots are always
 refused. The canonical checkout is never refreshed. Keep the selected installation
 intact until the command finishes. This setting applies at both dependency
@@ -63,6 +65,8 @@ arguments remain unquoted. Non-Vitest failures show their failed step names and
 “no Vitest rerun; read log” with the job log URL. `--run` executes the selected
 test command with the local runner's default worker behavior. `--json` emits
 `{ run, failures: [{ job, class, files: [{ file, tests }], failedSteps, url, reason }], command }`.
+
+`--run` sets `OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1` so ordinary test failures do not hide later selected files; use the same opt-in with manual `pnpm test` commands, while infrastructure failures still stop scheduling.
 
 After PR CI fails, run `pnpm test:ci-failed <pr>`, fix new failures and investigate
 unknown ones, then run `pnpm test:ci-failed <pr> --run` until those pass locally

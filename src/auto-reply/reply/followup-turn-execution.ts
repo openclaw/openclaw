@@ -196,6 +196,7 @@ export async function executeFollowupTurn(params: {
     isHeartbeat,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
     internalEventExecution: turn.queued.run.internalEventExecution,
+    userTurnTranscriptRecorder: turn.queued.userTurnTranscriptRecorder,
     // A refreshed runner owns presentation defaults, never another source's authority or callbacks.
     operatorAuthority: turn.queued.operatorAuthority,
     abortSignal: turn.operation.abortSignal,
@@ -208,6 +209,7 @@ export async function executeFollowupTurn(params: {
     onModelSelected: turn.queued.runObservers?.onModelSelected,
     prepareAssistantTranscriptMessage: turn.queued.runObservers?.prepareAssistantTranscriptMessage,
     resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
+    resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
     onDeliberateSilentTerminalReply: turn.queued.runObservers?.onDeliberateSilentTerminalReply,
     commentaryPayloadsEnabled,
     runId: turn.runId,

@@ -1,8 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsResolveParams } from "../../packages/gateway-protocol/src/index.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -24,7 +28,10 @@ import {
   withPreparedSessionResolve,
 } from "./sessions-resolve.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  memorySessionActorOwners.reset();
+});
 
 function addUnrelatedSessions() {
   for (let index = 0; index < 96; index++) {
@@ -340,7 +347,7 @@ it("searches stored and selected model identities from retained row facts withou
 it("resolves authorized exact incognito keys without admitting them to discovery or resident rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const incognitoKey = "agent:main:dashboard:incognito-12345678-0aaa-4000-8000-000000000002";
-    replaceSessionEntrySync(
+    await replaceSessionEntry(
       { agentId: "main", sessionKey: incognitoKey },
       { sessionId: "private-resolve", updatedAt: 1, incognito: true, label: "Private" },
     );

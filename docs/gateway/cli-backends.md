@@ -190,6 +190,11 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 ### Claude CLI specifics
 
+For channels that deliver one final reply per turn, a Claude Code Stop-hook
+rejection discards the rejected reply segment, including when Claude runs a tool
+before rewriting. A `NO_REPLY` rewrite stays silent. Ordinary tool-split replies
+still preserve substantive pre-tool text.
+
 Interrupted turns can retain ordinary partial prose. If an unfinished reply contains
 standalone tool-protocol markup outside a code example, OpenClaw discards that
 partial reply instead of saving it in conversation history. Completed replies keep
@@ -391,6 +396,20 @@ Reset-archive fallbacks rebuild the index per request because their source files
 have a separate revision from the active database.
 Incognito history uses a request-scoped memory index and never writes that index
 to disk. No migration or update repair is required.
+
+When a restricted completion turn runs in a separate Claude session, the next
+ordinary turn can resume a session that never saw that result. OpenClaw carries
+completion replies recorded since the last ordinary Claude reply into the resumed
+turn, including their prompts when saved. This uses the canonical transcript;
+it adds no stored state and survives Gateway restarts. The newest eight exchanges
+are included, with each string capped at 2,000 characters and labeled as historical
+records whose current facts should be verified. A completion that already ran in
+the bound session may appear once more as quoted context.
+
+This replay requires the resuming turn's [history account boundary](#history-account-boundaries).
+When that boundary withholds saved text, the metadata-only session-gap note counts
+the completion turns instead, with a `sessions_history` hint when that tool is
+available. Completion tool restrictions remain unchanged.
 
 ### History account boundaries
 

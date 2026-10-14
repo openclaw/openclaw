@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -269,7 +270,7 @@ suite.define(() => {
         }
         await page.locator("#new-session-checkout-trigger").click();
         await page
-          .locator('wa-popover.new-session-page__checkout-popover [data-value="worktree"]')
+          .locator('.oc-popover.new-session-page__checkout-popover [data-value="worktree"]')
           .click();
         await checkoutBaseRefInput(page).fill("release/proof");
         await page.getByLabel("Name", { exact: true }).fill("instant-proof");
@@ -398,12 +399,22 @@ suite.define(() => {
           );
         }
         await navigateInApp(page, "new-session", "?agent=main");
+        await waitForControlUiRoute(page, {
+          routeId: "new-session",
+          pathname: "/new",
+          search: "?agent=main",
+        });
+        await page.locator("openclaw-new-session-page").evaluate(async (element) => {
+          // SAFETY: This registered Solid bridge exposes its mount completion promise.
+          await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+        });
         const composer = page.locator(".new-session-page__message");
         if (readiness) {
-          // Wait for the retained draft before fill selects and replaces it.
-          await expect.poll(() => composer.inputValue()).toBe(submitted);
+          // Accepted input retires even while preview readiness is pending.
+          await expect.poll(() => composer.inputValue()).toBe("");
         }
         await composer.fill(message);
+        await expect.poll(() => composer.inputValue()).toBe(message);
         const newerUrl = page.url();
         if (readiness) {
           await page.evaluate(() =>
@@ -418,9 +429,9 @@ suite.define(() => {
             runId: "late-old-run",
           });
           await gateway.waitForRequest("sessions.list");
-          expect(await composer.inputValue()).toBe(message);
-          expect(page.url()).toBe(newerUrl);
         }
+        expect(await composer.inputValue()).toBe(message);
+        expect(page.url()).toBe(newerUrl);
         await gateway.deferNext("sessions.create");
         await page.getByRole("button", { name: "Start session", exact: true }).click();
         const second = createParams(await gateway.waitForRequest("sessions.create", { after: 1 }));

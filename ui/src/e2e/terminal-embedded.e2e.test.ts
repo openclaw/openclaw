@@ -120,8 +120,8 @@ suite.define(() => {
       expect(firstConnect.params).toMatchObject({ client: { buildId: "e2e" } });
       await page.waitForFunction(
         () =>
-          sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ===
-          "replacement-build",
+          JSON.parse(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null")
+            ?.buildId === "replacement-build",
       );
       await page.getByText("Server updated", { exact: true }).waitFor();
 
@@ -430,7 +430,10 @@ suite.define(() => {
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("terminal.list");
-        await page.waitForTimeout(250);
+        const status = page.locator("openclaw-terminal-panel .tabstrip-tab__status");
+        await expect
+          .poll(async () => await status.textContent(), { timeout: 5_000 })
+          .toBe("exited");
 
         if (deadSessionScreenshotPath) {
           if (deadSessionVideoDir) {
@@ -444,10 +447,6 @@ suite.define(() => {
             await page.screenshot({ path: deadSessionScreenshotPath, fullPage: true });
           }
         }
-        const status = page.locator("openclaw-terminal-panel .tabstrip-tab__status");
-        await expect
-          .poll(async () => await status.textContent(), { timeout: 5_000 })
-          .toBe("exited");
         expect(await gateway.getRequests("terminal.attach")).toHaveLength(0);
         expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
         expect(

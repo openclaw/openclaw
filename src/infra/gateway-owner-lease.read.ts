@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -7,6 +6,7 @@ import type {
   GatewayOwnerLeaseIdentity,
   GatewayOwnerSupervisor,
 } from "./gateway-owner-lease.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   parseStateLeaseProcessOwner,
   readStateLeaseProcessOwnerStatus,
@@ -35,7 +35,7 @@ function parseSupervisor(value: unknown): GatewayOwnerSupervisor | null {
 
 /** Read through the caller's admitted connection when ownership guards a write. */
 export function readGatewayOwnerLeaseFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   port?: number,
 ): GatewayOwnerLeaseIdentity | undefined {
   if (!tableExists(db, "state_leases")) {
@@ -78,6 +78,7 @@ export function decodeGatewayOwnerLease(
     port: payload.port,
     mode: payload.mode,
     supervisor,
+    ...(typeof payload.listeningAt === "number" ? { listeningAt: payload.listeningAt } : {}),
     // Expiry cannot revoke the separate physical Gateway coordinator.
     state: readStateLeaseProcessOwnerStatus(processOwner, row.heartbeatAt ?? row.createdAt),
     expired: row.expiresAt === null || row.expiresAt <= Date.now(),

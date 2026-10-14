@@ -1,6 +1,10 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
-import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import {
+  createPluginCache,
+  withPluginCache,
+  type PluginCache,
+} from "../../plugins/plugin-cache.js";
 import { pinConfigDir } from "../../utils.js";
 import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import {
@@ -11,8 +15,9 @@ import {
   appendLowerPrecedenceSkillRecords,
   mergeSkillRecords,
 } from "../loading/skill-precedence.js";
+import type { SkillSourceReadBatch } from "../loading/skill-root-loader.js";
 import { buildSkillSnapshotProjection } from "../loading/skill-snapshot-projection.js";
-import { readWorkspaceSkillSources } from "../loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   splitSkillSourcePlan,
@@ -35,9 +40,8 @@ function applyEnvironment(environment: SkillsDiscoveryEnvironment) {
   pinConfigDir();
 }
 
-function resolveInputPlan(input: SkillsSourcePlanInput) {
-  // Each pass observes new/replaced plugin roots instead of reusing old filesystem facts.
-  return withPluginCache(createPluginCache(), () => {
+function resolveInputPlan(input: SkillsSourcePlanInput, cache: PluginCache = createPluginCache()) {
+  return withPluginCache(cache, () => {
     const options = input.options;
     const pluginSkillRoots = options?.workspaceOnly
       ? []
@@ -80,20 +84,40 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
   } else {
     process.env.PATH = request.path;
   }
+  // Share physical inventory facts across workspaces, then discard them for the next pass.
+  const pluginCache = createPluginCache();
+  const sourceReads = new Map<string, SkillSourceReadBatch>();
   const plans = new Map<string, ReturnType<typeof resolveInputPlan>>();
+  const selectPlan = (sourceInput: SkillsSourcePlanInput) => {
+    const key = JSON.stringify(sourceInput);
+    const plan = plans.get(key) ?? resolveInputPlan(sourceInput, pluginCache);
+    plans.set(key, plan);
+    return plan;
+  };
   return {
     kind: "scan",
-    results: request.requests.map(({ key, request: sourceRequest, environment, plan }) => {
+    results: request.requests.map(({ key, environment, selection }) => {
       applyEnvironment(environment);
-      let resolvedPlan = sourceRequest.sourcePlan;
-      if (plan) {
-        const planKey = JSON.stringify(plan.input);
-        resolvedPlan = plans.get(planKey) ?? resolveInputPlan(plan.input);
-        plans.set(planKey, resolvedPlan);
+      const resolvedPlan =
+        selection.kind === "planned"
+          ? selectPlan(selection.plan.input)
+          : selection.plan
+            ? selectPlan(selection.plan.input)
+            : selection.request.sourcePlan;
+      const sourceRequest = {
+        ...selection.request,
+        sourcePlan:
+          selection.kind === "selected" && selection.plan?.scope === "gateway"
+            ? splitSkillSourcePlan(resolvedPlan).gatewayPlan
+            : resolvedPlan,
+      };
+      const environmentKey = JSON.stringify(environment);
+      let batch = sourceReads.get(environmentKey);
+      if (!batch) {
+        batch = new Map();
+        sourceReads.set(environmentKey, batch);
       }
-      sourceRequest.sourcePlan =
-        plan?.scope === "gateway" ? splitSkillSourcePlan(resolvedPlan).gatewayPlan : resolvedPlan;
-      const sources = readWorkspaceSkillSources(sourceRequest);
+      const sources = readWorkspaceSkillSources(sourceRequest, batch);
       const entries = mergeSkillRecords(sources.entries, key, []);
       appendLowerPrecedenceSkillRecords(
         entries,
@@ -103,7 +127,7 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
       return {
         key,
         sources,
-        plan: plan ? resolvedPlan : undefined,
+        plan: selection.plan ? resolvedPlan : undefined,
         fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
       };
     }),

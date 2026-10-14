@@ -11,6 +11,7 @@ import { promoteRequesterFinalAttachment } from "../requester-final-attachment.j
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import { trackSubagentProgressYield } from "./subagent-progress-draft.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
+import { getSubagentSessionReadLookup } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
@@ -222,7 +223,10 @@ export function selectRequesterTurnChildren(
   requesterTurnRunId: string,
   onSuperseded?: (entry: SubagentRunRecord) => void,
 ): SubagentRunRecord[] {
-  return [...runs.values()]
+  const lookup = getSubagentSessionReadLookup(runs);
+  return lookup
+    .selectRequesterTurn(requesterTurnRunId)
+    .map((runId) => runs.get(runId)!)
     .filter(
       (entry) =>
         entry.requesterSessionKey === requesterSessionKey &&
@@ -236,7 +240,7 @@ export function selectRequesterTurnChildren(
           entry,
           (key, matches, childAgentId) =>
             getLatestSubagentRunByChildSessionKeyFromRuns(
-              runs.values(),
+              lookup.selectChildren(new Set([key])).map((runId) => runs.get(runId)!),
               key,
               matches,
               childAgentId,
