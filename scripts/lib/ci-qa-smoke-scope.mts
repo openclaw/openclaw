@@ -6,5 +6,8 @@ const QA_SMOKE_SURFACE_RE =
 
 /** Broad runtime changes wait for release validation; automatic runs select QA owners. */
 export function hasQaSmokeAffectingChange(changedPaths: string[]) {
-  return changedPaths.some((changedPath) => QA_SMOKE_SURFACE_RE.test(changedPath));
+  return changedPaths.some(
+    (changedPath) => !isCiDocumentationPath(changedPath) && QA_SMOKE_SURFACE_RE.test(changedPath),
+  );
 }
+import { isCiDocumentationPath } from "../ci-changed-scope.mjs";

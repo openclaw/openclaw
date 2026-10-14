@@ -984,8 +984,10 @@ const runPostgresConformance =
     ((eventName === "pull_request" || releaseGate) &&
       !docsOnly &&
       (changedPaths === null ||
-        changedPaths.some((file) =>
-          postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
+        changedPaths.some(
+          (file) =>
+            !changedNodeTestPlan.isCiDocumentationPath?.(file) &&
+            postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
         ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
