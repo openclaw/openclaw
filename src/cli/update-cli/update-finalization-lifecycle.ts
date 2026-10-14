@@ -86,6 +86,7 @@ export class UpdateFinalizationLifecycle {
   private stateBudgetMs: number | undefined;
   private reportTimeout?: () => void;
   private failureObservation?: UpdateRunResult;
+  private readonly recordedWarningCounts = new Map<"doctor" | "plugins", number>();
 
   constructor(
     private readonly json: boolean,
@@ -178,6 +179,7 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
+  /** Records the phase's complete current warning list, retiring rows a shorter list drops. */
   recordWarnings(warnings: readonly string[], phase: "doctor" | "plugins" = "doctor"): void {
     warnings.forEach((detail, index) => {
       this.record(
@@ -187,6 +189,28 @@ export class UpdateFinalizationLifecycle {
         detail,
       );
     });
+    const recorded = this.recordedWarningCounts.get(phase) ?? 0;
+    this.recordedWarningCounts.set(phase, warnings.length);
+    if (!this.runId) {
+      return;
+    }
+    // Reports render only completed warning rows; retired rows stay as bounded history.
+    for (let index = warnings.length; index < recorded; index += 1) {
+      try {
+        recordUpdateRunStep(
+          this.runId,
+          {
+            step: `warning:finalize:${phase}:${index}`,
+            status: "skipped",
+            endedAtMs: Date.now(),
+            detail: "Settled or superseded later in this update.",
+          },
+          this.ledgerOptions,
+        );
+      } catch {
+        defaultRuntime.error("[update finalize] Could not retire a settled warning.");
+      }
+    }
   }
 
   recordDoctorStep(step: UpdateStepResult): void {

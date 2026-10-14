@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import type { WorkerOptions } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -33,7 +34,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 });
 
 it.each(["read", "copy"] as const)(
-  "retains cold snapshot cleanup after a worker %s failure",
+  "retains the worker %s outcome and cold snapshot cleanup custody",
   async (failureStage) => {
     await withOpenClawTestState(
       { label: "cron-cold-cleanup", env: { XDG_CACHE_HOME: undefined } },
@@ -82,16 +83,33 @@ fs.rmSync = (target, ...args) => {
             name.includes("openclaw-sqlite-readonly-"),
           );
         try {
-          await expect(
-            withArtifactPreservingStateReads(() =>
-              loadCronJobsStoreWithConfigJobsReadOnly(
-                state.statePath("cron", "jobs.json"),
-                state.env,
-              ),
+          const reading = withArtifactPreservingStateReads(() =>
+            loadCronJobsStoreWithConfigJobsReadOnly(
+              state.statePath("cron", "jobs.json"),
+              state.env,
             ),
-          ).rejects.toThrow("cleanup failed");
+          );
+          if (failureStage === "read") {
+            // A completed read survives deferred snapshot removal; custody retries the cleanup.
+            expect((await reading).store.jobs).toEqual([]);
+          } else {
+            const originalFailure = "controlled worker snapshot removal failure";
+            await expect(reading).rejects.toMatchObject({
+              errors: [
+                expect.objectContaining({ message: expect.stringContaining(originalFailure) }),
+                expect.objectContaining({
+                  message: "Cron read-only state snapshot cleanup failed.",
+                }),
+              ],
+              cause: expect.objectContaining({ message: expect.stringContaining(originalFailure) }),
+            });
+          }
           expect((await remaining()).length).toBeGreaterThan(0);
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
+          if (failureStage === "read") {
+            // The settled read released its owner; the registered snapshot retries canonically.
+            await cleanupSnapshotOperations();
+          }
           expect(await remaining()).toEqual([]);
           expect(parentRemovalFailed).toBe(true);
         } finally {

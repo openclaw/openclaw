@@ -344,6 +344,8 @@ const RELEASE_WAIVED_LIVE_FILES = new Map<string, ReadonlySet<string>>([
       "src/agents/google-gemini-switch.live.test.ts",
     ]),
   ],
+  // Extended-stable 2026.9.33 is cut from the 2026.9.9 line with the same skips.
+  ["2026.9.33", RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES],
 ]);
 
 export function withoutReleaseWaivedLiveFiles(

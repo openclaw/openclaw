@@ -311,7 +311,13 @@ describe("saved update failure resolution", () => {
         ok: false,
         summary: expect.stringContaining('Plugin "codex" data/settings upgrade is unfinished'),
       });
-      expect(result.summary).toContain("Let the current update or repair finish.");
+      // Post-core convergence is the final migration pass, so it names the repair directly.
+      expect(result.summary).toContain(
+        marker === "OPENCLAW_UPDATE_IN_PROGRESS"
+          ? "Let the current update or repair finish."
+          : 'Run "openclaw doctor --fix" to retry the upgrade.',
+      );
+      expect(result.stopReason).toBe(result.summary);
     },
   );
 
@@ -333,13 +339,18 @@ describe("saved update failure resolution", () => {
         validateDoctor,
       });
 
-      expect(result).toMatchObject({
-        ok: false,
-        summary: expect.stringContaining("Let the current update or repair finish."),
-      });
-      expect(result.summary).toContain(
-        'If this warning remains afterward, run "openclaw update repair"',
-      );
+      expect(result.ok).toBe(false);
+      if (marker === "OPENCLAW_UPDATE_IN_PROGRESS") {
+        expect(result.summary).toContain("Let the current update or repair finish.");
+        expect(result.summary).toContain(
+          'If this warning remains afterward, run "openclaw update repair"',
+        );
+      } else {
+        expect(result.summary).toContain(
+          'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.',
+        );
+        expect(result.summary).not.toContain("Let the current update or repair finish.");
+      }
       expect(result.stopReason).toBe(result.summary);
     },
   );

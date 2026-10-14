@@ -610,28 +610,46 @@ describe("deferred plugin migration repair guidance", () => {
     command: "openclaw update repair",
   };
 
-  it.each(["OPENCLAW_UPDATE_IN_PROGRESS", "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"])(
-    "waits for the owning update before suggesting another repair (%s)",
-    (marker) => {
-      const message = formatDeferredPluginMigration(pending, { [marker]: "1" });
-      expect(message).toContain("Let the current update or repair finish.");
-      expect(message).toContain('If this warning remains afterward, run "openclaw update repair"');
+  it.each([
+    { markers: ["OPENCLAW_UPDATE_IN_PROGRESS"], command: pending.command, laterPass: true },
+    // Post-core convergence is the final migration pass, even inside an update child.
+    {
+      markers: ["OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"],
+      command: pending.command,
+      laterPass: false,
+    },
+    {
+      markers: ["OPENCLAW_UPDATE_IN_PROGRESS", "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"],
+      command: pending.command,
+      laterPass: false,
+    },
+    { markers: [], command: pending.command, laterPass: false },
+    { markers: [], command: "openclaw doctor --fix", laterPass: false },
+  ])(
+    "formats repair guidance for markers $markers / $command",
+    ({ markers, command, laterPass }) => {
+      const message = formatDeferredPluginMigration(
+        { ...pending, command },
+        Object.fromEntries(markers.map((marker) => [marker, "1"])),
+      );
+      expect(message).toContain('Plugin "fixture-plugin" data/settings upgrade is unfinished:');
+      expect(message).toContain(pending.reason);
+      expect(message).toContain("Your existing data and settings have been kept.");
+      if (laterPass) {
+        expect(message).toContain("Let the current update or repair finish.");
+        expect(message).toContain(
+          'If this warning remains afterward, run "openclaw update repair"',
+        );
+      } else {
+        expect(message).not.toContain("Let the current");
+        if (command === pending.command) {
+          expect(message).toContain(
+            'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.',
+          );
+        } else {
+          expect(message.match(/openclaw doctor --fix/g)).toHaveLength(1);
+        }
+      }
     },
   );
-
-  it("gives immediate recovery outside an update and avoids repeating Doctor", () => {
-    const repair = formatDeferredPluginMigration(pending, {});
-    expect(repair).toContain('Plugin "fixture-plugin" data/settings upgrade is unfinished:');
-    expect(repair).toContain(pending.reason);
-    expect(repair).toContain("Your existing data and settings have been kept.");
-    expect(repair).toContain(
-      'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.',
-    );
-    const message = formatDeferredPluginMigration(
-      { ...pending, command: "openclaw doctor --fix" },
-      {},
-    );
-    expect(message.match(/openclaw doctor --fix/g)).toHaveLength(1);
-    expect(message).not.toContain("Let the current");
-  });
 });

@@ -4,7 +4,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readResolvedDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
+import { readRetiredDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
@@ -426,9 +426,14 @@ async function updateFinalizeCommandInternal(
           onWarnings: onDoctorWarnings,
           onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
         });
-        const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
+        const retiredWarnings = await readRetiredDeferredPluginMigrationWarnings(doctorWarnings);
         phase.assertCurrent();
-        doctorWarnings = doctorWarnings.filter((warning) => !resolvedWarnings.has(warning));
+        if (retiredWarnings.size > 0) {
+          // Earlier Doctor warnings were persisted when reported; retire the ones a
+          // later pass settled or superseded so the run report matches the ledger.
+          doctorWarnings = doctorWarnings.filter((warning) => !retiredWarnings.has(warning));
+          lifecycle.recordWarnings(doctorWarnings);
+        }
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);
         return result;
       },

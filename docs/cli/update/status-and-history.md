@@ -53,6 +53,12 @@ JSON exposes these messages as `migrationWarnings`; they clear when the plugin m
 completes. If migration state cannot be read, `migrationWarningsError` reports
 that failure while availability and run history remain visible.
 
+The final update summary reconciles plugin migration warnings with the pending
+ledger after the last repair pass. Completed obligations leave the final summary
+and persisted warning steps; pending obligations keep their retry command.
+If the ledger cannot be read, the summary retains the warnings. Messages already
+printed during an earlier phase can remain in the terminal scrollback.
+
 When the Gateway is reachable, status also reads its recorded channel warnings
 without probing channel services. JSON exposes these as `channelIssues`. This
 includes blocked channel startup after a local plugin requests trusted runtime

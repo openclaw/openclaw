@@ -119,16 +119,26 @@ The released `operator_approval_standing_grants` table keeps its exact shape. A
 first-use companion table, `operator_approval_standing_grant_generations`, binds
 each newly minted grant to its job generation and cascades with the grant. Older
 same-version readers ignore the companion and the bare nullable job columns, so
-they can reopen the database. After re-upgrade, a grant without a companion row
-is treated as legacy and requires approval again; it is never assigned a
-generation retroactively. A job recreation advances past retained companion
+they can reopen the database. A job recreation advances past retained companion
 generations, including when an older writer deleted the job row.
+
+The schema transaction that first installs the job projections also carries
+forward live grants minted by earlier releases, such as 2026.8.35. It records
+each job's first generation, hashed from the stored `job_json`, and binds that
+job's unrevoked, unexpired grants to it. This grants no new authority:
+consumption still requires the job's current definition to match the
+configuration revision recorded at mint, which is the check those releases
+enforced, and any later substantive edit advances the generation. A grant whose
+job changed before the upgrade therefore keeps prompting, even if a later edit
+restores the original definition. The carry-forward runs once. Afterward, and
+after any rollback and re-upgrade, a grant without a companion row is treated as
+legacy and requires approval again.
 
 An older writer does not maintain these projections. Its edits make the
 projection stale, so a current reader fails closed after re-upgrade. While the
 older build is running it cannot enforce generation binding, and changes that
 preserve every observable job value and timestamp cannot be reconstructed later.
-No backfill or schema-version bump is required. The accepted design and rollback
+No schema-version bump is required. The accepted design and rollback
 contract are recorded in [#142153](https://github.com/openclaw/openclaw/pull/142153).
 
 Retained ACP imports use the same-version additive-column exception for the bare

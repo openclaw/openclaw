@@ -625,7 +625,16 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
   plugin_install_help="$(openclaw_e2e_run_command "$sut_command" plugins install --help)"
   fixture_consent="$(printf '%s' "$plugin_install_help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)"
   if [ -n "$fixture_consent" ]; then
-    openclaw_e2e_fixture_plugin_command "$sut_command" -- plugins install @openclaw/codex \
+    codex_install_args=(@openclaw/codex)
+    if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+      # Unpublished candidates use only the exact verified companion; a bare
+      # spec resolves ClawHub latest, which can require a newer plugin API.
+      codex_install_args=(
+        "npm:@openclaw/codex@${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
+        --pin
+      )
+    fi
+    openclaw_e2e_fixture_plugin_command "$sut_command" -- plugins install "${codex_install_args[@]}" \
       >/tmp/openclaw-npm-telegram-codex-install.log 2>&1 </dev/null
   fi
   OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command "$sut_command" onboard \

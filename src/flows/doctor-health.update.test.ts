@@ -12,6 +12,7 @@ import { createDoctorPluginMetadataSnapshotScope } from "../commands/doctor/shar
 import { withTriageTerminal } from "../commands/triage.test-support.js";
 import { transformConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatDeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { RunGithubCli } from "../infra/github-issue.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
@@ -50,6 +51,10 @@ const mocks = vi.hoisted(() => ({
   configResources: vi.fn<() => Record<string, unknown>>(),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   packageRoot: vi.fn<() => string | undefined>(),
+  pendingPluginMigrations:
+    vi.fn<
+      typeof import("../infra/deferred-plugin-migrations.js").readDeferredPluginMigrationsAsync
+    >(),
   stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
 }));
 
@@ -88,6 +93,12 @@ vi.mock("../commands/doctor-prompter.js", () => ({
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: async () => mocks.packageRoot(),
+}));
+
+// The shared-state ledger needs the host broker, which this worker-thread lane lacks.
+vi.mock("../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/deferred-plugin-migrations.js")>()),
+  readDeferredPluginMigrationsAsync: mocks.pendingPluginMigrations,
 }));
 
 vi.mock("../cli/update-cli/update-command.js", () => ({
@@ -161,6 +172,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.outro.mockClear();
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
+    mocks.pendingPluginMigrations.mockReset().mockResolvedValue([]);
     mocks.stateMigrationReceipts = [];
   });
 
@@ -559,6 +571,63 @@ describe("runDoctorHealthFlow update outcomes", () => {
               );
             }
           }
+        } finally {
+          await consumeUpdatePostInstallDoctorResult(resultPath);
+        }
+      });
+    },
+  );
+
+  it.each(["partial", "all", "unreadable"] as const)(
+    "publishes current plugin migration warnings after Doctor (%s)",
+    async (settlement) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const resultPath = createUpdatePostInstallDoctorResultPath();
+        vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
+        const pending = (pluginId: string) => ({
+          pluginId,
+          reason: "The installed plugin has not confirmed its saved data and settings.",
+          command: "openclaw doctor --fix",
+        });
+        const [settled, stillPending] = [pending("acpx"), pending("codex")];
+        // Config preflight reported both before post-session repair settled acpx.
+        for (const plugin of [settled, stillPending]) {
+          mocks.stateMigrationReceipts.push({
+            id: `plugin:${plugin.pluginId}`,
+            phase: "final",
+            source: [{ kind: "owner", id: plugin.pluginId }],
+            target: [{ kind: "owner", id: plugin.pluginId }],
+            requiredness: "conditional",
+            reversibility: "checkpoint-required",
+            outcome: "deferred",
+            changes: [],
+            warnings: [formatDeferredPluginMigration(plugin)],
+          });
+        }
+        if (settlement === "unreadable") {
+          mocks.pendingPluginMigrations.mockRejectedValue(
+            new Error("migration ledger unavailable"),
+          );
+        } else {
+          mocks.pendingPluginMigrations.mockResolvedValue(
+            settlement === "all" ? [] : [stillPending],
+          );
+        }
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+        try {
+          await runDoctorHealthFlow(runtime, { nonInteractive: true });
+          const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+          const expected =
+            settlement === "unreadable"
+              ? [settled, stillPending]
+              : settlement === "all"
+                ? []
+                : [stillPending];
+          expect(result).toMatchObject({ status: "ok" });
+          expect(result?.warnings ?? []).toEqual(
+            expected.map((plugin) => formatDeferredPluginMigration(plugin)),
+          );
         } finally {
           await consumeUpdatePostInstallDoctorResult(resultPath);
         }
