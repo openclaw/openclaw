@@ -2446,6 +2446,10 @@ async function inspectPublicationStatus(options) {
         !diagnostic?.context.releaseTag || dispatch.tag === diagnostic.context.releaseTag,
       );
       publication.surfaces.nativeWindows.selection = "selected";
+      publication.surfaces.nativeWindows.target = {
+        tag: dispatch.tag,
+        sourceTag: dispatch.sourceTag,
+      };
       publication.dispatches.push({
         scope: "windows",
         state: dispatch.state === "dispatched" ? "acknowledged" : "unknown",
