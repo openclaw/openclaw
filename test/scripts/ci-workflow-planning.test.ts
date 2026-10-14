@@ -5325,6 +5325,7 @@ describe("ci workflow guards", () => {
     ({ event, docsOnly, root, expected }) => {
       const result = runCiManifestFixture({
         bundledPlanner: true,
+        changedPaths: docsOnly === "false" ? ["VISION.md", "src/focused.ts"] : ["VISION.md"],
         eventName: event,
         scopeEnv: {
           OPENCLAW_CI_DOCS_ONLY: docsOnly,
