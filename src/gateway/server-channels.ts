@@ -1126,25 +1126,31 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const runStopAttempt = async (): Promise<ChannelAccountStopOutcome> => {
           const lifetime = store.lifetimes.get(id);
           const abort = lifetime?.abort;
+          const retainedCleanup = store.stops.get(id)?.cleanup;
+          const explicitlyDisabled = isChannelAccountExplicitlyDisabled({
+            cfg,
+            channel: channelId,
+            accountId: id,
+          });
           const canHandoff =
             optsLocal.routeHandoff &&
             configuredAccountIds.includes(id) &&
-            !isChannelAccountExplicitlyDisabled({ cfg, channel: channelId, accountId: id }) &&
+            !explicitlyDisabled &&
             !manuallyStopped.has(rKey);
           if (!canHandoff) {
             releaseRouteHandoff(store, id);
           }
           const task = store.tasks.get(id);
-          // Idle accounts have no captured teardown; managed getters need cleanup admission.
+          // Disabled idle accounts need no credentials; admitted lifetimes retain their teardown.
           const fallbackStop =
-            !lifetime && plugin
+            !lifetime && !explicitlyDisabled && plugin
               ? runPluginCleanup(plugin, () => {
                   const gateway = plugin.gateway;
                   const stopAccount = gateway?.stopAccount;
                   return gateway && stopAccount ? { gateway, stopAccount } : undefined;
                 })
               : undefined;
-          if (!abort && !task && !lifetime?.teardown && !fallbackStop) {
+          if (!abort && !task && !lifetime?.teardown && !fallbackStop && !retainedCleanup) {
             stopState.settled = true;
             return { status: "fulfilled" };
           }
@@ -1166,7 +1172,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           // Running and failed-stop accounts belong to their admitted plugin and config,
           // even after publication removes the account or replaces its registration.
           const teardown = lifetime?.teardown;
-          if (teardown || (fallbackStop && plugin)) {
+          if (teardown || (fallbackStop && plugin) || retainedCleanup) {
             // Teardown can outlive the start task. Its own lease permits route and status
             // writes only until this stop attempt completes or times out.
             const stopLease = createPluginRuntimeCapabilityLease("channel account stop");
@@ -1175,7 +1181,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               // stop-driven flow (health monitor sweeps, thaw recovery, reload).
               // Ordinary recovery retains the timed-out owner; explicit handoff
               // retires its slots after revoking OpenClaw runtime authority.
-              const retainedCleanup = store.stops.get(id)?.cleanup;
               let stopAccountStarted = retainedCleanup !== undefined;
               const stopAccountAttempt =
                 retainedCleanup ??

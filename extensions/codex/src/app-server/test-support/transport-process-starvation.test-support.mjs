@@ -55,6 +55,9 @@ if (fixtureProcfs) {
 const fixtureOpen = fixtureFs.openSync;
 const fixtureFiles = new Map(${JSON.stringify([...mapped])});
 fixtureFs.openSync = (file, ...args) => fixtureOpen(fixtureFiles.get(file) ?? file, ...args);
+const fixtureReaddir = fixtureFs.readdirSync;
+fixtureFs.readdirSync = (file, ...args) => file === "/proc"
+  ? [${JSON.stringify(String(process.pid))}] : fixtureReaddir(file, ...args);
 `;
       const injectedArgs = args.slice();
       injectedArgs[evalIndex + 1] = injected + injectedArgs[evalIndex + 1];
@@ -104,6 +107,7 @@ try {
   const outcomes = await Promise.allSettled([
     readCodexAppServerProcessSnapshot(deadline, [process.pid]),
     readCodexAppServerProcessCommand(own, deadline),
+    readCodexAppServerProcessSnapshot(deadline),
   ]);
   const inspectionMs = performance.now() - started;
   const filesystemWorkerHeldAtInspection = blockedFilesystemWorkerMs === undefined;
@@ -128,7 +132,7 @@ try {
         eventLoopDelayMs,
         inspectionMs,
         outcomes: outcomes.map((outcome, index) => {
-          const operation = index === 0 ? "selected-identity" : "selected-command";
+          const operation = ["selected-identity", "selected-command", "full-snapshot"][index];
           if (outcome.status === "rejected") {
             return {
               operation,
@@ -137,7 +141,7 @@ try {
               reason: outcome.reason?.reason,
             };
           }
-          return index === 0
+          return index !== 1
             ? {
                 operation,
                 status: "fulfilled",

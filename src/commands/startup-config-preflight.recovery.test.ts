@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { ExitError } from "../runtime.js";
 import {
@@ -73,10 +75,30 @@ it.each(["current", "webhook-repair"] as const)(
           recheckGatewayRunBootstrap({ opts: {}, runtime, snapshot }),
       };
       if (source === "webhook-repair") {
+        const registry = await import("../plugins/doctor-contract-registry.js");
+        const applyMigrations = registry.applyPluginDoctorCompatibilityMigrations;
+        const migrationReads: string[] = [];
+        vi.spyOn(registry, "applyPluginDoctorCompatibilityMigrations").mockImplementation(
+          (...args) => {
+            const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+            try {
+              return applyMigrations(...args);
+            } finally {
+              migrationReads.push(...sql.queries);
+              sql.restore();
+            }
+          },
+        );
         await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({
           code: 78,
-          message: expect.stringContaining("openclaw doctor --fix"),
+          message: expect.stringMatching(
+            /openclaw doctor --fix[\s\S]*Pinned channels\.nextcloud-talk\.accounts\.default\.legacyWebhook/,
+          ),
         });
+        // Only the webhook receipt needs a read; plugin metadata is already prepared.
+        expect(
+          migrationReads.filter((sql) => /\bfrom\s+"?config_machine_state"?/i.test(sql)),
+        ).toHaveLength(1);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
       } else {

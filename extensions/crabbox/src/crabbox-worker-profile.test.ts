@@ -86,6 +86,20 @@ it("keys snapshots by resolved disk inputs while ignoring allocation policy", ()
 
 const PROFILE = { provider: "aws", class: "standard", ttl: "24h", idleTimeout: "60m" };
 
+it("pins the Linux warm-image profile key without setup secrets", () => {
+  const profile = parseCrabboxProfile({
+    ...PROFILE,
+    class: "tiny",
+    target: "linux",
+    warmImage: true,
+    desktop: false,
+  });
+  // Changing this value invalidates every user's warm images on update; change deliberately and explain why in the PR.
+  expect(resolveCrabboxWarmImageProfileKey(profile)).toBe(
+    "6b01b9af04cfd3441ea20fde45d9951b39cf4c2da9a5df3c62dd8a1929725254",
+  );
+});
+
 it("accepts bounded store references for recipe setup without a profile setup command", () => {
   const setupSecrets = { npm_token: { source: "store", provider: "default", id: "NPM_TOKEN" } };
   expect(parseCrabboxProfile({ ...PROFILE, setupSecrets }).setupSecrets).toEqual(setupSecrets);

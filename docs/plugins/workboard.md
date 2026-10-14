@@ -447,9 +447,10 @@ seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
 
-Promotion rejects completed (`done`) cards, including when `force` is set, and
-preserves their completion timestamp. It remains available for recovering
-blocked work; `force` only bypasses dependency or schedule holds.
+Promotion only moves `todo` cards to `ready`; every other status returns an
+error without changing the card, including when `force` is set. To recover
+blocked work, use `workboard_unblock` first to move it to `todo`.
+`force` only bypasses dependency or schedule holds.
 
 ## Dispatch
 

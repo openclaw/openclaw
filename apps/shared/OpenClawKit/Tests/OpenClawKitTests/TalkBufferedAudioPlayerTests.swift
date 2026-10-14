@@ -1,7 +1,7 @@
+#if Talk && canImport(ElevenLabsKit) && (os(iOS) || os(macOS))
 import Foundation
 import OpenClawKit
 import Testing
-@testable import OpenClaw
 
 @Suite(.serialized) struct TalkBufferedAudioPlayerTests {
     @MainActor
@@ -28,7 +28,8 @@ import Testing
 
         _ = try await withTimeout(seconds: 10.0) {
             await first.value
-        }    }
+        }
+    }
 }
 
 private struct TimeoutError: Error {}
@@ -92,3 +93,4 @@ extension Data {
         Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) }
     }
 }
+#endif

@@ -243,6 +243,8 @@ If shutdown cannot be verified, the command fails with the exact `launchctl boot
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
 
+On macOS, service restarts preserve multiline environment values, including PEM keys, embedded quotes, and trailing newlines. If an older restart already truncated a value in the generated service environment, another restart cannot reconstruct it. Restore the complete value in its authored configuration or environment and reinstall with `openclaw gateway install --force`.
+
 ### Existing system LaunchDaemons
 
 OpenClaw installs and manages a per-user LaunchAgent. It does not install or manage system LaunchDaemons. If a custom LaunchDaemon already uses the same gateway label, OpenClaw refuses to write, start, restart, or repair a user LaunchAgent because two `KeepAlive` managers can repeatedly restart the same gateway.

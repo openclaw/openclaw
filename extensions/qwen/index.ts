@@ -214,6 +214,7 @@ export default defineSingleProviderPluginEntry({
     label: "Qwen Cloud",
     docsPath: "/providers/qwen",
     aliases: ["modelstudio", "qwencloud"],
+    hookAliases: ["dashscope", "modelstudio-native"],
     auth: [
       createQwenAuthMethod("standard", "cn"),
       createQwenAuthMethod("standard", "global"),

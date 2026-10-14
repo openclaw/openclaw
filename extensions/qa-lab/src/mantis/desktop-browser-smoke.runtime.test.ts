@@ -181,7 +181,35 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the managed binary to lease a desktop, run a browser, copy artifacts, and stop", async () => {
+  it.each([
+    { machineClass: undefined, envClass: undefined, expected: "tiny" },
+    { machineClass: undefined, envClass: " small ", expected: "small" },
+    { machineClass: " fast ", envClass: "small", expected: "fast" },
+    { machineClass: " ", envClass: " small ", expected: "small" },
+    { machineClass: " ", envClass: " ", expected: "tiny" },
+  ])(
+    "selects $expected for class=$machineClass and env=$envClass",
+    async ({ machineClass, envClass, expected }) => {
+      const runner = vi.fn<CommandRunner>(async () => {
+        throw new Error("Stop at the warmup boundary");
+      });
+
+      await runMantisDesktopBrowserSmoke({
+        commandRunner: runner,
+        crabboxBin: "/tmp/crabbox",
+        env: { OPENCLAW_MANTIS_CRABBOX_CLASS: envClass },
+        machineClass,
+        repoRoot,
+      });
+
+      const args = runner.mock.calls[0]?.[1] ?? [];
+      expect(args[0]).toBe("warmup");
+      expect(args[args.indexOf("--class") + 1]).toBe(expected);
+      expect(runner).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([undefined, "cbx_existing"])("captures a browser on lease=%s", async (leaseId) => {
     vi.mocked(ensureManagedCrabboxBinary).mockResolvedValueOnce({
       binary: "/tmp/crabbox",
       version: "999.0.0",
@@ -237,6 +265,7 @@ describe("mantis desktop browser smoke runtime", () => {
       crabboxBin: "/tmp/outdated-crabbox",
       env: runtimeEnv,
       htmlFile: "qa-artifacts/timeline.html",
+      leaseId,
       now: () => new Date("2026-05-04T12:00:00.000Z"),
       outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-test",
       repoRoot,
@@ -249,11 +278,11 @@ describe("mantis desktop browser smoke runtime", () => {
       env: runtimeEnv,
     });
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([
-      ["/tmp/crabbox", "warmup"],
+      ...(!leaseId ? [["/tmp/crabbox", "warmup"]] : []),
       ["/tmp/crabbox", "inspect"],
       ["/tmp/crabbox", "run"],
       ["rsync", "-az"],
-      ["/tmp/crabbox", "stop"],
+      ...(!leaseId ? [["/tmp/crabbox", "stop"]] : []),
     ]);
     expect(commands.map((entry) => entry.env)).toEqual(commands.map(() => runtimeEnv));
     const rsyncArgs = commands.find((entry) => entry.command === "rsync")?.args ?? [];
@@ -292,9 +321,9 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(summary.browserUrl).toMatch(/^file:\/\//u);
     expect(summary.htmlFile).toBe(path.join(repoRoot, "qa-artifacts", "timeline.html"));
     expect(summary.status).toBe("pass");
-    expect(summary.crabbox.id).toBe("cbx_abc123");
+    expect(summary.crabbox.id).toBe(leaseId ?? "cbx_abc123");
     expect(summary.crabbox.vncCommand).toBe(
-      "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
+      `/tmp/crabbox vnc --provider hetzner --id ${leaseId ?? "cbx_abc123"} --open`,
     );
   });
 

@@ -23,6 +23,7 @@ import { isChannelRunAuthorizationError } from "../../channels/message-access/ru
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -153,6 +154,9 @@ export async function handleAgentExecutionError(params: {
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
   }
+  if (err instanceof WorkerNodeLostError) {
+    return settleFailure({ text: err.message });
+  }
   if (isChannelRunAuthorizationError(err)) {
     if (isChannelRunAuthorizationError(err, "unavailable")) {
       return settleFailure({
@@ -267,9 +271,14 @@ export async function handleAgentExecutionError(params: {
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
     return await settleFailure({
-      // Curated facet copy beats the generic classified summary; see
-      // buildExternalRunFailureReply for the same priority.
-      text: providerRequestError.userMessage,
+      // Recorded retry exhaustion is more specific than generic quota guidance.
+      // Other facets keep their recovery advice, as in buildExternalRunFailureReply.
+      text:
+        failureSummary?.kind === "rate_limit" &&
+        isFailoverError(err) &&
+        err.rateLimitRetriesExhausted !== undefined
+          ? failureSummary.text
+          : providerRequestError.userMessage,
     });
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);

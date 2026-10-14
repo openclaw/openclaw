@@ -210,7 +210,9 @@ describe("Crabbox first capture without upload wait", () => {
     const finish = Promise.withResolvers<void>();
     let captures = 0;
     const { provider, calls } = createWarmProvider(async ({ argv }) => {
-      if (argv[2] !== "create") return undefined;
+      if (argv[2] !== "create") {
+        return undefined;
+      }
       if (++captures === 2) {
         entered.resolve();
         await finish.promise;

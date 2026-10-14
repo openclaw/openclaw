@@ -36,6 +36,7 @@ const { values } = parseArgs({
     revision: { type: "string" },
     operations: { type: "string" },
     limit: { type: "string", default: "100" },
+    "row-mode": { type: "string", default: "compact" },
     entry: { type: "string", default: "dist/entry.js" },
     port: { type: "string", default: "41033" },
     "mock-port": { type: "string", default: "41034" },
@@ -74,6 +75,10 @@ const operations = integer(
   "--operations",
 );
 const limit = integer(values.limit, "--limit");
+const rowMode = values["row-mode"];
+if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
+  throw new Error("--row-mode must be compact, sidebar, or dashboard");
+}
 const clientCount = scenario === "chat.send" ? 1 : integer(values.clients, "--clients");
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const rounds = integer(values.rounds, "--rounds");
@@ -608,7 +613,7 @@ try {
         const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
         const result = await rpc(sender, method, {
           limit,
-          rowMode: "compact",
+          rowMode,
           archived: "all",
         });
         const page =
@@ -743,6 +748,7 @@ try {
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? runCount : operations,
     limit,
+    rowMode,
     clientCount,
     runCount,
     chunks: chunkCount,
