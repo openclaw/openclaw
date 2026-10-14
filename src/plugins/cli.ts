@@ -1,9 +1,10 @@
 import type { Command } from "commander";
-import { getRuntimeConfigSnapshot, readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLoadSession,
@@ -40,7 +41,9 @@ export async function registerPluginCliCommandsFromValidatedConfig(
     if (!snapshot.valid) {
       throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
     }
-    const cfg = getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
+    const cfg = await loadPinnedRuntimeConfigAsync(async () => ({
+      config: snapshot.runtimeConfig,
+    }));
     const mode = options?.mode ?? "eager";
     const primary = options?.primary ?? undefined;
     const entries = await loadPluginCliRegistrationEntriesWithDefaults(

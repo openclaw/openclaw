@@ -232,4 +232,61 @@ describe("CLI config producer lifetime", () => {
       },
     );
   });
+  it("publishes validated config before plugin CLI registration reads it", async () => {
+    const root = fs.realpathSync(makePluginLoaderTempDir());
+    const id = "runtime-config-cli";
+    const plugin = writePlugin({
+      id,
+      dir: path.join(root, "plugin"),
+      filename: "index.cjs",
+      configSchema: {
+        type: "object",
+        properties: { command: { type: "string" } },
+        additionalProperties: false,
+      },
+      body: `module.exports = { id: "${id}", register(api) {
+        const name = api.runtime.config.current().plugins.entries["${id}"].config.command;
+        api.registerCli(({ program }) => program.command(name), { descriptors: [{ name, description: "Live config command", hasSubcommands: false }] });
+      } };`,
+    });
+    const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        ...manifest,
+        cliCommands: [
+          { name: "live-config", description: "Live config command", hasSubcommands: false },
+        ],
+      }),
+    );
+    const configPath = path.join(root, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugins: {
+          enabled: true,
+          load: { paths: [plugin.dir] },
+          allow: [id],
+          entries: { [id]: { enabled: true, config: { command: "live-config" } } },
+        },
+      }),
+    );
+    await withEnvAsync(
+      {
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+      async () => {
+        clearRuntimeConfigSnapshot();
+        const program = new Command();
+        await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+          primary: "live-config",
+        });
+        expect(program.commands.map((command) => command.name())).toEqual(["live-config"]);
+      },
+    );
+  });
 });
