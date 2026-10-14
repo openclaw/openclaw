@@ -356,9 +356,50 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "SECRET_PROGRESS_FAILURE");
   });
 
-  it.each(["pending", "missing"] as const)(
-    "scopes error recovery to current custody after delivery (%s)",
-    (currentDelivery) => {
+  it.each(
+    [true, undefined].flatMap((sourceReplyFinal) =>
+      ([undefined, "delivered"] as const).map((sourceReplyDeliveryState) => ({
+        sourceReplyFinal,
+        sourceReplyDeliveryState,
+      })),
+    ),
+  )(
+    "keeps terminal errors suppressed after a completed message-tool reply (final=$sourceReplyFinal, canonical=$sourceReplyDeliveryState)",
+    ({ sourceReplyFinal, sourceReplyDeliveryState }) => {
+      const payloads = buildPayloads({
+        lastAssistant: makeAssistant({
+          stopReason: "error",
+          errorMessage: "SECRET_POST_FINAL_FAILURE",
+          content: [],
+        }),
+        didSendViaMessagingTool: true,
+        didDeliverSourceReplyViaMessageTool: true,
+        sourceReplyDeliveryState,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            sourceReplyFinal,
+          },
+        ],
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+
+      expect(payloads).toEqual([]);
+    },
+  );
+
+  it.each(
+    (["pending", "delivered"] as const).flatMap((earlierDelivery) =>
+      (["pending", "missing"] as const).map((currentDelivery) => ({
+        earlierDelivery,
+        currentDelivery,
+      })),
+    ),
+  )(
+    "scopes error recovery to current custody ($earlierDelivery then $currentDelivery)",
+    ({ earlierDelivery, currentDelivery }) => {
       const earlier = makeAgentAssistantMessage({
         content: [{ type: "text", text: "Do not repeat the completed answer." }],
       });
@@ -373,10 +414,13 @@ describe("buildEmbeddedRunPayloads", () => {
             messageEnd: 1,
             finalMessageStart: 1,
             lastAssistant: earlier,
-            sourceReplyDeliveryState: "delivered",
+            sourceReplyDeliveryState: earlierDelivery,
           },
         ],
-        messagingToolSourceReplyPayloads: [{ text: "Completed answer.", sourceReplyFinal: true }],
+        messagingToolSourceReplyPayloads:
+          earlierDelivery === "delivered"
+            ? [{ text: "Completed answer.", sourceReplyFinal: true }]
+            : [],
         lastAssistant: makeAssistant({
           stopReason: "error",
           content: [],
@@ -384,7 +428,9 @@ describe("buildEmbeddedRunPayloads", () => {
         }),
       });
       expect(payloads).toEqual([
-        expect.objectContaining({ text: "Completed answer." }),
+        ...(earlierDelivery === "delivered"
+          ? [expect.objectContaining({ text: "Completed answer." })]
+          : []),
         ...(currentDelivery === "missing"
           ? [expect.objectContaining({ text: REDACTED_TEST_MODEL_FAILURE_TEXT, isError: true })]
           : []),
@@ -695,6 +741,20 @@ describe("buildEmbeddedRunPayloads", () => {
       text: formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"),
       isError: true,
     });
+  });
+
+  it("does not emit a synthetic billing error for successful turns with stale errorMessage", () => {
+    // Some providers leave stale errorMessage fields on otherwise successful
+    // assistant messages; stopReason/content decide user-facing output.
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: "insufficient credits for embedding model",
+        content: [{ type: "text", text: "Handle payment required errors in your API." }],
+      }),
+    });
+
+    expectSinglePayloadText(payloads, "Handle payment required errors in your API.");
   });
 
   it("suppresses raw error JSON even when errorMessage is missing", () => {

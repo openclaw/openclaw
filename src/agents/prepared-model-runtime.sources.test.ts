@@ -467,44 +467,48 @@ describe("prepared catalog source composition", () => {
       expect.soft(snapshot.modelCatalog.staticEntries ?? []).toEqual([]);
     }
   });
-  it("does not share captured registries across workspaces with different credentials", async () => {
-    const { facts, generation, modelsJsonContents } = fixture();
-    const registries: PreparedConfiguredModelRegistries = new Map();
-    const first = await prepareConfiguredRuntimeFactsBatch({
-      agentFacts: [facts],
-      pluginGeneration: generation,
-      registries,
-    });
-    const agentDir = tempDirs.make("openclaw-prepared-sibling-");
-    fs.writeFileSync(path.join(agentDir, "models.json"), modelsJsonContents);
-    const credentials: PreparedModelRuntimeAgentFacts["credentials"] = {
-      [providerId]: { type: "api_key", key: "sibling-key" },
-    };
-    const sibling = {
-      ...facts,
-      input: { ...facts.input, agentDir, workspaceDir: path.join(agentDir, "workspace") },
-      credentials,
-      templateAuthStorage: AuthStorage.inMemory(credentials),
-    };
-    const second = await prepareConfiguredRuntimeFactsBatch({
-      agentFacts: [sibling],
-      pluginGeneration: generation,
-      registries,
-    });
-    expect(first.registryCount).toBe(1);
-    expect(second.registryCount).toBe(1);
-    const firstRegistry = first.catalogs.get(facts.input)!.templateModelRegistry;
-    const secondRegistry = second.catalogs.get(sibling.input)!.templateModelRegistry;
-    const firstModel = firstRegistry.find(providerId, "curated-only")!;
-    const secondModel = secondRegistry.find(providerId, "curated-only")!;
-    expect(firstModel.baseUrl).toBe(endpoint);
-    expect(secondModel.baseUrl).toBe(endpoint);
-    expect(firstRegistry.hasConfiguredAuth(firstModel)).toBe(false);
-    expect(secondRegistry.hasConfiguredAuth(secondModel)).toBe(true);
-    expect(secondRegistry.getProviderMetadataOwners()).toBe(
-      generation.pluginMetadataSnapshot.owners,
-    );
-  });
+  it.each(["same", "credentials"] as const)(
+    "shares captured registries across workspaces only for equivalent sources: %s",
+    async (difference) => {
+      const { facts, generation, modelsJsonContents } = fixture();
+      const registries: PreparedConfiguredModelRegistries = new Map();
+      const first = await prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [facts],
+        pluginGeneration: generation,
+        registries,
+      });
+      const agentDir = tempDirs.make("openclaw-prepared-sibling-");
+      fs.writeFileSync(path.join(agentDir, "models.json"), modelsJsonContents);
+      const credentials: PreparedModelRuntimeAgentFacts["credentials"] =
+        difference === "credentials"
+          ? { [providerId]: { type: "api_key" as const, key: "sibling-key" } }
+          : {};
+      const sibling = {
+        ...facts,
+        input: { ...facts.input, agentDir, workspaceDir: path.join(agentDir, "workspace") },
+        credentials,
+        templateAuthStorage: AuthStorage.inMemory(credentials),
+      };
+      const second = await prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [sibling],
+        pluginGeneration: generation,
+        registries,
+      });
+      expect(first.registryCount).toBe(1);
+      expect(second.registryCount).toBe(difference === "same" ? 0 : 1);
+      const firstRegistry = first.catalogs.get(facts.input)!.templateModelRegistry;
+      const secondRegistry = second.catalogs.get(sibling.input)!.templateModelRegistry;
+      const firstModel = firstRegistry.find(providerId, "curated-only")!;
+      const secondModel = secondRegistry.find(providerId, "curated-only")!;
+      expect(firstModel.baseUrl).toBe(endpoint);
+      expect(secondModel.baseUrl).toBe(endpoint);
+      expect(firstRegistry.hasConfiguredAuth(firstModel)).toBe(false);
+      expect(secondRegistry.hasConfiguredAuth(secondModel)).toBe(difference === "credentials");
+      expect(secondRegistry.getProviderMetadataOwners()).toBe(
+        generation.pluginMetadataSnapshot.owners,
+      );
+    },
+  );
 
   it("services event-loop work between dynamic model completions in one registry group", async () => {
     const { facts, generation } = fixture();

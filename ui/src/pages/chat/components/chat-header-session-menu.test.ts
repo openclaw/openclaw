@@ -249,6 +249,7 @@ describe("chat header session menu", () => {
   );
 
   it.each([
+    { name: "plain browser", nativeGateway: null, offered: false },
     { name: "native local gateway", nativeGateway: "local", offered: true },
     {
       name: "SSH-tunneled remote native gateway",
@@ -426,7 +427,7 @@ describe("chat header session menu", () => {
     );
   });
 
-  it.each([false])("keeps bubble mode on the menu session in compact=%s", async (compact) => {
+  it.each([false, true])("keeps bubble mode on the menu session in compact=%s", async (compact) => {
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const menu = await mountMenu({
       compact,
@@ -463,7 +464,7 @@ describe("chat header session menu", () => {
     });
   });
 
-  it.each([true])("renders and activates session actions in compact=%s", async (compact) => {
+  it.each([false, true])("renders and activates session actions in compact=%s", async (compact) => {
     const exportTranscript = vi.fn();
     const stopWorker = vi.fn();
     const onOpenCommandPalette = vi.fn();

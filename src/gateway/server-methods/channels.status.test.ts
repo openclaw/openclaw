@@ -1,3 +1,7 @@
+/**
+ * Gateway channels.status method tests.
+ */
+
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -257,6 +261,45 @@ describe("channelsHandlers channels.status", () => {
     expect(inspectUnrelated).not.toHaveBeenCalled();
     expect(resolveAccount).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, true, false])(
+    "channels.status preserves published plugin defaults at the plugin consumer (enabled=%s)",
+    async (enabled) => {
+      const activation = enabled === undefined ? {} : { enabled };
+      const runtimeConfig: OpenClawConfig = {
+        plugins: {
+          entries: {
+            browser: { ...activation, config: {} },
+            "google-meet": { ...activation, config: { defaultMode: "agent" } },
+            "teams-meetings": { ...activation, config: { defaultMode: "agent" } },
+            "zoom-meetings": { ...activation, config: { defaultMode: "agent" } },
+          },
+        },
+      };
+      const publishedConfig = structuredClone(runtimeConfig);
+      const probeAccount = vi.fn(async (_params: { cfg: OpenClawConfig }) => ({ ok: true }));
+      mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+      mocks.listChannelPlugins.mockReturnValue([
+        {
+          ...createChannelTestPluginBase({ id: "whatsapp" }),
+          status: { probeAccount },
+        },
+      ]);
+
+      const payload = await runChannelsStatus({ probe: true, timeoutMs: 2000 });
+
+      expect(payload.partial).toBeUndefined();
+      expect(probeAccount).toHaveBeenCalledOnce();
+      expect(probeAccount.mock.calls[0]?.[0].cfg).toStrictEqual(publishedConfig);
+      expect(probeAccount.mock.calls[0]?.[0].cfg).toBe(runtimeConfig);
+      const snapshotArgs = requireGatewayRecord(
+        requireFirstCallArg(mocks.buildChannelAccountSnapshotFromAccount),
+        "snapshot args",
+      );
+      expect(snapshotArgs.cfg).toBe(runtimeConfig);
+      expect(firstChannelAccount(payload, "whatsapp").configured).toBe(true);
+    },
+  );
 
   it.each([
     { listed: false, probe: false },
@@ -568,7 +611,7 @@ describe("channelsHandlers channels.status", () => {
     },
   );
 
-  it.each(["load"] as const)(
+  it.each(["load", "register", "validation"] as const)(
     "keeps a channel visible after its plugin fails during %s",
     async (failurePhase) => {
       const credential = "synthetic-loader-credential-that-must-not-escape";
@@ -840,7 +883,7 @@ describe("channelsHandlers channels.status", () => {
     },
   );
 
-  it.each([7_000])(
+  it.each([100, 2_000, 7_000])(
     "delivers partial channel results to Doctor after a %i ms round-trip",
     async (roundTripMs) => {
       const { checkGatewayHealth } = await import("../../commands/doctor-gateway-health.js");
@@ -908,7 +951,7 @@ describe("channelsHandlers channels.status", () => {
         const result = checkGatewayHealth({
           runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
           cfg: {},
-          timeoutMs: 10_000,
+          timeoutMs: roundTripMs < 3_000 ? 3_000 : 10_000,
         });
         await statusStarted.promise;
         await vi.advanceTimersByTimeAsync(roundTripMs);

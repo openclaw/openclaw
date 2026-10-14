@@ -130,7 +130,44 @@ describe("Codex plugin activation", () => {
     ).toMatchObject({ installed: true, enabled: true });
   });
 
-  it("reports a skipped app inventory refresh without failing the plugin install", async () => {
+  it("keeps curated catalog refresh scoped to the active repository", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const result = await ensureCodexPluginActivation({
+      identity: identity("google-calendar"),
+      configCwd: "/repo/project",
+      request: async (method, params) => {
+        requests.push({ method, params });
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("google-calendar", {
+              installed: requests.filter((request) => request.method === "plugin/list").length > 1,
+              enabled: requests.filter((request) => request.method === "plugin/list").length > 1,
+            }),
+          ]);
+        }
+        if (method === "plugin/install") {
+          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: true,
+      reason: "installed",
+      installAttempted: true,
+    });
+    expect(requests).toContainEqual({
+      method: "plugin/list",
+      params: { cwds: ["/repo/project"] },
+    });
+    expect(requests).toContainEqual({
+      method: "plugin/list",
+      params: { cwds: ["/repo/project"], forceRefetch: true },
+    });
+  });
+
+  it("keeps activation fail-closed when post-install app inventory refresh fails", async () => {
     const appCache = new CodexAppInventoryCache();
     const result = await ensureCodexPluginActivation({
       identity: identity("google-calendar"),
@@ -161,6 +198,60 @@ describe("Codex plugin activation", () => {
       {
         message: "Codex app inventory refresh skipped: app/installed unavailable",
       },
+    ]);
+  });
+
+  it("installs a disabled remote curated plugin by its resolved remote id", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
+      name: "google-calendar",
+      remotePluginId: "plugin_connector_google_calendar",
+      installed: false,
+      enabled: false,
+    });
+    const result = await ensureCodexPluginActivation({
+      identity: identity("google-calendar"),
+      request: async (method, params) => {
+        calls.push({ method, params });
+        if (method === "plugin/list") {
+          return {
+            ...pluginList([remoteSummary]),
+            marketplaces: [
+              {
+                name: CODEX_PLUGINS_MARKETPLACE_NAME,
+                path: "/marketplaces/openai-curated",
+                interface: null,
+                plugins: [pluginSummary("github")],
+              },
+              {
+                name: "openai-curated-remote",
+                path: null,
+                interface: null,
+                plugins: [remoteSummary],
+              },
+            ],
+          } satisfies v2.PluginListResponse;
+        }
+        if (method === "plugin/install") {
+          expect(params).toEqual({
+            remoteMarketplaceName: "openai-curated-remote",
+            pluginName: "plugin_connector_google_calendar",
+          });
+          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: true,
+      reason: "installed",
+      installAttempted: true,
+    });
+    expect(calls.map((call) => call.method)).toEqual([
+      "plugin/list",
+      "plugin/install",
+      "plugin/list",
     ]);
   });
 

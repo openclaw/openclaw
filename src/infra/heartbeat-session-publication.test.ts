@@ -287,6 +287,7 @@ describe("publishHeartbeatSessionReply", () => {
 
   it.each([
     { name: "captioned image", caption: "Attached image", source: "/tmp/reply-image.png" },
+    { name: "media-only image", caption: "", source: "/tmp/reply-image.png" },
     { name: "silent voice", caption: "NO_REPLY", source: "/tmp/voice.opus" },
   ])(
     "reconciles a producer-derived $name receipt without rewriting it",

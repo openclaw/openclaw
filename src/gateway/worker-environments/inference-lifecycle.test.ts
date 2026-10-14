@@ -254,6 +254,40 @@ describe("worker inference manager", () => {
     },
   );
 
+  it("cancels the provider idempotently", async () => {
+    const store = createMemoryStore();
+    const signals: AbortSignal[] = [];
+    const pending = [
+      createDeferred<WorkerInferenceTerminalOutcome>(),
+      createDeferred<WorkerInferenceTerminalOutcome>(),
+    ];
+    const instance = makeManager(({ signal }) => {
+      signals.push(signal);
+      const execution = pending[signals.length - 1];
+      if (!execution) {
+        throw new Error("unexpected inference execution");
+      }
+      signal.addEventListener("abort", () => execution.resolve(ERROR), { once: true });
+      return execution.promise;
+    }, store);
+    const sink = createSink();
+    await accept(instance, { sink: sink.sink });
+    await waitForFast(() => expect(signals).toHaveLength(1));
+    for (let index = 0; index < 2; index += 1) {
+      expect(await instance.cancel({ identity: IDENTITY, request: CANCEL })).toEqual({
+        ok: true,
+        result: { status: "cancelled" },
+      });
+    }
+    expect(signals[0]?.aborted).toBe(true);
+    const nextRequest = { ...REQUEST, runId: "new-run", turnId: "new-turn" };
+    await accept(instance, { identity: identityFor(nextRequest), request: nextRequest });
+    await waitForFast(() => expect(signals).toHaveLength(2));
+    expect(await instance.cancelSession(REQUEST.sessionId, "new-run")).toEqual(["new-run"]);
+    expect(signals[1]?.aborted).toBe(true);
+    await instance.stop();
+  });
+
   it.each(["write-failed", "outcome-unknown"] as const)(
     "preserves the original %s persistence failure through an inference drain",
     async (failureKind) => {

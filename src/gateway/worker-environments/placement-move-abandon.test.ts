@@ -220,6 +220,28 @@ describe("offline device placement abandonment", () => {
     expect(fixture.provider.destroy).toHaveBeenCalledOnce();
   }
 
+  it.each([false, true])(
+    "abandons an unreachable device through real teardown (live tunnel: %s)",
+    async (liveTunnel) => {
+      const fixture = await deviceTeardown(liveTunnel);
+      const { harness, active, transfer, invoke } = fixture;
+      const fail = vi.spyOn(placements, "fail");
+      await expect(harness.service.move(requestFor(active))).resolves.toMatchObject({
+        state: "local",
+      });
+      expectRetainedDeviceCleanup(fixture);
+      expect(fail).toHaveBeenCalledWith(
+        expect.objectContaining({ recoveryError: FORCED_WORKER_ABANDONMENT_ERROR }),
+        undefined,
+      );
+      expect(transfer.close).toHaveBeenCalledWith(active.environmentId);
+      expect(invoke).not.toHaveBeenCalled();
+      expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
+      await finishDeviceCleanup(fixture);
+      expect(invoke).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("abandons a device whose supervisor proof disappears after discovery", async () => {
     const fixture = await deviceTeardown(false);
     const { harness, active, reconnect, invoke } = fixture;
@@ -315,6 +337,19 @@ describe("offline device placement abandonment", () => {
     },
   );
 
+  it("keeps ordinary device destruction waiting for its remote stop", async () => {
+    const { active, environments, provider } = await deviceTeardown(false);
+    await expect(environments.destroy(active.environmentId)).rejects.toThrow(
+      "not connected with the supervisor dialect",
+    );
+    expect(environments.get(active.environmentId)).toMatchObject({
+      state: "attached",
+      ownerEpoch: active.activeOwnerEpoch,
+    });
+    expect(placements.get(active.sessionId)).toMatchObject({ state: "active" });
+    expect(provider.destroy).not.toHaveBeenCalled();
+  });
+
   it("keeps forced cloud destruction owned by the dedicated provider", async () => {
     const { harness, active, invoke, provider } = await deviceTeardown(false, "crabbox", false);
     await expect(
@@ -408,23 +443,46 @@ describe("offline device placement abandonment", () => {
     },
   );
 
+  it("refuses an ordinary non-abandoning move for an offline paired device with an existing pending cloud workspace result", async () => {
+    const harness = await createHarness(database, placements);
+    const active = await harness.service.dispatch(REQUEST);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+    const claim = await placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "offline-device-preserve-claim",
+      runId: "offline-device-preserve-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    await placements.markWorkspaceResultPending(claim);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
+
+    await expect(harness.service.move(requestFor(active, false))).rejects.toThrow(
+      `Cannot drain session ${active.sessionId} with a pending cloud workspace result`,
+    );
+
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
+      expect.objectContaining({ claimId: claim.claimId, runId: claim.runId }),
+    ]);
+    expect(placements.validateTurnClaim(claim)).toBe(true);
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
+    expect(placements.get(active.sessionId)).toMatchObject({
+      state: "active",
+      generation: active.generation,
+    });
+  });
+
   it("forces an offline remote-exec device onto the Gateway without waiting for its local claim", async () => {
     const harness = await createHarness(database, placements);
     const active = await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
-    await expect(
-      placements.claimTurn({
-        ...REQUEST,
-        owner: {
-          kind: "worker",
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-        claimId: "remote-worker-claim",
-        runId: "remote-worker-run",
-      }),
-    ).rejects.toThrow("stale owner");
     const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
@@ -617,6 +675,25 @@ describe("offline device placement abandonment", () => {
         runId: "replacement-device-run",
       });
     }
+  });
+
+  it("keeps an ordinary offline move reconcile-first", async () => {
+    const harness = await createHarness(database, placements);
+    const active = await harness.service.dispatch(REQUEST);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+    vi.mocked(harness.environments.startTunnel).mockRejectedValueOnce(
+      new Error("device worker node is not connected; reconnect it before retrying"),
+    );
+
+    await expect(harness.service.move(requestFor(active, false))).rejects.toThrow(
+      "reconnect it before retrying",
+    );
+    expect(placements.get(active.sessionId)).toMatchObject({ state: "draining" });
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toMatchObject({
+      abandonSource: false,
+    });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
   it.each([

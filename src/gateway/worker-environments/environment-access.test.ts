@@ -152,7 +152,7 @@ describe("worker environment service", () => {
     }
   });
 
-  it.each([false])(
+  it.each([false, true])(
     "joins both readiness owners before reporting their original failures (shared: %s)",
     async (shared) => {
       const storeFailure = new Error("environment inventory readiness failed");
@@ -523,7 +523,7 @@ describe("worker environment service", () => {
     expect(support.testState.store.get("worker-isolation-change")?.sharedHost).toBe(true);
   });
 
-  it.each([true])(
+  it.each([false, true])(
     "launches advertised SSH desktop apps and reports runtime failure %s",
     async (fails) => {
       const record = await support.seedReadyDesktop("worker-desktop-launch");
@@ -586,13 +586,15 @@ describe("worker environment service", () => {
   );
 
   it.each([
-    ["SSH", true, undefined],
-    ["SSH", false, undefined],
-    ["node", true, undefined],
-    ["node", true, false],
+    ["SSH", true, undefined, true],
+    ["SSH", false, undefined, true],
+    ["node", true, undefined, true],
+    ["node", false, undefined, true],
+    ["node", true, false, true],
+    ["node", true, undefined, false],
   ] as const)(
-    "carries resize permission through %s observe (provider: %s, endpoint: %s)",
-    async (transport, allowsDesktopResize, allowsResize) => {
+    "carries resize permission through %s observe (provider: %s, endpoint: %s, available: %s)",
+    async (transport, allowsDesktopResize, allowsResize, providerAvailable) => {
       const node = transport === "node";
       const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
       const client = { invalidated: false };
@@ -640,13 +642,23 @@ describe("worker environment service", () => {
               }
             : {}),
         }),
-        node ? { nodeDesktopCarrier } : { tunnelManager: createStoppedTunnelManager({ acquire }) },
+        node
+          ? {
+              nodeDesktopCarrier: providerAvailable
+                ? nodeDesktopCarrier
+                : ({
+                    observe,
+                    stopAll: vi.fn(async () => {}),
+                  } as unknown as WorkerNodeDesktopCarrier),
+            }
+          : { tunnelManager: createStoppedTunnelManager({ acquire }) },
       );
-      const canResize = allowsDesktopResize && allowsResize !== false;
+      support.testState.providersEnabled = providerAvailable;
+      const canResize = providerAvailable && allowsDesktopResize && allowsResize !== false;
       const observed = await workerService.observeDesktop({
         environmentId: record.environmentId,
         control: true,
-        requester,
+        ...(providerAvailable ? { requester } : {}),
       });
       if (!node) {
         expect(observed).toMatchObject({
@@ -681,6 +693,9 @@ describe("worker environment service", () => {
         ...(canResize ? { canResize: true } : {}),
       });
       expect(observe).toHaveBeenCalledOnce();
+      if (!providerAvailable) {
+        return;
+      }
       expect(workerService.get(record.environmentId)).toMatchObject({
         desktopAvailable: true,
         desktopApps: ["browser", "terminal"],

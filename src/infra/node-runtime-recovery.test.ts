@@ -427,6 +427,31 @@ describe("runtime recovery discovery", () => {
     });
   });
 
+  it.each(["nvm", "fnm", "Volta"])("expands the %s manager root against home", async (manager) => {
+    await withRecoveryHome(async (home) => {
+      const root = path.join(home, "custom-manager");
+      let candidate: string;
+      if (manager === "nvm") {
+        candidate = await writeFixture(path.join(root, "versions/node/v24.19.0/bin/node"));
+        await writeFixture(path.join(root, "alias/default"), "24");
+        vi.stubEnv("NVM_DIR", "~/custom-manager");
+      } else if (manager === "fnm") {
+        candidate = await writeFixture(path.join(root, "aliases/default/bin/node"));
+        vi.stubEnv("FNM_DIR", "~/custom-manager");
+      } else {
+        candidate = await writeFixture(path.join(root, "tools/image/node/24.19.0/bin/node"));
+        await writeFixture(
+          path.join(root, "tools/user/platform.json"),
+          JSON.stringify({ node: { runtime: "24.19.0" } }),
+        );
+        vi.stubEnv("VOLTA_HOME", "~/custom-manager");
+      }
+      mocks.admissible.add(candidate);
+      await expectRecoveryStarted({ homeDir: home });
+      expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+    });
+  });
+
   it.each(["HOME", "USERPROFILE", "OPENCLAW_HOME"])(
     "expands inherited %s before private discovery",
     async (key) => {
@@ -604,6 +629,28 @@ describe("runtime recovery discovery", () => {
     });
   });
 
+  it("keeps PATH discovery after rejecting a service executable's cwd parent", async () => {
+    await withRecoveryHome(async (home) => {
+      const cwd = path.join(home, "checkout");
+      const candidate = await writeFixture(path.join(home, "outside", "node"));
+      await fs.mkdir(cwd);
+      await fs.symlink(candidate, path.join(cwd, "node"));
+      const alias = path.join(home, "service-alias");
+      await fs.symlink(cwd, alias, "junction");
+      await writeFixture(
+        path.join(home, ".config/systemd/user/openclaw-gateway.service"),
+        `[Service]\nExecStart="${path.join(alias, "node").replaceAll("\\", "\\\\")}" /fixture/entry.js gateway\n`,
+      );
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      vi.stubEnv("PATH", path.dirname(candidate));
+      mocks.admissible.add(candidate);
+
+      await expectRecoveryStarted({ homeDir: home });
+      expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("(PATH;"));
+    });
+  });
+
   it.each(["private", "service"] as const)(
     "never probes a %s runtime resolving into cwd",
     async (source) => {
@@ -631,58 +678,59 @@ describe("runtime recovery discovery", () => {
     },
   );
 
-  it.each([[7, "Homebrew node@24"]] as const)(
-    "selects the first admissible runtime: %s %s",
-    async (index, source) => {
-      await withRecoveryHome(async (home) => {
-        const candidates = await Promise.all(
-          [
-            ".openclaw/tools/cli-node/tools/node/bin/node",
-            "service/bin/node",
-            "bin/node",
-            ".nvm/versions/node/v24.19.0/bin/node",
-            ".fnm/aliases/default/bin/node",
-            ".volta/tools/image/node/24.19.0/bin/node",
-            "brew26/bin/node",
-            "brew24/bin/node",
-          ].map((relative) => writeFixture(path.join(home, relative))),
+  it.each([
+    [0, "cached OpenClaw runtime"],
+    [1, "managed Gateway service"],
+    [7, "Homebrew node@24"],
+  ] as const)("selects the first admissible runtime: %s %s", async (index, source) => {
+    await withRecoveryHome(async (home) => {
+      const candidates = await Promise.all(
+        [
+          ".openclaw/tools/cli-node/tools/node/bin/node",
+          "service/bin/node",
+          "bin/node",
+          ".nvm/versions/node/v24.19.0/bin/node",
+          ".fnm/aliases/default/bin/node",
+          ".volta/tools/image/node/24.19.0/bin/node",
+          "brew26/bin/node",
+          "brew24/bin/node",
+        ].map((relative) => writeFixture(path.join(home, relative))),
+      );
+      await writeFixture(
+        path.join(home, ".config/systemd/user/openclaw-gateway.service"),
+        `[Service]\nExecStart="${expectDefined(candidates[1], "service candidate").replaceAll("\\", "\\\\")}" /fixture/dist/index.js gateway run\n`,
+      );
+      await writeFixture(path.join(home, ".nvm/alias/default"), "lts/test\n");
+      await writeFixture(path.join(home, ".nvm/alias/lts/test"), "24\n");
+      await writeFixture(
+        path.join(home, ".volta/tools/user/platform.json"),
+        JSON.stringify({ node: { runtime: "24.19.0" } }),
+      );
+      for (const prefix of ["/opt/homebrew", "/usr/local"]) {
+        mocks.virtualPaths.set(
+          path.join(prefix, "opt", "node@26", "bin", "node"),
+          expectDefined(candidates[6], "Node 26 candidate"),
         );
-        await writeFixture(
-          path.join(home, ".config/systemd/user/openclaw-gateway.service"),
-          `[Service]\nExecStart="${expectDefined(candidates[1], "service candidate").replaceAll("\\", "\\\\")}" /fixture/dist/index.js gateway run\n`,
+        mocks.virtualPaths.set(
+          path.join(prefix, "opt", "node@24", "bin", "node"),
+          expectDefined(candidates[7], "Node 24 candidate"),
         );
-        await writeFixture(path.join(home, ".nvm/alias/default"), "lts/test\n");
-        await writeFixture(path.join(home, ".nvm/alias/lts/test"), "24\n");
-        await writeFixture(
-          path.join(home, ".volta/tools/user/platform.json"),
-          JSON.stringify({ node: { runtime: "24.19.0" } }),
-        );
-        for (const prefix of ["/opt/homebrew", "/usr/local"]) {
-          mocks.virtualPaths.set(
-            path.join(prefix, "opt", "node@26", "bin", "node"),
-            expectDefined(candidates[6], "Node 26 candidate"),
-          );
-          mocks.virtualPaths.set(
-            path.join(prefix, "opt", "node@24", "bin", "node"),
-            expectDefined(candidates[7], "Node 24 candidate"),
-          );
-        }
-        for (const candidate of candidates.slice(index)) {
-          mocks.admissible.add(candidate);
-        }
+      }
+      for (const candidate of candidates.slice(index)) {
+        mocks.admissible.add(candidate);
+      }
 
-        await expectRecoveryStarted({ homeDir: home });
+      await expectRecoveryStarted({ homeDir: home });
 
-        expect(mocks.probe.mock.calls.map(([filename]) => filename)).toEqual(
-          candidates.slice(0, index + 1),
-        );
-        expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidates[index]);
-        expect(stderrSpy).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining(`(${source}; current Node failed runtime admission)`),
-        );
-      });
-    },
-  );
+      expect(mocks.probe.mock.calls.map(([filename]) => filename)).toEqual(
+        candidates.slice(0, index + 1),
+      );
+      expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidates[index]);
+      expect(stderrSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`(${source}; current Node failed runtime admission)`),
+      );
+    });
+  });
 
   it.each(["direct", "shell wrapper", "executable wrapper"])(
     "finds the profiled launchd runtime through a %s command",
@@ -775,6 +823,7 @@ describe("runtime recovery discovery", () => {
 
   it.each([
     ["--profile", "fixture", "webhooks", "gmail", "run"],
+    ["webhooks", "--log-level=debug", "gmail", "--no-color", "run"],
     ["hooks", "relay", "--relay-id", "fixture"],
   ])("keeps exact-PID invocation %j in its original process", async (...args) => {
     await withRecoveryHome(async (home) => {
@@ -790,6 +839,7 @@ describe("runtime recovery discovery", () => {
 
   it.each([
     { terminal: "none", stdinTTY: false, stdoutTTY: false, hide: true, exitCode: 0 },
+    { terminal: "stdin", stdinTTY: true, stdoutTTY: false, hide: false, exitCode: 0 },
     { terminal: "stdout", stdinTTY: false, stdoutTTY: true, hide: false, exitCode: 7 },
   ])(
     "preserves invocation and replacement exit $exitCode with $terminal terminal stdio",

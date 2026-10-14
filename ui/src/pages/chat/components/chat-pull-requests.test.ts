@@ -143,6 +143,24 @@ describe("renderChatPullRequests", () => {
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
+  it("shows unpublished changes on the same branch instead of merged PR history", () => {
+    const branch = pullRequest().branch;
+    render(
+      renderChatPullRequests({
+        pullRequests: [pullRequest({ state: "merged" })],
+        branch: sessionBranch({ branch }),
+        status: "ready",
+        onDismiss: () => {},
+        publication: publication(),
+      }),
+      container,
+    );
+    expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
+    expect(container.querySelector(".chat-pr__number")).toBeNull();
+    expect(container.querySelector(".chat-pr__branch")?.textContent).toBe(branch);
+    expect(container.querySelector(".chat-pr__create")?.textContent).toContain("Publish PR");
+  });
+
   it("does not attach a failed session publication to any PR when live and settled rows reorder", () => {
     const failedPublication = publication({
       result: {
@@ -228,6 +246,36 @@ describe("renderChatPullRequests", () => {
       expect(status === "needs_confirmation" ? onConfirm : onRefresh).toHaveBeenCalledOnce();
     },
   );
+
+  it("keeps the current PR and CI visible when an older receipt falls out of the PR snapshot", () => {
+    const onNewAction = vi.fn();
+    const onDismiss = vi.fn();
+    render(
+      renderChatPullRequests({
+        pullRequests: [pullRequest()],
+        status: "ready",
+        onDismiss,
+        publication: publication({
+          result: {
+            requestId: "old-publication",
+            status: "published",
+            url: "https://github.com/openclaw/openclaw/pull/1",
+            repository: "openclaw/openclaw",
+            branch: pullRequest().branch,
+            headCommit: "a".repeat(40),
+          },
+          onNewAction,
+        }),
+      }),
+      container,
+    );
+    expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
+    expect(container.querySelector(".chat-pr__number")?.textContent).toBe("#103469");
+    expect(container.querySelector(".chat-pr__checks")).not.toBeNull();
+    container.querySelector<HTMLButtonElement>(".chat-pr__dismiss")?.click();
+    expect(onNewAction).toHaveBeenCalledOnce();
+    expect(onDismiss).toHaveBeenCalledOnce();
+  });
 
   it("keeps publication recovery separate and expanded after publication completed", () => {
     const onRefresh = vi.fn();

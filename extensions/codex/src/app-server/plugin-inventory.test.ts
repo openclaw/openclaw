@@ -65,6 +65,73 @@ describe("Codex plugin inventory", () => {
     expect(calls).toEqual(["plugin/installed", "plugin/read"]);
   });
 
+  it("reuses one installed snapshot for consecutive configured plugin inventories", async () => {
+    const metadataCache = new CodexPluginMetadataCache();
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const params = {
+      policy: pluginPolicy({ github: curatedPlugin("github") }),
+      appCacheKey: "runtime",
+      configCwd: "/repo/project",
+      metadataCache,
+      request: async (method: string, requestParams?: unknown) => {
+        calls.push({ method, params: requestParams });
+        if (method === "plugin/installed") {
+          return pluginInstalled([activePlugin("github")]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("github", []);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    };
+
+    const first = await readCodexPluginInventory(params);
+    const second = await readCodexPluginInventory(params);
+
+    expect(first.records[0]?.summary.id).toBe("github");
+    expect(second.records[0]?.summary.id).toBe("github");
+    expect(calls).toEqual([
+      { method: "plugin/installed", params: { cwds: ["/repo/project"] } },
+      ...Array.from({ length: 2 }, () => ({
+        method: "plugin/read",
+        params: { marketplacePath: "/marketplaces/openai-curated", pluginName: "github" },
+      })),
+    ]);
+  });
+
+  it("reads the curated catalog only for an explicitly requested missing plugin", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const inventory = await readCodexPluginInventory({
+      policy: pluginPolicy({ calendar: curatedPlugin("calendar") }),
+      request: async (method, params) => {
+        calls.push({ method, params });
+        if (method === "plugin/installed") {
+          return pluginInstalled([]);
+        }
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("calendar")]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("calendar", []);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(calls).toEqual([
+      { method: "plugin/installed", params: {} },
+      { method: "plugin/list", params: {} },
+      {
+        method: "plugin/read",
+        params: { marketplacePath: "/marketplaces/openai-curated", pluginName: "calendar" },
+      },
+    ]);
+    expect(inventory.records[0]).toMatchObject({
+      activationRequired: true,
+      summary: { id: "calendar", installed: false },
+    });
+  });
+
   it("matches namespaced curated plugin ids by normalized path segment", async () => {
     const appCache = await cachedApps(appInfo("github-app", true));
 

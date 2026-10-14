@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -113,6 +114,12 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it.each([
+    {
+      name: "caps model metadata",
+      timeout: undefined,
+      caller: false,
+      expected: MAX_TIMER_TIMEOUT_MS,
+    },
     {
       name: "combines an explicit timeout with caller abort",
       timeout: 750,
@@ -272,7 +279,7 @@ describe("buildGuardedModelFetch", () => {
     await expect(parseSse(response)).resolves.toEqual([{ ok: true }]);
   });
 
-  it.each([undefined])(
+  it.each([undefined, "application/json; charset=utf-8"])(
     "recognizes split SSE before EOF with content-type %s",
     async (contentType) => {
       const source = responseStream(["d", "ata", ': {"ok": true}\n\n'], { open: true });
@@ -304,6 +311,30 @@ describe("buildGuardedModelFetch", () => {
     expect(response.status).toBe(400);
     expect(response.headers.get("x-should-retry")).toBeNull();
     await expect(response.json()).resolves.toEqual({ error: { message: "API key expired" } });
+  });
+
+  it("accepts a large batch of small SSE events followed by a large split event", async () => {
+    const count = 5_000;
+    const refreshTimeout = vi.fn();
+    const payload = { text: "x".repeat(70 * 1024) };
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        responseStream([
+          'data: {"ok":true}\n\n'.repeat(count),
+          `data: ${JSON.stringify(payload)}`,
+          "\n\n",
+        ]).stream,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: `${model.baseUrl}/responses`,
+      release: vi.fn(async () => {}),
+      refreshTimeout,
+    });
+    const items = await parseSse(await request());
+    expect(items).toHaveLength(count + 1);
+    expect(items.slice(0, count)).toEqual(Array.from({ length: count }, () => ({ ok: true })));
+    expect(items.at(-1)).toEqual(payload);
+    expect(refreshTimeout).toHaveBeenCalledTimes(3);
   });
 
   it.each([
@@ -365,7 +396,10 @@ describe("buildGuardedModelFetch", () => {
     expect(bytesPulled).toBeLessThan(total);
   });
 
-  it.each([{ contentType: "application/json", body: '{"ok":true}' }])(
+  it.each([
+    { contentType: "application/json", body: '{"ok":true}' },
+    { contentType: "text/event-stream", body: 'data: {"ok":true}\n\n' },
+  ])(
     "preserves consumer cancellation through $contentType cleanup failure",
     async ({ contentType, body }) => {
       const cancel = vi.fn(async () => {
@@ -522,7 +556,7 @@ describe("buildGuardedModelFetch SSE readability", () => {
     },
   );
 
-  it.each(["sanitized", "official"])(
+  it.each(["sanitized", "official", "opt-out"])(
     "observes comment lines without event separators on %s streams",
     async (mode) => {
       const chunks = [
@@ -539,7 +573,7 @@ describe("buildGuardedModelFetch SSE readability", () => {
       const onSseComment = vi.fn();
       const response = await buildGuardedModelFetch(target, undefined, {
         onSseComment,
-        sanitizeSse: true,
+        sanitizeSse: mode !== "opt-out",
       })(`${target.baseUrl}/responses`, { method: "POST" });
 
       if (mode === "sanitized") {
@@ -561,6 +595,28 @@ describe("buildGuardedModelFetch SSE readability", () => {
       init: undefined,
       chunks: ['event: response.created\n\ndata: {"ok": true}\n\n'],
       expected: 'event: response.created\n\ndata: {"ok": true}\n\n',
+    },
+    {
+      name: "mixed chunked framing and multiline data, excluding blank keepalives",
+      target: completionModel,
+      input: url,
+      init: { method: "POST" },
+      chunks: [
+        "event: ping\ndata\ndata:\ndata: \t\uFEFF\u00A0\n\nData: ignored\n data: ignored\ndatabase: ignored\n\n",
+        'data: {"ok"',
+        ": true}\n",
+        "\n",
+        "event: ping\r",
+        "\rdata: \u0085\r",
+        "\rdata: \u200B\r\r",
+        'data:\r\ndata: {\r\ndata: "ok": true}\r\ndata: \t\r',
+        "\n\r",
+        "\n",
+        "event: ping\ndata\ndata: \t\uFEFF\u00A0",
+      ],
+      expected:
+        'data: {"ok": true}\n\ndata: \u0085\r\rdata: \u200B\r\r' +
+        'data:\r\ndata: {\r\ndata: "ok": true}\r\ndata: \t\r\n\r\n',
     },
     {
       name: "a readable EOF tail ending with a blank data line",

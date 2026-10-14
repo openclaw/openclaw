@@ -50,19 +50,21 @@ function createRuntimeManager(
 describe("worker provisioning cancellation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["ready"] as const)(
+  it.each(["bootstrapping", "ready"] as const)(
     "cancels persisted SSH bootstrap from %s while retaining its child and lease cleanup",
     async (state) => {
       let record = await support.seedBootstrapping(`worker-persisted-bootstrap-stop-${state}`);
-      record = await support.testState.store.transition({
-        environmentId: record.environmentId,
-        from: record.state,
-        to: "ready",
-        patch: support.readyPatch(record.environmentId, {
-          ...support.BOOTSTRAP_RECEIPT,
-          bundleHash: "b".repeat(64),
-        }),
-      });
+      if (state !== "bootstrapping") {
+        record = await support.testState.store.transition({
+          environmentId: record.environmentId,
+          from: record.state,
+          to: "ready",
+          patch: support.readyPatch(record.environmentId, {
+            ...support.BOOTSTRAP_RECEIPT,
+            bundleHash: "b".repeat(64),
+          }),
+        });
+      }
       const entered = createDeferredCore();
       const childClosed = createDeferredCore();
       const controller = new AbortController();
@@ -97,9 +99,11 @@ describe("worker provisioning cancellation ownership", () => {
             throw new Error("Recovery ended before bootstrap");
           }),
         ]);
-        expect(support.testState.store.get(record.environmentId)?.ownerEpoch).toBeGreaterThan(
-          record.ownerEpoch,
-        );
+        if (state !== "bootstrapping") {
+          expect(support.testState.store.get(record.environmentId)?.ownerEpoch).toBeGreaterThan(
+            record.ownerEpoch,
+          );
+        }
         controller.abort(new DOMException("Stop persisted bootstrap", "AbortError"));
         teardown = service.destroy(record.environmentId);
         await stopIntent.committed;

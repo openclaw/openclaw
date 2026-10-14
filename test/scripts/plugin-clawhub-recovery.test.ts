@@ -228,6 +228,18 @@ describe("sealed ClawHub recovery manifest", () => {
     });
   });
 
+  it("seals unavailable packages without inventing an attempt ID", () => {
+    expect(createClawHubRecoveryManifest(transactions, []).packages).toEqual([
+      expect.objectContaining({
+        name: pending.name,
+        publicationStatus: "unavailable",
+      }),
+    ]);
+    expect(createClawHubRecoveryManifest(transactions, []).packages[0]).not.toHaveProperty(
+      "attemptId",
+    );
+  });
+
   it("refuses an unavailable package before recovering any staged attempt", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     await expect(
@@ -241,7 +253,7 @@ describe("sealed ClawHub recovery manifest", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it.each(["published"])(
+  it.each(["pending", "published"])(
     "verifies a recorded %s receipt against public state",
     async (recorded) => {
       const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
@@ -266,6 +278,37 @@ describe("sealed ClawHub recovery manifest", () => {
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("explains recovery before sending its mutation", async () => {
+    const messages: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      if (init?.method === "POST") {
+        expect(messages.at(-1)).toContain(`recover sealed attempt ${pending.attemptId}`);
+        return Response.json({
+          name: pending.name,
+          version,
+          recoveredFromAttemptId: pending.attemptId,
+          attemptId: "attempt-2",
+          publicationStatus: "published",
+        });
+      }
+      return Response.json({
+        name: pending.name,
+        version,
+        state: "failed",
+        recoverable: true,
+        attemptId: pending.attemptId,
+      });
+    });
+    await executeClawHubRecoveryManifest({
+      manifest: createClawHubRecoveryManifest(transactions, [pending]),
+      reason: "Recovery",
+      token: "fixture-token",
+      fetchImpl,
+      report: (message: string) => messages.push(message),
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 
   it("hands pending finalization to the existing worker without creating a successor", async () => {
     const messages: string[] = [];
@@ -298,7 +341,6 @@ describe("sealed ClawHub recovery manifest", () => {
 
   it("recovers with current publisher authority without private original attempt access", async () => {
     const manifest = createClawHubRecoveryManifest(transactions, [pending]);
-    const messages: string[] = [];
     const requests: Array<{ url: string; method: string; body?: string }> = [];
     let publicationRequest = 0;
     const fetchImpl: typeof fetch = async (input, init) => {
@@ -324,7 +366,6 @@ describe("sealed ClawHub recovery manifest", () => {
         });
       }
       if (init?.method === "POST") {
-        expect(messages.at(-1)).toContain(`recover sealed attempt ${pending.attemptId}`);
         return Response.json({
           recoveredFromAttemptId: "attempt-1",
           attemptId: "attempt-2",
@@ -350,7 +391,6 @@ describe("sealed ClawHub recovery manifest", () => {
       registry: "https://clawhub.example",
       fetchImpl,
       wait: async () => {},
-      report: (message: string) => messages.push(message),
     });
     expect(result).toMatchObject({ complete: true, recovered: [{ attemptId: "attempt-2" }] });
     expect(requests).toEqual([
@@ -503,6 +543,18 @@ describe("sealed ClawHub recovery manifest", () => {
   });
 
   it.each([
+    {
+      name: "current publication state",
+      publication: "published",
+      exact: undefined,
+      recovers: false,
+    },
+    {
+      name: "legacy publication-route 404",
+      publication: "not-found",
+      exact: "published",
+      recovers: false,
+    },
     {
       name: "legacy version JSON on the publication route",
       publication: "version",
@@ -669,6 +721,36 @@ describe("sealed ClawHub recovery manifest", () => {
       }),
     ).rejects.toThrow(`ClawHub recovery timed out: ${pending.name}.`);
     expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed recovery through a legacy publication fallback", async () => {
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const attempt = {
+      attemptId: "attempt-2",
+      name: pending.name,
+      version,
+    };
+    const responses = [
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+      Response.json({
+        ...attempt,
+        recoveredFromAttemptId: pending.attemptId,
+        publicationStatus: "pending",
+      }),
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+      Response.json({ ...attempt, publicationStatus: "failed" }),
+    ];
+    await expect(
+      executeClawHubRecoveryManifest({
+        manifest,
+        reason: "Parent failed after sealed staging",
+        token: "fixture-token",
+        fetchImpl: vi.fn<typeof fetch>(async () => responses.shift()!),
+      }),
+    ).rejects.toThrow(`ClawHub recovery failed: ${pending.name}.`);
+    expect(responses).toEqual([]);
   });
 
   it("keeps automated recovery behind approval and preserves the manifest before cancellation", () => {

@@ -101,7 +101,7 @@ it("preserves an edited draft across reconnect and session navigation without re
   );
 });
 
-it.each([saved])(
+it.each([saved, { ...saved, edited: false, reopenedAfterBoundary: "earlier-completion" }])(
   "restores edited=$edited only for the authenticated owner and matching question content",
   async (draft) => {
     storage.read.mockImplementation(async (scope) =>
@@ -172,6 +172,19 @@ it.each(["saved draft", "deletion tombstone"])(
     }
   },
 );
+
+it("keeps a draft usable and explains unavailable persistence without claiming it was saved", async () => {
+  storage.read.mockResolvedValue({ status: "storage-failed" });
+  const current = state();
+  edit(present(current), "Keep my answer");
+  await settled(current);
+  const presentation = present(current);
+  expect(presentation.storageError).toContain("not saved");
+  expect(presentation.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe(
+    "Keep my answer",
+  );
+  expect(storage.write).not.toHaveBeenCalled();
+});
 
 it("keeps a dismissed answer out of pending questions after reload and later completion", async () => {
   let stored = { revision: 10, writeId: "saved", questionDrafts: [saved] };
@@ -261,6 +274,19 @@ it("retires disposed-pane callbacks without renewing pre-deletion draft intent",
   await session.load;
   await session.write;
   expect(storage.write).not.toHaveBeenCalled();
+});
+
+it("makes a failed dismissal save visible and keeps Undo available", async () => {
+  storage.write.mockResolvedValue({ status: "storage-failed" });
+  const current = state();
+  const presentation = present(current);
+  await presentation.dismiss(question.itemId);
+  const toast = storage.toast.mock.calls.at(-1)?.[0];
+  expect(toast.message).toContain("not saved");
+  expect(toast.actionLabel).toBe("Undo");
+  toast.onAction();
+  await settled(current);
+  expect(present(current).pending).toHaveLength(1);
 });
 
 it("reopens from Undo against the latest completion boundary, not the dismissed render", async () => {
@@ -395,7 +421,7 @@ it.each(["disabled", "gatewayOwner", "recoveryScope"] as const)(
   },
 );
 
-it.each(["Undo"])(
+it.each(["Undo", "Answer"])(
   "keeps %s visibly pending until removing dismissal survives a remount",
   async (action) => {
     const onReopen = vi.fn();
@@ -499,7 +525,20 @@ it.each(["answered", "owner replaced"])(
   },
 );
 
-it.each(["reloaded"] as const)(
+it("keeps answering available with an unsaved warning when restoring a dismissal cannot persist", async () => {
+  storage.read.mockResolvedValue(foundDraft({ ...saved, dismissed: true }));
+  const current = state();
+  present(current);
+  await settled(current);
+  storage.write.mockResolvedValue({ status: "storage-failed" });
+  await present(current).reopen(question.itemId);
+  const reopened = present(current);
+  expect(reopened.pending).toHaveLength(1);
+  expect(reopened.storageError).toContain("not saved");
+  expect(reopened.drafts.get(question.itemId)?.answers.get("0")?.freeText).toBe("Saved answer");
+});
+
+it.each(["mounted", "reloaded"] as const)(
   "preserves ambiguous free-text answers when a failed queued answer is discarded (%s)",
   async (mount) => {
     const multiQuestion = {

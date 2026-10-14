@@ -246,6 +246,76 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     );
   });
 
+  it("uses kitchen-sink npm and ClawHub scenarios as the registry install canary", () => {
+    const lane = getDockerLane("kitchen-sink-plugin");
+    const script = readFileSync("scripts/e2e/kitchen-sink-plugin-docker.sh", "utf8");
+    const sweepScript = readFileSync("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh", "utf8");
+    const assertionsScript = readFileSync(
+      "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs",
+      "utf8",
+    );
+
+    expect(lane).toEqual({
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-plugin",
+      e2eImageKind: "functional",
+      live: false,
+      name: "kitchen-sink-plugin",
+      resources: ["npm"],
+      stateScenario: "empty",
+      weight: 3,
+    });
+    expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
+    expect(script).toContain("npm-latest-conformance");
+    expect(script).toContain("npm-latest-adversarial");
+    expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
+    expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
+    expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
+    expect(script).toContain("OPENCLAW_KITCHEN_SINK_PLUGIN_MAX_MEMORY_MIB");
+    expect(script).toContain(
+      "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
+    );
+    expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC" --force');
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_PREINSTALL_SPEC" --force');
+    expect(sweepScript).toContain("assert-cutover-preinstalled");
+    expect(sweepScript).toContain('install_args+=("--force")');
+    expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
+    expect(sweepScript).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
+    expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
+    const successScenario = sweepScript.slice(
+      sweepScript.indexOf("run_success_scenario()"),
+      sweepScript.indexOf("run_failure_scenario()"),
+    );
+    const installIndex = successScenario.indexOf('plugins install "${install_args[@]}" --force');
+    const configureIndex = successScenario.indexOf("assertions.mjs configure-runtime");
+    const enableIndex = successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"');
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(configureIndex).toBeGreaterThan(installIndex);
+    expect(enableIndex).toBeGreaterThan(configureIndex);
+    expect(successScenario).toContain('plugins inspect "$KITCHEN_SINK_ID" --runtime --json');
+    expect(successScenario).toContain("plugins inspect --all --runtime --json");
+    expect(sweepScript).toContain("run_failure_scenario");
+    expect(assertionsScript).toContain("assertCutoverPreinstalled");
+    expect(assertionsScript).toContain("record.source !== source");
+    expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
+    expect(assertionsScript).toContain("record.artifactKind");
+    expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
+    expect(assertionsScript).toContain("expectedErrorMessages");
+    expect(assertionsScript).toContain(
+      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);',
+    );
+    expect(assertionsScript).toContain("!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)");
+    expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
+      'from "openclaw/plugin-sdk/plugin-entry"',
+    );
+    expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
+      "X-ClawHub-Artifact-Sha256",
+    );
+    expect(script).toContain("docker_e2e_sample_stats_until_exit");
+    expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
+    expect(sweepScript).toContain("assertions.mjs scan-logs");
+  });
+
   it("keeps the generic plugin Docker lane as an external install contract canary", () => {
     const lane = getDockerLane("plugins");
     const sweepScript = readFileSync("scripts/e2e/lib/plugins/sweep.sh", "utf8");
@@ -296,6 +366,29 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
   });
 
+  it("gates plugin Docker fanout on full release validation", () => {
+    const workflow = readPluginPrereleaseWorkflow();
+    const manifest = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build plugin prerelease manifest",
+    );
+    const dockerSuite = workflow.jobs["plugin-prerelease-docker-suite"];
+
+    expect(workflow.on.workflow_dispatch.inputs.full_release_validation.default).toBe(false);
+    expect(manifest.env.FULL_RELEASE_VALIDATION).toBe(
+      "${{ inputs.full_release_validation && 'true' || 'false' }}",
+    );
+    expect(manifest.run).toContain(
+      'const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";',
+    );
+    expect(manifest.run).toContain(
+      "const runDocker = runCandidate && fullReleaseValidation && dockerLanes.length > 0;",
+    );
+    expect(dockerSuite.if).toBe(
+      "${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}",
+    );
+    expect(dockerSuite.secrets).toBeUndefined();
+  });
+
   it("requires a complete immutable candidate for the plugin candidate phase", () => {
     const selectedSha = "a".repeat(40);
     const independent = runPluginPhaseValidation({
@@ -337,7 +430,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       });
     expect(workflow.on.schedule).toEqual([{ cron: "37 * * * *" }]);
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(workflow.jobs["plugin-prerelease-docker-suite"].secrets).toBeUndefined();
     expect(evaluate(workflow.jobs.resolve_target.if)).toBe(true);
     expect(evaluate(workflow.jobs.resolve_target.if, { repository: "contributor/openclaw" })).toBe(
       false,

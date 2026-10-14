@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -26,6 +26,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   withLocalWorkspaceProjection,
   withSettledLocalWorkspace,
@@ -150,6 +151,35 @@ afterEach(async () => {
 });
 
 describe("local sandbox workspace reconciliation", () => {
+  it("provisions, synchronizes, and retains reconciliation payloads without caller-thread store SQL", async () => {
+    const sql = observeLocalWorkspaceStoreSql();
+    try {
+      sql.calibrate();
+      const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      await fs.writeFile(path.join(projection, "source.txt"), "worker-persisted edit\n");
+      await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+      expect(await readText(owner.worktree.path, "source.txt")).toBe("worker-persisted edit\n");
+      const baseline = await withLocalWorkspaceStore(
+        { worktreeId: owner.worktree.id },
+        async (store) => {
+          const row = store.get()!;
+          const value = row.baseline_json + " ".repeat(6 * 1024 * 1024);
+          await store.update(row, {
+            baseline_json: value,
+            baseline_ref: "sha256:" + createHash("sha256").update(value).digest("hex"),
+          });
+          return value;
+        },
+      );
+      await withLocalWorkspaceProjection(owner, async (state) => {
+        expect(state.current().baseline_json).toBe(baseline);
+      });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+
   it.runIf(process.env.OPENCLAW_TEST_LOCAL_PROJECTION_PODMAN === "1")(
     "edits and runs Git in a real required Podman sandbox across turns",
     ({ signal }) =>
@@ -162,6 +192,45 @@ describe("local sandbox workspace reconciliation", () => {
       }),
     120000,
   );
+
+  it("installs additive owner state without changing the database version", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    const [
+      { tableExists },
+      { OPENCLAW_STATE_SCHEMA_SQL },
+      { FIRST_USE_STATE_TABLES },
+      { extractSqliteTableSchema },
+      { assertSqliteSchemaContains },
+    ] = await Promise.all([
+      import("../../state/openclaw-state-db-schema-helpers.js"),
+      import("../../state/openclaw-state-schema.js"),
+      import("../../state/openclaw-state-db-contract.js"),
+      import("../../infra/sqlite-schema-sql.js"),
+      import("../../infra/sqlite-schema-contract.js"),
+    ]);
+    const db = openOpenClawStateDatabase().db;
+    const version = db
+      .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+      .get();
+    expect(tableExists(db, "local_workspace_projections")).toBe(false);
+    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    expect(
+      db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+    ).toEqual(version);
+    const priorSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "local_workspace_projections"),
+      "",
+    );
+    expect(() =>
+      assertSqliteSchemaContains(requireNativeSqliteDatabase(db), "prior schema", priorSchema, {
+        allowedMissingTables: FIRST_USE_STATE_TABLES,
+      }),
+    ).not.toThrow();
+    await closeOpenClawStateDatabaseAsync();
+    expect((await readLocalWorkspaceProjection(owner.worktree.id))?.session_id).toBe(
+      owner.sessionId,
+    );
+  });
 
   it("seeds independent source-only Git and reconciles edits without host metadata or ignored secrets", async () => {
     await fs.mkdir(path.join(owner.worktree.path, "src/lib"), { recursive: true });
@@ -266,7 +335,7 @@ describe("local sandbox workspace reconciliation", () => {
     expect(paths).toContain("guest-new.txt");
   });
 
-  it.skipIf(process.platform === "win32").each(["later index"])(
+  it.skipIf(process.platform === "win32").each(["initial", "later index"])(
     "rejects non-UTF-8 path aliases before guest capture: %s",
     async (when) => {
       const ignored = "private-\uFFFD";
@@ -370,6 +439,20 @@ describe("local sandbox workspace reconciliation", () => {
       expect(existsSync(helper + ".ran")).toBe(false);
     },
   );
+
+  it("keeps eligible nested project content and accepted empty directories across turns", async () => {
+    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    await fs.mkdir(path.join(projection, ".openclaw/sandbox-skills/skills"), { recursive: true });
+    await fs.mkdir(path.join(projection, "src/empty"), { recursive: true });
+    await fs.writeFile(path.join(projection, ".openclaw/project.json"), "project content");
+    await fs.writeFile(path.join(projection, "src/nested.ts"), "nested content");
+    await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    expect(await readText(projection, ".openclaw/project.json")).toBe("project content");
+    expect(await readText(projection, "src/nested.ts")).toBe("nested content");
+    expect((await fs.stat(path.join(projection, "src/empty"))).isDirectory()).toBe(true);
+    await expectMissing(owner.worktree.path, ".openclaw/sandbox-skills");
+  });
 
   it("retains both sides and a durable pending result when edits conflict", async () => {
     const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
@@ -658,15 +741,17 @@ describe("local sandbox workspace reconciliation", () => {
     }
   });
 
-  it.each(["failed restore retry", "retention"] as const)(
+  it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
     "preserves accepted ignored files, symlinks and empty directories through archive: %s",
     async (mode) => {
       const [
-        { insertRegistryWorktree, getRegistryWorktreeProvisionedState },
+        { insertRegistryWorktree, getRegistryWorktreeProvisionedState, updateRegistryWorktree },
         { ManagedWorktreeService, SNAPSHOT_RETENTION_MS },
+        { restoreProvisionedFiles },
       ] = await Promise.all([
         import("../../agents/worktrees/registry.js"),
         import("../../agents/worktrees/service.js"),
+        import("../../agents/worktrees/provisioned-files.js"),
       ]);
       let now = Date.now();
       const service = new ManagedWorktreeService({ now: () => now });
@@ -747,32 +832,74 @@ describe("local sandbox workspace reconciliation", () => {
         await expect(fs.stat(projection)).rejects.toMatchObject({ code: "ENOENT" });
         return;
       }
-      let injected = false;
-      const acknowledgement = observeAcknowledgedUpdate((row) => {
-        if (
-          row.pending_ref &&
-          row.pending_target === null &&
-          existsSync(path.join(owner.worktree.path, "guest-ignored/data"))
-        ) {
-          injected = true;
-        }
-      });
-      await expect(
-        service.restore({
-          id: owner.worktree.id,
-          commitGuard: () => {
-            if (injected) {
-              throw new Error("restore interrupted after overlay acceptance");
-            }
-          },
-        }),
-      ).rejects.toThrow("restore interrupted after overlay acceptance");
-      acknowledgement.mockRestore();
-      expect(injected).toBe(true);
-      expect(existsSync(owner.worktree.path)).toBe(false);
-      expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBe(receipt);
-      expect(getRegistryWorktree(process.env, owner.worktree.id)?.removedAt).toBeDefined();
-      await service.restore({ id: owner.worktree.id });
+      if (mode === "legacy decoder") {
+        // Execute the pre-feature restore sequence and unchanged old decoder, not
+        // just its schema preflight. The ledger contains only original regular files.
+        const snapshot = await git(owner.worktree.repoRoot, "rev-parse", removed.snapshotRef!);
+        const parent = await git(owner.worktree.repoRoot, "rev-parse", snapshot + "^");
+        await git(
+          owner.worktree.repoRoot,
+          "worktree",
+          "add",
+          "--no-checkout",
+          "-b",
+          owner.worktree.branch,
+          owner.worktree.path,
+          parent,
+        );
+        await git(
+          owner.worktree.path,
+          "read-tree",
+          "--reset",
+          "--no-recurse-submodules",
+          "-u",
+          snapshot,
+        );
+        await git(owner.worktree.path, "reset", "--quiet", parent);
+        await restoreProvisionedFiles(
+          process.env,
+          owner.worktree.id,
+          owner.worktree.path,
+          legacyState,
+        );
+        expect(await readText(owner.worktree.path, ".env.allowed")).toBe(
+          "original provisioned bytes",
+        );
+        expect(existsSync(path.join(owner.worktree.path, "guest-ignored/data"))).toBe(false);
+        await updateRegistryWorktree(process.env, owner.worktree.id, {
+          removedAt: undefined,
+          lastActiveAt: now + 1,
+          provisionedPaths: legacyState.map((entry) => entry.path),
+        });
+        await closeOpenClawStateDatabaseAsync();
+      } else {
+        let injected = false;
+        const acknowledgement = observeAcknowledgedUpdate((row) => {
+          if (
+            row.pending_ref &&
+            row.pending_target === null &&
+            existsSync(path.join(owner.worktree.path, "guest-ignored/data"))
+          ) {
+            injected = true;
+          }
+        });
+        await expect(
+          service.restore({
+            id: owner.worktree.id,
+            commitGuard: () => {
+              if (injected) {
+                throw new Error("restore interrupted after overlay acceptance");
+              }
+            },
+          }),
+        ).rejects.toThrow("restore interrupted after overlay acceptance");
+        acknowledgement.mockRestore();
+        expect(injected).toBe(true);
+        expect(existsSync(owner.worktree.path)).toBe(false);
+        expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBe(receipt);
+        expect(getRegistryWorktree(process.env, owner.worktree.id)?.removedAt).toBeDefined();
+        await service.restore({ id: owner.worktree.id });
+      }
       await withLocalWorkspaceProjection(owner, (state) => state.prepare());
       for (const workspace of [owner.worktree.path, projection]) {
         expect(await fs.readFile(path.join(workspace, "guest-ignored/data"))).toEqual(bytes);

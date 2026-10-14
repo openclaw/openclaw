@@ -41,6 +41,20 @@ describe("resolveEnvironmentRecipe", () => {
     });
   });
 
+  it("accepts the root devcontainer and lets remoteEnv override containerEnv", async () => {
+    expect(
+      await resolve({
+        ".devcontainer.json": entry(
+          '{"containerEnv":{"MODE":"build","SHARED":"container"},"remoteEnv":{"SHARED":"remote"}}',
+        ),
+      }),
+    ).toMatchObject({
+      source: "devcontainer",
+      inputs: { ".devcontainer.json": "a".repeat(40) },
+      env: { MODE: "build", SHARED: "remote" },
+    });
+  });
+
   it("allows remoteEnv null to unset inherited or container values", async () => {
     const recipe = await resolve({
       ".devcontainer.json": entry(
@@ -105,14 +119,37 @@ describe("resolveEnvironmentRecipe", () => {
     expect(recipe.onCreate).toBeUndefined();
   });
 
-  it.each(['{"onCreateCommand":"\\u0000"}', '{"onCreateCommand":[]}'])(
-    "rejects an invalid declared lifecycle recipe %s instead of falling back",
-    async (content) => {
-      await expect(
-        resolve({ ".devcontainer.json": entry(content), "package-lock.json": entry() }),
-      ).rejects.toThrow("Invalid cloud environment file .devcontainer.json");
-    },
-  );
+  it("preserves empty exec arguments and whitespace in shell commands", async () => {
+    const recipe = await resolve({
+      ".devcontainer.json": entry(
+        '{"onCreateCommand":["printf","%s", ""],"postStartCommand":"  echo ready  "}',
+      ),
+    });
+    expect(recipe.onCreate).toEqual(["printf", "%s", ""]);
+    expect(recipe.postStart).toBe("  echo ready  ");
+  });
+
+  it.each([
+    '{"onCreateCommand":42}',
+    '{"secrets":{"BAD-NAME":{}}}',
+    '{"secrets":{"TOKEN":"plaintext"}}',
+    '{"secrets":["TOKEN"]}',
+    '{"postStartCommand":{"bad":[1]}}',
+    '{"remoteEnv":{"NUMBER":1}}',
+    '{"remoteEnv":{"BAD-NAME":"value"}}',
+    '{"remoteEnv":{"VALUE":"\\u0000"}}',
+    '{"onCreateCommand":"\\u0000"}',
+    '{"onCreateCommand":[]}',
+    "[]",
+  ])("rejects an invalid declared lifecycle recipe %s instead of falling back", async (content) => {
+    await expect(
+      resolve({ ".devcontainer.json": entry(content), "package-lock.json": entry() }),
+    ).rejects.toThrow("Invalid cloud environment file .devcontainer.json");
+  });
+
+  it("rejects malformed JSONC instead of falling back", async () => {
+    await expect(resolve({ ".devcontainer.json": entry("{broken") })).rejects.toThrow();
+  });
 
   it("keeps the executable setup script's existing blob identity", async () => {
     expect(
@@ -149,6 +186,7 @@ describe("resolveEnvironmentRecipe", () => {
     [{ ".yarnrc.yml": entry("nodeLinker: node-modules") }, "--immutable"],
     [{ "package.json": entry('{"packageManager":"yarn@1.22.22"}') }, "--frozen-lockfile"],
     [{ "package.json": entry("malformed") }, "--frozen-lockfile"],
+    [{}, "--frozen-lockfile"],
   ])(
     "enables user-writable Corepack shims for the detected yarn generation %#",
     async (files, flag) => {
@@ -170,9 +208,27 @@ describe("resolveEnvironmentRecipe", () => {
     ]);
   });
 
-  it.each(["bun.lock"])("gates %s installation on bun being available", async (file) => {
-    expect((await resolve({ [file]: entry() })).detectedInstall).toBe(
-      'if command -v bun >/dev/null 2>&1; then bun install --frozen-lockfile; else printf "%s\\n" "OpenClaw: bun install skipped because bun is not on PATH" >&2; fi',
-    );
+  it.each(["bun.lock", "bun.lockb"])(
+    "gates %s installation on bun being available",
+    async (file) => {
+      expect((await resolve({ [file]: entry() })).detectedInstall).toBe(
+        'if command -v bun >/dev/null 2>&1; then bun install --frozen-lockfile; else printf "%s\\n" "OpenClaw: bun install skipped because bun is not on PATH" >&2; fi',
+      );
+    },
+  );
+
+  it("changes detected identity with lockfile, package-manager, or yarn config blobs", async () => {
+    const files = {
+      "yarn.lock": entry(),
+      "package.json": entry('{"packageManager":"yarn@4.6.0"}'),
+      ".yarnrc.yml": entry("nodeLinker: node-modules"),
+    };
+    const original = await resolve(files);
+    expect(original.identity).toMatch(/^[a-f0-9]{64}$/u);
+    for (const file of Object.keys(files)) {
+      const changed = await resolve({ ...files, [file]: entry("{}", "b".repeat(40)) });
+      expect(changed.identity).not.toBe(original.identity);
+    }
+    expect(await resolve(files)).toEqual(original);
   });
 });

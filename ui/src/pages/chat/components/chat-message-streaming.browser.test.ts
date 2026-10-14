@@ -67,6 +67,50 @@ function draw(
 
 describe("streaming Markdown DOM", () => {
   it.each([
+    { label: "paragraph", initial: "A growing reply", suffix: " with more text", selector: "p" },
+    {
+      label: "list",
+      initial: "- First item\n- Growing item",
+      suffix: " with more text",
+      selector: "ul",
+    },
+    {
+      label: "long list",
+      initial: Array.from({ length: 200 }, (_, index) => `- Item ${index}`).join("\n"),
+      suffix: " with more text",
+      selector: "ul",
+    },
+    {
+      label: "code fence",
+      initial: "```text\nA growing block",
+      suffix: " with more text",
+      selector: "pre",
+    },
+  ])(
+    "updates $label text without removing the rendered subtree",
+    ({ initial, suffix, selector }) => {
+      draw(initial);
+      const existing = container.querySelector(selector);
+      expect(existing).not.toBeNull();
+      const records: MutationRecord[] = [];
+      const observer = new MutationObserver((mutations) => records.push(...mutations));
+      observer.observe(container, { childList: true, subtree: true, characterData: true });
+      try {
+        for (let index = 1; index <= 12; index++) {
+          draw(initial + suffix.repeat(index));
+        }
+        records.push(...observer.takeRecords());
+        expect(container.querySelector(selector)).toBe(existing);
+        expect(records.flatMap((record) => [...record.removedNodes])).toHaveLength(0);
+        expect(records.some((record) => record.type === "characterData")).toBe(true);
+        expect(existing?.textContent).toContain(suffix.repeat(12));
+      } finally {
+        observer.disconnect();
+      }
+    },
+  );
+
+  it.each([
     {
       label: "list item append",
       initial: "- <details><summary>Evidence</summary>Retained details</details>\n- Second item",
@@ -98,6 +142,36 @@ describe("streaming Markdown DOM", () => {
       expect(details.open).toBe(true);
     },
   );
+
+  it("keeps code wrap controls and updates copy content while a fence grows", async () => {
+    const code = Array.from({ length: 6 }, (_, index) => `const value${index} = ${index};`).join(
+      "\n",
+    );
+    const initial = `\`\`\`ts\n${code}`;
+    draw(initial);
+    await Promise.resolve();
+    const wrapper = container.querySelector<HTMLElement>(".code-block-wrapper")!;
+    const button = wrapper.querySelector<HTMLButtonElement>(".code-block-wrap")!;
+    button.click();
+    const extra = "\nconst seventh = 7;\nconst eighth = 8;";
+    draw(initial + extra);
+    await Promise.resolve();
+    expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
+    expect(wrapper.classList.contains("is-wrapped")).toBe(true);
+    expect(wrapper.classList.contains("is-collapsible")).toBe(true);
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    const expand = wrapper.querySelector<HTMLButtonElement>(".code-block-expand")!;
+    const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport")!;
+    expect(viewport.id).not.toBe("");
+    expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
+    expand.click();
+    draw(initial + extra + "\nconst ninth = 9;");
+    expect(wrapper.classList.contains("is-expanded")).toBe(true);
+    expect(expand.getAttribute("aria-expanded")).toBe("true");
+    expect(readMarkdownCodeBlockCopyText(wrapper.querySelector(".code-block-copy")!)).toBe(
+      code + extra + "\nconst ninth = 9;",
+    );
+  });
 
   it("retains table controls and updates overflow as streamed cells resize", async () => {
     container.className = "chat-text";
@@ -289,28 +363,31 @@ describe("streaming Markdown DOM", () => {
     expect(container.textContent).toContain(source);
   });
 
-  it.each(["wrapped"])("updates %s highlighter text without replacing its list", (mode) => {
-    const initial = "- First item\n- Growing text";
-    draw(initial);
-    const list = container.querySelector("ul");
-    const [first, growing] = container.querySelectorAll("li");
-    const highlight = document.createElement("mark");
-    const firstText = [...first!.childNodes].find((node) => node instanceof Text)!;
-    firstText.replaceWith(highlight);
-    highlight.append(firstText);
-    const text = [...growing!.childNodes].find((node): node is Text => node instanceof Text)!;
-    if (mode === "wrapped") {
-      const wrapper = document.createElement("mark");
-      text.replaceWith(wrapper);
-      wrapper.append(text);
-    } else {
-      text.splitText(4);
-    }
-    draw(initial + " continues");
-    expect(container.querySelector("ul")).toBe(list);
-    expect(container.querySelector("li mark")).toBe(highlight);
-    expect(growing?.textContent).toBe("Growing text continues");
-  });
+  it.each(["wrapped", "split"])(
+    "updates %s highlighter text without replacing its list",
+    (mode) => {
+      const initial = "- First item\n- Growing text";
+      draw(initial);
+      const list = container.querySelector("ul");
+      const [first, growing] = container.querySelectorAll("li");
+      const highlight = document.createElement("mark");
+      const firstText = [...first!.childNodes].find((node) => node instanceof Text)!;
+      firstText.replaceWith(highlight);
+      highlight.append(firstText);
+      const text = [...growing!.childNodes].find((node): node is Text => node instanceof Text)!;
+      if (mode === "wrapped") {
+        const wrapper = document.createElement("mark");
+        text.replaceWith(wrapper);
+        wrapper.append(text);
+      } else {
+        text.splitText(4);
+      }
+      draw(initial + " continues");
+      expect(container.querySelector("ul")).toBe(list);
+      expect(container.querySelector("li mark")).toBe(highlight);
+      expect(growing?.textContent).toBe("Growing text continues");
+    },
+  );
 
   it("clears the canonical memo when a positional node becomes a media slot", () => {
     const prepared = prepareMarkdownMedia(
@@ -473,7 +550,7 @@ describe("streaming Markdown DOM", () => {
 });
 
 describe("streaming Markdown promotion", () => {
-  it.each(["\n\nNext paragraph"])(
+  it.each(["\n\nNext paragraph", "\n\nNext paragraph\n\nLast paragraph"])(
     "preserves highlighted text when one tail retires into stable blocks: %j",
     (suffix) => {
       const initial = "Retained paragraph.";
@@ -558,25 +635,28 @@ describe("streaming Markdown promotion", () => {
     expect(wrapper.classList.contains("is-json-raw")).toBe(true);
   });
 
-  it.each([1])("keeps promoted nodes across chunks of %i characters and an empty tail", (size) => {
-    const initial = "First paragraph.";
-    const suffix = "\n\nSecond paragraph.\n\n```ts\nconst value = 1;\n```\n\nLast paragraph.\n\n";
-    draw(initial);
-    const paragraph = container.querySelector("p");
-    for (let end = size; end < suffix.length + size; end += size) {
-      draw(initial + suffix.slice(0, end));
+  it.each([1, 200])(
+    "keeps promoted nodes across chunks of %i characters and an empty tail",
+    (size) => {
+      const initial = "First paragraph.";
+      const suffix = "\n\nSecond paragraph.\n\n```ts\nconst value = 1;\n```\n\nLast paragraph.\n\n";
+      draw(initial);
+      const paragraph = container.querySelector("p");
+      for (let end = size; end < suffix.length + size; end += size) {
+        draw(initial + suffix.slice(0, end));
+        expect(container.querySelector("p")).toBe(paragraph);
+      }
+      draw(initial + suffix, { streaming: false });
       expect(container.querySelector("p")).toBe(paragraph);
-    }
-    draw(initial + suffix, { streaming: false });
-    expect(container.querySelector("p")).toBe(paragraph);
-    expect([...container.querySelectorAll("p")].map((node) => node.textContent)).toEqual([
-      initial,
-      "Second paragraph.",
-      "Last paragraph.",
-    ]);
-    expect(container.querySelectorAll("pre")).toHaveLength(1);
-    expect(container.querySelector("pre code")?.textContent).toBe("const value = 1;\n");
-  });
+      expect([...container.querySelectorAll("p")].map((node) => node.textContent)).toEqual([
+        initial,
+        "Second paragraph.",
+        "Last paragraph.",
+      ]);
+      expect(container.querySelectorAll("pre")).toHaveLength(1);
+      expect(container.querySelector("pre code")?.textContent).toBe("const value = 1;\n");
+    },
+  );
 
   it.each(["message", "correction", "options", "citation", "reference"])(
     "resets canonical content on %s changes",

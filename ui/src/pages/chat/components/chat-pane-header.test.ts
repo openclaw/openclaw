@@ -1,7 +1,7 @@
 import { html, render } from "lit";
 import { flush } from "solid-js";
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
@@ -108,6 +108,12 @@ describe("chat pane header", () => {
     expect(drawerEvents).toHaveLength(1);
     expect(drawerEvents[0]?.detail.trigger).toBe(drawer);
     window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, onDrawer);
+  });
+
+  it("omits shell chrome actions when the header is not merged", () => {
+    const { container } = mountHeader();
+    expect(container.querySelector(".chat-pane__nav-toggle")).toBeNull();
+    expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
   });
 
   it("keeps only Share, Layout, and overflow at rest and moves layout actions into the menu", async () => {
@@ -248,6 +254,66 @@ describe("chat pane header", () => {
     );
   });
 
+  it("places placement and presence after the identity trail", () => {
+    const { container } = mountHeader({
+      placementControl: html`<span data-slot="placement"></span>`,
+      presence: html`<span data-slot="presence"></span>`,
+    });
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    expect(
+      [...container.querySelectorAll("[data-slot]")].map((slot) => slot.getAttribute("data-slot")),
+    ).toEqual(["placement", "presence"]);
+    expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
+  });
+
+  it("keeps the public indicator visible in narrow headers", () => {
+    const narrow = true;
+    const { container } = mountHeader({
+      narrow,
+      publicAccessIndicator: html`<span class="chat-pane__public-share-indicator">Public</span>`,
+    });
+
+    expect(container.querySelector(".chat-pane__public-share-indicator")?.textContent).toBe(
+      "Public",
+    );
+  });
+
+  it("replaces the header owner avatar when visibility is available", () => {
+    const actor = {
+      type: "human" as const,
+      id: "profile-ada",
+      identity: { type: "profile" as const, id: "profile-ada" },
+      label: "Ada",
+    };
+    const { container } = mountHeader({
+      session: row({ owner: { actor } }),
+      showOwnerChip: true,
+      sharingControl: html`<span data-slot="sharing"></span>`,
+    });
+
+    expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
+    expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
+      "chat-pane__actions",
+    );
+  });
+
+  it("drops the separator when the session has no project segment", () => {
+    const { container } = mountHeader({ workspaceLabel: null, workspaceRoot: null });
+    expect(container.querySelector(".chat-pane__crumb-sep")).toBeNull();
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    expect(crumbs?.firstElementChild?.className).toBe("chat-pane__session-trail");
+    expect(crumbs?.querySelector(".chat-pane__session-title")).not.toBeNull();
+  });
+
+  it("keeps the rename input inside the trail so the project stays visible", () => {
+    const { container } = mountHeader({ editing: true, renameValue: "Renaming" });
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    expect(crumbs?.querySelector(".chat-pane__workspace-chip")).not.toBeNull();
+    expect(crumbs?.querySelector<HTMLInputElement>(".chat-pane__session-title-input")?.value).toBe(
+      "Renaming",
+    );
+  });
+
   it("renders the bounded static participant facepile beside the owner", async () => {
     const mounted = mountHeader({
       showOwnerChip: true,
@@ -291,6 +357,36 @@ describe("chat pane header", () => {
       expectedChip: true,
       expectedViewers: ["profile-zoe"],
     },
+    {
+      name: "keeps the owner when the owner chip is hidden",
+      owners: [{ type: "human" as const, id: "profile-ada", label: "Ada" }],
+      viewers: ["profile-ada", "profile-zoe"],
+      qualified: true,
+      expectedChip: false,
+      expectedViewers: ["profile-ada", "profile-zoe"],
+    },
+    {
+      name: "omits the facepile when the shown owner is the only viewer",
+      owners: [
+        { type: "human" as const, id: "profile-ada", label: "Ada" },
+        { type: "human" as const, id: "profile-zoe", label: "Zoe" },
+      ],
+      viewers: ["profile-ada"],
+      qualified: true,
+      expectedChip: true,
+      expectedViewers: [],
+    },
+    {
+      name: "keeps a raw viewer whose ID matches the displayed profile owner",
+      owners: [
+        { type: "human" as const, id: "profile-ada", label: "Ada" },
+        { type: "human" as const, id: "profile-zoe", label: "Zoe" },
+      ],
+      viewers: ["profile-ada"],
+      qualified: false,
+      expectedChip: true,
+      expectedViewers: ["profile-ada"],
+    },
   ])("$name", async ({ owners, viewers, qualified, expectedChip, expectedViewers }) => {
     const sessionKey = "agent:main:current";
     const { container } = mountIntegratedPresenceHeader({
@@ -321,6 +417,47 @@ describe("chat pane header", () => {
       ),
     ).toEqual(expectedViewers);
     expect(facepile !== null).toBe(expectedViewers.length > 0);
+  });
+
+  it("keeps header viewers settled until presence changes", async () => {
+    const presence: PresenceEntry[] = [
+      {
+        instanceId: "guest-instance",
+        ts: 1,
+        user: { id: "guest", identity: { type: "profile", id: "guest" }, name: "Guest" },
+        watchedSessions: ["agent:main:current"],
+      },
+    ];
+    const mounted = mountIntegratedPresenceHeader({ owners: [], presence });
+    const facepile = mounted.container.querySelector("openclaw-viewer-facepile")!;
+    await facepile.updateComplete;
+    const updates: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => updates.push(...records));
+    observer.observe(facepile, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    onTestFinished(() => observer.disconnect());
+    mounted.renderHeader();
+    await facepile.updateComplete;
+    expect(updates).toHaveLength(0);
+    mounted.pane.presencePayload = {
+      presence: [
+        ...presence,
+        {
+          instanceId: "second-instance",
+          ts: 1,
+          user: { id: "second", identity: { type: "profile", id: "second" }, name: "Second" },
+          watchedSessions: ["agent:main:current"],
+        },
+      ],
+    };
+    mounted.renderHeader();
+    await facepile.updateComplete;
+    expect(updates.length).toBeGreaterThan(0);
+    expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
   });
 
   it("updates the header owner vitality from live session presence", async () => {
@@ -400,6 +537,7 @@ describe("chat pane header", () => {
   });
 
   it.each([
+    ["Enter", false, 0, "commit"],
     ["Escape", false, 0, "cancel"],
     ["Enter", true, 0, null],
     ["Enter", false, 229, null],
@@ -419,7 +557,7 @@ describe("chat pane header", () => {
       input?.dispatchEvent(event);
 
       expect(event.defaultPrevented).toBe(action !== null);
-      expect(props.onCommitRename).not.toHaveBeenCalled();
+      expect(props.onCommitRename).toHaveBeenCalledTimes(action === "commit" ? 1 : 0);
       expect(props.onCancelRename).toHaveBeenCalledTimes(action === "cancel" ? 1 : 0);
     },
   );
@@ -453,6 +591,22 @@ describe("chat pane header", () => {
       }
     },
   );
+
+  it("keeps catalog sessions static and without a workspace chip", () => {
+    const { container } = mountHeader({
+      catalog: true,
+      session: undefined,
+      panelMenuActions: [{ id: "terminal", label: "Terminal", icon: html``, onActivate: vi.fn() }],
+    });
+    expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
+    expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
+      "Session title",
+    );
+    expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
+    container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(new Event("wa-show"));
+    flush();
+    expect(container.querySelector('.chat-pane__layout-menu [value="terminal"]')).not.toBeNull();
+  });
 
   it("keeps read-only gateway session titles static", () => {
     const { container } = mountHeader({
@@ -533,6 +687,17 @@ describe("chat pane header", () => {
     expect(tooltip.hasAttribute("open")).toBe(false);
     expect(mountHeader().container.querySelector(".chat-pane__incognito")).toBeNull();
   });
+
+  it("keeps Incognito identity and limits visible when only the canonical key marks it private", () => {
+    const { container } = mountHeader({
+      session: row({ key: "agent:main:dashboard:incognito-private" }),
+    });
+    const notice = container.querySelector(".chat-pane__incognito-notice");
+    expect(container.querySelector(".chat-pane__incognito")?.textContent).toContain("Incognito");
+    expect(notice?.textContent).toContain("History expires 24 hours after creation");
+    expect(notice?.textContent).toContain("Tools, plugins, and uploads may save data.");
+    expect(mountHeader().container.querySelector(".chat-pane__incognito-notice")).toBeNull();
+  });
 });
 
 describe("chat pane parent resolution", () => {
@@ -546,6 +711,17 @@ describe("chat pane parent resolution", () => {
 });
 
 describe("chat pane workspace resolution", () => {
+  it("uses worktree repo vocabulary with spawned cwd", () => {
+    expect(
+      resolveSessionWorkspace({
+        session: row({
+          spawnedCwd: "/tmp/worktrees/title-bar",
+          worktree: { id: "wt-1", branch: "title-bar", repoRoot: "/src/openclaw" },
+        }),
+      }),
+    ).toEqual({ root: "/tmp/worktrees/title-bar", label: "openclaw" });
+  });
+
   it("does not substitute the agent workspace for a missing worktree checkout", () => {
     expect(
       resolveSessionWorkspace({
@@ -646,6 +822,12 @@ describe("chat pane workspace chip icon", () => {
     await element?.updateComplete;
     return { container, element };
   }
+
+  it("keeps the folder glyph when the gateway resolved no project icon", async () => {
+    const { container, element } = await mountChip(null);
+    expect(element).toBeNull();
+    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+  });
 
   it("keeps the folder glyph while credentials are not ready", async () => {
     const fetchSpy = mockWorkspaceIconFetch();

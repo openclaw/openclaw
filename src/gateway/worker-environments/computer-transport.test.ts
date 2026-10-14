@@ -132,7 +132,7 @@ describe("session computer transport", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it.each(["snapshot"] as const)(
+  it.each(["snapshot", "type"] as const)(
     "preserves native permission details for attached %s commands",
     async (action) => {
       const h = createHarness(true);
@@ -265,6 +265,51 @@ describe("session computer transport", () => {
     await expect(transport.invoke(request("type"))).resolves.toEqual({ ok: true });
     await service.close();
     await desktopRegistry.stopAll();
+  });
+
+  it("preserves bounded native close causes in the worker RPC error", async () => {
+    const h = createHarness();
+    const service = createWorkerComputerService(h.options);
+    const prepared = await service.prepare(h.claim);
+    if (!prepared) {
+      throw new Error("Expected a prepared session desktop");
+    }
+    prepared.bind(h.run, h.workerSource);
+    const rpc = createWorkerComputerRpc({
+      execute: service.execute,
+      validate: () => ({ ok: true }),
+    });
+    const connection = new AbortController();
+    const invoke = (action: "snapshot" | "close") => {
+      const input = request(action);
+      return rpc(
+        connectionIdentity(h),
+        { command: input.command, paramsJson: JSON.stringify(input.commandParams) },
+        connection.signal,
+      );
+    };
+    await expect(invoke("snapshot")).resolves.toMatchObject({ ok: true });
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    h.state.afterDispatch = async () => {
+      throw new AggregateError(
+        [new Error(`native close failed Authorization: Bearer ${secret} ${"x".repeat(400)}`)],
+        "desktop cleanup failed",
+      );
+    };
+    try {
+      const result = await invoke("close");
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "gateway-unavailable",
+        message: expect.stringContaining("desktop cleanup failed | native close failed"),
+      });
+      expect(JSON.stringify(result)).toContain(secret);
+      if ("message" in result) {
+        expect(result.message?.length).toBeLessThanOrEqual(256);
+      }
+    } finally {
+      await expect(service.close()).rejects.toThrow("Session computer cleanup failed");
+    }
   });
 
   it("reports an offline runner before preparing a disconnected desktop", async () => {
@@ -660,14 +705,21 @@ describe("session computer transport", () => {
     await prepared.close("cancellation");
   });
 
-  it.each([{ sharedHost: true, revoke: "commands" }] as const)(
+  it.each([
+    { sharedHost: false, revoke: "policy" },
+    { sharedHost: true, revoke: "commands" },
+  ] as const)(
     "releases its native execution after $revoke revocation (shared host: $sharedHost)",
-    async ({ sharedHost }) => {
+    async ({ sharedHost, revoke }) => {
       const h = createHarness(sharedHost);
       const { transport, prepared } = await h.prepare();
       await transport.invoke(request("snapshot"));
       const physicalId = h.nativeExecutionIds[0];
-      h.state.config = { gateway: { nodes: { commands: { deny: ["computer.act"] } } } };
+      if (revoke === "policy") {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      } else {
+        h.state.config = { gateway: { nodes: { commands: { deny: ["computer.act"] } } } };
+      }
       await expect(transport.invoke(request("type"))).rejects.toThrow();
       h.privateInvoke.mockClear();
       h.publicInvoke.mockClear();

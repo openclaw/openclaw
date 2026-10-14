@@ -630,6 +630,41 @@ describe("heartbeat broadcast outcomes", () => {
     ).toEqual(["main", "ops"].map((agentId) => ({ agentId, tasks: request.tasks })));
   });
 
+  it.each([{ intent: "scheduled", reason: "not-due", runs: 1, retryAtMs: 30 * 60_000 }] as const)(
+    "preserves the earliest $reason deadline across agents",
+    async (testCase) => {
+      const { run } = startRunner();
+      for (let i = 0; i < testCase.runs; i++) {
+        await run({ source: "manual", intent: "manual", agentId: "ops" });
+      }
+      vi.setSystemTime(5_000);
+      for (let i = 0; i < testCase.runs; i++) {
+        await run({ source: "manual", intent: "manual", agentId: "main" });
+      }
+      vi.setSystemTime(10_000);
+
+      expect(
+        await run({ source: "interval", intent: testCase.intent, reason: "interval" }),
+      ).toEqual({
+        status: "skipped",
+        reason: testCase.reason,
+        retryAtMs: testCase.retryAtMs,
+      });
+    },
+  );
+
+  it("prefers a guard deferral over a sibling failure", async () => {
+    const { run, runOnce } = startRunner();
+    await run({ source: "manual", intent: "manual", agentId: "ops" });
+    vi.setSystemTime(1);
+    runOnce.mockResolvedValue({ status: "failed", reason: "agent-tool-failure" });
+    expect(await run({ source: "cron", intent: "task" })).toEqual({
+      status: "skipped",
+      reason: "min-spacing",
+      retryAtMs: 30_000,
+    });
+  });
+
   it("preserves the first terminal skip when no agent can retry", async () => {
     const { run, runOnce } = startRunner();
     const result = { status: "skipped", reason: "quiet-hours" } as const;

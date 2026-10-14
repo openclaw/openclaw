@@ -124,6 +124,24 @@ describe("typed Git read ownership", () => {
     await expect(runGitReadOperation(operation)).resolves.toEqual([]);
   });
 
+  it("shares concurrent checkout work without sharing session envelopes or settled file state", async () => {
+    const held = createDeferredCore<GitReadOperations["checkout.diff"]["output"]>();
+    onTestFinished(() => held.resolve(emptyDiff));
+    gitRead.mockReturnValueOnce(held.promise);
+    const first = loadCheckoutDiff({ cwd: "/diff-sharing", sessionKey: "session-a" });
+    const second = loadCheckoutDiff({ cwd: "/diff-sharing", sessionKey: "session-b" });
+    await Promise.resolve();
+    expect(gitRead).toHaveBeenCalledOnce();
+    held.resolve(emptyDiff);
+    await expect(first).resolves.toEqual({ ...emptyDiff, sessionKey: "session-a" });
+    await expect(second).resolves.toEqual({ ...emptyDiff, sessionKey: "session-b" });
+    gitRead.mockResolvedValueOnce({ ...emptyDiff, additions: 3 });
+    await expect(
+      loadCheckoutDiff({ cwd: "/diff-sharing", sessionKey: "session-a" }),
+    ).resolves.toMatchObject({ additions: 3 });
+    expect(gitRead).toHaveBeenCalledTimes(2);
+  });
+
   it("gives each coalesced response independent files and commit metadata", async () => {
     const held = createDeferredCore<GitReadOperations["checkout.diff"]["output"]>();
     onTestFinished(() => held.resolve(emptyDiff));

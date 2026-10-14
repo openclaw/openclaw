@@ -69,6 +69,40 @@ function mount(props: ChatSessionSharingProps, open = true) {
 }
 
 describe("chat session sharing menu", () => {
+  it("defers people until opening and uses the latest sharing state", () => {
+    const sharing = (count: number) =>
+      renderSharing({
+        state: {
+          loading: false,
+          result: {
+            sessionKey: "agent:main:main",
+            members: [],
+            identities: Array.from({ length: count }, (_, index) => ({
+              type: "human" as const,
+              id: `person-${index}`,
+              label: `Person ${index}`,
+            })),
+            role: "owner",
+            allowedVisibilities: ["shared", "read-only"],
+          },
+        },
+      });
+    const root = mount(sharing(100), false);
+    expect(root.querySelector("button[slot='trigger']")).not.toBeNull();
+    expect(root.querySelector("wa-dropdown-item")).toBeNull();
+    render(sharing(101), root);
+    expect(root.querySelector("wa-dropdown-item")).toBeNull();
+    const dropdown = root.querySelector("wa-dropdown")!;
+    dropdown.dispatchEvent(new CustomEvent("wa-show"));
+    flush();
+    expect(root.querySelectorAll(".chat-pane__sharing-member")).toHaveLength(101);
+    const member = root.querySelector('[value="member:person-100"]');
+    dropdown.dispatchEvent(new CustomEvent("wa-after-hide"));
+    dropdown.dispatchEvent(new CustomEvent("wa-show"));
+    flush();
+    expect(root.querySelector('[value="member:person-100"]')).toBe(member);
+  });
+
   it.each(["draft"] as const)(
     "keeps a world-readable %s session visibly public after its menu closes",
     (visibility) => {

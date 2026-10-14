@@ -40,6 +40,7 @@ vi.mock("../../infra/device-bootstrap.js", () => ({
 }));
 
 const PUBLIC_ORIGIN = "https://gateway.example.test";
+const PLUGIN_PUBLIC_URL = "wss://pairing.example.test";
 const LOCAL_TLS_FINGERPRINT = "c".repeat(64);
 const REMOTE_TLS_FINGERPRINT = "d".repeat(64);
 
@@ -504,6 +505,27 @@ describe("worker node enrollment", () => {
 
   it.each(
     [
+      {
+        name: "prefers shared publicOrigin over Tailscale for cloud enrollment",
+        modes: ["connect"],
+        config: {
+          ...createConfig(),
+          gateway: {
+            ...createConfig().gateway,
+            tls: { enabled: true },
+            tailscale: { mode: "serve" },
+          },
+        } satisfies OpenClawConfig,
+        expectedUrl: "wss://gateway.example.test",
+        expectedFingerprint: undefined,
+      },
+      {
+        name: "preserves the cloud pairing publicUrl path ahead of gateway.publicOrigin",
+        modes: ["connect"],
+        config: createConfig(`${PLUGIN_PUBLIC_URL}/extra`),
+        expectedUrl: `${PLUGIN_PUBLIC_URL}/extra`,
+        expectedFingerprint: undefined,
+      },
       {
         name: "pins direct Gateway TLS",
         modes: ["connect", "resume"],

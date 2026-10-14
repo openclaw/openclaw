@@ -252,6 +252,18 @@ describe("private inference HTTP relay", () => {
     expect(transport.fetch).toHaveBeenCalledTimes(1);
     expect(writes).toBe(0);
   });
+
+  it("passes native unauthorized responses through for native auth recovery", async () => {
+    const { proxy, body } = await fixture();
+    transport.fetch.mockResolvedValue({
+      response: new Response("native unauthorized", { status: 401 }),
+      release: async () => {},
+    });
+    const response = await post(proxy.baseUrl + "/responses", body);
+    expect(transport.fetch).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("native unauthorized");
+  });
 });
 
 describe("private inference WebSocket relay", () => {
@@ -320,108 +332,120 @@ describe("private inference WebSocket relay", () => {
     }
   });
 
-  it("preserves proxied WebSocket deltas without local DNS", async () => {
-    const agent = new Agent();
-    const destroy = vi.spyOn(agent, "destroy");
-    transport.proxyAgent.mockReturnValue(agent);
-    transport.resolve.mockRejectedValue(
-      Object.assign(new Error("synthetic local DNS unavailable"), { code: "ENOTFOUND" }),
-    );
-    const server = createServer();
-    const wss = new WebSocketServer({ server });
-    const received: unknown[] = [];
-    wss.on("headers", (headers) => {
-      headers.push(
-        "x-codex-turn-state: synthetic-turn-state",
-        "x-reasoning-included: true",
-        "openai-model: fixture-model",
-      );
-    });
-    wss.on("connection", (socket) => {
-      socket.on("message", (data) => {
-        if (!Buffer.isBuffer(data)) {
-          throw new Error("fixture expected an uncompressed Node WebSocket buffer");
+  it.each([
+    { proxied: false, localDnsUnavailable: false, withInstructions: true },
+    { proxied: true, localDnsUnavailable: true, withInstructions: false },
+  ])(
+    "preserves WS deltas (proxy=$proxied, local DNS unavailable=$localDnsUnavailable, instructions=$withInstructions)",
+    async ({ proxied, localDnsUnavailable, withInstructions }) => {
+      const agent = new Agent();
+      const destroy = vi.spyOn(agent, "destroy");
+      transport.proxyAgent.mockReturnValue(proxied ? agent : undefined);
+      if (localDnsUnavailable) {
+        transport.resolve.mockRejectedValue(
+          Object.assign(new Error("synthetic local DNS unavailable"), { code: "ENOTFOUND" }),
+        );
+      }
+      const server = createServer();
+      const wss = new WebSocketServer({ server });
+      const received: unknown[] = [];
+      wss.on("headers", (headers) => {
+        headers.push(
+          "x-codex-turn-state: synthetic-turn-state",
+          "x-reasoning-included: true",
+          "openai-model: fixture-model",
+        );
+      });
+      wss.on("connection", (socket) => {
+        socket.on("message", (data) => {
+          if (!Buffer.isBuffer(data)) {
+            throw new Error("fixture expected an uncompressed Node WebSocket buffer");
+          }
+          received.push(JSON.parse(data.toString("utf8")));
+          socket.send('{"type":"response.completed","response":{"id":"synthetic-response"}}');
+        });
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("fixture did not listen");
+      }
+      transport.upstream = "ws://127.0.0.1:" + address.port;
+      const { proxy, registration, body } = await fixture(withInstructions);
+      const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+      let responseHeaders: IncomingHttpHeaders | undefined;
+      socket.on("upgrade", (response) => {
+        responseHeaders = response.headers;
+      });
+      try {
+        await once(socket, "open");
+        expect(responseHeaders).toMatchObject({
+          "x-codex-turn-state": "synthetic-turn-state",
+          "x-reasoning-included": "true",
+          "openai-model": "fixture-model",
+        });
+        for (const input of [body.input, []]) {
+          const response = Promise.race([
+            once(socket, "message"),
+            once(socket, "close").then(() => {
+              throw new Error("inference relay closed before its response");
+            }),
+          ]);
+          const wire = JSON.stringify(
+            {
+              ...body,
+              type: "response.create",
+              input,
+              previous_response_id: "previous",
+            },
+            null,
+            2,
+          );
+          socket.send(wire);
+          expect((await response)[0].toString()).toBe(
+            '{"type":"response.completed","response":{"id":"synthetic-response"}}',
+          );
         }
-        received.push(JSON.parse(data.toString("utf8")));
-        socket.send('{"type":"response.completed","response":{"id":"synthetic-response"}}');
-      });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("fixture did not listen");
-    }
-    transport.upstream = "ws://127.0.0.1:" + address.port;
-    const { proxy, registration, body } = await fixture(false);
-    const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
-    let responseHeaders: IncomingHttpHeaders | undefined;
-    socket.on("upgrade", (response) => {
-      responseHeaders = response.headers;
-    });
-    try {
-      await once(socket, "open");
-      expect(responseHeaders).toMatchObject({
-        "x-codex-turn-state": "synthetic-turn-state",
-        "x-reasoning-included": "true",
-        "openai-model": "fixture-model",
-      });
-      for (const input of [body.input, []]) {
-        const response = Promise.race([
-          once(socket, "message"),
-          once(socket, "close").then(() => {
-            throw new Error("inference relay closed before its response");
-          }),
-        ]);
-        const wire = JSON.stringify(
-          {
-            ...body,
-            type: "response.create",
-            input,
-            previous_response_id: "previous",
-          },
-          null,
-          2,
-        );
-        socket.send(wire);
-        expect((await response)[0].toString()).toBe(
-          '{"type":"response.completed","response":{"id":"synthetic-response"}}',
-        );
+        const expected = {
+          ...body,
+          instructions: withInstructions ? "native base\n\nsynthetic persona" : "synthetic persona",
+          type: "response.create",
+          previous_response_id: "previous",
+        };
+        expect(received).toEqual([expected, { ...expected, input: [] }]);
+        expect(transport.dials).toEqual(["wss://api.openai.com/v1/responses"]);
+        expect(transport.resolve).toHaveBeenCalledTimes(proxied ? 0 : 1);
+        if (proxied) {
+          expect(transport.wsAgents[0] === agent).toBe(true);
+          expect(transport.proxyAgent).toHaveBeenCalledWith({
+            mode: "env",
+            targetUrl: expect.any(String),
+          });
+        }
+        const closed = once(socket, "close");
+        registration.release();
+        await closed;
+        if (proxied) {
+          expect(destroy).toHaveBeenCalled();
+        }
+      } finally {
+        socket.terminate();
+        proxy.close();
+        agent.destroy();
+        for (const client of wss.clients) {
+          client.terminate();
+        }
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
       }
-      const expected = {
-        ...body,
-        instructions: "synthetic persona",
-        type: "response.create",
-        previous_response_id: "previous",
-      };
-      expect(received).toEqual([expected, { ...expected, input: [] }]);
-      expect(transport.dials).toEqual(["wss://api.openai.com/v1/responses"]);
-      expect(transport.resolve).not.toHaveBeenCalled();
-      expect(transport.wsAgents[0] === agent).toBe(true);
-      expect(transport.proxyAgent).toHaveBeenCalledWith({
-        mode: "env",
-        targetUrl: expect.any(String),
-      });
-      const closed = once(socket, "close");
-      registration.release();
-      await closed;
-      expect(destroy).toHaveBeenCalled();
-    } finally {
-      socket.terminate();
-      proxy.close();
-      agent.destroy();
-      for (const client of wss.clients) {
-        client.terminate();
-      }
-      await new Promise<void>((resolve) => {
-        wss.close(() => resolve());
-      });
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
+    },
+  );
 });
 
 it("preserves WebSocket connection error headers and body for native auth recovery", async () => {

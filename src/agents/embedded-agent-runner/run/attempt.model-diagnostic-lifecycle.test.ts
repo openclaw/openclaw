@@ -103,10 +103,13 @@ describe("model diagnostic lifecycle", () => {
   });
 
   it.each([
+    "throw",
     "promise rejection",
     "iterator failure",
     "iterator factory failure",
+    "result rejection",
     "resolved stream setup failure",
+    "EOF without result",
   ] as const)(
     "finishes request activity once after %s without admitting cache usage",
     async (kind) => {
@@ -116,6 +119,9 @@ describe("model diagnostic lifecycle", () => {
       const onSucceeded = vi.fn();
       const context = { nextCallId: () => "call-1", onFinished, onTerminal, onSucceeded };
       const source = () => {
+        if (kind === "throw") {
+          throw failure;
+        }
         if (kind === "promise rejection") {
           return Promise.reject(failure);
         }
@@ -137,67 +143,91 @@ describe("model diagnostic lifecycle", () => {
             },
           };
         }
-        return Promise.resolve({
-          async *[Symbol.asyncIterator]() {},
-          get result() {
-            throw failure;
-          },
-        });
+        if (kind === "result rejection") {
+          return Object.assign((async function* () {})(), {
+            result: async () => {
+              throw failure;
+            },
+          });
+        }
+        if (kind === "resolved stream setup failure") {
+          return Promise.resolve({
+            async *[Symbol.asyncIterator]() {},
+            get result() {
+              throw failure;
+            },
+          });
+        }
+        return (async function* () {})();
       };
       const wrapped = wrap(source as unknown as StreamFn, context);
       let caught: unknown;
       try {
         const response = await wrapped({} as never, { messages: [] });
         await drain(response);
+        if (kind === "result rejection") {
+          await response.result();
+        }
       } catch (error) {
         caught = error;
       }
-      expect(caught).toBe(failure);
+      expect(caught).toBe(kind === "EOF without result" ? undefined : failure);
       expect(onFinished).toHaveBeenCalledExactlyOnceWith("call-1");
       expect(onTerminal).not.toHaveBeenCalled();
       expect(onSucceeded).not.toHaveBeenCalled();
     },
   );
 
-  it("notifies terminal success once after deferred EOF settlement", async () => {
-    const onTerminal = vi.fn();
-    const onSucceeded = vi.fn();
-    const onFinished = vi.fn();
-    const source = createAssistantMessageEventStream();
-    source.end(
-      makeAssistantMessageFixture({
-        content: [{ type: "text", text: "Done." }],
-        stopReason: "stop",
-        errorMessage: undefined,
-      }),
-    );
-    const wrapped = wrap(() => source, {
-      agentId: "agent-1",
-      onTerminal,
-      onSucceeded,
-      onFinished,
-    });
-    const events = await collect(async () => {
-      const response = await wrapped({} as never, { messages: [] });
-      await drain(response);
-      expect(onTerminal).not.toHaveBeenCalled();
-      expect(onSucceeded).not.toHaveBeenCalled();
-      expect(onFinished).not.toHaveBeenCalled();
-      await response.result();
-      await response.result();
-      await drain(response);
-    });
-    expect(onTerminal).toHaveBeenCalledOnce();
-    expect(onFinished).toHaveBeenCalledExactlyOnceWith("call-1");
-    expect(onSucceeded).toHaveBeenCalledOnce();
-    expect(events.map((event) => event.type)).toEqual([
-      "model.call.started",
-      "model.call.completed",
-    ]);
-    expect(events).toMatchObject([{ agentId: "agent-1" }, { agentId: "agent-1" }]);
-  });
+  it.each(["stop", "error"] as const)(
+    "notifies terminal %s once after deferred EOF settlement",
+    async (stopReason) => {
+      const onTerminal = vi.fn();
+      const onSucceeded = vi.fn();
+      const onFinished = vi.fn();
+      const source = createAssistantMessageEventStream();
+      source.end(
+        makeAssistantMessageFixture({
+          content: [{ type: "text", text: "Done." }],
+          stopReason,
+          errorMessage: undefined,
+        }),
+      );
+      const wrapped = wrap(() => source, {
+        agentId: "agent-1",
+        onTerminal,
+        onSucceeded,
+        onFinished,
+      });
+      const events = await collect(async () => {
+        const response = await wrapped({} as never, { messages: [] });
+        await drain(response);
+        expect(onTerminal).not.toHaveBeenCalled();
+        expect(onSucceeded).not.toHaveBeenCalled();
+        expect(onFinished).not.toHaveBeenCalled();
+        await response.result();
+        await response.result();
+        await drain(response);
+      });
+      expect(onTerminal).toHaveBeenCalledOnce();
+      expect(onFinished).toHaveBeenCalledExactlyOnceWith("call-1");
+      expect(onSucceeded).toHaveBeenCalledTimes(stopReason === "stop" ? 1 : 0);
+      expect(events.map((event) => event.type)).toEqual([
+        "model.call.started",
+        stopReason === "stop" ? "model.call.completed" : "model.call.error",
+      ]);
+      expect(events).toMatchObject([{ agentId: "agent-1" }, { agentId: "agent-1" }]);
+    },
+  );
 
-  it.each([[200, 200, 0]] as const)(
+  it.each([
+    [20, 20, 110],
+    [0, 0, 130],
+    [200, 200, 0],
+    [-1, undefined, undefined],
+    ["20", undefined, undefined],
+    [Number.NaN, undefined, undefined],
+    [undefined, undefined, undefined],
+  ] as const)(
     "separates reported processing %s from delayed terminal settlement",
     async (processingMs, expectedProcessingMs, expectedWaitMs) => {
       let now = Date.parse("2026-07-09T18:30:00.000Z");
@@ -252,10 +282,15 @@ describe("model diagnostic lifecycle", () => {
         },
       ]);
       for (const record of [diagnostics.at(-1), events.at(-1)?.attributes]) {
-        expect(record).toMatchObject({
-          providerProcessingMs: expectedProcessingMs,
-          providerWaitEstimateMs: expectedWaitMs,
-        });
+        if (expectedProcessingMs === undefined) {
+          expect(record).not.toHaveProperty("providerProcessingMs");
+          expect(record).not.toHaveProperty("providerWaitEstimateMs");
+        } else {
+          expect(record).toMatchObject({
+            providerProcessingMs: expectedProcessingMs,
+            providerWaitEstimateMs: expectedWaitMs,
+          });
+        }
       }
       expect(ended).toHaveBeenCalledTimes(1);
       expect(ended.mock.calls[0]?.[0]).not.toHaveProperty("providerProcessingMs");
@@ -297,6 +332,48 @@ describe("model diagnostic lifecycle", () => {
     ]);
     expect(events[1]).toMatchObject({ type: "mark", runId: "run-1", spanId: "call-1" });
     expect(JSON.stringify(events)).not.toContain("private preparation fixture");
+  });
+
+  it("bounds activity marks and flag lookups independently of chunk volume", async () => {
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const readFlags = vi.fn(() => []);
+    async function* stream() {
+      for (const offset of [0, 1, 29_999, 30_000, 30_001]) {
+        now = offset;
+        for (let i = 0; i < 1000; i++) {
+          yield { type: "thinking_delta", delta: "", partial: {} };
+        }
+      }
+    }
+    const wrapped = wrap((() => stream()) as unknown as StreamFn, {
+      config: {
+        diagnostics: {
+          get flags() {
+            return readFlags();
+          },
+        },
+      },
+    });
+    const events = await timeline(async () => {
+      await drain(await wrapped({} as never, { messages: [] }));
+    });
+    expect(events.map((event) => event.name)).toEqual([
+      "provider.request.started",
+      "provider.request.activity",
+      "provider.request.activity",
+      "provider.request",
+    ]);
+    expect(
+      events
+        .filter((event) => event.name === "provider.request.activity")
+        .map((event) => event.timestamp),
+    ).toEqual([new Date(0).toISOString(), new Date(30_000).toISOString()]);
+    expect(events.at(-1)).toMatchObject({ attributes: { lastProviderActivityAtMs: 30_001 } });
+    expect(events.every((event) => event.runId === "run-1" && event.spanId === "call-1")).toBe(
+      true,
+    );
+    expect(readFlags.mock.calls.length).toBeLessThan(100);
   });
 
   it("records legacy HTTP metadata without inferring provider acceptance", async () => {

@@ -314,6 +314,7 @@ it("fences pending tool revocation and cannot revive grants after claim release"
 });
 
 it.each([
+  { settlement: "commit", replace: true },
   { settlement: "invalidate", replace: true },
   { settlement: "invalidate", replace: false },
 ] as const)(
@@ -373,6 +374,8 @@ it.each([
 
 it.each([
   { mode: "local", failed: false },
+  { mode: "worker-turn", failed: false },
+  { mode: "remote-exec", failed: false },
   { mode: "remote-exec", failed: true },
 ] as const)(
   "retains prepared $mode claims across compatible transitions (persisted failed: $failed)",
@@ -400,6 +403,19 @@ it.each([
       if (failed) {
         expect(authority.isCurrent()).toBe(true);
         await store.fail({ sessionId: claim.sessionId, recoveryError: "cleanup is still pending" });
+      } else if (active) {
+        if (claim.owner.kind === "worker") {
+          await store.updateAckCursors({ claim, liveEvent: 2 });
+          expect(authority.isCurrent()).toBe(true);
+          await store.startWorkspaceResultDrain(claim);
+        } else {
+          await store.startDrain({
+            sessionId: claim.sessionId,
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+            expectedGeneration: active.generation,
+          });
+        }
       } else {
         await store.startDispatch(SESSION);
         expect(authority.isCurrent()).toBe(true);
@@ -531,7 +547,7 @@ it("rejects a prepared reader reply after an identical claim was released and re
   }
 });
 
-it.each(["preparing", "final source check"] as const)(
+it.each(["preparing", "bound", "final source check"] as const)(
   "rejects revoked execution-owner authority during %s",
   async (phase) => {
     const active = await advanceToActive();
@@ -564,9 +580,19 @@ it.each(["preparing", "final source check"] as const)(
         sessionTarget,
         assertSourceCurrent,
       );
-      await expect(binding).rejects.toThrow(
-        phase === "preparing" ? "worker turn authority changed" : "run closed during binding",
-      );
+      if (phase === "bound") {
+        const { capability, takeFinishingOutcome } = await binding;
+        await store.releaseTurn(claim);
+        assertSourceCurrent.mockClear();
+        expect(capability.receiptAuthority).toThrow("worker turn authority changed");
+        expect(() => takeFinishingOutcome("synthetic-credential")).toThrow(
+          "worker turn authority changed",
+        );
+      } else {
+        await expect(binding).rejects.toThrow(
+          phase === "preparing" ? "worker turn authority changed" : "run closed during binding",
+        );
+      }
       expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
     } finally {
       preparation?.mockRestore();
