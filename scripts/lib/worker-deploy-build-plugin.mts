@@ -69,6 +69,68 @@ export function isUnstagedWorkerDeployRuntimeArtifact(
   );
 }
 
+type WorkerChunkingContext = {
+  getModuleInfo(id: string): { importedIds: string[] } | null;
+};
+
+/** Coarsen within loading stages, never pulling optional code into admission or text turns. */
+export function createWorkerDeployCodeSplitting(
+  entrySource: string,
+  turnSources: readonly string[],
+) {
+  // Rolldown supplies a new context for each chunking pass, including watch rebuilds.
+  const layersByPass = new WeakMap<
+    WorkerChunkingContext,
+    { startup: Set<string>; turn: Set<string> }
+  >();
+  return {
+    groups: [
+      {
+        name(id: string, context: WorkerChunkingContext) {
+          let layers = layersByPass.get(context);
+          if (!layers) {
+            const entry = fs.realpathSync(entrySource).replaceAll("\\", "/");
+            const turnEntries = turnSources.map((source) =>
+              fs.realpathSync(source).replaceAll("\\", "/"),
+            );
+            if ([entry, ...turnEntries].some((source) => !context.getModuleInfo(source))) {
+              throw new Error("Missing worker startup or turn module");
+            }
+            const collectStatic = (roots: string[]) => {
+              const collected = new Set<string>();
+              const pending = [...roots];
+              for (const dependency of pending) {
+                if (collected.has(dependency)) {
+                  continue;
+                }
+                collected.add(dependency);
+                pending.push(...(context.getModuleInfo(dependency)?.importedIds ?? []));
+              }
+              return collected;
+            };
+            layers = {
+              startup: collectStatic([entry]),
+              turn: collectStatic(turnEntries),
+            };
+            layersByPass.set(context, layers);
+          }
+          return layers.startup.has(id)
+            ? undefined
+            : layers.turn.has(id)
+              ? "worker-turn"
+              : "worker-optional";
+        },
+        entriesAware: true,
+        // Merge small entry groups for headroom below the shipped updater's tree-entry cap.
+        // Global minSize only filters manual groups; it does not merge small chunks.
+        entriesAwareMergeThreshold: 64 * 1024,
+        // Keep startup dependencies outside these groups; the caller sets strict execution order.
+        includeDependenciesRecursively: false,
+      },
+    ],
+  };
+}
+
 /** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
 export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const require = createRequire(import.meta.url);
