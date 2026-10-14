@@ -369,7 +369,7 @@ openclaw-chat-details-progress {
 }
 .chat-details .chat-pr--compact .chat-pr__link {
   grid-template-columns: 16px minmax(0, 1fr);
-  grid-column: 1 / -1;
+  grid-column: 1;
   grid-row: 1;
   row-gap: 7px;
 }
