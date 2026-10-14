@@ -203,9 +203,10 @@ export function wrapStreamFnWithSessionFork(
       onPayload: async (payload, payloadModel) => {
         const replacement = await onPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
-        preparedPayload = finalPayload;
         // Native ChatGPT, Anthropic, and custom transports do not use the encoded-body boundary.
-        if (isRecord(finalPayload) && !modelRequestBodyState(capturedOptions).enabled) {
+        if (modelRequestBodyState(capturedOptions).enabled) {
+          preparedPayload = finalPayload;
+        } else if (isRecord(finalPayload)) {
           save(Buffer.from(JSON.stringify(finalPayload)));
         }
         return finalPayload;
@@ -216,9 +217,14 @@ export function wrapStreamFnWithSessionFork(
         return;
       }
       // HTTP continuations send only a suffix; an independent fork still needs the full prefix.
+      // Suffix-only retries reuse the captured prefix; a rebuilt request calls onPayload again.
+      if (payload.previous_response_id && preparedPayload === undefined) {
+        return;
+      }
       save(
         payload.previous_response_id ? Buffer.from(JSON.stringify(preparedPayload)) : encoded.body,
       );
+      preparedPayload = undefined;
     };
     return streamFn(model, context, capturedOptions);
   };

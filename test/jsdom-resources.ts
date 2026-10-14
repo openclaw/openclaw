@@ -13,11 +13,28 @@ export function trackJsdomResources(): JsdomResourceTracking | undefined {
     return undefined;
   }
   const ownerDocument = document;
-  // Tests may replace global window with a forwarding facade. Registrations
-  // still belong to this native window, including when the facade is restored.
   const ownerWindow = window;
   const listeners: [EventTarget, string, EventListenerOrEventListenerObject, boolean][] = [];
   const observers = new Set<MutationObserver>();
+  const forgetListener = (
+    target: EventTarget,
+    type: string,
+    callback: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ) => {
+    const capture = typeof options === "boolean" ? options : Boolean(options?.capture);
+    for (let index = listeners.length - 1; index >= 0; index--) {
+      const [eventTarget, event, listener, capturing] = listeners[index]!;
+      if (
+        eventTarget === target &&
+        event === type &&
+        listener === callback &&
+        capturing === capture
+      ) {
+        listeners.splice(index, 1);
+      }
+    }
+  };
   // Native methods are captured once and always invoked with their original target.
   // oxlint-disable-next-line typescript/unbound-method -- called with the native EventTarget as this.
   const add = EventTarget.prototype.addEventListener;
@@ -45,16 +62,8 @@ export function trackJsdomResources(): JsdomResourceTracking | undefined {
     return add.call(this, type, callback, options);
   };
   EventTarget.prototype.removeEventListener = function (type, callback, options) {
-    remove.call(this, type, callback, options);
-    const capture = typeof options === "boolean" ? options : Boolean(options?.capture);
-    // Native removal retires all matching registrations. Do not keep the
-    // removed callback (and its owner payload) alive until the file ends.
-    for (let index = listeners.length - 1; index >= 0; index--) {
-      const [target, event, listener, capturing] = listeners[index];
-      if (target === this && event === type && listener === callback && capturing === capture) {
-        listeners.splice(index, 1);
-      }
-    }
+    forgetListener(this, type, callback, options);
+    return remove.call(this, type, callback, options);
   };
   // Vitest captures window.addEventListener before tests to count error handlers;
   // that own method bypasses EventTarget.prototype and needs the same ownership.
@@ -80,16 +89,8 @@ export function trackJsdomResources(): JsdomResourceTracking | undefined {
     callback: EventListenerOrEventListenerObject,
     options?: boolean | EventListenerOptions,
   ) {
-    const capture = typeof options === "boolean" ? options : Boolean(options?.capture);
-    const index = listeners.findIndex(
-      ([target, event, listener, capturing]) =>
-        target === ownerWindow && event === type && listener === callback && capturing === capture,
-    );
-    if (index >= 0) {
-      // Vitest decrements its Window error-handler count even for a no-op native
-      // removal. Retire only the registrations not already removed by their owner.
-      listeners.splice(index, 1);
-    }
+    // Vitest counts Window error-handler removals, including native no-ops.
+    forgetListener(ownerWindow, type, callback, options);
     return removeWindow(type, callback, options);
   };
   const NativeMutationObserver = MutationObserver;
@@ -110,14 +111,13 @@ export function trackJsdomResources(): JsdomResourceTracking | undefined {
         observer.disconnect();
       }
       observers.clear();
-      for (const [target, type, callback, capture] of listeners) {
+      for (const [target, type, callback, capture] of listeners.splice(0)) {
         if (target === ownerWindow) {
           removeWindow(type, callback, capture);
         } else {
           remove.call(target, type, callback, capture);
         }
       }
-      listeners.length = 0;
     },
   };
 }

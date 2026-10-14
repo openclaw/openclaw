@@ -221,10 +221,9 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         const replyText = "Source reply with media";
         writeSavedPng(fixtureDir, "source-reply-deduped.png");
         const mirrorIdempotencyKey = "idem-agent-source-reply-deduped:internal-source-reply:0";
-        await appendSourceReplyMirrorEntry({
-          text:
-            resolveMirroredTranscriptText({ text: replyText, mediaUrls: [mediaUrl] }) ?? "media",
-        });
+        const originalText =
+          resolveMirroredTranscriptText({ text: replyText, mediaUrls: [mediaUrl] }) ?? "media";
+        await appendSourceReplyMirrorEntry({ text: originalText });
         setAgentRunReplies([
           createMainSourceReply({
             idempotencyKey: mirrorIdempotencyKey,
@@ -243,14 +242,14 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         const assistantEntries = await readActiveAssistantTranscriptMessages();
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
-        for (const message of [
-          assistantEntries[0],
-          ...(await readRawActiveAssistantTranscriptMessages()),
-        ]) {
-          expect(getMessageContent({ message }).filter((block) => block.type === "text")).toEqual([
-            { type: "text", text: replyText },
-          ]);
-        }
+        expect(
+          getMessageContent({ message: assistantEntries[0] }).filter(
+            (block) => block.type === "text",
+          ),
+        ).toEqual([{ type: "text", text: replyText }]);
+        expect((await readRawActiveAssistantTranscriptMessages())[0]?.content).toEqual([
+          { type: "text", text: originalText },
+        ]);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
         expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
       },

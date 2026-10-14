@@ -2615,7 +2615,6 @@ ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
 ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form.analyze.ts	1
-ui/src/components/connect-command.ts	2
 ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/dock-panel-layout.ts	3
