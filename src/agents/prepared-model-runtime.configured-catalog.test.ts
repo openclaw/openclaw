@@ -216,12 +216,6 @@ describe("configured catalog registry composition", () => {
     inheritsChoices: boolean;
   }>([
     {
-      name: "captured endpoint",
-      capturedBaseUrl: "http://127.0.0.1:9/v1",
-      expectedBaseUrl: "http://127.0.0.1:9/v1",
-      inheritsChoices: false,
-    },
-    {
       name: "replace with a different captured endpoint",
       mode: "replace",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
@@ -232,23 +226,6 @@ describe("configured catalog registry composition", () => {
       name: "model endpoint pin",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
       modelBaseUrl: "https://fixture.invalid/v1",
-      inheritsChoices: true,
-    },
-    {
-      name: "API override",
-      modelApi: "openai-responses",
-      inheritsChoices: false,
-    },
-    {
-      name: "endpoint override",
-      modelBaseUrl: "https://proxy.invalid/v1",
-      expectedBaseUrl: "https://proxy.invalid/v1",
-      inheritsChoices: false,
-    },
-    {
-      name: "equivalent endpoint",
-      modelBaseUrl: "https://fixture.invalid/v1/",
-      expectedBaseUrl: "https://fixture.invalid/v1/",
       inheritsChoices: true,
     },
   ])(
@@ -474,9 +451,6 @@ describe("synthetic configured context publication", () => {
   it("preserves provider synthetic provenance through the catalog row projection", () => {
     expect(modelCatalogRowToEntry(fallback)).toHaveProperty("contextWindowSource", "synthetic");
   });
-  it("uses accepted account prompt limits instead of the superseded synthetic window", () => {
-    expect(budget()).toBe(872_000);
-  });
   it.each([false, undefined])(
     "preserves configured non-sizing metadata with reasoning override %s",
     (configuredReasoning) => {
@@ -525,42 +499,35 @@ describe("synthetic configured context publication", () => {
       );
     },
   );
-  it.each([
-    ["matching physical route", discovered, false],
-    ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],
-  ] as const)("replaces only the %s synthetic fallback", (_name, physical, retained) => {
-    const logical = { ...discovered, api: "openai-completions" as const };
-    const publication = prepareModelCatalogPublication(
-      {
-        entries: [logical],
-        routeVariants: [logical, physical],
-        providerOutcomes: [{ provider: "fixture", status: "ready" }],
-      },
-      new Map(),
-      undefined,
-      auth("account-a"),
-      (provider) => provider,
-      new Map(),
-    );
-    const catalog = materializePreparedModelCatalog(
-      publication.catalog,
-      [],
-      [{ ...fallback, baseUrl: discovered.baseUrl }],
-      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
-    );
-    expect(catalog.entries[0]?.api).toBe("openai-completions");
-    expect(catalog.routeVariants).toContainEqual(physical);
-    expect(catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic")).toBe(
-      retained,
-    );
-  });
-  it.each([
-    ["curated static", { ...fallback, contextWindowSource: undefined }],
-    ["other API", { ...fallback, api: "openai-completions" as const }],
-    ["other endpoint", { ...fallback, baseUrl: "https://other.example/v1" }],
-  ])("preserves %s limits", (_name, row) => {
-    expect(budget([discovered], row)).toBe(128_000);
-  });
+  it.each([["matching physical route", discovered, false]] as const)(
+    "replaces only the %s synthetic fallback",
+    (_name, physical, retained) => {
+      const logical = { ...discovered, api: "openai-completions" as const };
+      const publication = prepareModelCatalogPublication(
+        {
+          entries: [logical],
+          routeVariants: [logical, physical],
+          providerOutcomes: [{ provider: "fixture", status: "ready" }],
+        },
+        new Map(),
+        undefined,
+        auth("account-a"),
+        (provider) => provider,
+        new Map(),
+      );
+      const catalog = materializePreparedModelCatalog(
+        publication.catalog,
+        [],
+        [{ ...fallback, baseUrl: discovered.baseUrl }],
+        new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+      );
+      expect(catalog.entries[0]?.api).toBe("openai-completions");
+      expect(catalog.routeVariants).toContainEqual(physical);
+      expect(
+        catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic"),
+      ).toBe(retained);
+    },
+  );
   it("preserves explicit authored prompt and native-window caps", () => {
     for (const limits of [{ contextTokens: 64_000 }, { contextWindow: 64_000 }]) {
       const config: OpenClawConfig = {

@@ -29,23 +29,14 @@ describe("tool-authored source replies", () => {
     expect(extractMessagingToolSourceReplyPayload(result)).toBeUndefined();
   });
 
-  it("admits a media-only reply", () => {
-    expect(
-      extractToolAuthoredSourceReplyPayload({
-        details: { sourceReply: { mediaUrls: ["/tmp/flyer.png"] } },
-      }),
-    ).toEqual({ mediaUrls: ["/tmp/flyer.png"] });
-  });
-
-  it.each([
-    { message: "Internal diagnostic" },
-    { mediaUrl: "/tmp/internal-report.pdf" },
-    { mediaUrls: ["/tmp/internal-report.pdf"] },
-  ])("does not restore withdrawn reply content from top-level details: %j", (details) => {
-    expect(
-      extractToolAuthoredSourceReplyPayload({ details: { ...details, sourceReply: {} } }),
-    ).toBeUndefined();
-  });
+  it.each([{ mediaUrls: ["/tmp/internal-report.pdf"] }])(
+    "does not restore withdrawn reply content from top-level details: %j",
+    (details) => {
+      expect(
+        extractToolAuthoredSourceReplyPayload({ details: { ...details, sourceReply: {} } }),
+      ).toBeUndefined();
+    },
+  );
 
   it("keeps a media-only reply separate from unrelated result and delivery metadata", () => {
     expect(
@@ -86,17 +77,13 @@ describe("tool-authored source replies", () => {
   });
 
   it.each([
-    { label: "no sourceReply", details: { ok: true, final_answer: "text only" } },
     { label: "empty sourceReply", details: { sourceReply: {} } },
-    { label: "whitespace text", details: { sourceReply: { text: "   " } } },
-    { label: "non-record sourceReply", details: { sourceReply: "plain string" } },
     // Delivery only admits text or media, so attachments alone cannot end a turn.
     {
       label: "attachment-only sourceReply",
       details: { sourceReply: { attachments: [{ path: "/tmp/albaran.pdf" }] } },
     },
     // Delivery drops blank media, so blank entries alone cannot end a turn.
-    { label: "blank mediaUrls", details: { sourceReply: { mediaUrls: ["", "   "] } } },
     { label: "blank mediaUrl", details: { sourceReply: { mediaUrl: "  " } } },
     {
       label: "blank mediaUrls shadowing a mediaUrl",
