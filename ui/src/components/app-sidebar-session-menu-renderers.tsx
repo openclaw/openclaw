@@ -296,7 +296,7 @@ export function renderSidebarSessionSortMenuForController(
     options: () => ReadonlyArray<{ value: T; label: string }>,
     onChange: (value: T) => void,
   ) => (
-    <div id={id} class="sidebar-session-menu-row">
+    <div id={id} class="sidebar-session-menu-row sidebar-session-menu-row--segmented">
       <span aria-hidden="true" title={label()}>
         {label()}
       </span>
