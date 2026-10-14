@@ -478,7 +478,7 @@
   }
 
   /* These two add a fixed cosmetic offset on top of the --radius-xl step in
-     their home rule (components.css); only the --radius-xl portion scales,
+     their home rule (agents.css); only the --radius-xl portion scales,
      matching that intent. */
   .md-preview-dialog__panel.md-preview-dialog__panel {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale) + 6px);

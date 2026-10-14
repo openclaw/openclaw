@@ -123,6 +123,28 @@ Lightning or Nemotron 3 Super when you want a smaller Nemotron option, or
 choose one of the third-party models
 hosted in NVIDIA's catalog when their context, latency, or behavior fits better.
 
+## Nemotron 3.5 Super VL
+
+[Nemotron 3.5 Super VL](https://docs.nvidia.com/nemo/automodel/model-coverage/omni/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16)
+is NVIDIA's vision-language model for text and image input.
+
+Pair Super VL's image support with Nemotron 3 Ultra for text. Set Ultra as the
+primary model and Super VL as the image model:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": { "primary": "nvidia/nvidia/nemotron-3-ultra-550b-a55b" },
+      "imageModel": { "primary": "nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b" }
+    }
+  }
+}
+```
+
+OpenClaw uses `imageModel` for image understanding when the primary model cannot
+accept images.
+
 ## Bundled fallback catalog
 
 The bundled rows provide known chat metadata and an offline fallback. Retired

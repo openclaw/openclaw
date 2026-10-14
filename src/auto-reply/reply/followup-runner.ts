@@ -381,6 +381,13 @@ export function createFollowupRunner(
       if (disposition.kind === "consumed") {
         completeFollowupRunLifecycle(queued);
       }
+      try {
+        await admittedTurn?.restartRecovery?.clear();
+      } catch (error) {
+        defaultRuntime.error?.(
+          `followup queue: recovery settlement failed: ${formatErrorMessage(error)}`,
+        );
+      }
       if (disposition.kind !== "deferred" && admittedTurn?.runId) {
         clearAgentRunContext(admittedTurn.runId);
       }

@@ -25,7 +25,10 @@ import {
   parseTranslationBatchReply,
   translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
-import { loadControlUiSourceCatalog } from "../../scripts/lib/control-ui-i18n-catalog.ts";
+import {
+  loadControlUiSourceCatalog,
+  readControlUiSourceCatalog,
+} from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
@@ -337,6 +340,15 @@ describe("translation provider privacy and fallback", () => {
 });
 
 describe("control-ui config hint source catalog", () => {
+  it("includes plugin-owned Memory label sources in the raw catalog hash input", async () => {
+    const source = await readControlUiSourceCatalog();
+    for (const plugin of ["active-memory", "memory-wiki"]) {
+      expect(source).toContain(
+        readFileSync(`extensions/${plugin}/control-ui.presentation.json`, "utf8"),
+      );
+    }
+  });
+
   it("includes core config labels and help under collision-safe keys", () => {
     const source = flattenTranslations(loadControlUiSourceCatalog());
 

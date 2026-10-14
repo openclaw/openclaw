@@ -197,6 +197,14 @@ attempt's inbound and queue dedupe entries before ingress retries it. Messages
 already adopted or consumed keep duplicate suppression, so transport redelivery
 does not repeat their effects.
 
+Queued channel input is adopted only after the session owner accepts durable
+input and recovery custody. Preparation failures before acceptance keep ingress retryable;
+failures after acceptance produce a terminal error reply without replaying the
+input. Entering the session lane alone does not complete ingress.
+Repeated preparation errors stop renewing the waiting heartbeat, allowing the
+existing ingress watchdog to apply its retry and dead-letter policy. Normal
+capacity waits keep their heartbeat.
+
 ## Lanes and scope
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).

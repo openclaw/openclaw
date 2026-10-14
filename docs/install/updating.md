@@ -146,6 +146,11 @@ Post-install Doctor also accepts older updaters, including `2026.8.2`, that do n
 provide an update run ID. Its commands retain invocation-specific custody without
 requiring an environment-variable workaround.
 
+Doctor keeps a command's captured birth identity through native custody binding.
+If a command finishes before that identity can be captured, its original spawning
+owner still joins the command and confirms its process group has exited before
+releasing the reservation. A live or unreadable command remains protected.
+
 When the installed `2026.9.2` updater runs the candidate's early Doctor check,
 shared-state and agent schema changes are rehearsed on private copies. Plugin
 inspection cannot publish native admission metadata to live state during this
@@ -823,7 +828,9 @@ package installs and existing Git checkouts. Package
 installs reject the `--tag main` shorthand because the workspace checkout is
 not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
-keep their package-manager behavior.
+keep their package-manager behavior. Dev target inspection fetches only the selected
+upstream source, respecting the repository's ref mappings and exclusions. It does
+not download unrelated branches or change the repository's shallow boundary.
 
 On source installs, Doctor and plugin updates keep plugins built with the host.
 A registry plugin with the same version string can target a different SDK, so

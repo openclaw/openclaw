@@ -289,28 +289,37 @@ it.each([true, false])(
   },
 );
 
-it("keeps deferred finalization successful for an inherited update driver", async () => {
-  const run = createUpdateRun({ trigger: "cli" });
-  adoptUpdateRun(run.runId);
-  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-  vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
-    new DoctorMaintenanceRefusalError("Synthetic maintenance contention", {
-      kind: "deferred",
-      reason: "coordinator-contention",
-    }),
-  );
+it.each(["coordinator-contention", "admission-unavailable"] as const)(
+  "keeps deferred finalization successful for an inherited update driver (%s)",
+  async (reason) => {
+    const run = createUpdateRun({ trigger: "cli" });
+    adoptUpdateRun(run.runId);
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+    vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
+      new DoctorMaintenanceRefusalError("Synthetic maintenance contention", {
+        kind: "deferred",
+        reason,
+      }),
+    );
 
-  await expect(
-    updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
-  ).resolves.toBeUndefined();
+    await expect(
+      updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+    ).resolves.toBeUndefined();
 
-  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-    expect.objectContaining({ status: "warning" }),
-  );
-  expect(getUpdateRun(run.runId)?.status).toBe("running");
-  expect(readDeferredPluginMigrations()).toEqual([pending]);
-  expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
-});
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "warning",
+        nextAction: expect.stringContaining("openclaw update repair"),
+        postUpdate: { doctor: { status: "warning", warnings: expect.any(Array) } },
+      }),
+    );
+    expect(verifyUpdateFailureRecovery).not.toHaveBeenCalled();
+    expect(getUpdateRun(run.runId)?.verification.rollbackOutcome).toBeUndefined();
+    expect(getUpdateRun(run.runId)?.status).toBe("running");
+    expect(readDeferredPluginMigrations()).toEqual([pending]);
+    expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   ["stop", false],

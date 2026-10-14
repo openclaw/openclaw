@@ -1,6 +1,6 @@
 // Tool-call shaped text tests cover detection of text that resembles tool calls.
 import { describe, expect, it } from "vitest";
-import { detectToolCallShapedText } from "./tool-call-shaped-text.js";
+import { detectToolCallShapedText } from "./attempt.js";
 
 describe("detectToolCallShapedText", () => {
   it.each(["", '{"name":"earlier","arguments":{}}\n'])(

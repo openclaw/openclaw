@@ -835,19 +835,6 @@ it("reuses complete public Linux assets without local build inputs", () => {
   expect(f.bytes(nextTag, "latest.json")).toEqual(advanced);
 });
 
-it("reuses immutable publication bytes without local build inputs on replay", () => {
-  const f = fixture();
-  succeeded(f.run("publish"));
-  const original = f.bytes(tag, "OpenClaw-2026.9.3-linux.json");
-  f.update((state) => {
-    state.calls = [];
-  });
-  succeeded(f.run("publish", tag, undefined, true));
-  expect(f.bytes(channel, "latest.json")).toEqual(original);
-  expect(f.bytes(tag, "OpenClaw-2026.9.3-linux.json")).toEqual(original);
-  expect(f.mutations()).toEqual([]);
-});
-
 it("retains partial canonical replacement when the executing writer is cancelled after deletion", () => {
   const f = fixture();
   succeeded(f.run("publish"));

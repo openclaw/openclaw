@@ -77,6 +77,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   attempt: IncompleteTurnAttempt;
 }): string | null {
   const assistantState = classifyAssistantTurn(params);
+  const textToolCallAttempt = params.attempt.textToolCallAttempt === true;
   const assistant = assistantState.assistant;
   const completionAttempt = {
     ...params.attempt,
@@ -106,7 +107,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
   if (
-    (params.payloadCount !== 0 && !incompleteTerminalAssistant && !thinkingOnlyTerminal) ||
+    (params.payloadCount !== 0 &&
+      !incompleteTerminalAssistant &&
+      !thinkingOnlyTerminal &&
+      !textToolCallAttempt) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -137,8 +141,13 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  const textToolCallFailureText = textToolCallAttempt
+    ? "⚠️ The model wrote a tool call as text instead of calling the tool. No tool ran for that call."
+    : undefined;
+
   const stopReason = assistant?.stopReason;
   if (
+    !textToolCallAttempt &&
     !incompleteTerminalAssistant &&
     !assistantState.reasoningOnly &&
     !thinkingOnlyTerminal &&
@@ -164,6 +173,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   // A non-replayable harness failure may have no assistant message to carry its error.
   // Share classified copy with thrown failures; never display raw prompt diagnostics.
   const promptFailureText =
+    textToolCallFailureText ??
     preflightFailureText ??
     (failureFacts
       ? (failureFacts.providerRequestError?.userMessage ??
@@ -176,6 +186,9 @@ export function resolveIncompleteTurnPayloadText(params: {
       : undefined);
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
     return `${promptFailureText ?? "⚠️ Agent couldn't generate a response."} Note: some tool actions may have already been executed — please verify before retrying.`;
+  }
+  if (textToolCallFailureText) {
+    return `${textToolCallFailureText} Please try again or use a model with native tool calling.`;
   }
   if (preflightFailureText !== undefined) {
     return preflightFailureText;

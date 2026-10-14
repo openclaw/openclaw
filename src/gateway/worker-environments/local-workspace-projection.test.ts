@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { deleteRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
@@ -532,6 +538,141 @@ describe("local sandbox workspace reconciliation", () => {
       });
     },
   );
+
+  it("waits for checkpoint resume before preparing the next guest command", async ({ signal }) => {
+    const [
+      projectionOwner,
+      { prepareLocalSandboxWorkspace, bindLocalSandboxWorkspace },
+      { createSandboxTestContext },
+      { createSandboxFsBridge },
+      { resolveSandboxConfigForAgent },
+      registry,
+      engine,
+    ] = await Promise.all([
+      import("./local-workspace-projection.js"),
+      import("../../agents/sandbox/local-workspace.js"),
+      import("../../agents/sandbox/test-fixtures.js"),
+      import("../../agents/sandbox/fs-bridge.js"),
+      import("../../agents/sandbox/config.js"),
+      import("../../agents/sandbox/registry.js"),
+      import("../../agents/sandbox/container-engine.js"),
+    ]);
+    vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
+      ...owner,
+      [Symbol.dispose]() {},
+    });
+    using projection = await prepareLocalSandboxWorkspace({
+      cfg: { worktreeAcceleration: false },
+      agentId: owner.agentId,
+      sessionKey: owner.sessionKey,
+      workspaceDir: owner.worktree.path,
+      sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
+    });
+    if (!projection) {
+      throw new Error("Expected managed projection");
+    }
+    const paused = createDeferred();
+    const settle = createDeferred();
+    let runtimePaused = false;
+    const events: string[] = [];
+    const entry = {
+      containerName: "checkpoint-command-owned",
+      backendId: "docker",
+      sessionKey: owner.sessionKey,
+      workspaceDir: projection.workspaceDir,
+      createdAtMs: 1,
+      lastUsedAtMs: 1,
+      image: "fixture",
+    };
+    await registry.updateRegistry(entry);
+    vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+      if (args[0] === "inspect") {
+        return {
+          code: 0,
+          stderr: "",
+          stdout: args.includes("{{.State.Paused}}")
+            ? String(runtimePaused)
+            : `${"a".repeat(64)} true ${runtimePaused}`,
+        };
+      }
+      if (args[0] === "pause") {
+        runtimePaused = true;
+        events.push("paused");
+        paused.resolve();
+        await settle.promise;
+      } else if (args[0] === "unpause") {
+        runtimePaused = false;
+        events.push("resumed");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const dispatch = (kind: string) => {
+      if (runtimePaused) {
+        throw new Error("Container is paused");
+      }
+      events.push(kind);
+    };
+    const backend: SandboxBackendHandle = {
+      id: "docker",
+      runtimeId: entry.containerName,
+      runtimeLabel: entry.containerName,
+      workdir: "/workspace",
+      buildExecSpec: async () => {
+        dispatch("exec");
+        return { argv: ["true"], env: {}, stdinMode: "pipe-closed" };
+      },
+      runShellCommand: async () => {
+        dispatch("shell");
+        return { code: 0, stdout: Buffer.from("ready"), stderr: Buffer.alloc(0) };
+      },
+    };
+    const sandbox = createSandboxTestContext({
+      overrides: { workspaceDir: projection.workspaceDir, backend },
+    });
+    sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
+    bindLocalSandboxWorkspace(sandbox, projection);
+    const checkpoint = backend.finalizeExec!({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+    });
+    let commands: Promise<unknown>[] = [];
+    try {
+      await awaitGateBeforeSettlement(
+        paused.promise,
+        checkpoint,
+        "Checkpoint did not pause runtime",
+      );
+      const controller = new AbortController();
+      const reason = new Error("cancelled during checkpoint");
+      const cancelled = backend.runShellCommand({ script: "true", signal: controller.signal });
+      commands = [cancelled];
+      controller.abort(reason);
+      await expect(withinTest(cancelled, signal)).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_ABORTED",
+        cause: reason,
+      });
+      expect(runtimePaused).toBe(true);
+      expect(events).toEqual(["paused"]);
+      commands = [
+        backend.runShellCommand({ script: "true" }),
+        backend.buildExecSpec({ command: "true", env: {}, usePty: false }),
+      ];
+      const outcomes = Promise.allSettled(commands);
+      settle.resolve();
+      await checkpoint;
+      expect((await outcomes).map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+      expect(events.slice(0, 2)).toEqual(["paused", "resumed"]);
+      expect(events.slice(2).toSorted()).toEqual(["exec", "shell"]);
+      // Preparing an exec must release admission before that background command exits.
+      await projection.provision(async () => events.push("next admission"));
+      expect(events.at(-1)).toBe("next admission");
+    } finally {
+      settle.resolve();
+      await Promise.allSettled([checkpoint, ...commands]);
+      await registry.removeRegistryEntry(entry.containerName);
+    }
+  });
 
   it("retirement preserves a same-name replacement browser after quiescence", async () => {
     const [{ insertRegistryWorktree }, registry, engine] = await Promise.all([

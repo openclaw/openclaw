@@ -84,6 +84,7 @@ function readUiCss(): string {
     "ui/src/styles/sessions.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
+    "ui/src/styles/agents.css",
     "ui/src/styles/skill-workshop.css",
     "ui/src/styles/rail-header.css",
     "ui/src/styles/chat/startup-layout.css",

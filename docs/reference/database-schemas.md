@@ -83,6 +83,13 @@ FIFO ordering and rereading the current rows. Fresh admission waits outside
 host is busy. Authority refusals and uncertain rollback outcomes are not retried;
 required update and recovery records retain their existing durability.
 
+Channel-identity writes use the same one-second admission budget at transaction
+entry and commit, with at most three attempts. Entry admission waits before
+`BEGIN`; a commit timeout rolls back before retrying with fresh authority and
+current rows. Exhaustion names the failed operation and directs the operator to
+`openclaw gateway status --deep` before retrying. Final commit authorization stays
+inside the transaction until the remaining authority owners can transfer their checks.
+
 Database-fact readers do not contact the host inside a transaction. Missing writer
 registrations or unpublished facts remain unknown until the transaction closes;
 schema readers retain their conservative snapshot validation. The next read
