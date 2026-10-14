@@ -11,7 +11,12 @@ const childKeys = Array.from(
   (_, index) => `agent:main:dashboard:child-${index + 1}`,
 );
 
-async function mountChildSessions(extraRows: GatewaySessionRow[] = []) {
+async function mountChildSessions(
+  extraRows: GatewaySessionRow[] = [],
+  childFields: (index: number) => Partial<GatewaySessionRow> = (index) => ({
+    updatedAt: index + 1,
+  }),
+) {
   const harness = createSessionsHarness("main", [parentKey]);
   harness.list.mockResolvedValue({
     ts: 100_000,
@@ -24,7 +29,7 @@ async function mountChildSessions(extraRows: GatewaySessionRow[] = []) {
         spawnedBy: parentKey,
         kind: "direct" as const,
         label: `Child ${index + 1}`,
-        updatedAt: index + 1,
+        ...childFields(index),
       })),
       ...extraRows,
     ],
@@ -109,6 +114,33 @@ describe("AppSidebar spawned session cap", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:dashboard:child-5"]')).toBeNull();
     expect(sidebar.querySelector("[data-show-more-children]")?.textContent?.trim()).toBe(
       "Show 1 more",
+    );
+  });
+
+  it("orders capped children by the selected session sort instead of their keys", async () => {
+    // Real child keys end in random ids, so key order is unrelated to activity.
+    const createdAt = [3, 6, 1, 5, 2, 4];
+    const updatedAt = [60, 10, 50, 20, 40, 30];
+    const sidebar = await mountChildSessions([], (index) => ({
+      createdAt: createdAt[index],
+      updatedAt: updatedAt[index],
+    }));
+    const visibleChildren = () =>
+      [...sidebar.querySelectorAll(".sidebar-recent-session--child[data-session-key]")].map((row) =>
+        row.getAttribute("data-session-key")?.replace("agent:main:dashboard:", ""),
+      );
+
+    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
+    await waitForFast(() =>
+      expect(visibleChildren()).toEqual(["child-2", "child-4", "child-6", "child-1"]),
+    );
+
+    sidebar.setSessionSortMode("updated");
+    await waitForFast(() =>
+      expect(visibleChildren()).toEqual(["child-1", "child-3", "child-5", "child-6"]),
+    );
+    expect(sidebar.querySelector("[data-show-more-children]")?.textContent?.trim()).toBe(
+      "Show 2 more",
     );
   });
 });
