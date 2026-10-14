@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -21,10 +22,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import {
-  readOpenClawAgentIntegrityVerification,
-  readOpenClawDatabaseQuarantineFailure,
-} from "./openclaw-quarantine-store.js";
+import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
@@ -134,7 +132,7 @@ it.each(["drop", "recreate"] as const)(
   },
 );
 
-it("reuses live agent admission and revalidates after writer idle retirement", async () => {
+it("reuses live agent admission and its seal after writer idle retirement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
     const shared = openOpenClawStateDatabase({ env });
@@ -148,7 +146,8 @@ it("reuses live agent admission and revalidates after writer idle retirement", a
         readOnly: true,
       });
       admitSqliteSchema(quarantine);
-      expect(readOpenClawAgentIntegrityVerification(first.path, env, true)?.clean_close).toBe(0);
+      expect(readSqliteDatabaseCleanClose(first.path)).toBe(false);
+      expect(readOpenClawDatabaseQuarantineFailure("agent", first.path, { env })).toBeUndefined();
       const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {
         const reader = openOpenClawAgentDatabaseReadOnly(options);
@@ -159,12 +158,11 @@ it("reuses live agent admission and revalidates after writer idle retirement", a
         expect(validationStatements(observation.queries)).toEqual([]);
         vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
         expect(firstNative.isOpen).toBe(false);
+        expect(readSqliteDatabaseCleanClose(first.path)).toBe(true);
         const reopened = openOpenClawAgentDatabase(options);
         expect(reopened.db === firstNative).toBe(false);
         expect(reopened.db.isOpen).toBe(true);
-        expect(
-          observation.queries.filter((sql) => /\bFROM main\.sqlite_schema\b/iu.test(sql)),
-        ).toHaveLength(1);
+        expect(validationStatements(observation.queries)).toEqual([]);
       } finally {
         observation.restore();
       }

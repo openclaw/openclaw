@@ -27,6 +27,7 @@ export type SessionPreviewItem = {
 export type SessionBranchSummarySnapshot = SessionTranscriptWatermark & {
   branches: SessionBranchSummary[];
   appendSafe?: boolean;
+  source?: { sessionId: string; databaseIdentity: string };
 };
 
 export type SessionBranchSummaryReadResult =

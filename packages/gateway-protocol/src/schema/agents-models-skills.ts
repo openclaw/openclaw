@@ -249,6 +249,8 @@ export const ModelsProbeResultSchema = closedObject({
 export const SkillsStatusParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  /** Refresh file-backed discovery before reporting status after an explicit local change. */
+  refresh: Type.Optional(Type.Boolean()),
 });
 
 /** Empty request payload for listing available skill bins. */

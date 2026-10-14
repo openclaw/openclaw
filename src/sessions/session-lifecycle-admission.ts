@@ -448,7 +448,7 @@ export async function beginSessionWorkAdmission(params: {
   /** Queue behind earlier admissions of the same owner, including pending work. */
   serializeOwner?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
-  assertAllowed: (signal: AbortSignal) => Promise<void> | void;
+  assertAllowed?: (signal: AbortSignal) => Promise<void> | void;
   /** Final writer-ordered validation; use when one-time effects must not run during the first check. */
   revalidateAllowed?: () => Promise<void> | void;
   onInterrupt?: SessionWorkAdmissionInterrupt;
@@ -593,8 +593,8 @@ export async function beginSessionWorkAdmission(params: {
       identities: rawIdentities,
       signal,
       run: async () => {
-        if (params.revalidateAllowed) {
-          await lease.run(async () => await params.assertAllowed(signal));
+        if (params.revalidateAllowed && params.assertAllowed) {
+          await lease.run(async () => await params.assertAllowed?.(signal));
         }
         assertIngressOpen();
         if (isGatewaySubordinateWorkAdmissionClosed()) {
@@ -613,7 +613,7 @@ export async function beginSessionWorkAdmission(params: {
               if (params.revalidateAllowed) {
                 await params.revalidateAllowed();
               } else {
-                await params.assertAllowed(signal);
+                await params.assertAllowed?.(signal);
                 admission.phase = "acquired";
               }
             });
@@ -710,6 +710,38 @@ export function startSessionWorkAdmissionInterruption(params: {
     reason: params.reason,
     assertCurrent: params.assertCurrent,
   });
+}
+
+/** Cancel this Gateway's ingress, retaining acquired custody through physical settlement. */
+export function startGatewaySessionWorkAdmissionInterruption(
+  resolveGatewayContext: GatewayContextResolver,
+  reason: Error,
+): { released: Promise<void> } {
+  const admissions = collectSessionWorkAdmissions(ACTIVE_SESSION_WORK_ADMISSIONS.keys(), (owner) =>
+    hasGatewayContextOwner(owner, resolveGatewayContext),
+  );
+  const interruptions = Array.from(admissions, (owner) => {
+    if (owner.interrupted || owner.isSettling?.()) {
+      return owner.released;
+    }
+    try {
+      return interruptSessionWorkAdmissionOwners(new Set([owner]), reason).released;
+    } catch (error) {
+      // A failed cancellation callback must not strand another owner's ingress.
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+  return {
+    released: Promise.allSettled([
+      ...interruptions,
+      ...Array.from(admissions, (owner) => owner.released),
+    ]).then((results) => {
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") {
+        throw failed.reason;
+      }
+    }),
+  };
 }
 
 export async function interruptSessionWorkAdmissions(params: {

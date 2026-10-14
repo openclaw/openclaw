@@ -34,7 +34,12 @@ async function fixture() {
     path.join(directory, "package.json"),
     JSON.stringify({ name: "ui-build-fixture", type: "module" }),
   );
-  await fs.symlink(path.resolve("node_modules"), path.join(directory, "node_modules"), "dir");
+  await fs.mkdir(path.join(directory, "node_modules"));
+  await fs.symlink(
+    path.resolve("node_modules/esbuild"),
+    path.join(directory, "node_modules/esbuild"),
+    "dir",
+  );
   await fs.writeFile(
     path.join(directory, "index.ts"),
     'import "./style.css"; export const message = "first";',
@@ -103,7 +108,7 @@ describe("native plugin browser builds", () => {
   it("bundles a Solid TSX view with reactive updates and owned disposal", async () => {
     const project = await fixture();
     const dependencies = path.join(project.rootDir, "node_modules");
-    await fs.unlink(dependencies);
+    await fs.rm(dependencies, { recursive: true });
     await fs.mkdir(path.join(dependencies, "@solidjs"), { recursive: true });
     for (const name of ["esbuild", "solid-js", "@solidjs/web", "@solidjs/compiler"]) {
       const owner = name === "esbuild" ? "node_modules" : "ui/node_modules";
@@ -473,7 +478,12 @@ export { flush };
     expect(await fs.readFile(path.join(project.rootDir, "openclaw.plugin.json"), "utf8")).toBe(
       manifest,
     );
-    expect(await fs.readFile(path.join(project.rootDir, first.entry), "utf8")).toContain("first");
+    const retained = await import(pathToFileURL(path.join(project.rootDir, first.entry)).href);
+    expect(retained.message).toBe("first");
+    expect(await retained.loadDependencies("value")).toEqual([
+      "literal dependency",
+      "glob dependency",
+    ]);
   });
 
   it("rejects source entries outside the authoring package", async () => {

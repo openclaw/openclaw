@@ -7,6 +7,7 @@ import type { ApplicationContext, ApplicationGateway } from "../../app/context.t
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { ModelSetupRouteData } from "./first-run-setup.ts";
 import type { ModelSetupPageState } from "./state.ts";
@@ -200,9 +201,12 @@ export async function clickCandidate(page: TestModelSetupPage, kind: string) {
 
 export async function selectManualProvider(page: TestModelSetupPage, providerId: string) {
   const picker = page.querySelector(".model-setup-provider-select")!;
-  const item = picker.querySelector(`[data-manual-provider="${providerId}"]`);
+  const trigger = picker.querySelector<HTMLButtonElement>(".model-setup-provider-select__trigger")!;
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  const item = picker.querySelector<HTMLButtonElement>(`[data-manual-provider="${providerId}"]`);
   expect(item).not.toBeNull();
-  picker.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+  item!.click();
   await page.updateComplete;
 }
 

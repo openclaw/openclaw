@@ -136,6 +136,11 @@ cancelling it and waiting up to 15 more seconds for it to stop. When cancellatio
 succeeds, the command's reply asks you to resend the interrupted request, including
 when the run is still stopping and compaction cannot proceed.
 
+On channels such as Telegram, `/compact` acknowledges the incoming command before
+interrupting an active run or starting compaction, so the channel's five-minute
+adoption watchdog does not abort and replay it. Compaction uses `agents.defaults.compaction.timeoutSeconds`
+and reports its result in a reply; cancellation still stops the work.
+
 Client-side compaction in the built-in OpenClaw runtime passes focus to both older-history and split-turn-prefix summaries. The host limits operator-provided focus to 800 Unicode code points and escapes it as prompt data before adding it to model requests.
 
 Automatic session title generation runs in the background and does not block manual compaction. Gateway compaction requests promptly refuse admitted turns and accepted queued work. Once foreground admission has ended, a completed reply that is still saving or cleaning up can take up to 15 seconds to settle before the request rechecks the session. In-band commands exclude their own execution from this wait, but still wait for other completed writers.
@@ -175,7 +180,7 @@ The built-in OpenClaw runtime starts compaction with the active session model. S
 }
 ```
 
-Bare configured aliases resolve to their canonical provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
+Bare configured aliases resolve to their normalized provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
 
 If Gateway configuration reloads while compaction is waiting to start, compaction uses the newly loaded context engine and model settings together. Its requested workspace and transcript stay the same.
 

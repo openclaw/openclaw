@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { executeSqliteQueryTakeFirstSync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -12,10 +11,7 @@ import {
   classifyOpenClawAgentDatabaseReadError,
   isOpenClawAgentDatabaseReadOpenFailure,
 } from "../../state/openclaw-agent-db-read-error.js";
-import {
-  retainOpenClawAgentDatabaseReadOnly,
-  withOpenClawAgentDatabaseReadOnly,
-} from "../../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -36,7 +32,6 @@ import {
   readQualifiedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import {
-  getSessionKysely,
   resolveSqliteScope,
   toDatabaseOptions,
   type SessionSqliteTargetResolutionCache,
@@ -269,68 +264,6 @@ type PhysicalSessionEntryReadScope = {
   readSource: SessionEntryReadSource;
   projection?: SessionEntryReadScope["projection"];
 };
-
-/** Retained windows occupy a key even when they have no current readable entry. */
-export function retainSessionEntryKeyAbsence(params: {
-  source: CapturedSessionEntryReadSource;
-  sessionKeys: readonly string[];
-  canonicalKey: string;
-  env?: NodeJS.ProcessEnv;
-}) {
-  const capturedSource = params.source;
-  const memory = captureMemoryExactSessionReader({
-    agentId: capturedSource.agentId,
-    storePath: capturedSource.path,
-  });
-  if (memory) {
-    assertMemoryExactReadSource(capturedSource, memory.source);
-    if (params.sessionKeys.some((key) => memory.read(key, "list"))) {
-      throw new Error(
-        `Session "${params.canonicalKey}" has ambiguous stored identity. Select an unambiguous session; stored rows and history were not changed.`,
-      );
-    }
-    return { assertCurrent: memory.assertCurrent, release() {} };
-  }
-  const source = retainOpenClawAgentDatabaseReadOnly({
-    agentId: capturedSource.agentId,
-    path: capturedSource.path,
-    env: params.env,
-  });
-  if (!source.found) {
-    throw new Error("Captured session database is unavailable");
-  }
-  const assertSourceCurrent = () => {
-    source.claim.assertCurrent();
-    assertCapturedSessionEntryReadSource(capturedSource, source.database);
-  };
-  const assertCurrent = () => {
-    assertSourceCurrent();
-    if (!params.sessionKeys.length) {
-      return;
-    }
-    const occupied = executeSqliteQueryTakeFirstSync(
-      source.database.db,
-      getSessionKysely(source.database.db)
-        .selectFrom("session_nodes")
-        .select("session_key")
-        .where("session_key", "in", sqliteStringSet(params.sessionKeys))
-        .limit(1),
-    );
-    assertSourceCurrent();
-    if (occupied) {
-      throw new Error(
-        `Session "${params.canonicalKey}" has ambiguous stored identity. Select an unambiguous session; stored rows and history were not changed.`,
-      );
-    }
-  };
-  try {
-    assertCurrent();
-    return { assertCurrent, release: source.claim.release };
-  } catch (error) {
-    source.claim.release();
-    throw error;
-  }
-}
 
 /** Loads one exact persisted-key entry from the additive SQLite session store. */
 export function loadExactSessionEntry(scope: SessionEntryReadScope): ExactSessionEntry | undefined {

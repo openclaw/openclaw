@@ -127,7 +127,7 @@ is on by default. Use `agent`, `channel`, `tree`, or `self` to narrow visibility
 <AccordionGroup>
   <Accordion title="Visibility scopes">
     - `self`: only the current session key.
-    - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the canonical main session, it includes every same-agent session for list, history, search, send, and status.
+    - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the primary main session, it includes every same-agent session for list, history, search, send, and status.
     - `channel`: current session + verified sessions of the same agent in the same channel, including sibling threads. Stored provider, account, opaque destination, chat kind, and workspace/space must match. Missing or inconsistent route facts deny cross-session access. Main and DM callers without a verified channel remain self-only; main, spawned ownership, agent-to-agent policy, and scoped access grants cannot widen this boundary.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting is governed by `tools.agentToAgent`, which is on by default.
@@ -148,7 +148,7 @@ A per-peer `session.dmScope` separates DM context but does not restrict session
 tools. For narrower access, explicitly choose `agent`, `channel`, `tree`, or `self`, or
 restrict agent pairs with `tools.agentToAgent.allow`. Set
 `tools.agentToAgent.enabled: false` to block ordinary cross-agent access; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`. `tree` retains the
-canonical main-session exception; `self` restricts even main to its current session.
+primary main-session exception; `self` restricts even main to its current session.
 
 The `channel` setting authorizes retrieval; it does not merge thread sessions or
 automatically inject sibling-thread history. It also filters transcript-backed

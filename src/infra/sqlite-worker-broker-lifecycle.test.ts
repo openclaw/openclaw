@@ -12,6 +12,7 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
+import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
 vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
@@ -67,10 +68,15 @@ describe("SQLite worker slots", () => {
   }) => {
     const { lifecycle, slots, workers, options, replyOwner } = runtimeFixture(false);
     const slot = lifecycle.createSlot(options, false, replyOwner);
+    const custody = slot.custody.createRequest();
+    custody.activate();
+    custody.accept();
     let retired = false;
     const retirement = lifecycle.retire(slot).then(() => {
       retired = true;
     });
+    expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
+    expect(custody.dispatched).toBe(true);
     const cancel = new AbortController();
     const waiting = lifecycle.acquireSlot(
       { ...options, signal: cancel.signal },
@@ -258,17 +264,26 @@ describe("SQLite worker slots", () => {
       );
       const nativeStopped = createDeferredCore();
       const markNativeStopped = vi.fn(nativeStopped.resolve);
+      const custody = slot.custody.createRequest();
+      custody.activate();
+      custody.accept();
+      custody.post();
       const actor: Actor = {
         id: 1,
         key: "fixture",
         databasePath: "/state/openclaw.sqlite",
+        stateAccess: {
+          canonicalPath: "/state/openclaw.sqlite",
+          assertAccessAllowed() {},
+          assertReadAllowed() {},
+        },
         pathReferences: new Map(),
         moduleUrl: "file:///openclaw/dist/device-auth-store.sqlite.js",
         inputHash: "fixture",
         slot,
         references: 0,
         opened: Promise.resolve(),
-        openDispatch: { dispatched: true },
+        openDispatch: { custody },
         initialized: true,
         backendClosed: false,
         nativeStopped: nativeStopped.promise,

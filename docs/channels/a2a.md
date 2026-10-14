@@ -90,7 +90,9 @@ By default, the request waits for the agent response. A completed response conta
 }
 ```
 
-Include `message.contextId` on subsequent requests to continue the same conversation. Context IDs can contain letters, numbers, periods, underscores, colons, and hyphens, and must not exceed 128 characters.
+Include `message.contextId` on subsequent requests to continue the same conversation with a new task. Omit `message.taskId`: continuing an existing task is not supported, including while that task is working. Context IDs can contain letters, numbers, periods, underscores, colons, and hyphens, and must not exceed 128 characters.
+
+If `message.taskId` is supplied, unknown, expired, or other peers' task IDs return JSON-RPC error `-32001`. An owned task with a conflicting `message.contextId` returns `-32602`; otherwise, the request returns `-32004` for unsupported task continuation. None of these requests starts new work or changes the referenced task.
 
 To return immediately while the agent continues working, add `"configuration": { "returnImmediately": true }` alongside `"message"` in `params`. The task initially reports `TASK_STATE_WORKING`. Requests that exceed `replyTimeoutMs` also return the current working task instead of canceling it.
 
@@ -184,6 +186,8 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 ## A2A 1.0 limitations
 
 The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
+
+The Agent Card advertises `pushNotifications: false`. Push notification configuration methods return JSON-RPC error `-32003` (`PushNotificationNotSupportedError`), as required by the [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/#334-capability-validation). Other recognized unsupported methods return `-32004`; unknown method names return `-32601`.
 
 A repeated `messageId` from the same authenticated peer returns the existing task and its current
 state while that task is retained. It does not start another agent turn, even if the retry omits

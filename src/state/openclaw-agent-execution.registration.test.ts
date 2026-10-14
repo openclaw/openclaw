@@ -15,6 +15,7 @@ import {
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { AgentDatabaseDeletionRefusedError } from "./agent-deletion-journal.js";
 import type {
@@ -108,7 +109,7 @@ vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) 
         "validationPort" in facts &&
         facts.validationPort instanceof MessagePort
       ) {
-        facts.validationPort.postMessage({ deferUnverifiedIntegrity: false }, []);
+        facts.validationPort.postMessage({}, []);
       }
       edge.request(...args);
     },
@@ -190,11 +191,15 @@ function retireFailedReply(
   const completion = createDeferredCore<unknown>();
   const reject = vi.fn((error: unknown) => completion.resolve(error));
   const settleNative = vi.fn();
+  const slotCustody = new SqliteWorkerSlotCustody();
+  const custody = slotCustody.createRequest();
+  custody.activate();
+  custody.accept();
   const job: Job = {
+    custody,
     observation: { started() {}, completed() {} },
     request,
     bytes: 0,
-    nativeDispatched: true,
     operationAdmission: {
       admission: {
         get port(): MessagePort {
@@ -220,6 +225,7 @@ function retireFailedReply(
   };
   const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
     Parameters<typeof failSqliteWorkerSlot>[0] = {
+    custody: slotCustody,
     actors: new Set<Actor>(),
     current: job,
     queue: [],

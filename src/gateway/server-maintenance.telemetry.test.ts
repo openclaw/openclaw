@@ -16,7 +16,8 @@ const {
 } = vi.hoisted(() => ({
   checkTelemetryUpdateMock: vi.fn<typeof import("../infra/telemetry.js").checkTelemetryUpdate>(),
   generateSecureIntMock: vi.fn<typeof import("../infra/secure-random.js").generateSecureInt>(),
-  devicePairCleanupMock: vi.fn(async () => 0),
+  devicePairCleanupMock:
+    vi.fn<typeof import("../infra/device-bootstrap.js").startDevicePairSetupMaintenance>(),
   forbiddenDefaultAdapter: vi.fn((adapter: string): never => {
     throw new Error(`Unexpected default maintenance adapter: ${adapter}`);
   }),
@@ -27,8 +28,9 @@ vi.mock("../infra/secure-random.js", async (importOriginal) => ({
   generateSecureInt: generateSecureIntMock,
 }));
 
+// mock-isolation: Inject scheduled device work to test shutdown without a database worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
-  pruneExpiredDevicePairSetupCompletions: devicePairCleanupMock,
+  startDevicePairSetupMaintenance: devicePairCleanupMock,
 }));
 
 vi.mock("../infra/telemetry.js", () => ({
@@ -99,7 +101,7 @@ describe("gateway telemetry maintenance", () => {
     vi.restoreAllMocks();
     checkTelemetryUpdateMock.mockReset();
     generateSecureIntMock.mockReset();
-    devicePairCleanupMock.mockReset().mockResolvedValue(0);
+    devicePairCleanupMock.mockReset();
     expect(defaultAdapterCalls).toHaveLength(0);
   });
 
@@ -128,7 +130,7 @@ describe("gateway telemetry maintenance", () => {
           return maintenance;
         });
       }
-      const blockedCall = fails ? 1 : 2;
+      const blockedCall = fails || owner === "device-pair" ? 1 : 2;
       const operation = createDeferredCore();
       const cleanup = createDeferredCore();
       const cleanupStarted = createDeferredCore();
@@ -144,11 +146,19 @@ describe("gateway telemetry maintenance", () => {
         cleanupStarted.resolve();
       };
       const state = createGatewayMaintenanceStateForTest();
-      devicePairCleanupMock.mockImplementation(async () => {
+      if (owner === "health") {
+        state.clients.add({
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "test", version: "test", platform: "test", mode: "test" },
+          },
+        });
+      }
+      devicePairCleanupMock.mockImplementation(({ scheduler }) => {
         if (owner === "device-pair") {
-          await run();
+          scheduler.schedule({ id: "device-pair-test", atMs: scheduler.now(), run });
         }
-        return 0;
       });
       const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
       const timers = startGatewayMaintenanceTimers({

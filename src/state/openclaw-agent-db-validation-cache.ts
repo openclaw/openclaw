@@ -1,11 +1,14 @@
-import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
+  readSqliteDatabaseIntegrityVerification,
+  recordSqliteDatabaseIntegrity,
 } from "../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
@@ -15,6 +18,7 @@ import {
 } from "../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
+  assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   resolveDatabasePathKey,
 } from "../infra/sqlite-worker-identity.js";
@@ -26,6 +30,7 @@ import {
 import {
   clearPersistedOpenClawAgentCanonicalValidation,
   hasPersistedOpenClawAgentCanonicalValidation,
+  loadOpenClawAgentCanonicalValidationReceipt,
 } from "./openclaw-agent-canonical-validation-receipt.js";
 import {
   adoptCanonicalSessionValidationSchema,
@@ -42,6 +47,7 @@ import {
 } from "./openclaw-agent-db-resources.js";
 import {
   agentDatabaseValidationKey,
+  createOpenClawAgentDatabaseValidationReceipt,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-facts.js";
 
@@ -64,6 +70,59 @@ const validatedPaths = resolveGlobalSingleton<Map<string, ValidationEntry>>(
   () => new Map(),
   () => clearOpenClawAgentDatabaseValidationCache(),
 );
+const validationObservations = resolveGlobalSingleton<
+  Map<string, { close(): void; revalidate(): void }>
+>(Symbol.for("openclaw.agentDatabaseValidationObservations"), () => new Map());
+
+function releaseValidationObservation(pathname: string): void {
+  validationObservations.get(pathname)?.close();
+}
+
+function observeValidationPath(pathname: string, admission: boolean): void {
+  const existing = validationObservations.get(pathname);
+  if (existing) {
+    if (admission) {
+      existing.revalidate();
+    }
+    return;
+  }
+  const revalidate = () => {
+    const validation = validatedPaths.get(pathname)?.validation;
+    if (!validation || Atomics.load(new Int32Array(validation.valid), 0) !== 1) {
+      return;
+    }
+    try {
+      assertExistingDatabaseIdentity(pathname, `file:${validation.identity}`, validation.birthtime);
+    } catch {
+      invalidateOpenClawAgentDatabaseValidation(pathname, validation.identity);
+    }
+  };
+  const watched = observeOwnedDirectory(
+    path.dirname(pathname),
+    (filename) => {
+      if (
+        filename === undefined ||
+        (process.platform === "win32"
+          ? filename.toLowerCase() === path.basename(pathname).toLowerCase()
+          : filename === path.basename(pathname))
+      ) {
+        revalidate();
+      }
+    },
+    { recoveryIntervalMs: 30_000 },
+  );
+  // Retained proof outlives native handles; its cache owns observation cleanup.
+  validationObservations.set(pathname, {
+    revalidate,
+    close() {
+      watched.close();
+      validationObservations.delete(pathname);
+    },
+  });
+  // The first subscriber must not retain a file replaced before observation began.
+  revalidate();
+}
+
 const validationBindings = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseValidationBindings"),
   () =>
@@ -160,6 +219,17 @@ export function adoptOpenClawAgentDatabaseSchema(
   }
   if (adopted) {
     adoptCanonicalSessionValidationSchema(database.db);
+    if (validation?.integrityVerifiedAt !== undefined) {
+      if (readSqliteDatabaseIntegrityVerification(database.db) === undefined) {
+        recordSqliteDatabaseIntegrity(database.db, validation.integrityVerifiedAt);
+      }
+      if (
+        getSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey)?.receiptId !==
+        validation.receiptId
+      ) {
+        publishSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey, validation);
+      }
+    }
   }
   return adopted;
 }
@@ -234,38 +304,52 @@ export function getOpenClawAgentDatabaseValidation(
   ) {
     return undefined;
   }
-  const validation = entry.validation;
-  bindValidationLifetime(database, validation);
-  return validation;
+  bindValidationLifetime(database, entry.validation);
+  return entry.validation;
 }
 
 /** The receiving opener must adopt this proof against its own physical file identity. */
 export function getOpenClawAgentDatabaseValidationForTransfer(
   database: Pick<ValidationDatabase, "agentId" | "path">,
 ): OpenClawAgentDatabaseValidation | undefined {
-  const entry = validatedPaths.get(resolveDatabasePathKey(database.path));
-  return entry?.integrityVerified &&
-    entry.validation?.agentId === database.agentId &&
-    Atomics.load(new Int32Array(entry.validation.valid), 0) === 1
-    ? entry.validation
-    : undefined;
+  const pathname = validatedPaths.has(database.path)
+    ? database.path
+    : resolveDatabasePathKey(database.path);
+  const entry = validatedPaths.get(pathname);
+  if (
+    !entry?.integrityVerified ||
+    entry.validation?.agentId !== database.agentId ||
+    Atomics.load(new Int32Array(entry.validation.valid), 0) !== 1
+  ) {
+    return undefined;
+  }
+  return entry.validation;
 }
 
 /** Readers borrow physical/canonical proof without copying the schema catalog or opening a host handle. */
 export function captureOpenClawAgentDatabaseReadValidation(
   database: Pick<ValidationDatabase, "agentId" | "path">,
+  mode: "retained" | "admission" = "retained",
 ) {
   const current = getOpenClawAgentDatabaseValidationForTransfer(database);
   if (!current) {
     return undefined;
   }
-  const capturedIdentity = readDatabasePathIdentitySync(database.path);
-  if (
-    capturedIdentity.key !== `file:${current.identity}` ||
-    capturedIdentity.birthtime !== current.birthtime
-  ) {
-    // A retained pathname receipt cannot admit its replacement file.
-    return undefined;
+  let canonicalPath = database.path;
+  if (validatedPaths.has(canonicalPath)) {
+    observeValidationPath(canonicalPath, mode === "admission");
+    if (Atomics.load(new Int32Array(current.valid), 0) !== 1) {
+      return undefined;
+    }
+  } else {
+    const capturedIdentity = readDatabasePathIdentitySync(database.path);
+    if (
+      capturedIdentity.key !== `file:${current.identity}` ||
+      capturedIdentity.birthtime !== current.birthtime
+    ) {
+      return undefined;
+    }
+    canonicalPath = capturedIdentity.canonicalPath;
   }
   const { agentId, identity, birthtime, receiptId, valid, canonicalReady } = current;
   const validation: OpenClawAgentDatabaseReadValidation = {
@@ -277,6 +361,7 @@ export function captureOpenClawAgentDatabaseReadValidation(
     canonicalReady,
   };
   return {
+    canonicalPath,
     validation,
     inputBytes:
       JSON.stringify(validation).length * 2 + valid.byteLength + canonicalReady.byteLength,
@@ -511,7 +596,7 @@ export function hasOpenClawAgentCanonicalValidation(
   ) {
     return false;
   }
-  const canonical = createValidationReceipt({ ...database, path: pathname }, true);
+  const canonical = createOpenClawAgentDatabaseValidationReceipt(database, true);
   const entry: ValidationEntry = validatedPaths.get(pathname) ?? {
     integrityVerified: false,
   };
@@ -529,6 +614,11 @@ export function invalidateOpenClawAgentCanonicalValidation(
   const validation = canonicalValidationReceipt(database);
   if (validation) {
     Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
+    // A seal can restore a separate copy of this receipt after the last handle closes.
+    const pathname = findOpenClawAgentDatabaseIdentity(database)?.canonicalPath;
+    if (pathname && validatedPaths.get(pathname)?.integrityVerified) {
+      publishSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey, validation);
+    }
   }
   clearPersistedOpenClawAgentCanonicalValidation(database);
 }
@@ -599,40 +689,17 @@ function isOpenClawAgentCanonicalStoreEmpty(database: { db: DatabaseSync }): boo
   );
 }
 
-function createValidationReceipt(
-  database: ValidationDatabase,
-  canonicalReady: boolean,
-): OpenClawAgentDatabaseValidation {
-  const { identity, birthtime } = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity !== "string" || birthtime === undefined) {
-    throw new Error("Only persistent agent databases retain integrity validation");
-  }
-  const validation = {
-    agentId: database.agentId,
-    identity,
-    birthtime,
-    receiptId: randomUUID(),
-    valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-    canonicalReady: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-  };
-  if (canonicalReady) {
-    Atomics.store(new Int32Array(validation.canonicalReady), 0, 1);
-  }
-  Atomics.store(new Int32Array(validation.valid), 0, 1);
-  return validation;
-}
-
 export function setOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
 ): OpenClawAgentDatabaseValidation {
   const pathname = readOpenClawAgentDatabaseIdentity(database).canonicalPath;
   const revoked = hasRevokedOpenClawAgentDatabaseValidation(pathname);
-  let validation = createValidationReceipt(
+  let validation = createOpenClawAgentDatabaseValidationReceipt(
     database,
     isOpenClawAgentCanonicalStoreEmpty(database) ||
       (!revoked &&
         !database.db.isTransaction &&
-        hasPersistedOpenClawAgentCanonicalValidation(database)),
+        loadOpenClawAgentCanonicalValidationReceipt(database)),
   );
   const entry = validatedPaths.get(pathname);
   if (
@@ -643,6 +710,9 @@ export function setOpenClawAgentDatabaseValidation(
   ) {
     // Successful admission promotes this owner; only revocation retires pending handoffs.
     if (entry.validation) {
+      if (validation.integrityVerifiedAt !== undefined) {
+        entry.validation.integrityVerifiedAt = validation.integrityVerifiedAt;
+      }
       Atomics.store(
         new Int32Array(entry.validation.canonicalReady),
         0,
@@ -691,6 +761,7 @@ export function invalidateOpenClawAgentDatabaseValidation(
     }
   }
   for (const candidate of paths) {
+    releaseValidationObservation(candidate);
     const entry = validatedPaths.get(candidate);
     const validation = entry?.validation;
     if (validation) {
@@ -743,6 +814,7 @@ export function releaseOpenClawAgentDatabaseReadValidation(
       ) &&
       candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, pathname))
     ) {
+      releaseValidationObservation(pathname);
       validatedPaths.delete(pathname);
     }
   }

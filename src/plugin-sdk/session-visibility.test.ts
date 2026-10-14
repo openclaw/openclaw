@@ -2,16 +2,19 @@ import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
-import { classifyLookupFailure, lookupFailedDenialSuffix } from "./session-visibility-internal.js";
+import {
+  classifyLookupFailure,
+  lookupFailedDenialSuffix,
+  resolveSessionChannelScope,
+  type SessionChannelScope,
+} from "./session-visibility-internal.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,
   createSessionVisibilityGuard,
   createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
-  resolveSessionChannelScope,
   resolveSessionToolsVisibility,
-  type SessionChannelScope,
 } from "./session-visibility.js";
 
 describe("scoped session access providers", () => {
@@ -485,6 +488,20 @@ describe("channel-scoped session visibility", () => {
       expect(checker.check({ key, channelScope: scope })).toEqual({ allowed: true });
     }
   });
+
+  it.each(["send", "status"] as const)(
+    "keeps same-channel sibling %s outside retrieval authority",
+    (action) => {
+      const checker = createSessionVisibilityRowChecker({ ...params, action });
+      expect(checker.check({ key: requester, channelScope: scope })).toEqual({ allowed: true });
+      expect(checker.check({ key: sibling, channelScope: scope })).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Channel visibility authorizes cross-session retrieval, not sibling sends or status changes.",
+      });
+    },
+  );
 
   it.each([
     { channelScope: undefined },

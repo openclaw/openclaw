@@ -5,11 +5,7 @@ import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LitRouteHost } from "./lit-route-host.tsx";
 import { ShellLayoutOwner } from "./shell-layout-owner.ts";
-import {
-  ShellLayoutController,
-  shellLayoutTraits,
-  type ShellLayoutTraits,
-} from "./shell-layout-traits.ts";
+import { shellLayoutTraits, type ShellLayoutTraits } from "./shell-layout-traits.ts";
 
 class LayoutPage extends LitElement {
   traits: ShellLayoutTraits = {};
@@ -38,7 +34,12 @@ class LayoutPage extends LitElement {
 }
 
 class LayoutShell extends LitElement {
-  private readonly layout = new ShellLayoutController(this);
+  private readonly layout = new ShellLayoutOwner(() => this.requestUpdate());
+
+  constructor() {
+    super();
+    this.addController(this.layout);
+  }
 
   protected override createRenderRoot() {
     return this;

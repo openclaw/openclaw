@@ -397,6 +397,41 @@ describe("loginMiniMaxPortalOAuth", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+  it("records the issuing account endpoint for Global and CN credentials", async () => {
+    for (const [region, expectedHosts] of [
+      [
+        "global",
+        [
+          "https://account.minimax.io/oauth2/device/code",
+          "https://account.minimax.io/oauth2/token",
+        ],
+      ],
+      [
+        "cn",
+        [
+          "https://account.minimaxi.com/oauth2/device/code",
+          "https://account.minimaxi.com/oauth2/token",
+        ],
+      ],
+    ] as const) {
+      const fetchMock = stubOAuthFetch(
+        (_input, init) => authorizationResponse(init),
+        tokenResponse(),
+      );
+
+      await expect(loginMiniMax({ region })).resolves.toMatchObject({
+        tokenEndpoint: expectedHosts[1],
+      });
+      expect(
+        fetchMock.mock.calls.map(([input]) =>
+          input instanceof Request ? input.url : String(input),
+        ),
+      ).toEqual(expectedHosts);
+
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("rejects Date-invalid authorization expiries before formatting instructions", async () => {
     stubOAuthFetch((_input, init) =>
       authorizationResponse(init, { expired_in: 8_700_000_000_000_000 }),

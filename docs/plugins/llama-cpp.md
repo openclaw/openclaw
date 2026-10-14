@@ -472,6 +472,27 @@ for older llama-server builds.
 
 Local memory embeddings require managed mode:
 
+For automated embedding-only setup, configure local memory and explicitly consent
+to downloading the embedding model and verified llama.cpp runtime:
+
+```bash
+openclaw config set memory.search.provider local
+openclaw onboard --non-interactive --accept-risk \
+  --auth-choice llama-cpp --llama-cpp-embedding-only
+openclaw memory index --force
+openclaw memory status --deep
+```
+
+`--llama-cpp-embedding-only` installs only the embedding model (about 0.3 GB by
+default) and server runtime. It uses the same setup path as interactive
+embedding-only setup and preserves your chat model. It honors an enabled agent's
+configured embedding model; agents using local memory must agree on that model.
+An existing external server or managed chat route cannot be replaced by this
+embedding-only path. Without the consent flag, non-interactive managed setup fails
+before downloading anything.
+
+To choose the embedding model explicitly:
+
 ```json5
 {
   memory: {

@@ -1,6 +1,6 @@
 import type { CronJob, CronScratchGetResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
@@ -31,8 +31,13 @@ import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
-import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
+import { modelCatalogKey, modelCatalogParams } from "../../lib/model-catalog-cache.ts";
+import {
+  loadModelCatalog,
+  modelCatalogRefreshError,
+  subscribeModelCatalogCache,
+} from "../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
   DeliveryConversationsController,
@@ -87,6 +92,7 @@ export class CronPageController {
   private readonly routeSelection = new CronRouteSelection();
   private pendingRunScroll = false;
   private modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
+  private stopModelSuggestions: (() => void) | undefined;
   readonly deliveryDirectory = new DeliveryConversationsController({
     currentCronState: () => this.cron,
     canManage: () => this.canManageCron,
@@ -156,6 +162,9 @@ export class CronPageController {
         this.clearHeartbeatScratch();
         this.deliveryDirectory.clear();
       }
+      if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+        this.cron.cronJobsError = formatMissingOperatorReadScopeMessage("scheduled tasks");
+      }
       if (snapshot.phase === "connected" && (first || changed)) {
         this.ensureInitialData();
       } else if (!first && !this.gatewayAvailable && nextAvailable && previousConnected) {
@@ -181,8 +190,6 @@ export class CronPageController {
         if (this.active && this.context === context) {
           if (event.event === "cron") {
             void this.refreshCron({ coalesce: true });
-          } else if (modelCatalogEventInvalidation(event)) {
-            void this.loadModelSuggestions(this.cron);
           }
         }
       }),
@@ -199,8 +206,15 @@ export class CronPageController {
   };
 
   activate() {
+    if (!this.active) {
+      return;
+    }
     document.addEventListener("visibilitychange", this.onActivation);
     globalThis.addEventListener("focus", this.onActivation);
+    // Solid constructs the host before insertion, so its cold read starts after attachment.
+    if (!this.cron.cronStatus && !this.cron.cronLoading) {
+      this.ensureInitialData();
+    }
   }
 
   dispose() {
@@ -224,6 +238,8 @@ export class CronPageController {
   }
 
   private resetGatewayState(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    this.stopModelSuggestions?.();
+    this.stopModelSuggestions = undefined;
     this.runTranscript.close();
     this.clearHeartbeatScratch();
     invalidateCronRefresh(this.cron);
@@ -251,6 +267,7 @@ export class CronPageController {
       this.host.isConnected &&
       this.cron === cron &&
       isGatewayAvailable(this.context.gateway.snapshot) &&
+      hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
       document.visibilityState !== "hidden"
     );
   }
@@ -382,6 +399,17 @@ export class CronPageController {
     if (!client || !agentId || !isGatewayAvailable(this.context.gateway.snapshot)) {
       return;
     }
+    this.stopModelSuggestions ??= subscribeModelCatalogCache(client, (update) => {
+      if (!this.active || this.cron.client !== client || update.type !== "invalidated") {
+        return;
+      }
+      const scope = modelCatalogParams({
+        agentId: this.context.agentSelection.state.selectedId ?? undefined,
+      });
+      if (update.matches(scope, modelCatalogKey(scope))) {
+        void this.loadModelSuggestions(this.cron);
+      }
+    });
     const request = { state: cronState, agentId };
     this.modelSuggestionsRequest = request;
     // Only the latest catalog request may publish rows or errors.

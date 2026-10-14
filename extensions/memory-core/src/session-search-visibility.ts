@@ -25,7 +25,6 @@ import {
   createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
-  resolveSessionChannelScope,
 } from "openclaw/plugin-sdk/session-visibility";
 import {
   normalizeOptionalLowercaseString as normalizeAgentIdForCompare,
@@ -211,16 +210,16 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
           )
         ).store
       : undefined;
-  const guardChannelScopeForSession = (key: string) => {
+  const guardChannelRowForSession = (key: string) => {
     const entry = guardSessionStore?.[key];
     return entry
-      ? resolveSessionChannelScope({
+      ? {
           key,
           chatType: entry.chatType,
           space: entry.space,
           origin: sessionDeliveryOrigin(entry),
           deliveryContext: deliveryContextFromSession(entry),
-        })
+        }
       : undefined;
   };
   const guard = params.requesterSessionKey
@@ -241,8 +240,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
         a2aPolicy,
         ...(visibility === "channel"
           ? {
-              requesterChannelScope: guardChannelScopeForSession(params.requesterSessionKey),
-              channelScopeForSession: guardChannelScopeForSession,
+              requesterChannelRow: guardChannelRowForSession(params.requesterSessionKey),
+              channelRowForSession: guardChannelRowForSession,
             }
           : {}),
       })
@@ -251,16 +250,16 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     params.cfg,
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );
-  const currentChannelScopeForSession = (key: string) => {
+  const currentChannelRowForSession = (key: string) => {
     const entry = combinedSessionStore[key];
     return entry
-      ? resolveSessionChannelScope({
+      ? {
           key,
           chatType: entry.chatType,
           space: entry.space,
           origin: sessionDeliveryOrigin(entry),
           deliveryContext: deliveryContextFromSession(entry),
-        })
+        }
       : undefined;
   };
   const channelRowChecker =
@@ -271,7 +270,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
           requesterAgentId,
           visibility,
           a2aPolicy,
-          requesterChannelScope: currentChannelScopeForSession(params.requesterSessionKey),
+          requesterChannelRow: currentChannelRowForSession(params.requesterSessionKey),
         })
       : null;
 
@@ -347,10 +346,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       return (
         trustedAgentScope ||
         (channelRowChecker
-          ? channelRowChecker.check({
-              key: visibilityKey,
-              channelScope: currentChannelScopeForSession(key),
-            }).allowed
+          ? channelRowChecker.check({ ...currentChannelRowForSession(key), key: visibilityKey })
+              .allowed
           : guard?.check(visibilityKey).allowed === true)
       );
     }

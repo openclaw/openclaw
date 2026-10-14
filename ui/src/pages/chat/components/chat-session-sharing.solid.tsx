@@ -394,6 +394,7 @@ function SharingContent(props: ChatSessionSharingProps) {
 }
 
 export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: boolean }) {
+  const [opened, setOpened] = createSignal(false);
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => props.state?.result?.owner ?? props.session?.owner?.actor;
   const canManage = () => props.session && canManageChatSessionSharing(props.session);
@@ -441,6 +442,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: b
             placement="bottom-end"
             onKeyDown={handlePeopleMenuKeydown}
             onWa-show={() => {
+              setOpened(true);
               if (!props.openDisabledReason) {
                 props.onOpen();
               }
@@ -465,7 +467,9 @@ export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: b
               <SharingIcon visibility={visibility()} />
               <span>{t("chat.sessionSharing.share")}</span>
             </button>
-            <SharingContent {...props} />
+            <Show when={opened()}>
+              <SharingContent {...props} />
+            </Show>
           </wa-dropdown>
         </Show>
       </Show>

@@ -1596,6 +1596,78 @@ describe("canonical session message recovery", () => {
     },
   );
 
+  it("recovers a terminal failure once without retrying a missing receipt", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "failed-run";
+      const request = vi.fn().mockResolvedValue({
+        messages: [],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          status: "failed",
+          hasActiveRun: false,
+          activeRunIds: [],
+          lastRunId: runId,
+          lastRunError: "Storage is unavailable",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatRunId: runId,
+        pendingSessionMessageReloadSessionKey: null,
+        client: createTestGatewayClient(request),
+      });
+      const event = {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "error",
+          errorMessage: "Storage is unavailable",
+        },
+      } satisfies Parameters<typeof handlePageGatewayEvent>[1];
+      handlePageGatewayEvent(state, event, () => false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
+      expect(state.chatRunError).toMatchObject({ runId, summary: "Error: Storage is unavailable" });
+      handlePageGatewayEvent(state, event, () => false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["other session", "background run"])(
+    "does not recover failure history for %s",
+    (kind) => {
+      const request = vi.fn();
+      const { state } = createSessionEventState({
+        chatRunId: "foreground-run",
+        client: createTestGatewayClient(request),
+      });
+      handlePageGatewayEvent(
+        state,
+        {
+          type: "event",
+          event: "chat",
+          payload: {
+            sessionKey: kind === "other session" ? "agent:main:other" : state.sessionKey,
+            runId: kind === "background run" ? "background-run" : "foreground-run",
+            state: "error",
+            errorMessage: "Another request failed",
+          },
+        },
+        () => false,
+      );
+      expect(request).not.toHaveBeenCalled();
+      expect(state.chatRunId).toBe("foreground-run");
+    },
+  );
+
   it("recovers once when history completed the run before its message-less terminal arrives", async () => {
     const runId = "run-completed-by-history-before-terminal";
     const prompt = createRecoveryPrompt(runId, "Finish after the tool call");

@@ -13,6 +13,7 @@ Select proof using the canonical
 Use the commands below for the suite you need:
 
 - Focused test: `pnpm test <file> --maxWorkers=1`
+- Failed PR CI tests: `pnpm test:ci-failed <pr>`; execute the selection with `--run`
 - Watch loop: `pnpm test:watch`
 - Full suite: `pnpm test`; higher worker cap: `pnpm test:max`
 - Informational coverage: `pnpm test:coverage`
@@ -23,6 +24,15 @@ Use the commands below for the suite you need:
 The QA site requires Docker and source (the npm tarball omits QA Lab); the VM
 runner requires Multipass. See [QA runners](/help/testing/qa-runners).
 
+PR CI owns broad proof. After CI fails, run `pnpm test:ci-failed <pr>` and read
+the pre-existing/new/unknown classification. Fix new failures and investigate
+unknown ones, then use `pnpm test:ci-failed <pr> --run` until the selected tests
+pass locally and push once. Do not run the full local suite or use
+`gh run rerun` to chase green. Pre-existing failures follow the
+[failure-table landing rule](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures).
+See [failed CI test selection](/reference/scripts/pr-tooling#rerun-failed-ci-tests)
+for targets, classification, and command options.
+
 Oxlint's `max-lines` rule warns when files exceed the per-scope limits in
 `.oxlintrc.json`; these warnings remain visible in lint logs and do not fail CI.
 Local `pnpm check:changed` rejects over-cap changed files and separately checks
@@ -30,6 +40,29 @@ new violations and growth; untouched overages found by broad lint are warnings.
 PR CI reports numeric ratchet violations as warnings too. The suppression
 baseline ratchet remains strict locally. See [surface ratchets](/ci/local-proof#surface-ratchets) for
 comparison bases and shrink-only maintenance.
+
+## Runner exit status
+
+`pnpm test`, `scripts/test-projects.mts`, and `scripts/run-vitest.mjs` distinguish
+Vitest failures from runner infrastructure failures:
+
+- `0`: the command completed successfully.
+- `1`: Vitest failed, or rejected the requested tests or arguments.
+- `2`: loader startup, runner preparation, child completion, worker disposal, or report publication failed.
+  Existing native failure codes other than `1` remain unchanged.
+
+The runner completes worker disposal and requested report publication before it
+returns. A later infrastructure failure takes precedence over an earlier test
+failure. Across parallel completions, the first observed native status other than
+`0`, `1`, or reserved infrastructure `2` wins, regardless of when `2` arrives.
+Infrastructure outcomes stop new shard admission; already admitted shards still
+join. Ordinary assertion failures keep the selection's continuation policy.
+Forwarded signals retain their signal outcome after cleanup.
+
+For an expected-failure proof, require exit `1` and the intended assertion in its
+report. Wait for the outer command to terminate. A report alone does not prove
+that cleanup succeeded. An interrupted command or missing terminal result is
+not a completed expected failure.
 
 ## Test suites (what runs where)
 
@@ -130,7 +163,7 @@ Native dependency policy:
     - Non-watch package and agent directory targets, such as `pnpm test packages/gateway-client` or `pnpm test src/agents/tools`, and quoted agent globs such as `pnpm test 'src/agents/failover/**/*.test.ts'`, discover regular `*.test.ts` files and route each to its owning lane. This preserves fast, isolated, harness, and database-worker ownership, shared exclusions, and inherited include limits; ordinary selections do not opt into live or E2E tests.
     - Non-watch root-project runs, such as `node scripts/run-vitest.mjs run src/config`, prepare any built runtime required by their selected tests before starting them.
     - `pnpm test:changed` expands changed git paths into cheap scoped lanes by default: direct test edits, sibling `*.test.ts` files, explicit source mappings, and local import-graph dependents. Config/setup/package edits do not broad-run tests unless you explicitly use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed`.
-    - `pnpm check:changed` is the normal smart local check gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. Selected paths also schedule targeted Vitest owner tests via `pnpm test:serial`; use `pnpm test:changed` or explicit `pnpm test <target>` for additional test proof matching the touched contract. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
+    - `pnpm check:changed` is an optional smart local check for narrow work; PR CI owns the broad gate. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. Selected paths also schedule targeted Vitest owner tests via `pnpm test:serial`; use `pnpm test:changed` or explicit `pnpm test <target>` for additional test proof matching the touched contract. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
     - In the default Git diff mode against `HEAD`, comment/whitespace-only TypeScript edits skip their typecheck lanes and core graph boundary check when tokens and line-break boundaries match the merge base. Files with TypeScript/JSX directives, triple-slash comments, parse errors, or path lifecycle changes retain typechecking, as do JavaScript files. Lint, formatting, ratchets, guards, and tests keep the full changed-path scope. Staged, explicit-path, and non-`HEAD` comparisons retain normal typecheck selection; `--dry-run` reports any skipped paths.
     - Changed core test checks run the shards that own changed test roots before their other selected consumers. Both groups keep their canonical order, and CI stripe membership stays unchanged. Source-only changes keep the normal order. The boundary inventory is reused for selection and ordering.
     - Live Docker ACP harness edits run focused checks: shell syntax for the live Docker auth scripts and a live Docker scheduler dry-run. `package.json` changes are included only when the diff is limited to `scripts["test:docker:live-*"]`; dependency, export, version, and other package-surface edits still use the broader guards.
@@ -214,8 +247,8 @@ Native dependency policy:
       configured, it also scans staged content before and after formatting.
       See [Local commit hook setup](https://github.com/openclaw/openclaw/blob/main/CONTRIBUTING.md#local-commit-hook).
       It does not run lint, typecheck, or tests.
-    - Run `pnpm check:changed` explicitly before handoff or push when you
-      need the smart local check gate.
+    - Use `pnpm check:changed` when an optional smart local check helps select
+      focused proof. PR CI runs broad checks after publication.
     - `pnpm test:changed` routes through cheap scoped lanes by default. Use
       `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the agent
       decides a harness, config, package, or contract edit really needs

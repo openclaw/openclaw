@@ -43,10 +43,30 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 19      | Durable original channel-owner authorization and revocation continuity                                                                                                                                                                                                                                                          | `v2026.9.7`         |
 | 20      | Cron receipt delivery-attempt fence prevents replay of ambiguous one-shot completions                                                                                                                                                                                                                                           | `v2026.10.1-beta.1` |
 | 21      | Derived meeting-transcript selectors, summary overview, and bounded delivery-retention columns                                                                                                                                                                                                                                  | Unreleased          |
+| 22      | Portable ACP resume columns and explicit approval, cron, execution-decision, and Skill Workshop cursor identities                                                                                                                                                                                                               | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 22
+
+Schema 22 derives `resume_agent_session_id` and `resume_acpx_session_id` in the
+single ACP metadata writer and replaces the JSON expression indexes. It also
+adds unique `cursor_id` columns to `operator_approvals`, `cron_run_receipts`,
+`execution_decision_facts`, and `skill_workshop_changes`. Existing cursor values,
+ordering, JSON bytes, and receipt-cache behavior are preserved.
+
+The forward migration runs once inside shared-state schema maintenance. It
+backfills ACP columns using the prior SQLite expressions and cursor identities
+from rowid, without renumbering gaps. New writes allocate the next cursor inside
+the existing serialized write transaction. PostgreSQL DDL carries the same
+columns and indexes; no shared-state indexes remain pending promotion.
+
+Older builds refuse schema 22. Rollback restores the verified pre-upgrade backup
+with its matching build; never lower schema markers. See the
+[accepted addendum](https://github.com/openclaw/openclaw/issues/169254#issuecomment-6129843452)
+and its [combined-v22 sequencing](https://github.com/openclaw/openclaw/issues/169254#issuecomment-6131216265).
 
 ### State schema 21
 

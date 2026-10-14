@@ -4,6 +4,7 @@ import type { SessionEntryCurrentFacts } from "../../config/sessions/session-ent
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -156,7 +157,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           return admitted.facts;
         },
         readReceipt: (facts) => (isReceipt(facts) ? facts : undefined),
-        stageCommit(facts) {
+        stageCommit(facts, nativeSettlement) {
           if (!isReceipt(facts)) {
             throw new Error("Placement claim commit has no receipt");
           }
@@ -224,6 +225,14 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                   facts.projection
                     ? { projection: facts.projection, conflictSessionIds: new Set() }
                     : undefined,
+                  nativeSettlement,
+                  command.type === "placementTurns.claim" ||
+                    command.type === "placementTurns.release" ||
+                    command.type === "placementTurns.releaseIfOwned" ||
+                    command.type === "placementTurns.claimReclaimResult" ||
+                    command.type === "placementTurns.claimMutationResult" ||
+                    command.type === "placementTurns.completeResult" ||
+                    command.type === "placementTurns.cancelResult",
                 )
               : stagePlacementWorkspaceResultWorkerPublication(
                   context.admission.identity,
@@ -269,6 +278,14 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
               } finally {
                 projectionPublication?.release();
               }
+            }
+            if (close && receipt.placement.turnClaim === null && receipt.workspaceResult === null) {
+              emitSessionLifecycleEvent({
+                sessionKey: receipt.placement.sessionKey,
+                agentId: receipt.placement.agentId,
+                reason: "placement",
+                scope: "runtime",
+              });
             }
           }
         },

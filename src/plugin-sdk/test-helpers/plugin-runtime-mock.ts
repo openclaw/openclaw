@@ -331,6 +331,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     },
     webSearch: {
       listProviders: vi.fn<PluginRuntime["webSearch"]["listProviders"]>(),
+      listProvidersAsync: vi.fn<PluginRuntime["webSearch"]["listProvidersAsync"]>(),
       search: vi.fn<PluginRuntime["webSearch"]["search"]>(),
     },
     channel: {
@@ -551,6 +552,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     state: createPluginStateRuntimeMock(),
     subagent: {
       complete: vi.fn(),
+      forkSession: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),

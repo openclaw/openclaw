@@ -5,6 +5,7 @@ import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
 } from "../../infra/sqlite-worker-contract.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerOperationAdmission,
   SqliteWorkerAdmissionRequest,
@@ -49,6 +50,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export async function patchSessionEntryInWorker(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
   databaseIdentity?: string;
+  expectedCreationIdentity?: DatabasePathIdentity;
   retainedExecution?: OpenClawAgentDatabaseExecution;
   agentId: string;
   selection: SessionEntryPatchSelection;
@@ -166,7 +168,20 @@ export async function patchSessionEntryInWorker(params: {
       committing = true;
       return commit(() => worker.execute({ type: "session.entry.patch.commit", input: prepared }));
     },
-    async onCommitted(committed, published, identity, _context, fileIdentity) {
+    onAcknowledged(committed, fileIdentity) {
+      if (committed.applied && committed.entry && committed.publication) {
+        params.onCommittedSource?.(
+          {
+            agentId: params.database.agentId,
+            path: params.database.path,
+            databaseIdentity: fileIdentity.physicalIdentity,
+            databaseBirthtime: fileIdentity.birthtime,
+          },
+          structuredClone(committed.entry),
+        );
+      }
+    },
+    async onCommitted(committed, published, identity) {
       try {
         if (committed.applied && committed.entry) {
           const entry = structuredClone(committed.entry);
@@ -174,17 +189,6 @@ export async function patchSessionEntryInWorker(params: {
             params.onCommitted?.(entry, committed.transcriptPredicate);
           } else {
             params.onCommitted?.(entry);
-          }
-          if (committed.publication) {
-            params.onCommittedSource?.(
-              {
-                agentId: params.database.agentId,
-                path: params.database.path,
-                databaseIdentity: fileIdentity.physicalIdentity,
-                databaseBirthtime: fileIdentity.birthtime,
-              },
-              structuredClone(committed.entry),
-            );
           }
         }
       } finally {
@@ -220,6 +224,7 @@ export async function runSessionEntryWorkerOperation<
 >(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
   databaseIdentity?: string;
+  expectedCreationIdentity?: DatabasePathIdentity;
   agentId: string;
   assertCurrent: () => void;
   assertPrepared?: () => void;
@@ -247,7 +252,7 @@ export async function runSessionEntryWorkerOperation<
     worker: AgentDatabaseExecutionScope,
     commit: (send: () => Promise<unknown>) => Promise<Result>,
   ): Promise<Result>;
-  onAcknowledged?: (candidate: Candidate) => void;
+  onAcknowledged?: (candidate: Candidate, fileIdentity: AgentDatabaseExecutionFileIdentity) => void;
   onTransactionFacts?: (facts: unknown) => boolean;
   onCommitted(
     candidate: Candidate,
@@ -341,7 +346,7 @@ export async function runSessionEntryWorkerOperation<
             const failures: unknown[] = [];
             try {
               if (committed) {
-                params.onAcknowledged?.(committed);
+                params.onAcknowledged?.(committed, identity);
               }
             } catch (error) {
               failures.push(error);
@@ -457,5 +462,7 @@ export async function runSessionEntryWorkerOperation<
     },
     params.nativeSettlement?.onAdmission,
     params.releaseSource,
+    "write",
+    params.expectedCreationIdentity,
   );
 }

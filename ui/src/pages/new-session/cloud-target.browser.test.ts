@@ -1,13 +1,43 @@
-import { render } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { CloudProfileMenuItems, SessionMenuItem } from "./cloud-target-view.tsx";
+import type { CloudProfileMenuItemsOptions } from "./cloud-target.ts";
+
+function mountSessionItem(
+  item: Parameters<typeof SessionMenuItem>[0]["item"],
+  submitting: boolean,
+  container: HTMLElement,
+) {
+  return mountSolid(() => createComponent(SessionMenuItem, { item, submitting }), { container });
+}
+
+function mountCloudProfiles(initial: CloudProfileMenuItemsOptions, container: HTMLElement) {
+  const [params, setParams] = createSignal(initial);
+  const mounted = mountSolid(
+    () =>
+      createComponent(CloudProfileMenuItems, {
+        get params() {
+          return params();
+        },
+      }),
+    { container },
+  );
+  return {
+    ...mounted,
+    update: (next: CloudProfileMenuItemsOptions) => {
+      setParams(next);
+      flush();
+    },
+  };
+}
 
 const container = document.createElement("div");
 document.body.append(container);
 
 afterEach(() => {
-  render(null, container);
+  cleanupSolid();
 });
 
 describe("cloud target accessibility", () => {
@@ -21,14 +51,14 @@ describe("cloud target accessibility", () => {
       submitting: false,
       onSelect: vi.fn(),
     };
-    render(renderCloudProfileMenuItems({ ...params, compact: true }), container);
+    const { update } = mountCloudProfiles({ ...params, compact: true }, container);
     const compact = page.getByRole("button", { name: "aws", exact: true });
     await expect.element(compact).toHaveAccessibleName("aws");
     await expect
       .element(compact)
       .toHaveAccessibleDescription(`Cloud worker provider: ${profile.provider}`);
 
-    render(renderCloudProfileMenuItems(params), container);
+    update(params);
     const move = page.getByRole("button", { name: "Cloud · aws Persistent", exact: true });
     await expect.element(move).toHaveAccessibleName("Cloud · aws Persistent");
     await expect
@@ -37,8 +67,8 @@ describe("cloud target accessibility", () => {
   });
 
   it("retains the provider in the configuration tooltip description", async () => {
-    render(
-      renderCloudProfileMenuItems({
+    mountCloudProfiles(
+      {
         profiles: [
           {
             id: "production",
@@ -55,7 +85,7 @@ describe("cloud target accessibility", () => {
         compact: true,
         submitting: false,
         onSelect: vi.fn(),
-      }),
+      },
       container,
     );
     const choice = page.getByRole("button", { name: "production Linux · Standard", exact: true });
@@ -110,22 +140,20 @@ describe("cloud target accessibility", () => {
     "preserves hints and blockers ($compact, $suggested, $disabled, $provider)",
     async ({ compact, suggested, disabled, provider, expected }) => {
       const onSelect = vi.fn();
-      render(
-        renderSessionMenuItem(
-          {
-            value: "cloud:production",
-            label: "production",
-            selectedSummary: "Linux · Standard",
-            accessibleProvider: provider,
-            compact,
-            suggested,
-            disabled,
-            title: disabled ? "Capacity exhausted" : undefined,
-            checked: false,
-            onSelect,
-          },
-          false,
-        ),
+      mountSessionItem(
+        {
+          value: "cloud:production",
+          label: "production",
+          selectedSummary: "Linux · Standard",
+          accessibleProvider: provider,
+          compact,
+          suggested,
+          disabled,
+          title: disabled ? "Capacity exhausted" : undefined,
+          checked: false,
+          onSelect,
+        },
+        false,
         container,
       );
       const name =

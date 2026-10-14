@@ -50,7 +50,7 @@ describe("chat admission authority", () => {
       if (!prepared.ok) {
         throw new Error("session preparation failed");
       }
-      const session = qualifyChatSendSession(prepared.value);
+      const session = await qualifyChatSendSession(prepared.value);
       let current = true;
       const assertCurrent = () => {
         if (!current) {
@@ -92,14 +92,12 @@ describe("chat admission authority", () => {
           }
         }
       } finally {
-        session.releaseSessionTarget();
         await fixture.cleanup();
       }
     },
   );
   it("clears a pending reservation when its retained reader is revoked after publication", async () => {
     const fixture = await createBrowserFollowupFixture();
-    const sessions: Array<ReturnType<typeof qualifyChatSendSession>> = [];
     const prepare = async () => {
       const request = await normalizeChatSendRequest({
         params: fixture.params,
@@ -116,8 +114,7 @@ describe("chat admission authority", () => {
       if (!loaded.ok) {
         throw new Error("session preparation failed");
       }
-      const session = qualifyChatSendSession(loaded.value);
-      sessions.push(session);
+      const session = await qualifyChatSendSession(loaded.value);
       const resolved = await resolveSessionMutationAuthorizationAsync({
         client: fixture.client,
         method: "chat.send",
@@ -196,9 +193,6 @@ describe("chat admission authority", () => {
       }
       clearAgentRunContext(fixture.params.idempotencyKey);
       await closing;
-      for (const session of sessions.toReversed()) {
-        session.releaseSessionTarget();
-      }
       await fixture.cleanup();
     }
   });
@@ -220,7 +214,7 @@ describe("chat admission authority", () => {
     if (!prepared.ok) {
       throw new Error("session preparation failed");
     }
-    const session = qualifyChatSendSession(prepared.value);
+    const session = await qualifyChatSendSession(prepared.value);
     const resolved = await resolveSessionMutationAuthorizationAsync({
       client: fixture.client,
       method: "chat.send",
@@ -321,7 +315,6 @@ describe("chat admission authority", () => {
       await closing;
       root.release();
       caller.release();
-      session.releaseSessionTarget();
       await fixture.cleanup();
     }
   });
@@ -357,7 +350,7 @@ describe("chat admission authority", () => {
     if (!prepared.ok) {
       throw new Error("session preparation failed");
     }
-    const session = qualifyChatSendSession(prepared.value);
+    const session = await qualifyChatSendSession(prepared.value);
     const resolved = await resolveSessionMutationAuthorizationAsync({
       client: fixture.client,
       method: "chat.send",
@@ -388,7 +381,6 @@ describe("chat admission authority", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(respond).toHaveBeenCalledWith(false, undefined, expect.anything());
     } finally {
-      session.releaseSessionTarget();
       await fixture.cleanup();
     }
   });

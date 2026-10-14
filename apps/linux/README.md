@@ -2,6 +2,10 @@
 
 The desktop app is a Tauri v2 shell for Linux and Windows, supporting local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
+On Windows, the native [Windows Hub](https://docs.openclaw.ai/platforms/windows#recommended-windows-hub)
+is the recommended desktop app. This cross-platform Tauri app is the backup,
+with a local Windows Gateway through bundled Bun or a remote Gateway connection.
+
 On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated.
 
 Dashboard widgets and browser panels load inside the app. Browser tabs belong to their conversation and support back, forward, reload, stop, snapshots, element inspection, and saving the current page or asset. Opening the same address in a conversation reuses its tab; other conversations keep their own tabs. Popups opened by a browser tab stay in that conversation.
@@ -103,18 +107,24 @@ for installation, app handoff, shortcuts, and troubleshooting.
 
 ## Windows
 
-Windows x64 NSIS installers ship beside Linux bundles in regular OpenClaw
+For the recommended native app, use [Windows Hub](https://docs.openclaw.ai/platforms/windows#recommended-windows-hub).
+The Tauri backup's Windows x64 NSIS installers ship beside Linux bundles in regular OpenClaw
 releases. The Windows updater uses the `windows-stable` channel and verifies
 Tauri updater signatures. Installer Authenticode signing is opt-in through the
 release workflow's Foundation Azure signing job; no credentials are needed for
 non-publishing builds.
 
-Local setup seeds the private Windows Bun runtime, installs the CLI with its
-package manager, and delegates service installation and health checks to
-`openclaw gateway`. System Node.js and npm are not required. The managed launcher
-is `%USERPROFILE%\.openclaw\bin\openclaw.cmd`; app actions execute Bun directly,
-without interpreting arguments in a command shell. Stable and Beta use published
-packages; Windows source development uses `OPENCLAW_DESKTOP_CLI`.
+Local setup seeds the private Windows Bun runtime and delegates service
+installation and health checks to `openclaw gateway`. Non-release builds install
+the core CLI and Codex staged from the same source commit; release builds install
+the matching published CLI with Bun. System Node.js and npm are not required.
+Release jobs pass `RELEASE_TAG` and its verified `RELEASE_SHA`, so shallow checkouts
+without tag refs still omit the source package. Staging rejects a release identity
+that disagrees with the package version or source commit. Local builds without an
+explicit release identity continue to use exact tag refs.
+The managed launcher is `%USERPROFILE%\.openclaw\bin\openclaw.cmd`; app actions
+execute Bun directly, without interpreting arguments in a command shell.
+`OPENCLAW_DESKTOP_CLI` can select an existing development CLI.
 
 Production runtime admission requires a matching Windows entry in the pinned
 OpenClaw Bun release with `authenticodeSigned: true` and `testOnly: false`.
@@ -314,8 +324,8 @@ On Linux and Windows, a fresh install with no saved OpenClaw configuration or
 Gateway profiles starts local setup automatically. It uses the same CLI installer,
 bundled runtime, and Gateway service owners as **On this computer**, then opens
 the Control UI's custodian onboarding. Release builds select their matching stable
-version; development builds use Development. Nearby Gateways are never joined
-automatically.
+version; development builds use their staged source package. Nearby Gateways are
+never joined automatically.
 
 The custodian prepares available AI access and explains what was selected. Its
 **Use a different Gateway**, **Review permissions**, and **Open AI setup** actions
@@ -323,15 +333,15 @@ open Manage Gateways, this computer's permissions, and Model Setup respectively.
 Existing configurations and saved remote connections keep their current startup
 behavior. If automatic setup fails, the app shows the error alongside the existing
 local and remote choices so you can retry or connect elsewhere. Windows uses
-the bundled Windows runtime, PowerShell installer, and CLI-owned service setup.
+the bundled Windows runtime and CLI-owned service setup.
 
 The manual setup screen explains what OpenClaw can do and asks where your
 assistant should live:
 
 - **On this computer** installs the CLI when needed and runs fresh Linux and Windows
   installations on the bundled OpenClaw Bun fork, then starts the Gateway through
-  the platform's service owner. Release builds install their matching stable version; development builds ask for a release channel
-  and preselect Development.
+  the platform's service owner. Release builds install their matching stable
+  version; development builds use the staged source package.
 - **On another computer** connects to an existing Gateway without installing or
   starting a local Gateway service. Select a nearby discovered Gateway, enter a
   Gateway URL directly, or choose **SSH tunnel** and enter `user@gateway-host`.
@@ -577,9 +587,22 @@ AppImage's existing compatibility floor.
 
 macOS Tauri keeps its existing runtime behavior; its native macOS sibling owns
 the Mac's bundled runtime. Windows stages its signed fork payload from the same
-pin and installs the CLI through Bun; unsigned dry-run builds are not eligible. See
-[Bun compatibility](https://docs.openclaw.ai/install/bun-compatibility) for runtime
+pin; release builds install the CLI through Bun. Unsigned dry-run builds are not
+eligible. See [Bun compatibility](https://docs.openclaw.ai/install/bun-compatibility) for runtime
 admission and the shared pin's repin gates.
+
+Non-release Linux and Windows builds also stage the same source commit's core
+package and official Codex plugin, including the target's Codex executable.
+Fresh local setup copies this prepared package into the verified, immutable
+runtime directory and creates the managed CLI launcher without contacting npm.
+This first copy can take several minutes on a fresh computer. Setup waits for
+the newly installed Gateway to become healthy before opening its dashboard.
+The shared desktop release-tag check leaves release builds on their existing
+installer path. The staged build identity makes plugin install, update, and
+Doctor prefer the bundled Codex copy through the same source-plugin owner as
+the native macOS app. The desktop app owns updates to this core package: rebuild
+or update the desktop app to refresh it. Previous runtime directories remain
+available to existing services.
 
 ## Icons
 

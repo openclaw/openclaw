@@ -390,10 +390,57 @@ describe("memory index", () => {
     expect(trustedResults[0]?.source).toBe("sessions");
   });
 
-  it.each([
-    { name: "one dirty session", source: "sessions", fullRetry: false },
-    { name: "full memory retry", source: "memory", fullRetry: true },
-  ])("keeps search usable while maintenance syncs $name", async ({ source, fullRetry }) => {
+  it("searches the published index without flushing dirty sessions", async () => {
+    providerFixture.forceNoProvider = true;
+    const manager = await getPersistentManager(
+      createCfg({
+        provider: "none",
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        minScore: 0,
+      }),
+    );
+    await manager.sync({ reason: "test", force: true });
+    const content = "Quiet-period transcript canary is ORCHID-83.";
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "search-sync",
+      messages: [{ role: "assistant", timestamp: Date.now(), content }],
+    });
+    const servingFields = manager as unknown as {
+      dirty: boolean;
+      sessionsDirty: boolean;
+      sessionsDirtyFiles: Set<string>;
+      listSessionCorpusEntries: () => Promise<Array<{ sessionFile: string }>>;
+    };
+    const entries = await servingFields.listSessionCorpusEntries();
+    expect(entries).toHaveLength(1);
+    servingFields.dirty = false;
+    servingFields.sessionsDirty = true;
+    servingFields.sessionsDirtyFiles = new Set(entries.map((entry) => entry.sessionFile));
+    const getSpy = vi.spyOn(MemoryIndexManager, "get");
+
+    try {
+      const publishedResults = await manager.search("zebra", { maxResults: 5, minScore: 0 });
+      expect(publishedResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+      await expect(manager.search("ORCHID-83", { minScore: 0 })).resolves.toEqual([]);
+      expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
+      expect(servingFields.sessionsDirty).toBe(true);
+      expect(servingFields.sessionsDirtyFiles).toEqual(
+        new Set(entries.map((entry) => entry.sessionFile)),
+      );
+    } finally {
+      getSpy.mockRestore();
+    }
+
+    await manager.sync({ reason: "test", force: true });
+    expect(await manager.search("ORCHID-83", { minScore: 0 })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: "sessions", snippet: expect.stringContaining(content) }),
+      ]),
+    );
+  });
+
+  it("keeps search usable while maintenance syncs a full memory retry", async () => {
     providerFixture.forceNoProvider = true;
     const cfg = createCfg({
       provider: "none",
@@ -404,30 +451,14 @@ describe("memory index", () => {
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test", force: true });
     const content = "Current memory appears only after the dirty search sync.";
-    if (source === "memory") {
-      await fs.writeFile(path.join(fixture.paths.memory, "search-sync.md"), content);
-    } else {
-      await seedMemoryIndexSessionTranscript({
-        sessionId: "search-sync",
-        messages: [{ role: "assistant", timestamp: Date.now(), content }],
-      });
-    }
+    await fs.writeFile(path.join(fixture.paths.memory, "search-sync.md"), content);
     const servingFields = manager as unknown as {
       dirty: boolean;
       memoryFullRetryDirty: boolean;
-      sessionsDirty: boolean;
-      sessionsDirtyFiles: Set<string>;
-      listSessionCorpusEntries: () => Promise<Array<{ sessionFile: string }>>;
       awaitManagerIdle: () => Promise<void>;
     };
-    servingFields.dirty = source === "memory";
-    servingFields.memoryFullRetryDirty = fullRetry;
-    servingFields.sessionsDirty = source === "sessions";
-    if (source === "sessions") {
-      const entries = await servingFields.listSessionCorpusEntries();
-      expect(entries).toHaveLength(1);
-      servingFields.sessionsDirtyFiles = new Set(entries.map((entry) => entry.sessionFile));
-    }
+    servingFields.dirty = true;
+    servingFields.memoryFullRetryDirty = true;
 
     const maintenanceReady = createDeferred<void>();
     const releaseMaintenance = createDeferred<void>();
@@ -437,7 +468,6 @@ describe("memory index", () => {
       | {
           runInPlaceReindex: (params: unknown) => Promise<void>;
           syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
-          syncArchiveFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
         }
       | undefined;
     const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
@@ -453,15 +483,12 @@ describe("memory index", () => {
       const fields = acquired as unknown as NonNullable<typeof maintenanceFields>;
       maintenanceFields = fields;
       vi.spyOn(fields, "runInPlaceReindex");
-      const sourceSync = source === "memory" ? "syncMemoryFiles" : "syncArchiveFiles";
-      const syncSource = fields[sourceSync].bind(acquired);
-      vi.spyOn(fields, sourceSync).mockImplementation(async (syncParams) => {
-        // Full retries hold completed shadow writes; incremental sync holds before
-        // its live writes so both cases prove reads remain available during work.
-        const result = fullRetry ? await syncSource(syncParams) : undefined;
+      const syncSource = fields.syncMemoryFiles.bind(acquired);
+      vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (syncParams) => {
+        const result = await syncSource(syncParams);
         maintenanceReady.resolve();
         await releaseMaintenance.promise;
-        return fullRetry ? result : await syncSource(syncParams);
+        return result;
       });
       return acquired;
     });
@@ -470,10 +497,10 @@ describe("memory index", () => {
       const firstSearch = manager.search("zebra", { maxResults: 5, minScore: 0 });
       await maintenanceReady.promise;
       expect(manager.status()).toMatchObject({ dirty: true });
-      expect(maintenanceFields!.runInPlaceReindex).toHaveBeenCalledTimes(fullRetry ? 1 : 0);
-      expect(
-        maintenanceFields![source === "memory" ? "syncMemoryFiles" : "syncArchiveFiles"],
-      ).toHaveBeenCalledWith(expect.objectContaining({ needsFullReindex: fullRetry }));
+      expect(maintenanceFields!.runInPlaceReindex).toHaveBeenCalledTimes(1);
+      expect(maintenanceFields!.syncMemoryFiles).toHaveBeenCalledWith(
+        expect.objectContaining({ needsFullReindex: true }),
+      );
 
       const publishedResults = await firstSearch;
       expect(publishedResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
@@ -491,7 +518,7 @@ describe("memory index", () => {
       });
       expect(refreshedResults).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ source, snippet: expect.stringContaining(content) }),
+          expect.objectContaining({ source: "memory", snippet: expect.stringContaining(content) }),
         ]),
       );
       expect(maintenanceClosed).toBe(true);

@@ -94,11 +94,10 @@ function cancelChangedQueuedRuns(
   input: MutationInput,
   changes: PreparedCronStoreChanges,
   previousJobs: ReturnType<typeof loadCronMutationStore>["jobs"],
+  currentStore: ReturnType<typeof loadCronMutationStore>,
   receiptSchema: ReturnType<typeof prepareCronRunReceiptWriteSchema>,
 ): void {
-  const currentJobs = new Map(
-    loadCronMutationStore(db, input.storeKey).jobs.map((job) => [job.id, job]),
-  );
+  const currentJobs = new Map(currentStore.jobs.map((job) => [job.id, job]));
   for (const previous of previousJobs) {
     if (previous.state.queuedAtMs === undefined || !changes.changedIds.has(previous.id)) {
       continue;
@@ -127,6 +126,8 @@ function cancelChangedQueuedRuns(
         database: db,
         receiptSchema,
         handle: receipt,
+        pendingReceiptId:
+          current?.state.runningAtMs === undefined ? undefined : current.state.runningReceiptId,
         status: "skipped",
         finishedAtMs: input.snapshot.nowMs,
         error,
@@ -199,7 +200,7 @@ export function mutateCronJobsInWorker(
               },
             },
           };
-          saveCronStoreChangesInDatabase(
+          const store = saveCronStoreChangesInDatabase(
             db,
             input.storeKey,
             input.storeKey,
@@ -207,10 +208,10 @@ export function mutateCronJobsInWorker(
             undefined,
             hooks,
           );
-          cancelChangedQueuedRuns(db, input, changes, previous.jobs, receiptSchema);
+          cancelChangedQueuedRuns(db, input, changes, previous.jobs, store, receiptSchema);
           return {
             outcome: {
-              store: loadCronMutationStore(db, input.storeKey),
+              store,
               names: readCronJobNamesInDatabase(db, undefined, input.storeKey),
               changed: changes.changedIds.size > 0,
               notifications: plan.notifications,

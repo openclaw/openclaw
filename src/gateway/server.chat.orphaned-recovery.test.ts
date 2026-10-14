@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, onTestFailed, vi } from "vitest";
+import { expect, it, onTestFailed, onTestFinished, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
@@ -9,12 +9,29 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { recoverTerminalSessionEntryForVisibleTurn } from "../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createRestartSafeChatRequest } from "./server-methods/chat-restart-recovery.js";
+import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+it("preserves interrupted recovery custody when reusing a failed session", () => {
+  const entry = {
+    sessionId: "interrupted-session",
+    updatedAt: 1,
+    status: "failed" as const,
+    abortedLastRun: true,
+    mainRestartRecovery: { cycleId: "unfinished-cycle", revision: 7, chargedAttempts: 1 },
+    restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "previous-gateway" }],
+    restartRecoveryDeliveryRunId: "interrupted-run",
+    restartRecoveryDeliverySourceRunId: "accepted-input",
+  };
+
+  expect(recoverTerminalSessionEntryForVisibleTurn(entry)).toEqual(entry);
+});
 
 it("chat.send recovers failed and statusless work for new messages and retained retries exactly once", async () => {
   const token = "orphaned-recovery-chat-token";
@@ -124,6 +141,38 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
     await gateway.server.startupSettled;
+    const recoveryRuntime = getGatewayRecoveryRuntime();
+    if (recoveryRuntime) {
+      const dispatch = vi.spyOn(recoveryRuntime, "dispatchAgent");
+      let outcomeSummary = "[]";
+      onTestFinished(() => {
+        // The start race can finish before a later dispatch rejection, so inspect
+        // the original promise's settlement without replacing the real dispatch.
+        const outcomes = dispatch.mock.calls.flatMap(([request], index) => {
+          if (request.sessionKey !== `agent:main:dashboard:orphaned-chat-${diagnostics.caseId}`) {
+            return [];
+          }
+          const settled = dispatch.mock.settledResults[index];
+          const value: unknown = settled?.value;
+          return [
+            {
+              runId: request.idempotencyKey,
+              settlement: settled?.type,
+              status:
+                isRecord(value) && typeof value.status === "string"
+                  ? value.status.slice(0, 100)
+                  : undefined,
+              error: value instanceof Error ? value.message.slice(0, 2_000) : undefined,
+            },
+          ];
+        });
+        outcomeSummary = JSON.stringify(outcomes.slice(0, 8));
+        dispatch.mockRestore();
+      });
+      onTestFailed(() => {
+        console.error("orphaned recovery dispatch outcomes", outcomeSummary);
+      });
+    }
     const client = gateway.client;
     for (const { status, retry } of [
       { status: "failed", retry: false },

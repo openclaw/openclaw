@@ -5,16 +5,16 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { isChannelRunAuthorizationError } from "../channels/message-access/run-authorization-error.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
-import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
+import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
-  isProviderRequestSizeCeilingError,
   isUnclassifiedNoBodyHttpSignal,
 } from "./failover/classify.js";
 import {
@@ -91,15 +91,6 @@ function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
     // An opaque disposal branch must not hide the other recorded CLI facts.
   }
   return nested;
-}
-
-/** Distinguishes the provider's request ceiling from context pressure and bucket state. */
-export function hasProviderRequestSizeCeiling(err: unknown): boolean {
-  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
-    isFailoverError(candidate)
-      ? candidate.requestSizeCeiling
-      : isProviderRequestSizeCeilingError(formatErrorMessage(candidate)),
-  );
 }
 
 function findCliFailoverError<T extends FailoverError>(
@@ -307,6 +298,9 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 }
 
 function hasRuntimeCoordinationFailure(err: unknown): boolean {
+  if (isChannelRunAuthorizationError(err)) {
+    return true;
+  }
   return collectErrorGraphCandidates(err, resolveNestedErrors).some(
     (candidate) =>
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||

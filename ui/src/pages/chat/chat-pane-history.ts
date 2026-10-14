@@ -204,7 +204,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     this.historyObserver?.disconnect();
     this.historyObserver = null;
     this.historyObserverSentinel = null;
-    this.historyObserverBootstrap = false;
   }
 
   protected syncHistoryObserver(): void {
@@ -220,7 +219,11 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     if (
       typeof IntersectionObserver !== "function" ||
       !this.presented ||
+      !this.visuallyPresented ||
       !this.state?.connected ||
+      !this.historyObserverArmed ||
+      !this.transcript.isPositionSettled ||
+      this.transcript.isProgrammaticScroll ||
       this.loadingOlder ||
       !this.hasOlderMessages()
     ) {
@@ -234,7 +237,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return;
     }
     this.transcriptScrollTop ??= root.scrollTop;
-    const bootstrap = !this.historyObserverArmed;
     if (this.historyAutoLoadBlocked) {
       this.clearHistoryObserver();
       return;
@@ -242,8 +244,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     if (
       this.historyObserver &&
       this.historyObserver.root === root &&
-      this.historyObserverSentinel === sentinel &&
-      this.historyObserverBootstrap === bootstrap
+      this.historyObserverSentinel === sentinel
     ) {
       return;
     }
@@ -252,15 +253,17 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       (entries, observer) => {
         // Disconnecting does not cancel queued notifications. Only the current
         // observer may consume this pane's history intent.
-        if (this.historyObserver !== observer || !entries.some((entry) => entry.isIntersecting)) {
+        if (
+          this.historyObserver !== observer ||
+          !this.presented ||
+          !this.visuallyPresented ||
+          !this.transcript.isPositionSettled ||
+          this.transcript.isProgrammaticScroll ||
+          !entries.some((entry) => entry.isIntersecting)
+        ) {
           return;
         }
         this.clearHistoryObserver();
-        // Bootstrap geometry matters only at the visible history boundary.
-        // Measuring here avoids forcing layout during every pane update.
-        if (bootstrap && root.scrollHeight > root.clientHeight) {
-          return;
-        }
         this.historyObserverArmed = false;
         void this.loadOlderMessages();
       },
@@ -270,7 +273,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       { root, rootMargin: `${CHAT_HISTORY_PREFETCH_EDGE_PX}px 0px 0px`, threshold: 0 },
     );
     this.historyObserverSentinel = sentinel;
-    this.historyObserverBootstrap = bootstrap;
     this.historyObserver.observe(sentinel);
   }
 
@@ -302,7 +304,11 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     // A shrinking scroll range can move the native offset to its new end.
     // Only movement away from that edge can imply reader intent without input.
     const hasUpwardIntent =
+      this.presented &&
+      this.visuallyPresented &&
       !this.loadingOlder &&
+      this.transcript.isPositionSettled &&
+      !this.transcript.isProgrammaticScroll &&
       !this.transcript.isMaintenanceScroll &&
       viewport !== null &&
       previousScrollTop !== null &&
@@ -310,7 +316,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       viewport.scrollTop < viewport.scrollHeight - viewport.clientHeight &&
       viewport.scrollTop <= CHAT_HISTORY_PREFETCH_EDGE_PX;
     const newHistoryIntent = hasUpwardIntent && this.consumeHistoryIntent();
-    // A failed request or exhausted bootstrap stays disarmed until renewed
+    // A failed request stays disarmed until renewed
     // upward intent, preventing request loops without stranding older history.
     if (newHistoryIntent && (this.historyAutoLoadBlocked || !this.historyObserverArmed)) {
       this.historyAutoLoadBlocked = false;
@@ -360,6 +366,10 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     if (
       !root ||
+      !this.presented ||
+      !this.visuallyPresented ||
+      !this.transcript.isPositionSettled ||
+      this.transcript.isProgrammaticScroll ||
       !upward ||
       root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX ||
       this.loadingOlder ||

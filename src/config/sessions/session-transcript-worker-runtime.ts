@@ -32,6 +32,7 @@ import type {
   SessionHistoryWorkerInput,
   SessionHistoryWorkerPreparedInput,
   SessionTranscriptWorkerRequest,
+  SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -45,6 +46,8 @@ const historyPrewarms = new WeakMap<
 
 function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
+    case "history-page":
+      return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     case "transcript-hydration":
     case "current-turn-entry":
     case "recent-active-events":
@@ -52,8 +55,6 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
       return input.resolvedScope;
     case "transcript-anchors":
       return input.resolved;
-    case "session-row-backfill":
-      return input.params;
     case "session-activity-summary-source":
       return input.scope;
     default:
@@ -63,7 +64,7 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
 
 export function runSessionBranchSummaryWorkerRequest(
   request: SessionBranchSummaryReadRequest,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ) {
   const { database, ...read } = request;
   return withSessionHistoryWorkerDatabase(
@@ -156,7 +157,6 @@ export function retainSessionHistoryWorkerDatabase(
       onRequest,
       timeoutMs = 60_000,
     ) => {
-      const validation = captureOpenClawAgentDatabaseReadValidation(database);
       let retirement: Promise<void> | undefined;
       const hostEffects = new Set<Promise<WorkerTaskResponse>>();
       return withSessionHistoryReadAdmission(
@@ -169,25 +169,37 @@ export function retainSessionHistoryWorkerDatabase(
         },
         async (admit, requestLane) => {
           try {
-            const reply = await admit((requestSignal, remaining) =>
-              runWithSqliteDatabaseAdmissionTurn([database.path], () =>
+            const reply = await admit((requestSignal, remaining) => {
+              // A writer ahead of this read can renew the receipt during admission.
+              const validation = captureOpenClawAgentDatabaseReadValidation(
+                database,
+                owned.nativeSequences.has(requestLane) ? "retained" : "admission",
+              );
+              return runWithSqliteDatabaseAdmissionTurn([database.path], () =>
                 requestLane.pool.run(
                   () => {
                     assertCurrent();
+                    options.prepareRead?.();
                     const input = prepare();
                     const projection = projectionTarget(input);
+                    const projectionReceipt = projection?.sessionId
+                      ? readSessionActorProjectionReceipt({
+                          path: database.path,
+                          sessionKey: projection.sessionKey,
+                          sessionId: projection.sessionId,
+                        })
+                      : undefined;
                     owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
                     return {
                       ...input,
                       database,
                       validation: validation?.validation,
-                      projectionReceipt: projection?.sessionId
-                        ? readSessionActorProjectionReceipt({
-                            path: database.path,
-                            sessionKey: projection.sessionKey,
-                            sessionId: projection.sessionId,
-                          })
-                        : undefined,
+                      projectionReceipt: projectionReceipt && {
+                        ...projectionReceipt,
+                        ...(input.kind === "history-page" && !projectionReceipt.entrySessionKey
+                          ? { contextOnly: true }
+                          : {}),
+                      },
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {
@@ -219,8 +231,8 @@ export function retainSessionHistoryWorkerDatabase(
                     },
                   },
                 ),
-              ),
-            );
+              );
+            });
             await retirement;
             const received =
               unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
@@ -238,7 +250,11 @@ export function retainSessionHistoryWorkerDatabase(
             ) {
               knownSource = true;
             }
-            const value = receive(received);
+            // SAFETY: The pool pairs this reply with the exact prepared request above.
+            const paired = received as SessionTranscriptWorkerValues[ReturnType<
+              typeof prepare
+            >["kind"]];
+            const value = receive(paired);
             if (reply.ok && reply.closedHistoryDatabase) {
               await settleSessionHistoryWorkerEviction(requestLane, reply.closedHistoryDatabase);
             }

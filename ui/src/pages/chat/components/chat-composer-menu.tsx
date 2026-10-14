@@ -4,6 +4,36 @@ import { revealInScrollRegion } from "../../../components/scroll-state.ts";
 
 export { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
 
+export function composerScrollStateRef(revision: () => unknown, trackScroll = true) {
+  let element: HTMLElement | undefined;
+  const sync = () => {
+    if (!element?.isConnected) {
+      return;
+    }
+    const scrollable = element.scrollHeight > element.clientHeight + 1;
+    element.dataset.scrollable = String(scrollable);
+    element.dataset.atStart = String(!scrollable || element.scrollTop <= 1);
+    element.dataset.atEnd = String(
+      !scrollable || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+    );
+  };
+  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
+  createRenderEffect(revision, () => queueMicrotask(sync));
+  onCleanup(() => {
+    observer?.disconnect();
+    element?.removeEventListener("scroll", sync);
+    element = undefined;
+  });
+  return (node: HTMLElement) => {
+    element = node;
+    observer?.observe(node);
+    if (trackScroll) {
+      node.addEventListener("scroll", sync);
+    }
+    queueMicrotask(sync);
+  };
+}
+
 export function ComposerMenu(options: {
   id: string;
   label: string;
@@ -15,35 +45,14 @@ export function ComposerMenu(options: {
 }) {
   let region: HTMLDivElement | undefined;
   let disposed = false;
-  const sync = () => {
-    if (!region || disposed) {
-      return;
-    }
-    const scrollable = region.scrollHeight > region.clientHeight + 1;
-    region.dataset.scrollable = String(scrollable);
-    region.dataset.atStart = String(!scrollable || region.scrollTop <= 1);
-    region.dataset.atEnd = String(
-      !scrollable || region.scrollTop + region.clientHeight >= region.scrollHeight - 1,
-    );
-  };
-  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
+  const scrollRef = composerScrollStateRef(() => options.revision, options.trackScroll !== false);
   onCleanup(() => {
     disposed = true;
-    observer?.disconnect();
-    region?.removeEventListener("scroll", sync);
   });
   const attach = (element: HTMLDivElement) => {
     region = element;
-    if (options.trackScroll !== false) {
-      element.addEventListener("scroll", sync);
-    }
-    observer?.observe(element);
-    queueMicrotask(sync);
+    scrollRef(element);
   };
-  createRenderEffect(
-    () => options.revision,
-    () => queueMicrotask(sync),
-  );
   createRenderEffect(
     () => options.activeId,
     (activeId) => {

@@ -246,18 +246,22 @@ For remote gateways, use `openclaw logs --follow` instead (see
 
 ## SQLite worker timing
 
-Start the Gateway with `OPENCLAW_DIAGNOSTICS=sqlite.worker-timing` to attach
-monotonic millisecond timestamps to completed `worker.request` diagnostic events
-for SQLite writers. An internal diagnostic subscriber can separate queueing,
+SQLite writers attach monotonic millisecond timestamps to completed
+`worker.request` events when an internal diagnostic subscriber is interested in
+those events, including the Prometheus plugin. A subscriber can separate queueing,
 broker dispatch, `postMessage`, worker preparation, backend execution, result
 serialization, and reply delivery. Backend execution includes owner code and SQL;
 it is not a native SQL timer. `replyReceived` marks broker receipt, before the
 caller resumes. Measure caller latency separately.
 
-The flag is sampled at process startup. Failed requests omit stages they never
-reached. Framed requests describe only the initial exchange and may omit execution
-stages; `durationMs` still covers the complete request. Timestamps contain no SQL
-text, bindings, or result payloads. Disabled requests carry no timing data.
+Framed requests retain the first receipt and backend execution timestamps through
+the final reply. `inputReady` marks complete command reconstruction before backend
+preparation. Failed requests omit stages they never reached. Timestamps contain no
+SQL text, bindings, or result payloads.
+
+`OPENCLAW_DIAGNOSTICS=sqlite.worker-timing` still forces timing capture and is
+sampled at process startup. Without that flag or an interested subscriber, requests
+carry no timing data.
 
 ## Related
 

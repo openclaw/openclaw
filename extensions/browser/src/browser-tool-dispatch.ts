@@ -117,6 +117,8 @@ export async function executeBrowserTabAction(context: {
       const label = normalizeOptionalString(params.label);
       const opened = await browserOpenTab(target, targetUrl, {
         ...clientOptions,
+        timeoutMs: requestedTimeoutMs,
+        requestTimeoutMs: requestedTimeoutMs === undefined ? toolTimeoutMs : undefined,
         label,
       });
       const closeOpenedTab = async (targetId: string, openedProfile?: string) => {

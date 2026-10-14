@@ -33,7 +33,7 @@ const suite = createControlUiE2eSuite({
 });
 async function changePicker(
   picker: Locator,
-  eventType: "wa-after-show" | "wa-after-hide",
+  eventType: "overlay-after-show" | "overlay-after-hide",
   action: () => Promise<void>,
 ) {
   await Promise.all([
@@ -329,8 +329,8 @@ suite.define(() => {
         async ({ page }) => {
           await installMockGateway(page, scenario());
           const { palette } = await openFromForeground(page, suite.server.baseUrl);
-          const popup = palette.locator("wa-popover.palette-session-settings");
-          await changePicker(popup, "wa-after-show", () =>
+          const popup = palette.locator(".oc-popover.palette-session-settings");
+          await changePicker(popup, "overlay-after-show", () =>
             palette.getByRole("button", { name: "New session settings", exact: true }).click(),
           );
           const directory =
@@ -343,7 +343,7 @@ suite.define(() => {
           const capture = async (stage: string) => {
             if (directory) {
               await page.mouse.move(0, 0);
-              await popup.locator('[part="body"]').screenshot({
+              await popup.screenshot({
                 path: path.join(directory, stage + ".png"),
                 animations: "disabled",
               });
@@ -418,29 +418,29 @@ suite.define(() => {
         const capture = captureAfter(page, "palette-remember");
         const prompt = "Keep this prompt and its caret while changing preferences.";
         await input.fill(prompt);
-        const popup = palette.locator("wa-popover.palette-session-settings");
+        const popup = palette.locator(".oc-popover.palette-session-settings");
         const trigger = palette.getByRole("button", {
           name: "New session settings",
           exact: true,
         });
-        const openSettings = () => changePicker(popup, "wa-after-show", () => trigger.click());
+        const openSettings = () => changePicker(popup, "overlay-after-show", () => trigger.click());
         await openSettings();
         const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
         await expect.poll(() => remember.isEnabled()).toBe(true);
         expect(await remember.isChecked()).toBe(false);
         await capture("default-settings");
         const agent = popup.locator("openclaw-agent-select");
-        await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
+        await changePicker(agent.locator(".agent-select__menu"), "overlay-after-show", () =>
           agent.getByRole("button", { name: /^Agent:/ }).click(),
         );
-        await changePicker(agent.locator("wa-dropdown"), "wa-after-hide", () =>
+        await changePicker(agent.locator(".agent-select__menu"), "overlay-after-hide", () =>
           agent.getByRole("menuitemradio", { name: "Reviewer", exact: true }).press("Escape"),
         );
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
         expect(
           await popup.getByRole("checkbox", { name: /Remember settings for/ }).isVisible(),
         ).toBe(true);
-        await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
+        await changePicker(agent.locator(".agent-select__menu"), "overlay-after-show", () =>
           agent.getByRole("button", { name: /^Agent:/ }).click(),
         );
         await agent.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
@@ -463,7 +463,7 @@ suite.define(() => {
         }
         expect(Object.keys(saved.params.entries)).toEqual(["new-session.palette.v1"]);
         expect(await popup.getByRole("button", { name: "Use my defaults" }).count()).toBe(0);
-        await changePicker(popup, "wa-after-hide", () =>
+        await changePicker(popup, "overlay-after-hide", () =>
           popup.locator(".palette-session-settings__workspace").press("Escape"),
         );
         await input.press("Escape");
@@ -676,12 +676,12 @@ suite.define(() => {
           ).toEqual([]);
           await capture("multiline-prompt-mode");
 
-          const settings = palette.locator("wa-popover.palette-session-settings");
-          await changePicker(settings, "wa-after-show", () =>
+          const settings = palette.locator(".oc-popover.palette-session-settings");
+          await changePicker(settings, "overlay-after-show", () =>
             palette.getByRole("button", { name: "New session settings", exact: true }).click(),
           );
           const agent = palette.locator("openclaw-agent-select");
-          await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
+          await changePicker(agent.locator(".agent-select__menu"), "overlay-after-show", () =>
             agent.getByRole("button", { name: /^Agent:/ }).click(),
           );
           const reviewer = agent.getByRole("menuitemradio", { name: "Reviewer", exact: true });
@@ -719,7 +719,7 @@ suite.define(() => {
             await expect.poll(() => workspaceChoice.textContent()).toContain("Palette runner");
           }
           await capture("compact-session-settings");
-          await changePicker(settings, "wa-after-hide", () =>
+          await changePicker(settings, "overlay-after-hide", () =>
             settings.locator(".palette-session-settings__workspace").press("Escape"),
           );
           const start = palette.getByRole("button", {

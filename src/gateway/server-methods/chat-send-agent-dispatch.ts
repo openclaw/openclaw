@@ -25,6 +25,7 @@ import {
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
@@ -35,10 +36,7 @@ import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
-import {
-  createChatSendTitleTurn,
-  scheduleChatDashboardSessionTitle,
-} from "./chat-send-background.js";
+import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
 import { readChatSendReplyPayload } from "./chat-send-command-replies.js";
 import {
   createChatSendDispatchErrorLifecycle,
@@ -131,7 +129,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     injection;
   let { messageInjectionAttempt } = injection;
 
-  const titleTurn = createChatSendTitleTurn();
+  const titleTurn = createDeferredCore();
 
   let agentRunStarted = false;
   let replyDispatchRun: ReplyDispatchRun | undefined;
@@ -240,6 +238,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       }
     : undefined;
   const phase = diagnostics.scope("dispatch");
+  // Naming needs only the accepted message, not a ready workspace or reply progress.
+  scheduleChatDashboardSessionTitle(
+    { admittedSessionId, agentId, cfg, context, request, sessionKey, storePath },
+    titleTurn.promise,
+  );
   const dispatch = replyDispatch
     .runAgentMediaTranscript(dispatchAdmission, () =>
       measureDiagnosticsTimelineSpan(
@@ -318,7 +321,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           ) => {
             queuedFollowup.onRunStarted(runId);
             diagnostics.finish();
-            titleTurn.onAgentRunStart(runId);
             replyDispatchRun = options;
             if (activeRunAbort.markExecutionStarted()) {
               admission.armOperatorRunCancellation();
@@ -381,7 +383,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 [REPLY_ADMISSION_TICKET]: replyAdmissionTicket,
                 prepareAssistantTranscriptMessage: replyDispatch.prepareAssistantTranscriptMessage,
                 ...(isInternalSourceReplyChannel(ctx)
-                  ? { resolveReplyDelivery: replyDispatch.resolveReplyDelivery }
+                  ? {
+                      resolveReplyDelivery: replyDispatch.resolveReplyDelivery,
+                      resolveReplyDeliveryFacts: replyDispatch.resolveReplyDeliveryFacts,
+                    }
                   : {}),
                 ...(admission.admittedSessionSettings
                   ? { admittedSessionSettings: admission.admittedSessionSettings }
@@ -506,16 +511,18 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   activeRunAbort.controller.signal,
                 )
               : dispatchWithRetry();
-          const preparedWorkspace = workspacePreparation;
-          const dispatchResult = await (preparedWorkspace
-            ? runWithAgentWorkspaceReadiness(preparedWorkspace, async () => {
-                try {
-                  return await runDispatch();
-                } finally {
-                  await preparedWorkspace.waitUntilReady();
-                }
-              })
-            : runDispatch());
+          // A ready workspace still needs a fresh scope: internal continuations may retain
+          // the previous chat run's preparation even after its ownership has ended.
+          const dispatchResult = await runWithAgentWorkspaceReadiness(
+            workspacePreparation,
+            async () => {
+              try {
+                return await runDispatch();
+              } finally {
+                await workspacePreparation?.waitUntilReady();
+              }
+            },
+          );
           if (dispatchResult.beforeAgentRunBlocked === true) {
             userTurnRecorder.markBlocked();
           }
@@ -699,8 +706,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     try {
       await dispatch;
     } finally {
-      // Empty, rejected, and interrupted turns still receive an independent title.
-      titleTurn.finish();
+      // A failed overlapping label may retry after any terminal turn outcome.
+      titleTurn.resolve();
       await dispatchErrorLifecycle.finalize();
       // Terminal lifecycle can precede owner release; publish exact liveness after cleanup.
       emitSessionsChanged(
@@ -717,8 +724,4 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       }
     }
   })();
-  scheduleChatDashboardSessionTitle(
-    { admittedSessionId, agentId, cfg, context, request, sessionKey, storePath },
-    titleTurn,
-  );
 }

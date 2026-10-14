@@ -289,26 +289,14 @@ export function ActivityGroupContent(props: {
       {(activity) => (
         <Show
           when={props.presentation === "standalone"}
-          fallback={
-            <ActivityGroupBody
-              state={activity()}
-              groups={props.groups}
-              options={props.options}
-              renderEntries={props.renderEntries}
-            />
-          }
+          fallback={<ActivityGroupBody {...props} state={activity()} />}
         >
           <div
             class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
             data-chat-row-key={activity().firstGroup.key}
           >
             <div class="chat-group-messages">
-              <ActivityGroupBody
-                state={activity()}
-                groups={props.groups}
-                options={props.options}
-                renderEntries={props.renderEntries}
-              />
+              <ActivityGroupBody {...props} state={activity()} />
             </div>
           </div>
         </Show>

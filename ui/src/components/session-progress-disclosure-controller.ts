@@ -140,8 +140,10 @@ class ProgressDisclosureController {
   }
 
   private resetScrollInput(): void {
-    clearTimeout(this.settleTimer);
-    this.settleTimer = undefined;
+    if (this.settleTimer !== undefined) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = undefined;
+    }
     this.scrollSettled = false;
     this.lastWheelAt = undefined;
     this.gesture = undefined;
@@ -150,7 +152,9 @@ class ProgressDisclosureController {
   }
 
   private readonly scheduleCollapse = () => {
-    clearTimeout(this.settleTimer);
+    if (this.settleTimer !== undefined) {
+      clearTimeout(this.settleTimer);
+    }
     this.scrollSettled = false;
     this.settleTimer = setTimeout(() => {
       this.settleTimer = undefined;

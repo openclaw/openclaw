@@ -1,12 +1,26 @@
 import { copyFileSync, existsSync, renameSync } from "node:fs";
 import path from "node:path";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import {
+  SqliteWorkerError,
+  hasSqliteWorkerOutcomeUnknown,
+  type SqliteWorkerRequest,
+} from "../../infra/sqlite-worker-contract.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as sqliteWorkerStore from "../../infra/sqlite-worker-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import * as executions from "../../state/openclaw-agent-execution.js";
 import * as workerPublications from "../../state/openclaw-agent-worker-store.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  authProfileCredentialPublication,
+  captureAuthProfileCredentialAuthority,
+} from "../../state/user-model-account-authority.js";
 import {
   connectUserModelAccount,
   readUserModelAuthProfile,
@@ -42,9 +56,183 @@ import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 const credential = (key: string) => ({ type: "api_key" as const, provider: "fixture", key });
 
+async function prepareCredentialReader(env: NodeJS.ProcessEnv, agentDir?: string) {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const reader = agentDir
+    ? sqliteRead.prepareAgentAuthProfileRowsRead({
+        databasePath: resolveAuthProfileDatabasePath(agentDir),
+        agentId: "child",
+        env,
+      })
+    : undefined;
+  try {
+    const authority = reader
+      ? reader.captureCredentialAuthority("selected")!
+      : captureAuthProfileCredentialAuthority(
+          context,
+          {
+            identity: `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`,
+            databasePath: context.admission.databasePath,
+          },
+          "selected",
+        );
+    const rows = reader ? await reader.read() : await sqliteRead.readSharedAuthProfileRows(context);
+    authority.observe(
+      sqliteRead.loadPersistedAuthProfileStoreFromRows(
+        rows,
+        agentDir ? resolveAuthProfileDatabasePath(agentDir) : context.admission.databasePath,
+      )?.profiles.selected,
+    );
+    return authority.readCurrentCredential;
+  } finally {
+    await reader?.dispose();
+  }
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
+});
+
+it.each(["shared", "agent"] as const)(
+  "publishes %s credentials before release and preserves authority for metadata and rollback",
+  async (target) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentDir = target === "agent" ? state.agentDir("child") : undefined;
+      const original = credential("synthetic-before");
+      const replacement = credential("synthetic-after");
+      saveAuthProfileStore({ version: 1, profiles: { selected: original } }, agentDir, saveOptions);
+      const readCurrent = await prepareCredentialReader(state.env, agentDir);
+      expect(readCurrent()).toEqual(original);
+      let mode: "credential" | "metadata" | "rollback" = "credential";
+      let grants = 0;
+      let receipts = 0;
+      const settled: unknown[] = [];
+      const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
+        if (change.kind === "settled") {
+          settled.push(readCurrent());
+        }
+      });
+      probe.admission(operationAdmission, (request, grant, admit) => {
+        admit(request, (beforeRelease) => {
+          if (request.stage === "commit") {
+            grants++;
+            if (mode === "metadata") {
+              expect(readCurrent()).toEqual(replacement);
+            } else {
+              expect(readCurrent).toThrow("Auth profile credential authority is unavailable");
+            }
+            if (mode === "rollback") {
+              throw new Error("synthetic credential commit refusal");
+            }
+          }
+          return grant(beforeRelease);
+        });
+      });
+      const observe = operationAdmission.observeSqliteWorkerCommittedFacts;
+      vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+        (admission, publish) =>
+          observe(admission, (receipt) => {
+            if (isRecord(receipt.facts) && receipt.facts.authCredentials) {
+              receipts++;
+              expect(readCurrent).toThrow("Auth profile credential authority is unavailable");
+            }
+            publish(receipt);
+          }),
+      );
+      const update = (updater: (store: AuthProfileStore) => boolean) =>
+        updateAuthProfileStoreWithLock({
+          agentDir,
+          sharedStoreWrite: target === "shared",
+          saveOptions,
+          updater,
+        });
+      try {
+        await update((store) => {
+          store.profiles.selected = replacement;
+          return true;
+        });
+        expect(receipts).toBe(1);
+        expect(settled).toEqual([replacement]);
+        expect(readCurrent()).toEqual(replacement);
+        mode = "metadata";
+        await update((store) => {
+          store.order = { fixture: ["selected"] };
+          return true;
+        });
+        expect(receipts).toBe(1);
+        expect(settled).toHaveLength(1);
+        mode = "rollback";
+        await expect(
+          update((store) => {
+            store.profiles.selected = credential("synthetic-refused");
+            return true;
+          }),
+        ).rejects.toThrow("synthetic credential commit refusal");
+        expect(grants).toBe(3);
+        expect(settled).toEqual([replacement, replacement]);
+        expect(readCurrent()).toEqual(replacement);
+        expect(loadPersistedAuthProfileStore(agentDir)?.profiles.selected).toEqual(replacement);
+      } finally {
+        unsubscribe();
+      }
+    });
+  },
+);
+
+it("keeps shared credentials denied after worker death without a native outcome", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    saveAuthProfileStore(
+      { version: 1, profiles: { selected: credential("synthetic-before") } },
+      undefined,
+      saveOptions,
+    );
+    const readCurrent = await prepareCredentialReader(state.env);
+    let target: { worker: Worker } | undefined;
+    let terminated: Promise<number> | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
+    const post = Worker.prototype.postMessage;
+    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request: SqliteWorkerRequest,
+      transferList,
+    ) {
+      if (request.type === "execute") {
+        const command: unknown = deserialize(request.input);
+        if (isRecord(command) && command.type === "authProfiles.update") {
+          target = { worker: this };
+        }
+      }
+      return post.call(this, request, transferList);
+    });
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      admit(request, (beforeRelease) => {
+        if (target && request.stage === "commit") {
+          expect(readCurrent).toThrow("Auth profile credential authority is unavailable");
+          terminated = target.worker.terminate();
+          return false;
+        }
+        return grant(beforeRelease);
+      });
+    });
+    try {
+      const failure = await updateAuthProfileStoreWithLock({
+        sharedStoreWrite: true,
+        saveOptions,
+        updater(store) {
+          store.profiles.selected = credential("synthetic-uncertain");
+          return true;
+        },
+      }).catch((error: unknown) => error);
+      expect(terminated).toBeDefined();
+      expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+      expect(readCurrent).toThrow();
+      const recaptured = await prepareCredentialReader(state.env);
+      expect(recaptured).toThrow("Auth profile credential authority is unavailable");
+    } finally {
+      await terminated;
+    }
+  });
 });
 
 it.each([{ target: "agent", save: true }] as const)(
@@ -184,12 +372,13 @@ it.each(["stale", "newer-write", "rebound-owner"])(
               );
             }
             if (scenario === "rebound-owner") {
-              withEnv({ OPENCLAW_STATE_DIR: path.join(state.stateDir, "rebound") }, () =>
+              withEnv({ OPENCLAW_STATE_DIR: path.join(state.stateDir, "rebound") }, () => {
+                noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
                 setRuntimeAuthProfileStoreSnapshot(
                   { version: 1, profiles: { selected: credential("synthetic-rebound") } },
                   agentDir,
-                ),
-              );
+                );
+              });
             }
             if (!execution) {
               throw new Error("Missing real auth execution");

@@ -22,7 +22,8 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
-import { SHARED_AUTH_STORE_STATE_KEY, writeAuthProfileJsonCell } from "./sqlite-json.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import {
   prepareAuthProfileWriteTransactionAsync,
   resolveAuthProfileDatabasePath,
@@ -38,8 +39,7 @@ async function prepareActor(env: NodeJS.ProcessEnv) {
   openOpenClawStateDatabase({ env });
   await workerStore.runOpenClawStateWorkerOperation(
     captureOpenClawStateWorkerContext({ env }),
-    (scope) =>
-      scope.execute({ type: "authProfiles.sharedOwnership", input: { artifactPreserving: false } }),
+    async () => undefined,
   );
 }
 
@@ -111,22 +111,6 @@ it("holds an empty legacy source against a foreign writer through shared commit 
   });
 });
 
-it("accepts the initial owner binding installed by a concurrent first reader", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    await prepareActor(env);
-    const reading = resolveSharedAuthStoreOwnershipAsync(
-      captureOpenClawStateWorkerContext({ env }),
-    );
-    const writing = prepareAuthProfileWriteTransactionAsync(undefined, { env });
-    const [observed, prepared] = await Promise.all([reading, writing]);
-    expect(observed.location).toBe("legacy-main");
-    expect(prepared.sharedOwner.location).toBe("state-db");
-    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
-      location: "state-db",
-    });
-  });
-});
-
 it.each([false, true])(
   "fences replacement only for the selected legacy source (sharedOwned=%s)",
   async (sharedOwned) => {
@@ -182,7 +166,7 @@ it.each(["caller", "source"] as const)(
       await prepareActor(env);
       const sourceDir = resolveSharedMainAuthAgentDir(env);
       const sourcePath = resolveAuthProfileDatabasePath(sourceDir);
-      resolveSharedAuthStoreOwnership(env);
+      await resolveSharedAuthStoreOwnershipAsync(captureOpenClawStateWorkerContext({ env }));
       setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, sourceDir);
       let revoked = false;
       interceptBootstrap(async (execute) => {

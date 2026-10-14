@@ -8,8 +8,10 @@ import { performance } from "node:perf_hooks";
 import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import {
   finalizeBuildStepCache,
+  resetBuildCacheInputs,
   resolveBuildStepCacheState,
   restoreBuildStepCacheOutputs,
+  writeBuildCacheInputs,
   type BuildCacheStep,
 } from "./lib/build-artifact-cache.mts";
 import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
@@ -102,8 +104,7 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   ]),
   pluginAssetStep("build"),
   {
-    // Cap overlapping native bundle allocations in the shared runtime pass.
-    ...tsxStep("tsdown", "scripts/tsdown-build.mts", "--concurrency", "1"),
+    ...tsxStep("tsdown", "scripts/tsdown-build.mts"),
     env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
   },
   declarationStep("tsdown-ai", "tsdown.ai.config.ts", [TSDOWN_AI_OUTPUT_ROOT]),
@@ -131,10 +132,7 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   tsxStep("check-plugin-sdk-exports", "scripts/check-plugin-sdk-exports.mts"),
   {
     ...nodeStep("ui:build", ["scripts/ui.js", "build"]),
-    // No build-all cache: ui/vite.config.ts derives the Control UI build ID
-    // from package.json, git HEAD, and OPENCLAW_CONTROL_UI_BUILD_ID env, so a
-    // file-input signature cannot exactly invalidate generated assets and a
-    // warm hit could restore stale service-worker/app cache metadata.
+    // The UI owner caches its bundles and refreshes release identity before publication.
     cache: undefined,
   },
   tsxStep("write-build-info", "scripts/write-build-info.ts"),
@@ -401,7 +399,14 @@ export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepPara
     params.deferIsolatedAssets && step.label === "plugins:assets:build" ? ["--defer-isolated"] : [];
   return {
     command: params.nodeExecPath ?? nodeBin,
-    args: [...step.args, ...assetArgs],
+    args: [
+      ...step.args,
+      ...assetArgs,
+      // Native allocations are outside the JS heap. Keep small build hosts serial.
+      ...(step.label === "tsdown"
+        ? ["--concurrency", Number(env[TSDOWN_MAX_OLD_SPACE_MB_ENV]) >= 12288 ? "2" : "1"]
+        : []),
+    ],
     options: {
       stdio: "inherit",
       env,
@@ -505,6 +510,9 @@ export async function runBuildAllSteps(
   const restoreCache = params.restoreCache ?? restoreBuildStepCacheOutputs;
   const finalizeCache = params.finalizeCache ?? finalizeBuildStepCache;
   const cwd = params.cwd ?? process.cwd();
+  if (!params.runStep) {
+    resetBuildCacheInputs(cwd);
+  }
   const inputDeps = { cwd, distRoot: path.join(cwd, "dist"), fs, env: buildEnv, spawnSync };
   const capturesNativeInputs =
     !params.runStep && steps.some((step) => step.label.endsWith("build-stamp"));
@@ -676,6 +684,9 @@ export async function runBuildAllSteps(
     exitCode = await runSteps(steps);
   }
   logger.error(formatBuildAllTimingSummary(timings, now() - startedAt));
+  if (exitCode === 0 && !params.runStep) {
+    writeBuildCacheInputs(cwd);
+  }
   return { exitCode, timings };
 }
 

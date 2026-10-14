@@ -456,6 +456,21 @@ export function resolveProviderRequestPolicy(
   };
 }
 
+/** Catalog speed policy needs endpoint facts, without constructing request attribution. */
+export function resolveProviderFastModeRequestCapabilities(
+  input: ProviderRequestPolicyInput,
+  endpointClass = resolveProviderEndpoint(input.baseUrl, input.providerMetadataOwners)
+    .endpointClass,
+) {
+  return {
+    endpointClass,
+    allowsAnthropicServiceTier:
+      normalizeProviderId(input.provider ?? "") === "anthropic" &&
+      normalizeOptionalLowercaseString(input.api) === "anthropic-messages" &&
+      (endpointClass === "default" || endpointClass === "anthropic-public"),
+  };
+}
+
 export function resolveProviderRequestCapabilities(
   input: ProviderRequestCapabilitiesInput,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
@@ -531,10 +546,7 @@ export function resolveProviderRequestCapabilities(
         api === "openai-responses" ||
         api === "openai-chatgpt-responses" ||
         api === "azure-openai-responses"),
-    allowsAnthropicServiceTier:
-      provider === "anthropic" &&
-      api === "anthropic-messages" &&
-      (endpointClass === "default" || endpointClass === "anthropic-public"),
+    ...resolveProviderFastModeRequestCapabilities(input, endpointClass),
     // This is intentionally the gate for emitting `store: false` on Responses
     // transports, not just a statement about vendor support in the abstract.
     supportsResponsesStoreField:

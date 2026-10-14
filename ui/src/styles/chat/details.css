@@ -3,6 +3,14 @@ openclaw-chat-details {
   min-width: 0;
 }
 
+openclaw-chat-details[mobile] {
+  display: contents;
+}
+
+.chat-details-toggle[hidden] {
+  display: none;
+}
+
 /* Notices and suggestions share the gutter; Details lives in the pane header. */
 .chat-gutter-stack--details {
   width: calc(100% - 28px);
@@ -93,6 +101,22 @@ openclaw-chat-details-progress {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   font-size: 12px;
+}
+.chat-details[hidden] {
+  display: none;
+}
+.chat-details--docked {
+  position: absolute;
+  inset-block: 0;
+  inset-inline: auto 0;
+  width: var(--chat-details-space);
+  height: 100%;
+  border: 0;
+  border-inline-start: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow-wrap: anywhere;
 }
 .chat-details__toolbar {
   display: flex;

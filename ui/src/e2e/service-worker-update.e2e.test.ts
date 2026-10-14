@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -66,20 +66,17 @@ async function stageBuildB(destination: string): Promise<void> {
 }
 
 async function findBuildAsset(buildId: string, buildDir = outDir): Promise<BuildAsset> {
-  const assetsDir = path.join(buildDir, "assets");
-  for (const fileName of await readdir(assetsDir)) {
-    if (!fileName.endsWith(".js")) {
-      continue;
-    }
-    const source = await readFile(path.join(assetsDir, fileName));
-    if (source.includes(Buffer.from(buildId))) {
-      return {
-        path: `assets/${fileName}`,
-        sha256: createHash("sha256").update(source).digest("hex"),
-      };
-    }
+  const html = await readFile(path.join(buildDir, "index.html"), "utf8");
+  expect(html).toContain(`"buildId":${JSON.stringify(buildId)}`);
+  const assetPath = html.match(/<script\b[^>]*\bsrc="\.\/(assets\/[^"?]+\.js)"/u)?.[1];
+  if (!assetPath) {
+    throw new Error(`Production Control UI output has no entry script for ${buildId}`);
   }
-  throw new Error(`Production Control UI output did not contain build id ${buildId}`);
+  const source = await readFile(path.join(buildDir, assetPath));
+  return {
+    path: assetPath,
+    sha256: createHash("sha256").update(source).digest("hex"),
+  };
 }
 
 async function readBuildCacheName(buildId: string, buildDir = outDir): Promise<string> {
@@ -607,8 +604,7 @@ describe("Control UI service-worker production update E2E", () => {
       await holdReplacementWorkerInstalling(nextOutDir, installGate.url);
       const cacheB = await readBuildCacheName(buildB, nextOutDir);
       const assetB = await findBuildAsset(buildB, nextOutDir);
-      expect(assetB.path).not.toBe(assetA.path);
-      expect(assetB.sha256).not.toBe(assetA.sha256);
+      expect(assetB).toEqual(assetA);
 
       await page.evaluate(() => {
         localStorage.setItem(
@@ -707,11 +703,11 @@ describe("Control UI service-worker production update E2E", () => {
         controllerState: "activated",
         sha256: assetB.sha256,
       });
-      expect(refreshedAsset.sha256).not.toBe(initialAsset.sha256);
+      expect(refreshedAsset.sha256).toBe(initialAsset.sha256);
       await expect
         .poll(() =>
           page.evaluate(
-            async ({ assetPath, previousAssetPath, cacheName }) => {
+            async ({ assetPath, currentBuildId, previousBuildId, cacheName }) => {
               const registration = await navigator.serviceWorker.getRegistration();
               if (!registration) {
                 return null;
@@ -722,16 +718,27 @@ describe("Control UI service-worker production update E2E", () => {
               const html = shell ? await shell.text() : "";
               return {
                 currentAsset: html.includes(assetPath),
-                previousAsset: html.includes(previousAssetPath),
+                currentBuild: html.includes(`"buildId":${JSON.stringify(currentBuildId)}`),
+                previousBuild: html.includes(`"buildId":${JSON.stringify(previousBuildId)}`),
                 documentRootCached: Boolean(
                   await caches.match(new URL("./", registration.scope), { cacheName }),
                 ),
               };
             },
-            { assetPath: assetB.path, previousAssetPath: assetA.path, cacheName: cacheB },
+            {
+              assetPath: assetB.path,
+              currentBuildId: buildB,
+              previousBuildId: buildA,
+              cacheName: cacheB,
+            },
           ),
         )
-        .toEqual({ currentAsset: true, previousAsset: false, documentRootCached: false });
+        .toEqual({
+          currentAsset: true,
+          currentBuild: true,
+          previousBuild: false,
+          documentRootCached: false,
+        });
 
       if (captureUiProof) {
         await page.screenshot({

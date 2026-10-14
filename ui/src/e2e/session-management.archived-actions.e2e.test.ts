@@ -24,27 +24,32 @@ suite.define(() => {
     const context = await suite.browser.newContext({ viewport: { width: 390, height: 320 } });
     const page = await context.newPage();
     try {
-      await page.setContent(
+      for (const content of [
         '<main style="padding-top: 900px"><button disabled>Unarchive</button></main>',
-      );
-      await page.evaluate(() => {
-        const button = document.querySelector<HTMLButtonElement>("button");
-        if (!button) {
-          throw new Error("Lifecycle fixture control is missing");
-        }
-        document.body.dataset.activations = "0";
-        button.addEventListener("click", () => {
-          document.body.dataset.activations = String(Number(document.body.dataset.activations) + 1);
-          button.remove();
+        '<button disabled style="position: fixed; top: 300px; height: 100px">Unarchive</button>',
+      ]) {
+        await page.setContent(content);
+        await page.evaluate(() => {
+          const button = document.querySelector<HTMLButtonElement>("button");
+          if (!button) {
+            throw new Error("Lifecycle fixture control is missing");
+          }
+          document.body.dataset.activations = "0";
+          button.addEventListener("click", () => {
+            document.body.dataset.activations = String(
+              Number(document.body.dataset.activations) + 1,
+            );
+            button.remove();
+          });
+          requestAnimationFrame(() => {
+            button.disabled = false;
+          });
         });
-        requestAnimationFrame(() => {
-          button.disabled = false;
-        });
-      });
-      const unarchive = page.getByRole("button", { name: "Unarchive", exact: true });
-      await activateSelfRemovingControl(unarchive);
-      expect(await unarchive.count()).toBe(0);
-      expect(await page.locator("body").getAttribute("data-activations")).toBe("1");
+        const unarchive = page.getByRole("button", { name: "Unarchive", exact: true });
+        await activateSelfRemovingControl(unarchive);
+        expect(await unarchive.count()).toBe(0);
+        expect(await page.locator("body").getAttribute("data-activations")).toBe("1");
+      }
     } finally {
       await context.close();
     }

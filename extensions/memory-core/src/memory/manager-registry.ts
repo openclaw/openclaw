@@ -247,16 +247,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     params: { agentId: string; purpose: MemoryIndexManagerPurpose },
     operation: () => Promise<R>,
   ): Promise<R> {
-    while (this.closePromise) {
-      const globalClose = this.closePromise;
-      try {
-        await globalClose;
-      } catch {
-        if (this.closePromise === globalClose) {
-          await this.closeAll();
-        }
-      }
-    }
+    await this.closePromise;
     return await enqueueKeyedTask({
       tails: this.scopeOperations,
       key: JSON.stringify([params.agentId, params.purpose]),

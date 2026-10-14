@@ -13,14 +13,14 @@ import {
   sessionOwnershipLookupDenied,
   type SessionVisibilityDecision,
   type SessionVisibilityDecisionPresentationAction,
+  resolveSessionChannelScope,
+  type SessionChannelScope,
 } from "../../plugin-sdk/session-visibility-internal.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
-  resolveSessionChannelScope,
-  type SessionChannelScope,
   type AgentToAgentPolicy,
   type SessionAccessAction,
   type SessionToolsVisibility,

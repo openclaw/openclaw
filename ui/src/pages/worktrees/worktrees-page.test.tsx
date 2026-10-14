@@ -152,6 +152,22 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("navigates the hub only after activating a tab", async () => {
+    const page = createWorktreesPage();
+    page.mount();
+    await settle();
+    const selected = page.element.querySelector<HTMLButtonElement>("#sessions-tab-worktrees")!;
+    const sessions = page.element.querySelector<HTMLButtonElement>("#sessions-tab-sessions")!;
+    expect(selected.getAttribute("aria-selected")).toBe("true");
+    selected.focus();
+    selected.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(document.activeElement).toBe(sessions);
+    expect(page.model.context.navigate).not.toHaveBeenCalled();
+    sessions.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(page.model.context.navigate).toHaveBeenCalledExactlyOnceWith("sessions");
+    expect(selected.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("updates the shared header when the locale changes", async () => {
     const page = createWorktreesPage();
     page.mount();

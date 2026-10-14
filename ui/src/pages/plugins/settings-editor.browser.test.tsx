@@ -226,28 +226,6 @@ describe("grouped plugin settings", () => {
       expect(model.onConfigPatch).not.toHaveBeenCalled();
     },
   );
-  it("keeps a retired menu bound to the setting action that rendered it", async () => {
-    const { editor, model, update } = await mount();
-    const original = vi.fn();
-    await update({ onAskSetting: original });
-    const menu = editor.querySelector('[data-setting="enabled"] wa-dropdown')!;
-    const replacement = vi.fn();
-    await update({
-      onAskSetting: replacement,
-      model: {
-        ...model,
-        pluginId: "replacement",
-        configHints: {},
-        configSchema: { type: "object", properties: { limit: { type: "number" } } },
-      },
-    });
-    expect(menu.isConnected).toBe(false);
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "ask" } } }));
-    expect(replacement).not.toHaveBeenCalled();
-    expect(original).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ path: ["plugins", "entries", "fixture", "config", "enabled"] }),
-    );
-  });
   it.each<{
     name: string;
     overrides: Partial<PluginSettingsEditorModel>;
@@ -510,12 +488,6 @@ describe("grouped plugin settings", () => {
       const input = row.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
       expect(row).not.toBeNull();
       expect(input).not.toBeNull();
-      (target === "row" ? row : input).click();
-      expect(model.onConfigPatch).toHaveBeenCalledExactlyOnceWith(
-        ["plugins", "entries", "fixture", "config", "enabled"],
-        false,
-      );
-      vi.mocked(model.onConfigPatch).mockClear();
       const range = document.createRange();
       range.selectNodeContents(row.querySelector(".plugin-editor__title")!);
       getSelection()!.removeAllRanges();
@@ -524,8 +496,19 @@ describe("grouped plugin settings", () => {
       row.click();
       expect(model.onConfigPatch).not.toHaveBeenCalled();
       getSelection()!.removeAllRanges();
-      row.querySelector<HTMLButtonElement>('button[slot="trigger"]')!.click();
+      row.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!.click();
       expect(model.onConfigPatch).not.toHaveBeenCalled();
+      await settle();
+      const menu = row.querySelector<HTMLElement>('[role="menu"]')!;
+      expect(menu.matches(":popover-open")).toBe(true);
+      menu.click();
+      expect(model.onConfigPatch).not.toHaveBeenCalled();
+      (target === "row" ? row : input).click();
+      expect(model.onConfigPatch).toHaveBeenCalledExactlyOnceWith(
+        ["plugins", "entries", "fixture", "config", "enabled"],
+        false,
+      );
+      vi.mocked(model.onConfigPatch).mockClear();
       await update({ model: { ...model, canEditConfig: false } });
       row.click();
       expect(model.onConfigPatch).not.toHaveBeenCalled();

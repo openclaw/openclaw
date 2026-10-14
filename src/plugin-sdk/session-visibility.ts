@@ -21,11 +21,7 @@ import {
   type SessionVisibilityDecision,
   type SessionOwnershipLookupFailure,
   type SessionChannelScope,
-} from "./session-visibility-internal.js";
-
-export {
   resolveSessionChannelScope,
-  type SessionChannelScope,
 } from "./session-visibility-internal.js";
 
 type GatewayCaller = typeof defaultCallGateway;
@@ -298,8 +294,10 @@ type SessionVisibilityCheckerParams = {
   requesterAgentId?: string;
   requesterSessionKey: string;
   requesterChannelScope?: SessionChannelScope;
+  requesterChannelRow?: unknown;
   /** Host-owned stored scope lookup; missing facts fail closed in channel mode. */
   channelScopeForSession?: (key: string) => SessionChannelScope | undefined;
+  channelRowForSession?: (key: string) => unknown;
   mainSessionKey?: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
@@ -312,7 +310,11 @@ function createSessionVisibilityCheckerWithResult(
 ): { check: (targetSessionKey: string) => SessionAccessResult } {
   const spawnedKeys = params.spawnedKeys;
   let lookupFailureLogged = false;
-  const decisionChecker = createSessionVisibilityDecisionChecker(params);
+  const decisionChecker = createSessionVisibilityDecisionChecker({
+    ...params,
+    requesterChannelScope:
+      params.requesterChannelScope ?? resolveSessionChannelScope(params.requesterChannelRow),
+  });
 
   const check = (targetSessionKey: string): SessionAccessResult => {
     const incognitoDenial = resolveIncognitoSessionAccessDecision(targetSessionKey);
@@ -322,7 +324,9 @@ function createSessionVisibilityCheckerWithResult(
     let channelScope: SessionChannelScope | undefined;
     if (params.visibility === "channel") {
       try {
-        channelScope = params.channelScopeForSession?.(targetSessionKey);
+        channelScope =
+          params.channelScopeForSession?.(targetSessionKey) ??
+          resolveSessionChannelScope(params.channelRowForSession?.(targetSessionKey));
       } catch {
         // Host metadata lookup failures cannot widen the channel boundary.
       }
@@ -403,9 +407,19 @@ export const createSessionVisibilityChecker = Object.assign(createSessionVisibil
 export function createSessionVisibilityRowChecker(params: SessionVisibilityCheckerParams): {
   check: (row: SessionVisibilityRow) => SessionAccessResult;
 } {
-  const checker = createSessionVisibilityDecisionChecker(params);
+  const checker = createSessionVisibilityDecisionChecker({
+    ...params,
+    requesterChannelScope:
+      params.requesterChannelScope ?? resolveSessionChannelScope(params.requesterChannelRow),
+  });
   return {
-    check: (row) => toSessionAccessResult(checker.check(row), params.action, row.key),
+    check: (row) => {
+      const resolvedRow =
+        params.visibility === "channel" && !row.channelScope
+          ? { ...row, channelScope: resolveSessionChannelScope(row) }
+          : row;
+      return toSessionAccessResult(checker.check(resolvedRow), params.action, row.key);
+    },
   };
 }
 

@@ -18,7 +18,7 @@ Startup establishes state ownership before publishing compatibility metadata and
 
 Every server start uses the same admission, including the temporary Gateway started by container onboarding. Direct servers retain ownership until shutdown completes. Managed servers use the run loop's existing owner, which remains responsible for restart handoffs and release; closing one server generation does not release that owner.
 
-1. **Process owner** exclusively creates one sidecar keyed by the canonical shared-state database path. Gateway startup, embedded agents, and offline maintenance compete for this same owner. `OPENCLAW_ALLOW_MULTI_GATEWAY=1` does not permit sharing mutable state.
+1. **Process owner** exclusively creates one sidecar keyed by the resolved shared-state database path. Gateway startup, embedded agents, and offline maintenance compete for this same owner. `OPENCLAW_ALLOW_MULTI_GATEWAY=1` does not permit sharing mutable state.
 2. **Compatibility projection** publishes the owner's PID, process start identity, role, and runtime port in the historical state-local lock. Supported older Gateways use it to detect the current process. It is metadata under the process owner, not an independent lifecycle owner.
 3. **Socket bind** binds the HTTP/WebSocket listener (default `ws://127.0.0.1:18789`) as an exclusive TCP listener.
 
@@ -26,7 +26,7 @@ During startup or restart, the Gateway waits up to five minutes for another Open
 
 ### State and config locks
 
-- On Linux and macOS, the process owner lives at `$OPENCLAW_STATE_DIR/tmp/openclaw-<uid>/state.<hash>.lock`. It uses the selected state storage without requiring write access to its parent or depending on the system temporary directory. On Windows it lives beneath the user's `AppData/Local/OpenClaw/locks/openclaw-state-owners` directory. The hash identifies the canonical shared-state database path. `TMPDIR` does not change this namespace.
+- On Linux and macOS, the process owner lives at `$OPENCLAW_STATE_DIR/tmp/openclaw-<uid>/state.<hash>.lock`. It uses the selected state storage without requiring write access to its parent or depending on the system temporary directory. On Windows it lives beneath the user's `AppData/Local/OpenClaw/locks/openclaw-state-owners` directory. The hash identifies the resolved shared-state database path. `TMPDIR` does not change this namespace.
 - Destructive cleanup preserves the process owner and compatibility projection while removing state contents, so new startup remains blocked until native database resources and destructive operations settle. Normal release removes the sidecars; no SQLite coordinator database accompanies them.
 - Cleanup refuses redirected database or runtime-lock paths before deleting state: removing an internal symlink could select a new owner while the original files remain locked. Select the actual state root and real internal directories before retrying. An alias for the entire state root remains supported.
 - Ownership uses exclusive file creation and fs-safe's existing checked release and stale-recovery protocol. A dead process or a verified changed process start identity permits recovery. Age alone never revokes a live owner, and unreadable ownership remains a refusal.

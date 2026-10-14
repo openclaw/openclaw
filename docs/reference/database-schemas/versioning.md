@@ -9,12 +9,37 @@ title: "Versioning contract"
 
 ## Versioning contract
 
+An admitted empty shared-state database is created directly at the current
+version in the migration owner's transaction. It does not replay historical
+row transforms or validate and repair the canonical schema it just installed.
+Database-open admission still applies. Existing and native-bootstrap databases
+retain the versioned migration and validation path; creation preserves the same
+catalog SQL and first-use table policy.
+
 Each database records its published schema in two places:
 
 - `PRAGMA user_version` is the SQLite schema version.
 - The primary `schema_meta` row records `role`, `agent_id`, `schema_version`, and `app_version`. `app_version` is the OpenClaw build that last wrote the schema metadata.
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. [`openclaw update`](/cli/update) also refuses a package or source target whose declared schema support is older than an on-disk database. Known stable releases published before schema metadata was added are checked against their shipped schema-1 contract. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
+
+Native clients make a narrow exception for their local `device_identities` and
+`device_auth_tokens` tables. Connecting to a remote Gateway must not depend on
+unrelated local backend migrations. A newer shared-state schema is admitted for
+these stores only when its global metadata matches `user_version` and the
+credential table and index definitions still match the complete native contract,
+with no additional indexes or triggers. Missing or incompatible tables remain
+errors; the native client never repairs them or changes either schema-version
+marker. Existing identity keys and gateway-scoped tokens remain in the same
+database, without a migration or a second source of truth.
+
+These table names, definitions, and credential row meanings are a stable native
+storage contract. Future incompatible credential semantics must change the
+table name or definition so existing clients refuse access; bumping only the
+backend version is not a credential compatibility fence. Config, execution
+approvals, port-guardian state, Gateway startup, and updater admission retain
+their backend schema-version checks. Apps predating this exception still need
+an app update when their local backend advances beyond their supported schema.
 
 When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `openclaw doctor --fix`; run `openclaw doctor --fix` from the compatible install if further migration is required, then restart through the service or deployment owner.
 
@@ -23,12 +48,26 @@ cannot parse its catalog. A known legacy index defect must not replace that
 refusal with advice to repair the database using the older build. Doctor checks
 compatibility before stopping the Gateway service.
 
+Shared-state [schema 22](/reference/database-schemas/state-schema-history#state-schema-22)
+adds portable ACP resume columns and explicit cursor identities. Builds supporting
+only schema 21 or earlier refuse it. Existing cursor values are preserved; binary
+rollback requires the verified pre-upgrade backup and its matching build.
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports
 all incompatibilities without modifying the source files.
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
+
+Session-window preview caching adds bare nullable `row_transcript_json TEXT` and
+`row_transcript_updated_at INTEGER` columns without a numeric version bump.
+Admission adds the columns to existing stores; each row fills lazily through the
+agent writer. Older builds ignore them. A cache is reusable only when its source
+transcript timestamp and indexed sequence still match: older normal writes advance
+the timestamp, while older imports can preserve mtime but advance the index. A
+missing or invalid cache triggers bounded backfill; canonical transcript bytes,
+retention, and rollback semantics are unchanged.
 
 Agent deletion adds a nullable `phase TEXT` column to its existing journal on
 first deletion or Doctor reconstruction. `draining` closes ingress while existing

@@ -181,10 +181,21 @@ describe("native PR provisioning diagnostics", () => {
     expect(calls).toBe(0);
   });
 
-  it("reports ordinary errors without fabricating storage facts and safely handles primitives", () => {
-    const out = render(new Error("plain failure"));
+  it.each([
+    "plain failure",
+    "state lease heartbeat is not responsive (phase=verify, trigger=deadline, requestId=2, elapsedMs=1000, responseRemainingMs=0, operationRemainingMs=59000, leaseRemainingMs=59000, status=1, renewalProgress=2, completedRequestId=1)",
+  ])("reports ordinary errors without fabricating storage facts: %s", (message) => {
+    const out = render(new Error(message));
     expect(out.outcome).toBeUndefined();
-    expect(out.error.nodes[0]).toMatchObject({ type: "error", message: "plain failure" });
+    expect(out.error.nodes).toEqual([{ type: "error", name: "Error", message }]);
+    const carrier = new Error("wire carrier");
+    retainOpenClawStateWorkerErrorPayload(carrier, out.error);
+    expect(hydrateOpenClawStateWorkerError(carrier, { includeOrdinary: true }).message).toBe(
+      message,
+    );
+  });
+
+  it("safely handles primitives", () => {
     expect(formatProvisionError("plain failure")).toBe("plain failure");
     for (const value of [undefined, null, 0, true, Symbol("failure"), 1n]) {
       expect(formatProvisionError(value)).toBe(unavailable);

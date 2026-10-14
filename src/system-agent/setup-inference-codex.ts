@@ -89,9 +89,12 @@ async function prepareCodexRuntimePlugin(
     const official = getOfficialExternalPluginCatalogEntry("codex");
     const trustedBundled =
       official !== undefined &&
-      !record &&
       installed?.origin === "bundled" &&
-      installed.packageName === official?.name;
+      installed.packageName === official.name &&
+      (!record ||
+        (record.source === "path" &&
+          record.sourcePath === installed.rootDir &&
+          record.installPath === installed.rootDir));
     const trustedInstall =
       record &&
       isTrustedOfficialPluginInstallRecord({

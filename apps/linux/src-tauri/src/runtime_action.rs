@@ -18,6 +18,7 @@ const MARKER: &str = "@rem # OpenClaw-Tauri runtime v1 ";
 const CHANGED: &str = "The Gateway runtime or service definition changed. Its current selection was preserved; inspect it before retrying.";
 const PAUSED: &str = "The Gateway is paused. Start it before choosing Use bundled runtime.";
 const UPGRADE: &str = "Update the installed OpenClaw CLI before selecting the bundled runtime; this CLI cannot verify the current runtime pin and service definition.";
+const UNHEALTHY: &str = "The Gateway did not become healthy on the bundled runtime.";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct BundledRuntime {
@@ -203,6 +204,18 @@ impl Observation {
             && self.flag("/rpc/ok") == Some(true)
     }
 
+    fn check_health(&self, runtime: &BundledRuntime, fresh: bool) -> Result<bool, &'static str> {
+        if self.healthy_for(runtime) {
+            Ok(true)
+        } else if !fresh && self.paused() {
+            Err(UNHEALTHY)
+        } else {
+            // A newly installed Windows login item can still be starting after
+            // install returns. Keep its existing health deadline while it starts.
+            Ok(false)
+        }
+    }
+
     fn previous_runtime_command(&self) -> String {
         let path = self
             .text("/service/runtimeIntent/pin/path")
@@ -295,11 +308,11 @@ fn perform(
         loop {
             check_current(is_current)?;
             let observed = capture(cli, true)?;
-            if observed.healthy_for(runtime) {
+            if observed.check_health(runtime, fresh)? {
                 return Ok(());
             }
-            if observed.paused() || Instant::now() >= deadline {
-                return Err("The Gateway did not become healthy on the bundled runtime.".into());
+            if Instant::now() >= deadline {
+                return Err(UNHEALTHY.into());
             }
             thread::sleep(Duration::from_secs(2));
         }
@@ -491,8 +504,7 @@ pub(crate) fn managed_command(cli: &OpenClawCli) -> Result<Option<Command>, Stri
     Ok(Some(command))
 }
 
-/// Publish the initial Windows launcher only after the bundled package has been installed.
-#[cfg(target_os = "windows")]
+/// Publish the initial launcher only after the bundled package has been installed.
 pub(crate) fn install_launcher(
     prefix: &Path,
     runtime: &BundledRuntime,
@@ -519,6 +531,7 @@ pub(crate) fn install_launcher(
             path,
             bytes,
             entry,
+            #[cfg(target_os = "windows")]
             runtime: runtime.clone(),
         },
         runtime,

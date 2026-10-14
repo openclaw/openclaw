@@ -19,6 +19,7 @@ import { isImageWithMediaPayload } from "../media-payload.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
   describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
   extractToolResultText,
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
@@ -39,7 +40,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
-import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import {
+  normalizeOpenAIResponsesReasoningReplayItem,
+  resolveReplayableResponsesMessageId,
+} from "./openai-responses-replay.js";
 import {
   buildProviderReplayContext,
   isProviderReplayContext,
@@ -100,23 +104,6 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
   }
   const value = block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY];
   return isOpenAIResponsesReasoningReplayMetadata(value) ? value : null;
-}
-
-function normalizeOpenAIResponsesReasoningReplayItem(
-  item: ReplayableResponseReasoningItem,
-  api: Api,
-): ReplayableResponseReasoningItem {
-  if (api === "openai-chatgpt-responses") {
-    return Array.isArray(item.summary) ? item : { ...item, summary: [] };
-  }
-  // Match storage's reasoning privacy shape and order before warm replay too.
-  return {
-    id: item.id,
-    type: "reasoning",
-    summary: [],
-    status: item.status,
-    encrypted_content: item.encrypted_content,
-  };
 }
 
 function prepareOpenAIResponsesReasoningItemForReplay(
@@ -583,26 +570,44 @@ function convertResponsesMessagesWithStyle(
       const separatorIndex = msg.toolCallId.indexOf("|");
       const callId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
+      let output: string | ResponseFunctionCallOutputItemList = hasText
+        ? textResult
+        : (mediaPlaceholder ?? "(no output)");
+      if (hasImages && model.input.includes("image")) {
+        const parts: ResponseFunctionCallOutputItemList = [];
+        let hasExplicitText = false;
+        for (const item of msg.content) {
+          if (isImageWithMediaPayload(item)) {
+            parts.push({
+              type: "input_image",
+              detail: "auto",
+              image_url: `data:${item.mimeType};base64,${item.data}`,
+            });
+          } else if (hasText && item.type === "text") {
+            const text = extractToolResultBlockText(item);
+            if (text) {
+              const joinedText = `${hasExplicitText ? "\n" : ""}${text}`;
+              hasExplicitText = true;
+              const previous = parts.at(-1);
+              if (previous?.type === "input_text") {
+                previous.text += joinedText;
+              } else {
+                parts.push({ type: "input_text", text: joinedText });
+              }
+            }
+          }
+        }
+        if (hasText && !hasExplicitText) {
+          parts.unshift({ type: "input_text", text: textResult });
+        } else if (!hasText && mediaPlaceholder === "(see attached media)") {
+          parts.unshift({ type: "input_text", text: mediaPlaceholder });
+        }
+        output = parts;
+      }
       messages.push({
         type: "function_call_output",
         call_id: callId,
-        output:
-          hasImages && model.input.includes("image")
-            ? ([
-                ...(hasText
-                  ? [{ type: "input_text", text: textResult }]
-                  : mediaPlaceholder === "(see attached media)"
-                    ? [{ type: "input_text", text: mediaPlaceholder }]
-                    : []),
-                ...msg.content.filter(isImageWithMediaPayload).map((item) => ({
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                })),
-              ] as ResponseFunctionCallOutputItemList)
-            : hasText
-              ? textResult
-              : (mediaPlaceholder ?? "(no output)"),
+        output,
       });
     }
     msgIndex += 1;

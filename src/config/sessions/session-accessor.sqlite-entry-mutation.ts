@@ -116,13 +116,12 @@ export function writeSessionEntryPatchInDatabase(
       : {}),
   });
   if (postimages.get(params.sessionKey)?.changed === false) {
-    return { applied: true, entry: structuredClone(persisted) };
+    return { applied: true, entry: persisted };
   }
-  const current = new Map([[params.sessionKey, persisted]]);
   return {
     applied: true,
-    entry: structuredClone(persisted),
-    identity: { previous, current },
+    entry: persisted,
+    identity: { previous, current: new Map([[params.sessionKey, persisted]]) },
     postimages,
   };
 }

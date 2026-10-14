@@ -70,6 +70,7 @@ export async function resolveAgentRuntimePrompt(params: {
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
+      customInlineButtonHint: channelPromptContext.customInlineButtonHint,
     },
   });
 

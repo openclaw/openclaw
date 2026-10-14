@@ -246,6 +246,7 @@ export function memoizedSidebarCatalogs(
       host.hiddenSessionCatalogIds,
       host.sessionsStatusFilter,
       ownerId,
+      host.sessionInvolvingMeFilterActive,
       host.sessionData.sessionsResult,
       host.sessionData.sessionResultsByAgent,
     ],

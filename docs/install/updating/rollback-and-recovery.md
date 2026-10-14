@@ -151,8 +151,10 @@ openclaw update cleanup --dry-run
 ### Full-state recovery requires a backup
 
 Package updates keep pre-migration SQLite snapshots alongside the package
-backup until verified successful activation removes them with that backup.
-Rollback, failed or unverified completion, and refused restoration retain them.
+backup until verified successful activation removes restorable snapshots with that backup.
+Snapshots whose source write generations could not be sealed remain available
+for manual recovery even after successful activation. Rollback, failed or
+unverified completion, and refused restoration also retain snapshots.
 If cleanup cannot finish, the update reports a maintenance warning with the
 retained path. Older snapshot directories are not automatically removed: their
 ownership and successful outcome cannot be proven from existing receipts.
@@ -170,7 +172,10 @@ databases and reports `state-migrated-no-rollback` with the snapshot location an
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.
 Snapshot capture first settles local SQLite writers under maintenance ownership,
-so later writer shutdown is not mistaken for intervening writes. The installed
+so later writer shutdown is not mistaken for intervening writes. Under that
+ownership, capture copies each database file family privately instead of opening
+the source, so WAL files left by an exited writer are not mistaken for a change
+during capture. The installed
 updater owns this ordering; staging a newer candidate cannot change an
 already-running older updater.
 On Windows, an eligible capture first runs the same native SQLite exclusion check

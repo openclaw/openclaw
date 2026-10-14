@@ -121,6 +121,7 @@ export class UrbitSSEClient {
     await ensureUrbitChannelOpen(this.channelRequestContext(), {
       createBody: this.subscriptions,
       createAuditContext: "tlon-urbit-channel-create",
+      beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
     });
   }
 
@@ -207,7 +208,8 @@ export class UrbitSSEClient {
         ssrfPolicy: this.ssrfPolicy,
         lookupFn: this.lookupFn,
         fetchImpl: this.fetchImpl,
-        signal: controller.signal,
+        signal: AbortSignal.any([controller.signal, this.reconnectAbortController.signal]),
+        beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
         auditContext: "tlon-urbit-sse-stream",
       });
     } finally {
@@ -217,6 +219,10 @@ export class UrbitSSEClient {
     }
 
     const { response, release } = stream;
+    if (this.reconnectAbortController.signal.aborted) {
+      await release();
+      this.reconnectAbortController.signal.throwIfAborted();
+    }
     this.streamRelease = release;
 
     if (!response.ok || !response.body) {
@@ -500,6 +506,9 @@ export class UrbitSSEClient {
       this.reconnectAttempts = 0;
       this.logger.log?.("[SSE] Reconnection successful!");
     } catch (error) {
+      if (this.aborted) {
+        return;
+      }
       this.logger.error?.(`[SSE] Reconnection failed: ${String(error)}`);
       await this.attemptReconnect();
     }

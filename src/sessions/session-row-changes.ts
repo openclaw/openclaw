@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SessionMembershipFact } from "../config/sessions/session-membership-facts.types.js";
+import type {
+  SessionMembershipFact,
+  SessionParticipantRecord,
+} from "../config/sessions/session-membership-facts.types.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import {
   hasSqlitePostCommitScope,
@@ -48,6 +51,10 @@ export type SessionRowFacts =
       kind: "participants";
       /** Participant history belongs to the logical key, across transcript replacements. */
       projection?: Pick<SessionEntry, "participants" | "participantCount">;
+      /** Count-only contributions leave display identity and ordering unchanged. */
+      projectionChanged?: false;
+      records?: readonly SessionParticipantRecord[];
+      actorVersion?: { epoch: string; sequence: number };
     }
   | { kind: "category"; sessionId: string; category: string | null }
   | { kind: "removed" };

@@ -9,6 +9,7 @@ import {
   validateExtendedStableNpmReleaseRequest,
   validateExtendedStableRunIdentity,
 } from "../../scripts/openclaw-npm-extended-stable-release.mjs";
+import { encodePluginSdkApiArtifact } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 
 const sha = "a".repeat(40);
 const branch = "extended-stable/2026.6.33";
@@ -44,6 +45,12 @@ describe("npm preflight publication channels", () => {
             schema: "openclaw.plugin-sdk-api-release-evidence-set/v2",
           },
         },
+        npmDistTag: "latest",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateNpmPreflightDistTag({
+        manifest: { ...manifest, pluginSdkApi: encodePluginSdkApiArtifact(manifest.pluginSdkApi) },
         npmDistTag: "latest",
       }),
     ).not.toThrow();

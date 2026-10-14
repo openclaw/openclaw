@@ -157,6 +157,7 @@ export type SessionVisibilityDenialReason =
   | "agent_to_agent_disabled"
   | "agent_to_agent_not_allowed"
   | "agent_to_agent_send_not_allowed"
+  | "channel_retrieval_only"
   | "channel_visibility_restricted"
   | "cross_agent_visibility_restricted"
   | "incognito_session"
@@ -279,6 +280,14 @@ export function createSessionVisibilityDecisionChecker(params: SessionVisibility
             "channel_visibility_restricted",
             ["tools.sessions.visibility"],
             ["requesterAgentId", "targetAgentId", "requesterChannelScope", "targetChannelScope"],
+          );
+        }
+        if (params.action === "send" || params.action === "status") {
+          return denied(
+            "channel_retrieval_only",
+            ["tools.sessions.visibility"],
+            ["action", "requesterSessionKey", "targetSessionKey"],
+            [params.action],
           );
         }
         return { allowed: true };
@@ -408,6 +417,8 @@ export function renderSessionVisibilityDenial(
       return `Agent-to-agent ${params.action === "send" ? "messaging" : params.action === "list" ? "listing" : params.action} denied by tools.agentToAgent.allow.`;
     case "watch_visibility_required":
       return "watch:true requires session status visibility, not only send access. Omit watch to send without subscribing to future session changes.";
+    case "channel_retrieval_only":
+      return "Channel visibility authorizes cross-session retrieval, not sibling sends or status changes.";
     case "channel_visibility_restricted":
       return `${actionPrefix(params.action)} visibility is restricted to the current session and verified same-agent channel (tools.sessions.visibility=channel).`;
     case "self_visibility_restricted":

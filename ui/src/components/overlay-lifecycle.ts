@@ -1,6 +1,5 @@
 import { hideOverlayAnchor, showOverlayAnchor } from "./overlay-anchor.ts";
 import {
-  branchRevision,
   containsComposed,
   orderStack,
   prepareClosures,
@@ -13,6 +12,7 @@ import {
 import type {
   Overlay,
   OverlayFocusIntent,
+  OverlayLifecycleEvent,
   OverlayNativeAdapter,
   OverlayOptions,
   OverlayPhase,
@@ -78,6 +78,7 @@ export function createOverlay(
     if (event.target !== surface) {
       return;
     }
+    refreshRegistry();
     if (event.newState === "open") {
       registry.nativeOrder.set(api, ++registry.nextOrder);
     }
@@ -133,32 +134,21 @@ export function createOverlay(
     },
     retire() {
       if (notifyingRetirement) {
-        if (disposed) {
-          intent += 1;
-          intentTarget = false;
-          if (native.isOpen(surface)) {
-            setNativeOpen(false);
-          }
-          publish(false);
-        }
         return;
       }
       if (surface) {
         nativeToggle();
       }
-      const requested = ++intent;
+      intent += 1;
       intentTarget = false;
       notifyingRetirement = true;
       try {
         children.forEach((child) => child.retire());
         if (opened && surface.isConnected) {
-          surface.dispatchEvent(new CustomEvent("overlay-hide", { bubbles: true, composed: true }));
+          dispatchLifecycleEvent("overlay-hide");
         }
       } finally {
         notifyingRetirement = false;
-      }
-      if (requested !== intent) {
-        return;
       }
       if (!opened) {
         notifyClosed();
@@ -176,15 +166,6 @@ export function createOverlay(
         (disposed || !surface.isConnected || !hasPendingPresentation())
       ) {
         setNativeOpen(false);
-      }
-      if (requested !== intent) {
-        const reopen = intentTarget;
-        const focus = intentFocus;
-        publish(false);
-        if (reopen) {
-          api.request(true, focus);
-        }
-        return;
       }
       const token = ++generation;
       publish(false);
@@ -207,12 +188,7 @@ export function createOverlay(
         generation += 1;
       }
       surface = node;
-      registry = registryFor(node.ownerDocument);
-      unregister = registerOverlay(registry, api, {
-        options,
-        valid,
-        elements: ownedElements,
-      });
+      refreshRegistry(true);
       node.addEventListener("beforetoggle", beforeToggle);
       node.addEventListener("toggle", nativeToggle);
       setPhase("hidden");
@@ -267,11 +243,12 @@ export function createOverlay(
       if (disposed || !surface) {
         return false;
       }
+      refreshRegistry();
       refreshOverlayRoots(registry, api);
       if (disposed) {
         return false;
       }
-      if ((next && !valid()) || (!next && notifyingRetirement)) {
+      if (notifyingRetirement || (next && !valid())) {
         return !next;
       }
       if (nativeMutation && next === intentTarget) {
@@ -308,7 +285,6 @@ export function createOverlay(
         }
         return true;
       }
-      const admitted = new Set(registry.members.keys());
       if (!propose("overlay-show") || requested !== intent || !valid()) {
         return false;
       }
@@ -320,27 +296,21 @@ export function createOverlay(
       for (let ancestor = parent; ancestor; ancestor = ancestor.parent) {
         ancestors.add(ancestor);
       }
-      const displaced = () =>
-        registry.stack.filter(
-          (candidate) =>
-            candidate !== api &&
-            !ancestors.has(candidate) &&
-            options.exclusiveGroup !== undefined &&
-            registry.members.get(candidate)?.options.exclusiveGroup === options.exclusiveGroup,
-        );
-      const closes = prepareClosures(
-        registry,
-        () => {
-          const owners = displaced();
-          return owners.filter((owner) => !owner.parent || !owners.includes(owner.parent));
-        },
-        admitted,
+      const displaced = registry.stack.filter(
+        (candidate) =>
+          candidate !== api &&
+          !ancestors.has(candidate) &&
+          options.exclusiveGroup !== undefined &&
+          registry.members.get(candidate)?.options.exclusiveGroup === options.exclusiveGroup,
       );
-      if (!closes?.current() || requested !== intent || !valid() || !closes.commit()) {
+      const closes = prepareClosures(
+        displaced.filter((owner) => !owner.parent || !displaced.includes(owner.parent)),
+      );
+      if (!closes || requested !== intent || !closes()) {
         return false;
       }
       reconcileNative(registry);
-      if (displaced().length || requested !== intent || !valid()) {
+      if (requested !== intent || !valid()) {
         return false;
       }
       refreshOverlayRoots(registry, api);
@@ -350,7 +320,7 @@ export function createOverlay(
         return false;
       }
       reconcileNative(registry, api);
-      if (displaced().length || !valid() || (requested !== intent && !opened)) {
+      if (!valid() || (requested !== intent && !opened)) {
         children.forEach((child) => child.retire());
         setNativeOpen(false);
         generation += 1;
@@ -379,20 +349,15 @@ export function createOverlay(
       if (!propose("overlay-hide") || requested !== intent) {
         return null;
       }
-      const closes = prepareClosures(
-        registry,
-        () => [...children].filter((child) => child.open),
-        new Set(children),
-      );
-      if (!closes?.current() || requested !== intent) {
+      const closes = prepareClosures([...children].filter((child) => child.open));
+      if (!closes || requested !== intent) {
         return null;
       }
-      const revision = branchRevision(api);
       return () => {
-        if (requested !== intent || revision !== branchRevision(api) || !closes.current()) {
+        if (requested !== intent) {
           return false;
         }
-        if (!closes.commit()) {
+        if (!closes()) {
           return false;
         }
         reconcileNative(registry);
@@ -480,6 +445,23 @@ export function createOverlay(
     }
     return native.isOpen(surface) === next;
   }
+  function refreshRegistry(rebind = false) {
+    const next = registryFor(surface.ownerDocument);
+    if (next === registry && !rebind) {
+      return;
+    }
+    // Solid refs can bind in an inert template before the surface is adopted.
+    if (registry) {
+      removeFromStack();
+      unregister?.();
+    }
+    registry = next;
+    unregister = registerOverlay(registry, api, { options, valid, elements: ownedElements });
+    if (opened) {
+      registry.nativeOrder.set(api, ++registry.nextOrder);
+      registry.stack.push(api);
+    }
+  }
   function removeFromStack() {
     const index = registry.stack.indexOf(api);
     if (index >= 0) {
@@ -513,10 +495,17 @@ export function createOverlay(
     }
     listeners.forEach((listener) => listener(next));
   }
-  function propose(name: string) {
+  function dispatchLifecycleEvent(type: OverlayLifecycleEvent, cancelable = false) {
+    if (options.dispatchLifecycleEvent) {
+      return options.dispatchLifecycleEvent(type, cancelable);
+    }
+    const before = type === "overlay-show" || type === "overlay-hide";
     return surface.dispatchEvent(
-      new CustomEvent(name, { bubbles: true, composed: true, cancelable: true }),
+      new CustomEvent(type, { bubbles: before, composed: before, cancelable }),
     );
+  }
+  function propose(type: "overlay-show" | "overlay-hide") {
+    return dispatchLifecycleEvent(type, true);
   }
   function pendingPresentation() {
     return surface.getAnimations().filter((animation) => {
@@ -575,7 +564,7 @@ export function createOverlay(
           return;
         }
         setPhase(next ? "open" : "hidden");
-        surface.dispatchEvent(new CustomEvent(next ? "overlay-after-show" : "overlay-after-hide"));
+        dispatchLifecycleEvent(next ? "overlay-after-show" : "overlay-after-hide");
       });
     });
   }
@@ -584,6 +573,7 @@ export function createOverlay(
     if (!surface || nativeMutation) {
       return;
     }
+    refreshRegistry();
     const next = native.isOpen(surface);
     // Accepted close authority is already false while its finite exit still
     // needs the native top layer. Reconciliation must not turn that into a reopen.

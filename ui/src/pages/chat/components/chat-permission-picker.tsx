@@ -1,4 +1,4 @@
-import { For, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
@@ -85,6 +85,7 @@ function permissionIcon(mode: PermissionSelection | undefined) {
 }
 
 export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
+  const [opened, setOpened] = createSignal(false);
   const disabled = createMemo(() => props.disabled || props.pending);
   const selectMode = (mode: PermissionSelection) => {
     if (disabled() || (mode === "full" && !props.canSelectFull)) {
@@ -98,6 +99,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
     <wa-dropdown
       class="chat-controls__inline-select chat-controls__permission-picker"
       placement="top-start"
+      onWa-show={() => setOpened(true)}
       onWa-after-show={restorePointerOpenedChatComposerTrigger}
       onKeyDown={(event: KeyboardEvent) => handlePermissionPickerKeydown(event, selectMode)}
       onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
@@ -129,76 +131,80 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
           <Icon name={permissionIcon(props.mode)} />
         </span>
       </button>
-      <div class="chat-controls__popover-title chat-controls__permission-heading">
-        {t("chat.permissionControls.label")}
-      </div>
-      <wa-dropdown-item
-        class="chat-controls__permission-learn-more learn-more-link"
-        href={PERMISSION_MODES_DOCS_URL}
-        target={EXTERNAL_LINK_TARGET}
-        rel={buildExternalLinkRel()}
-      >
-        {t("common.learnMore")}
-      </wa-dropdown-item>
-      <For each={PERMISSION_OPTIONS} keyed={(mode) => mode ?? DEFAULT_PERMISSION_VALUE}>
-        {(mode, index) => {
-          const value = () => mode() ?? DEFAULT_PERMISSION_VALUE;
-          const selected = () => (props.mode ?? null) === mode();
-          const locked = () => mode() === "full" && !props.canSelectFull;
-          const label = () => modeLabel(mode(), props.defaultMode);
-          return (
-            <wa-dropdown-item
-              class={[
-                "chat-controls__permission-option",
-                { "chat-controls__permission-option--selected": selected() },
-              ]}
-              value={value()}
-              data-chat-permission-option={value()}
-              data-chat-permission-shortcut={String(index() + 1)}
-              role="menuitemradio"
-              aria-checked={selected() ? "true" : "false"}
-              aria-label={
-                locked() ? `${label()}. ${t("chat.permissionControls.fullRequiresAdmin")}` : label()
-              }
-              title={locked() ? t("chat.permissionControls.fullRequiresAdmin") : undefined}
-              disabled={disabled() || locked()}
-            >
-              <span slot="icon" class="chat-controls__permission-option-icon" aria-hidden="true">
-                <Icon name={permissionIcon(mode())} />
-              </span>
-              <span class="chat-controls__permission-option-copy">
-                <span class="chat-controls__permission-option-title">
-                  <span>{label()}</span>
-                </span>
-                <span class="chat-controls__permission-option-description">
-                  {mode()
-                    ? t(`chat.permissionControls.modes.${mode()}.description`)
-                    : t("chat.permissionControls.defaultDescription")}
-                </span>
-              </span>
-              <span
-                slot="details"
-                class="chat-controls__permission-option-state"
-                aria-hidden="true"
+      <Show when={opened()}>
+        <div class="chat-controls__popover-title chat-controls__permission-heading">
+          {t("chat.permissionControls.label")}
+        </div>
+        <wa-dropdown-item
+          class="chat-controls__permission-learn-more learn-more-link"
+          href={PERMISSION_MODES_DOCS_URL}
+          target={EXTERNAL_LINK_TARGET}
+          rel={buildExternalLinkRel()}
+        >
+          {t("common.learnMore")}
+        </wa-dropdown-item>
+        <For each={PERMISSION_OPTIONS} keyed={(mode) => mode ?? DEFAULT_PERMISSION_VALUE}>
+          {(mode, index) => {
+            const value = () => mode() ?? DEFAULT_PERMISSION_VALUE;
+            const selected = () => (props.mode ?? null) === mode();
+            const locked = () => mode() === "full" && !props.canSelectFull;
+            const label = () => modeLabel(mode(), props.defaultMode);
+            return (
+              <wa-dropdown-item
+                class={[
+                  "chat-controls__permission-option",
+                  { "chat-controls__permission-option--selected": selected() },
+                ]}
+                value={value()}
+                data-chat-permission-option={value()}
+                data-chat-permission-shortcut={String(index() + 1)}
+                role="menuitemradio"
+                aria-checked={selected() ? "true" : "false"}
+                aria-label={
+                  locked()
+                    ? `${label()}. ${t("chat.permissionControls.fullRequiresAdmin")}`
+                    : label()
+                }
+                title={locked() ? t("chat.permissionControls.fullRequiresAdmin") : undefined}
+                disabled={disabled() || locked()}
               >
-                {!selected() && !locked() && (
-                  <span class="chat-controls__permission-shortcut">{index() + 1}</span>
-                )}
-                {locked() && (
-                  <span class="chat-controls__permission-lock">
-                    <Icon name="lock" />
+                <span slot="icon" class="chat-controls__permission-option-icon" aria-hidden="true">
+                  <Icon name={permissionIcon(mode())} />
+                </span>
+                <span class="chat-controls__permission-option-copy">
+                  <span class="chat-controls__permission-option-title">
+                    <span>{label()}</span>
                   </span>
-                )}
-                {selected() && !locked() && (
-                  <span class="chat-controls__inline-select-check">
-                    <Icon name="check" />
+                  <span class="chat-controls__permission-option-description">
+                    {mode()
+                      ? t(`chat.permissionControls.modes.${mode()}.description`)
+                      : t("chat.permissionControls.defaultDescription")}
                   </span>
-                )}
-              </span>
-            </wa-dropdown-item>
-          );
-        }}
-      </For>
+                </span>
+                <span
+                  slot="details"
+                  class="chat-controls__permission-option-state"
+                  aria-hidden="true"
+                >
+                  {!selected() && !locked() && (
+                    <span class="chat-controls__permission-shortcut">{index() + 1}</span>
+                  )}
+                  {locked() && (
+                    <span class="chat-controls__permission-lock">
+                      <Icon name="lock" />
+                    </span>
+                  )}
+                  {selected() && !locked() && (
+                    <span class="chat-controls__inline-select-check">
+                      <Icon name="check" />
+                    </span>
+                  )}
+                </span>
+              </wa-dropdown-item>
+            );
+          }}
+        </For>
+      </Show>
     </wa-dropdown>
   );
 }

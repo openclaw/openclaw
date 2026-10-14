@@ -11,7 +11,7 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { decodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -226,8 +226,10 @@ export async function createRequesterPublicationFixture(
       return decodeGitHubPublicationRequester(
         backend === "repository"
           ? readRepositoryGitHubPublication(requestId)?.requester_authority_json
-          : readGitHubPublicationSessionLifecycle({ publicationKind: "shared", requestId })
-              ?.requester_authority_json,
+          : readGitHubPublicationSessionLifecycle(
+              { publicationKind: "shared", requestId },
+              openOpenClawStateDatabase().db,
+            )?.requester_authority_json,
       );
     },
     removeRequesterSnapshot(requestId: string) {
@@ -424,6 +426,7 @@ export async function prepareVisitorPublicationFixture(f: {
         // Service node setup reads this host facet even when Visitor never invokes nodes.
         subagent: {
           complete: unexpectedSubagent,
+          forkSession: unexpectedSubagent,
           run: unexpectedSubagent,
           waitForRun: unexpectedSubagent,
           getSessionMessages: unexpectedSubagent,

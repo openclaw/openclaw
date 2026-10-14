@@ -1,5 +1,7 @@
 /* @vitest-environment jsdom */
+import { delegateEvents } from "@solidjs/web";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 
 afterEach(() => {
@@ -23,6 +25,42 @@ function fixture(shadow = false) {
 }
 
 describe("portaled hovercard presentation ownership", () => {
+  it("keeps a Solid card open while its links hold focus and closes after focus leaves", async () => {
+    vi.useFakeTimers();
+    const view = fixture();
+    const card = createPortaledHovercard("solid-preview", "preview");
+    const content = document.createElement("div");
+    const first = document.createElement("a");
+    first.href = "#first";
+    const second = document.createElement("a");
+    second.href = "#second";
+    content.append(first, second);
+    // The application delegates these events before the portal installs native listeners.
+    delegateEvents(["focusin", "focusout"]);
+    mountSolid(() => content, { container: card });
+    view.controller.mount(view.trigger, card, "vertical");
+    onTestFinished(() => view.controller.reset());
+
+    first.focus();
+    view.controller.handleCardPointerLeave();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card.isConnected).toBe(true);
+    expect(document.activeElement).toBe(first);
+    expect(view.dismiss).not.toHaveBeenCalled();
+
+    second.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card.isConnected).toBe(true);
+    expect(document.activeElement).toBe(second);
+    expect(view.dismiss).not.toHaveBeenCalled();
+
+    view.trigger.href = "#outside";
+    view.trigger.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(view.controller.card).toBeNull();
+    expect(view.dismiss).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])(
     "retires animated exits without waiting for reduced motion (%s)",
     async (reduced) => {

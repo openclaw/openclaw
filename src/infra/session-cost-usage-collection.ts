@@ -11,10 +11,7 @@ import {
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import {
-  listDurableSqliteTargetPathsForSessionStorePath,
-  resolveSqliteTargetFromSessionStorePath,
-} from "../config/sessions/session-sqlite-target.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
@@ -27,6 +24,7 @@ const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 export type UsageCostCollectionAccess = {
   env?: NodeJS.ProcessEnv;
   materializeArchive: (sourcePath: string) => Promise<string>;
+  listSqliteMetadataStores: (storePath: string) => readonly string[];
   readSqliteMetadata: <T>(storePath: string, read: () => T) => Promise<T>;
   listSqliteInstances: (
     agentId: string,
@@ -96,10 +94,9 @@ async function listUsageCountedTranscriptFileSources(
   const archiveNames = transcripts.map((entry) => entry.name);
   const stores = new Map(
     transcripts.length > 0
-      ? listDurableSqliteTargetPathsForSessionStorePath(storePath).map((databasePath) => [
-          resolveRealpathOrAbsolute(databasePath),
-          databasePath,
-        ])
+      ? params
+          .listSqliteMetadataStores(storePath)
+          .map((databasePath) => [resolveRealpathOrAbsolute(databasePath), databasePath])
       : [],
   );
   const archivesByStore = [];
@@ -334,14 +331,21 @@ export async function resolveUsageCostTranscriptPaths(
   sessionFiles: readonly string[],
   access: UsageCostCollectionAccess,
 ): Promise<Array<string | undefined>> {
+  // Physical ownership is stable for this batch; every actual read retains database custody.
+  const storePaths = new Map<string, string>();
   const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: sessionFiles.map((sessionFile) => async () => {
       const marker = parseSqliteSessionFileMarker(sessionFile);
       if (marker) {
-        const { path: storePath } = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
-          agentId: marker.agentId,
-          env: access.env,
-        });
+        const targetKey = JSON.stringify([marker.agentId, marker.storePath]);
+        let storePath = storePaths.get(targetKey);
+        if (storePath === undefined) {
+          storePath = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
+            agentId: marker.agentId,
+            env: access.env,
+          }).path;
+          storePaths.set(targetKey, storePath);
+        }
         return formatSqliteSessionFileMarker({ ...marker, storePath });
       }
       try {

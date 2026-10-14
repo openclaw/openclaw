@@ -424,7 +424,7 @@ describe("applyClawAddPlan", () => {
         },
       },
     });
-    await expect(access(plan.agent.workspace)).resolves.toBeUndefined();
+    await access(plan.agent.workspace);
   });
 
   it("rejects overlap with the implicit main workspace before materializing it", async () => {

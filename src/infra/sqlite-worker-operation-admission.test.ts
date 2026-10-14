@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireGatewayStateOwner,
   assertStateDatabaseAccessAllowed,
@@ -31,6 +32,10 @@ import {
   settleSqliteWorkerOperationContext,
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
+import {
+  SqliteWorkerSlotCustody,
+  readSqliteWorkerRequestCustody,
+} from "./sqlite-worker-request-custody.js";
 
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -70,7 +75,7 @@ it.each([
     observed.push(request);
   });
   admission.bindDatabaseAuthority({
-    databasePath: path.resolve("synthetic-delayed-writer.sqlite"),
+    databasePath: resolveIdentityPathViaExistingAncestorSync("synthetic-delayed-writer.sqlite"),
     assertRequest() {
       if (!requestCurrent) {
         throw revoked;
@@ -138,7 +143,7 @@ it("rechecks database ownership after a worker request crosses the message port"
   let maintenance: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   try {
     admission.bindDatabaseAuthority({
-      databasePath,
+      databasePath: resolveIdentityPathViaExistingAncestorSync(databasePath),
       assertAccess: () => assertStateDatabaseAccessAllowed(databasePath),
       acquireSchema() {
         throw new Error("Ordinary admission must not acquire schema authority");
@@ -179,7 +184,7 @@ it("retains exact-target schema authority until settlement and rechecks access f
   const admit = vi.fn((_request: SqliteWorkerAdmissionRequest, grant: () => boolean) => grant());
   const admission = createSqliteWorkerOperationAdmission(admit);
   admission.bindDatabaseAuthority({
-    databasePath,
+    databasePath: resolveIdentityPathViaExistingAncestorSync(databasePath),
     assertAccess() {
       if (!current) {
         throw revoked;
@@ -220,7 +225,11 @@ it("refuses schema maintenance for a different database before acquiring authori
   const admit = vi.fn();
   const acquireSchema = vi.fn(() => ({ assertCurrent() {}, release() {} }));
   const admission = createSqliteWorkerOperationAdmission(admit);
-  admission.bindDatabaseAuthority({ databasePath, assertAccess() {}, acquireSchema });
+  admission.bindDatabaseAuthority({
+    databasePath: resolveIdentityPathViaExistingAncestorSync(databasePath),
+    assertAccess() {},
+    acquireSchema,
+  });
   vi.spyOn(Atomics, "wait").mockImplementation(() => {
     admission.service();
     return "ok";
@@ -253,7 +262,7 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
     });
     if (scenario !== "facts-only") {
       admission.bindDatabaseAuthority({
-        databasePath,
+        databasePath: resolveIdentityPathViaExistingAncestorSync(databasePath),
         assertAccess() {
           if (scenario === "revoked") {
             throw new Error("Captured creation owner was revoked");
@@ -396,6 +405,8 @@ it.each(["rollback", "unknown", "later rollback"] as const)(
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
     const published = vi.fn();
     observeSqliteWorkerCommittedFacts(admission, published);
+    const projected = vi.fn();
+    observeSqliteWorkerCommittedFacts(admission, projected);
     const owner: SqliteWorkerOperationContext = { port: admission.port };
     try {
       const write = (value: number, rollback = false) =>
@@ -442,9 +453,9 @@ it.each(["rollback", "unknown", "later rollback"] as const)(
       );
       admission.finish();
       expect(admission.committed).toEqual(committed);
-      expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(
-        outcome === "rollback" ? [] : [{ value: 1 }],
-      );
+      const expectedFacts = outcome === "rollback" ? [] : [{ value: 1 }];
+      expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(expectedFacts);
+      expect(projected.mock.calls.map(([receipt]) => receipt.facts)).toEqual(expectedFacts);
     } finally {
       admission.finish();
       db.close();
@@ -487,11 +498,14 @@ it.each([
     });
     const resolve = vi.fn(() => events.push("reply"));
     const reject = vi.fn(() => events.push("reject"));
+    const custody = new SqliteWorkerSlotCustody().createRequest();
+    custody.activate();
+    custody.accept();
     const job: Job = {
+      custody,
       observation: { started() {}, completed() {} },
       request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
       bytes: 0,
-      nativeDispatched: true,
       operationAdmission: { admission, releaseService() {} },
       resolve,
       reject,
@@ -509,6 +523,7 @@ it.each([
       settleSqliteWorkerOperationContext(owner, "completed");
       expect(events).toEqual([]);
       settleSqliteWorkerJob(job, undefined, { written: true });
+      expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
       expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
       expect(publish).toHaveBeenCalledOnce();
       expect(db.prepare("SELECT value FROM proof").all()).toEqual([{ value: 1 }]);

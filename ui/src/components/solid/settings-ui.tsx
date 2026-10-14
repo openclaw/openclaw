@@ -273,15 +273,7 @@ function ToggleControl(
 }
 
 export function SettingsToggle(props: SettingsToggleControl & { ariaLabel: string }) {
-  return (
-    <ToggleControl
-      checked={props.checked}
-      disabled={props.disabled}
-      onChange={(checked) => props.onChange(checked)}
-      onAct={(checked) => props.onAct?.(checked)}
-      label={props.ariaLabel}
-    />
-  );
+  return <ToggleControl {...props} label={props.ariaLabel} />;
 }
 
 export function SettingsToggleRow(
@@ -302,10 +294,7 @@ export function SettingsToggleRow(
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
       <div class="settings-row__control">
         <ToggleControl
-          checked={props.checked}
-          disabled={props.disabled}
-          onChange={(checked) => props.onChange(checked)}
-          onAct={(checked) => props.onAct?.(checked)}
+          {...props}
           label={props.ariaLabel}
           labelledBy={props.ariaLabel == null ? titleId : undefined}
         />

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -46,6 +45,7 @@ async function mount(embedded = true, tabsInHeader = true) {
   if (!embedded) {
     panel.toggle();
   }
+  await panel.updateComplete;
   await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
   const sessions = terminalSessionsForTest(panel);
   await waitForFast(() => expect(sessions.booting).toBe(false));
@@ -56,7 +56,16 @@ async function mount(embedded = true, tabsInHeader = true) {
 function mountActions(panel: OpenClawTerminalPanel) {
   const container = document.createElement("div");
   document.body.append(container);
-  const update = () => render(panel.hostedActions, container);
+  const update = () => {
+    const actions = panel.hostedActions;
+    if (actions) {
+      if (container.firstChild !== actions) {
+        container.replaceChildren(actions);
+      }
+    } else {
+      container.replaceChildren();
+    }
+  };
   panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, update);
   update();
   return container;
@@ -110,7 +119,7 @@ describe("Terminal panel hosted tabs", () => {
           selectedTab,
         );
       }
-      expect(panel.hostedActions === nothing).toBe(ownsStrip);
+      expect(panel.hostedActions === undefined).toBe(ownsStrip);
       expect(readPanelHostedTabs(panel)).toBe(panel);
     },
   );

@@ -552,7 +552,7 @@ describe("update-cli", () => {
     expect(process.exitCode).toBe(130);
     expect(processExitSpy).not.toHaveBeenCalled();
     expect(resumeScheduledTaskAutoStartAfterUpdate.mock.calls.length).toBe(0);
-    await expect(fs.access(path.join(root, "dist", "index.js"))).resolves.toBeUndefined();
+    await fs.access(path.join(root, "dist", "index.js"));
     expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
       version: "1.0.0",
     });

@@ -1,6 +1,7 @@
 /**
  * Tests plugin SDK file lock retry, stale lock, and cleanup behavior.
  */
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,7 +108,7 @@ describe("acquireFileLock", () => {
       try {
         expect(second.lockPath).toBe(first.lockPath);
         await first.release();
-        await expect(fs.access(first.lockPath)).resolves.toBeUndefined();
+        await fs.access(first.lockPath);
         await second.release();
         await expect(fs.access(first.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
@@ -237,6 +238,32 @@ describe("acquireFileLock", () => {
       await owner.close();
       await fs.rm(lockPath, { force: true });
     }
+  });
+
+  it("releases an acquired lock when the handoff guard rejects it", async () => {
+    const filePath = path.join(tempDir, "rejected-handoff");
+    const lockPath = `${filePath}.lock`;
+    const options = {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+    };
+    const guardError = new Error("resource became borrowed");
+
+    await expect(
+      acquireFileLock(filePath, {
+        ...options,
+        assertResourceUnborrowed: () => {
+          // Reject only after the real lock sidecar contains its owner payload.
+          if (existsSync(lockPath) && readFileSync(lockPath, "utf8").length > 0) {
+            throw guardError;
+          }
+        },
+      }),
+    ).rejects.toBe(guardError);
+
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const next = await acquireFileLock(filePath, options);
+    await next.release();
   });
 
   it("closes an opened lock handle when writing the owner payload fails", async () => {

@@ -3,8 +3,10 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -194,6 +196,7 @@ export function createAgentAdmissionController(params: {
     }
     const isSettling = () => admittedRunAbort?.entry?.terminalOutcomeObserved === true;
     const getAbortReason = () => admittedRunAbort?.controller.signal.reason;
+    const sessionKey = params.getResolvedSessionKey();
     admission =
       consumeExpectedSessionWorkAdmission({
         constraint: params.expectedSession,
@@ -215,6 +218,12 @@ export function createAgentAdmissionController(params: {
         isSettling,
         getAbortReason,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
+        storeWriterIdentities:
+          sessionKey &&
+          parseAgentSessionKey(sessionKey) &&
+          normalizeStoreSessionKey(sessionKey) === sessionKey
+            ? [sessionKey]
+            : undefined,
         ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => {
           assertAllowed(false);
@@ -224,7 +233,6 @@ export function createAgentAdmissionController(params: {
         },
         onInterrupt: interrupt,
       }));
-    const sessionKey = params.getResolvedSessionKey();
     if (sessionKey) {
       // A queued lifecycle mutation may finish before this lease is acquired.
       const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
@@ -276,6 +284,8 @@ export function createAgentAdmissionController(params: {
     setAdmittedRunAbort: (value: ReturnType<typeof registerChatAbortController>) => {
       admittedRunAbort = value;
     },
-    release: () => admission?.release(),
+    release: () => {
+      admission?.release();
+    },
   };
 }

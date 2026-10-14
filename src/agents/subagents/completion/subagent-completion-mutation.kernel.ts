@@ -34,10 +34,7 @@ import {
   rowToSubagentRunRecord,
 } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import {
-  subagentRunRowVersion,
-  type SubagentRunSqliteRow,
-} from "../registry/subagent-registry.store.row.js";
+import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
@@ -70,7 +67,7 @@ const noMutation = (applied: boolean | null): SubagentCompletionMutationResult =
   queueIds: [],
 });
 
-/** Decode on the worker while retaining the committed row's CAS version. */
+/** Decode the committed row on the worker. */
 export function decodeSubagentCompletionRecord(
   row: SubagentRunSqliteRow,
   cleanupHandled?: boolean,
@@ -81,7 +78,6 @@ export function decodeSubagentCompletionRecord(
   );
   return {
     subagent,
-    version: expectDefined(subagentRunRowVersion(row), "subagent completion row version"),
     cleanupHandled,
   };
 }

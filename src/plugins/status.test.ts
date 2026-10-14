@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DecisionProviderHost } from "../decisions/provider-host.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import * as status from "./status.js";
 import {
@@ -242,6 +243,39 @@ describe("plugin status reports", () => {
         );
       },
     );
+  });
+
+  it.each(["single", "all"])("uses the inspected config for %s decision diagnostics", (scope) => {
+    mocks.config.mockReturnValue({ agents: { defaults: { decisionModel: "other/model" } } });
+    const plugin = createPluginRecord({ id: "inspect-decisions" });
+    const report = setReport({
+      plugins: [plugin, createPluginRecord({ id: "unrelated" })],
+      decisionProviders: [
+        {
+          pluginId: plugin.id,
+          host: new DecisionProviderHost(
+            {
+              id: "inspect-decisions",
+              contractVersion: 1,
+              async evaluate() {
+                throw new Error("Inspection must not evaluate decisions");
+              },
+            },
+            plugin,
+          ),
+        },
+      ],
+    });
+    const config = { agents: { defaults: { decisionModel: "inspect-decisions/model" } } };
+    const inspected =
+      scope === "single"
+        ? status.buildPluginInspectReport({ id: plugin.id, config, report })
+        : status
+            .buildAllPluginInspectReports({ config, report })
+            .find((entry) => entry.plugin.id === plugin.id);
+    expect(inspected?.decisions).toMatchObject([
+      { pluginId: "inspect-decisions", providerId: "inspect-decisions", configured: true },
+    ]);
   });
 
   it("orders compatibility notices by plugin without attributing unrelated load failures", () => {

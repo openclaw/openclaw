@@ -72,8 +72,8 @@ it.each([false, true])(
       reconcileSystemJobs: async () => "converged",
     };
     const { cron } = createLazyGatewayCronState({
-      cfg: {},
       storePath,
+      cfg: {},
       deps: {} as CliDeps,
       broadcast: vi.fn(),
       scheduler,

@@ -19,6 +19,7 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../../../infra/diagnostic-model-request.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { formatModelTransportContext } from "../../../llm/model-transport-context.js";
 import {
   createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
@@ -124,6 +125,54 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("carries the existing model call identity into asynchronous transport work", async () => {
+    const observed: string[] = [];
+    const source: StreamFn = async () => {
+      await Promise.resolve();
+      observed.push(`create${formatModelTransportContext()}`);
+      return {
+        async *[Symbol.asyncIterator]() {
+          await Promise.resolve();
+          observed.push(`iterate${formatModelTransportContext()}`);
+          yield {
+            type: "done",
+            reason: "stop",
+            message: makeAssistantMessageFixture({ stopReason: "stop" }),
+          } as const;
+        },
+        async result() {
+          await Promise.resolve();
+          observed.push(`result${formatModelTransportContext()}`);
+          return makeAssistantMessageFixture({ stopReason: "stop" });
+        },
+      };
+    };
+    const model = makeProviderModelFixture({
+      id: "test-model",
+      provider: "test-provider",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid",
+    });
+    await Promise.all(
+      [1, 2].map(async (number) => {
+        const stream = await wrap(source, {
+          runId: `run-${number}`,
+          sessionKey: `session-${number}`,
+          nextCallId: () => `run-${number}:model:7`,
+        })(model, { messages: [] });
+        await drain(stream);
+        await stream.result();
+      }),
+    );
+    expect(observed.toSorted()).toEqual(
+      ["create", "iterate", "result"].flatMap((phase) => [
+        `${phase} sessionKey="session-1" runId="run-1" requestId="run-1:model:7" requestNumber=7`,
+        `${phase} sessionKey="session-2" runId="run-2" requestId="run-2:model:7" requestNumber=7`,
+      ]),
+    );
+    expect(formatModelTransportContext()).toBe("");
   });
 
   it("observes each iterator value once without mutating a frozen provider stream", async () => {

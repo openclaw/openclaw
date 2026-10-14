@@ -16,6 +16,7 @@ import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fen
 import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type {
   SessionEntryWorkerInput,
+  SessionEntriesWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
@@ -30,7 +31,7 @@ const modelContextReads = createSessionTranscriptReadPool<
 
 // Background transcript exports cannot occupy the foreground context worker.
 const sessionEntries = createSessionTranscriptReadPool<
-  SessionEntryWorkerInput | SessionResetRecallWorkerInput
+  SessionEntryWorkerInput | SessionEntriesWorkerInput | SessionResetRecallWorkerInput
 >(resolveWorkerPoolSize("singleton"), true);
 
 export async function readSessionTranscriptModelContextInWorker(
@@ -119,6 +120,38 @@ export async function prepareSessionEntryInWorker(
   return result;
 }
 
+export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorkerInput["entries"]) {
+  const result = unwrapSessionTranscriptWorkerReply<
+    "session-entry" | "session-entries" | "session-reset-recall"
+  >(
+    await runWithSqliteDatabaseAdmissionTurn(
+      [
+        ...new Set(
+          entries.map(
+            ({ options }) =>
+              resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path,
+          ),
+        ),
+      ],
+      () =>
+        sessionEntries.run(
+          {
+            kind: "session-entries",
+            entries: entries.map((entry) => {
+              const receipt = resolveSessionTranscriptReadFence(entry.options);
+              return { ...entry, ...(receipt ? { admission: { ...receipt } } : {}) };
+            }),
+          },
+          { inputBytes: JSON.stringify(entries).length * 2 },
+        ),
+    ),
+  );
+  if (!("entries" in result)) {
+    throw new Error("Session transcript worker returned a single export instead of a batch");
+  }
+  return result.entries;
+}
+
 export async function readSessionEntrySnapshotInWorker(
   absPath: string,
   options: SessionEntryWorkerInput["options"],
@@ -140,7 +173,9 @@ export async function readSessionEntrySnapshotInWorker(
 async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
   const { absPath, options } = input;
   const receipt = resolveSessionTranscriptReadFence(options);
-  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
+  const result = unwrapSessionTranscriptWorkerReply<
+    "session-entry" | "session-entries" | "session-reset-recall"
+  >(
     await runWithSqliteDatabaseAdmissionTurn(
       [resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path],
       () =>
@@ -171,7 +206,9 @@ export async function readSessionResetRecallCutoffInWorker(
   scope: SessionResetRecallWorkerInput["scope"],
 ) {
   const receipt = resolveSessionTranscriptReadFence(scope);
-  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
+  const result = unwrapSessionTranscriptWorkerReply<
+    "session-entry" | "session-entries" | "session-reset-recall"
+  >(
     await runWithSqliteDatabaseAdmissionTurn(
       [resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath).path],
       () =>

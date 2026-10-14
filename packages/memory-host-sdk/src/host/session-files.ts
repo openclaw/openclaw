@@ -21,14 +21,13 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
-  isIncognitoOpenClawAgentSqlitePath,
-  isIncognitoSessionKey,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   prepareSessionEntryInWorker,
+  prepareSessionEntriesInWorker,
   readSessionEntrySnapshotInWorker,
   readRestoredSessionTranscript,
   readTranscriptStatsAsync,
@@ -484,7 +483,7 @@ function sqliteSessionFileState(
   };
 }
 
-/** @deprecated Await statSessionEntry. Removed at the next Plugin SDK major; prepared statistics do not read SQLite. */
+/** @deprecated Await statSessionEntry. Retained during stable deprecation; prepared statistics do not read SQLite. */
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
@@ -548,28 +547,14 @@ async function yieldSessionEntryParseIfNeeded(
 export async function buildSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
-  source?: {
-    memoryEntry(
-      absPath: string,
-      options: BuildSessionEntryOptions,
-    ): Promise<SessionFileEntry | null>;
-  },
 ): Promise<SessionFileEntry | null> {
-  if (source) {
-    return source.memoryEntry(absPath, opts);
-  }
   const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
   const incognito = identity && captureIncognitoMemoryReader(identity);
   if (incognito) {
     return incognito.memoryEntry(absPath, opts);
   }
   const prepare = async () => {
-    // Unbound private stores retain their native owner until the atomic cutover.
-    if (
-      identity &&
-      !isIncognitoSessionKey(opts.sessionKey) &&
-      !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
-    ) {
+    if (identity) {
       const { onTranscriptMessage, parseYieldEveryLines, ...options } = { ...opts, ...identity };
       if (onTranscriptMessage || parseYieldEveryLines !== undefined) {
         const snapshot = await readSessionEntrySnapshotInWorker(
@@ -594,6 +579,64 @@ export async function buildSessionEntry(
     }
     return readRestoredSessionTranscript(identity, prepare);
   }
+}
+
+/** Prepare a bounded indexing group in one background transcript-worker request. */
+export async function buildSessionEntries(
+  inputs: readonly { absPath: string; options?: BuildSessionEntryOptions }[],
+): Promise<(SessionFileEntry | null)[]> {
+  const results: (SessionFileEntry | null)[] = inputs.map(() => null);
+  const workerInputs: Parameters<typeof prepareSessionEntriesInWorker>[0] = [];
+  const workerIndexes: number[] = [];
+  const otherEntries: Promise<void>[] = [];
+  for (const [index, input] of inputs.entries()) {
+    const options = input.options ?? {};
+    const identity = resolveBuildSessionSqliteIdentity(input.absPath, options);
+    const incognito = identity && captureIncognitoMemoryReader(identity);
+    if (
+      identity &&
+      !incognito &&
+      !options.onTranscriptMessage &&
+      options.parseYieldEveryLines === undefined
+    ) {
+      workerInputs.push({ absPath: input.absPath, options: { ...options, ...identity } });
+      workerIndexes.push(index);
+    } else {
+      otherEntries.push(
+        (incognito
+          ? incognito.memoryEntry(input.absPath, options)
+          : buildSessionEntry(input.absPath, options)
+        ).then((entry) => {
+          results[index] = entry;
+        }),
+      );
+    }
+  }
+  const prepareWorkerEntries = async () => {
+    if (workerInputs.length === 0) {
+      return;
+    }
+    const prepared = await prepareSessionEntriesInWorker(workerInputs);
+    const restored: Promise<void>[] = [];
+    for (const [offset, result] of prepared.entries()) {
+      const index = workerIndexes[offset]!;
+      if ("cold" in result) {
+        const input = inputs[index]!;
+        restored.push(
+          buildSessionEntry(input.absPath, input.options).then((entry) => {
+            results[index] = entry;
+          }),
+        );
+      } else {
+        results[index] = result.entry
+          ? attachSessionEntryResetRecallCutoff(result.entry, result.resetRecallCutoff)
+          : null;
+      }
+    }
+    await Promise.all(restored);
+  };
+  await Promise.all([...otherEntries, prepareWorkerEntries()]);
+  return results;
 }
 
 /** The shared transcript worker runs the same projection as inline readers. */

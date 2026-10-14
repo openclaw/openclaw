@@ -9,6 +9,9 @@ import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runCronIsolatedAgentTurn } from "./run.js";
+// Keep lazy runner imports outside the turn's timeout budget.
+import "./run-executor.runtime.js";
+import "./run-embedded.runtime.js";
 
 afterEach(() => {
   vi.useRealTimers();

@@ -3,6 +3,7 @@ import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -21,7 +22,7 @@ export function isManagedStateTransaction(database: DatabaseSync): boolean {
 export function runManagedStateTransaction<T>(
   database: DatabaseSync,
   operation: () => T,
-  options: SqliteTransactionOptions,
+  options: SqliteTransactionOptions & { singleStatement?: true },
 ): T {
   if (database.isTransaction && !managedStateTransactions.has(database)) {
     throw new Error(
@@ -35,7 +36,9 @@ export function runManagedStateTransaction<T>(
         managedStateTransactions.add(database);
       }
       try {
-        return runSqliteImmediateTransactionSync(database, operation, options);
+        return options.singleStatement
+          ? runSqliteSingleStatementSync(database, operation)
+          : runSqliteImmediateTransactionSync(database, operation, options);
       } finally {
         if (outer) {
           managedStateTransactions.delete(database);

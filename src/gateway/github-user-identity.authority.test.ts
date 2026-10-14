@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 it("keeps public sign-in, durable roles and privileged dispatch independent of colliding Enterprise IDs", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const owner = syncGitHubIdentity({
       identity: { accountId: 9001, login: "bob" },
       authenticationAlias: { kind: "github-login", login: "bob" },

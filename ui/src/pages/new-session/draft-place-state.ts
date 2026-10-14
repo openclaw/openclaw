@@ -23,12 +23,10 @@ import {
 } from "./draft-place-restore.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
 import type { PendingPlacementPlace } from "./draft-session-placement.ts";
+import { DraftSuggestedCloudProfile } from "./draft-suggested-cloud-profile.ts";
 import { DraftTerminalHostState } from "./draft-terminal-host-state.ts";
 import { DraftRestoredFolderValidation } from "./folder-validation.ts";
-import {
-  environmentDeviceDisabledReason,
-  environmentCloudDisabledReason,
-} from "./hosted-environments.ts";
+import { environmentDeviceDisabledReason } from "./hosted-environments.ts";
 import { newSessionSearch } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import {
@@ -70,6 +68,7 @@ export class DraftPlaceState {
       this.selectTerminalHost(hostId),
     );
   }
+  readonly suggestedCloudProfile: DraftSuggestedCloudProfile;
   private agentIdValue = "";
   private folderValue = "";
   readonly cloudMachines = new DraftCloudMachineState();
@@ -88,6 +87,7 @@ export class DraftPlaceState {
     private readonly read: () => DraftPlaceSnapshot,
     private readonly callbacks: DraftPlaceCallbacks,
   ) {
+    this.suggestedCloudProfile = new DraftSuggestedCloudProfile(gateway, this, read, callbacks);
     this.folderValidation = new DraftRestoredFolderValidation(
       () => ({
         gateway: this.read().context?.gateway.snapshot,
@@ -166,6 +166,7 @@ export class DraftPlaceState {
       return;
     }
     if (this.modelControl.selectHostedEnvironment(runtimeId)) {
+      this.suggestedCloudProfile.cancel();
       this.browser.close();
       this.callbacks.onError(null);
       this.callbacks.requestUpdate();
@@ -415,6 +416,7 @@ export class DraftPlaceState {
   }
 
   private resetPlaceSelection() {
+    this.suggestedCloudProfile.cancel();
     this.folderValidation.reset();
     Object.assign(this.selection, createDraftPlaceRestoreState());
     this.repositoryState.reset();
@@ -434,6 +436,7 @@ export class DraftPlaceState {
   }
 
   invalidateGatewayDiscovery(resetHostSelection: boolean) {
+    this.suggestedCloudProfile.cancel();
     this.repositoryState.invalidate();
     this.agentsHydratedValue = false;
     this.modelControl.invalidate(resetHostSelection);
@@ -638,6 +641,7 @@ export class DraftPlaceState {
     ) {
       return;
     }
+    this.suggestedCloudProfile.cancel();
     this.selection.whereSelectedByUser = true;
     this.selection.preferredWhereRestore = null;
     if (
@@ -666,19 +670,13 @@ export class DraftPlaceState {
   }
 
   selectCloudProfile(profileId: string) {
-    const snapshot = this.read();
-    const profile = this.gateway.cloudProfiles.find((candidate) => candidate.id === profileId);
     if (
-      snapshot.submitting ||
-      snapshot.pendingPlacementSessionKey ||
-      this.requiredPlacement ||
-      !this.isAdmin() ||
-      !profile ||
-      Boolean(environmentCloudDisabledReason(this.modelControl, profile)) ||
+      !this.suggestedCloudProfile.canSelect(profileId) ||
       !this.modelControl.selectHostEnvironment()
     ) {
       return;
     }
+    this.suggestedCloudProfile.cancel();
     this.selection.cloudProfileId = profileId;
     this.selection.deviceId = "";
     this.selection.autoDevice = false;

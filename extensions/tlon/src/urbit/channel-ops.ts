@@ -123,7 +123,7 @@ export async function scryUrbitPath(
 
 async function openUrbitChannelStep(
   deps: UrbitChannelDeps,
-  params: { body: unknown; auditContext: string; operation: string },
+  params: { body: unknown; auditContext: string; operation: string; beforeRequest?: () => void },
 ): Promise<void> {
   const { response, release } = await putUrbitChannel(deps, { ...params, timeoutMs: 30_000 });
 
@@ -138,12 +138,13 @@ async function openUrbitChannelStep(
 
 export async function ensureUrbitChannelOpen(
   deps: UrbitChannelDeps,
-  params: { createBody: unknown; createAuditContext: string },
+  params: { createBody: unknown; createAuditContext: string; beforeRequest?: () => void },
 ): Promise<void> {
   await openUrbitChannelStep(deps, {
     body: params.createBody,
     auditContext: params.createAuditContext,
     operation: "Channel creation",
+    beforeRequest: params.beforeRequest,
   });
   await openUrbitChannelStep(deps, {
     body: [
@@ -158,5 +159,6 @@ export async function ensureUrbitChannelOpen(
     ],
     auditContext: "tlon-urbit-channel-wake",
     operation: "Channel activation",
+    beforeRequest: params.beforeRequest,
   });
 }

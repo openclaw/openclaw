@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -8,12 +9,15 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import * as lifecycleDrain from "./sessions-lifecycle-drain.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import * as archivePreparation from "./sessions-patch-archive.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 afterEach(() => {
@@ -81,6 +85,62 @@ async function invokePatchSession(params: SessionsPatchParams, requestClient: Ga
 }
 
 describe("sessions.patch archive attribution", () => {
+  it("drains an archive behind an unrelated writer, then commits after that writer settles", async ({
+    signal,
+  }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const key = "agent:main:dashboard:archive-writer-wait";
+      const scope = { agentId: "main", sessionKey: key };
+      await upsertSessionEntryCore(scope, { sessionId: "archive-writer-wait", updatedAt: 1 });
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const drained = createDeferredCore();
+      let writer: Promise<void> | undefined;
+      const prepareOwner = archivePreparation.prepareSessionPatchArchive;
+      const drainOwner = lifecycleDrain.prepareSessionLifecycleDrain;
+      const prepare = vi
+        .spyOn(archivePreparation, "prepareSessionPatchArchive")
+        .mockImplementationOnce(async (params) => {
+          writer = runOpenClawAgentWriteAdmission(
+            { agentId: "main", path: params.target.initialTarget.readSource!.path },
+            async () => {
+              entered.resolve();
+              await resume.promise;
+            },
+          );
+          await entered.promise;
+          return prepareOwner(params);
+        });
+      const drain = vi
+        .spyOn(lifecycleDrain, "prepareSessionLifecycleDrain")
+        .mockImplementationOnce(async (params) => {
+          const result = await drainOwner(params);
+          drained.resolve();
+          return result;
+        });
+      const patch = invokePatchSession(
+        { key, archived: true, expectedSessionId: "archive-writer-wait" },
+        client(),
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(drained.promise, patch, "Archive settled before draining"),
+          signal,
+        );
+        expect(loadSessionEntry(scope)?.archivedAt).toBeUndefined();
+        resume.resolve();
+        expect((await patch)[0]?.[0]).toBe(true);
+        expect(loadSessionEntry(scope)?.archivedAt).toEqual(expect.any(Number));
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([patch, ...(writer ? [writer] : [])]);
+        prepare.mockRestore();
+        drain.mockRestore();
+      }
+    });
+  });
+
   it.each([
     { change: { sidebarRoot: true }, name: "promotion" },
     { change: { category: "Independent" }, name: "category" },

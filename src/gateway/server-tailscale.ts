@@ -1,5 +1,6 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { TailscaleServeDisabledError } from "../infra/tailscale-serve-disabled-error.js";
 import {
   claimTailscaleRoute,
   getTailnetHostname,
@@ -97,7 +98,22 @@ export async function startGatewayTailscaleExposure(params: {
     }
   } catch (err) {
     clearPublishedOrigin?.();
-    await claim?.stop();
+    try {
+      await claim?.stop();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [err, cleanupError],
+        "Tailscale exposure startup and cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    params.signal?.throwIfAborted();
+    if (params.tailscaleMode === "serve" && err instanceof TailscaleServeDisabledError) {
+      params.logTailscale.warn(
+        "Tailscale Serve is not enabled on this tailnet. The authenticated local Gateway remains available on loopback; remote access is unavailable. Restore the intended tailnet Serve policy and restart the Gateway.",
+      );
+      return null;
+    }
     params.logTailscale.warn(`${params.tailscaleMode} failed: ${formatErrorMessage(err)}`);
     throw err;
   }

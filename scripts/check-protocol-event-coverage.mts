@@ -20,8 +20,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { upperCamel } from "./lib/protocol-codegen-names.mts";
-// Dependency-light seam by design: preflight runs this script without
-// installed dependencies (the dependency-free manifest contract), so the
+// Dependency-light seam by design: security-fast runs this script without
+// installed dependencies on current targets, so the
 // canonical @openclaw/normalization-core import cannot resolve here.
 import { isRecord } from "./lib/record-shared.mjs";
 

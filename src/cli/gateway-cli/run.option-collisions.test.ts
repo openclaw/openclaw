@@ -163,6 +163,14 @@ vi.mock("../../config/config.js", () => ({
     readConfigFileSnapshotWithPluginMetadata(options),
 }));
 
+// mock-isolation: CLI option cases use the synthetic config snapshot without filesystem recovery.
+vi.mock("../../config/io.factory.js", () => ({
+  createConfigIO: () => ({
+    readConfigFileSnapshot: async () => configState.snapshot,
+    prepareConfigRecovery: async () => null,
+  }),
+}));
+
 vi.mock("../../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/paths.js")>()),
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
@@ -719,7 +727,7 @@ describe("gateway run option collisions", () => {
     });
   });
 
-  it("rereads changed config with accepted preflight facts and replaces its env", async () => {
+  it("rereads changed config and replaces its env", async () => {
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: undefined,
@@ -745,17 +753,13 @@ describe("gateway run option collisions", () => {
         const preBootstrap = await import("./pre-bootstrap.js");
         await preBootstrap.selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
         await preBootstrap.prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
-        const accepted = [{ command: "openclaw doctor --fix", pluginId: "demo", reason: "kept" }];
-        preBootstrap.acceptGatewayRunPreflightMigrations(accepted);
         expect(pinRuntimePaths).toHaveBeenCalledWith(process.env);
         expect(pinConfigDir).toHaveBeenCalledWith(process.env);
         expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("old-token");
         expect(process.env.OPENCLAW_PROXY_URL).toBe("http://127.0.0.1:19876");
 
         configState.snapshot = configSnapshot(newConfig, { hash: "new" });
-        readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
-          // Pre-ownership rereads reuse the accepted generation instead of copying shared state.
-          expect(options?.deferredPluginMigrations).toBe(accepted);
+        readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async () => {
           expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
           expect(process.env.OPENCLAW_PROXY_URL).toBeUndefined();
           return { snapshot: configState.snapshot };

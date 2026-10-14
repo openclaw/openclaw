@@ -14,6 +14,7 @@ import "../../styles/custodian.css";
 import { CustodianChangeHistory } from "./custodian-history.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSurface } from "./custodian-surface.tsx";
+import type { CustodianRouteData } from "./route.ts";
 
 type Props = { onboarding: boolean; newAgentIntent: boolean; store: CustodianSessionStore };
 type History = {
@@ -232,13 +233,17 @@ function CustodianPageContent(props: Props) {
   );
 }
 
-defineSolidBridge<Props>("openclaw-custodian-page", CustodianPageContent, {
-  properties: {
-    onboarding: { default: false, attribute: false },
-    newAgentIntent: { default: false, attribute: false },
-    store: { default: custodianSessionStore, attribute: false },
+export const CustodianPage = defineSolidBridge<Props>(
+  "openclaw-custodian-page",
+  CustodianPageContent,
+  {
+    properties: {
+      onboarding: { default: false, attribute: false },
+      newAgentIntent: { default: false, attribute: false },
+      store: { default: custodianSessionStore, attribute: false },
+    },
   },
-});
+);
 
 declare global {
   interface HTMLElementTagNameMap {
@@ -252,4 +257,17 @@ declare module "@solidjs/web" {
       "openclaw-sidebar-attention": HTMLAttributes<HTMLElement>;
     }
   }
+}
+
+export function CustodianRoute(props: { data?: CustodianRouteData }) {
+  return (
+    <Show when={props.data}>
+      {(data) => (
+        <CustodianPage
+          onboarding={data().onboarding}
+          newAgentIntent={data().intent === "new-agent"}
+        />
+      )}
+    </Show>
+  );
 }

@@ -30,6 +30,8 @@ CREATE TABLE "acp_sessions" (
   "agent" text COLLATE "C" NOT NULL,
   "runtime_session_name" text COLLATE "C" NOT NULL,
   "identity_json" text COLLATE "C",
+  "resume_agent_session_id" text COLLATE "C",
+  "resume_acpx_session_id" text COLLATE "C",
   "mode" text COLLATE "C" NOT NULL,
   "runtime_options_json" text COLLATE "C",
   "cwd" text COLLATE "C",
@@ -800,6 +802,7 @@ CREATE TABLE "official_external_plugin_catalog_snapshots" (
 );
 
 CREATE TABLE "operator_approvals" (
+  "cursor_id" bigint NOT NULL,
   "approval_id" text COLLATE "C" NOT NULL,
   "resolution_ref" text COLLATE "C" NOT NULL,
   "kind" text COLLATE "C" NOT NULL,
@@ -1387,6 +1390,10 @@ CREATE INDEX "idx_acp_replay_sessions_updated" ON "acp_replay_sessions" (("updat
 
 CREATE INDEX "idx_acp_sessions_agent_activity" ON "acp_sessions" (("agent") ASC NULLS FIRST, ("last_activity_at") DESC NULLS LAST, ("session_key") ASC NULLS FIRST);
 
+CREATE INDEX "idx_acp_sessions_resume_acpx" ON "acp_sessions" (("resume_acpx_session_id") ASC NULLS FIRST);
+
+CREATE INDEX "idx_acp_sessions_resume_agent" ON "acp_sessions" (("resume_agent_session_id") ASC NULLS FIRST);
+
 CREATE INDEX "idx_acp_sessions_state_activity" ON "acp_sessions" (("state") ASC NULLS FIRST, ("last_activity_at") DESC NULLS LAST, ("session_key") ASC NULLS FIRST);
 
 CREATE INDEX "idx_apns_registrations_updated" ON "apns_registrations" (("updated_at_ms") DESC NULLS LAST, ("node_id") ASC NULLS FIRST);
@@ -1504,6 +1511,8 @@ CREATE INDEX "idx_migration_sources_run" ON "migration_sources" (("last_run_id")
 CREATE INDEX "idx_native_hook_relay_bridges_expires" ON "native_hook_relay_bridges" (("expires_at_ms") ASC NULLS FIRST, ("relay_id") ASC NULLS FIRST);
 
 CREATE INDEX "idx_official_external_plugin_catalog_snapshots_updated" ON "official_external_plugin_catalog_snapshots" (("updated_at_ms") DESC NULLS LAST, ("feed_url") ASC NULLS FIRST);
+
+CREATE UNIQUE INDEX "idx_operator_approvals_cursor_id" ON "operator_approvals" (("cursor_id") ASC NULLS FIRST);
 
 CREATE UNIQUE INDEX "idx_operator_approvals_resolution_ref" ON "operator_approvals" (("resolution_ref") ASC NULLS FIRST);
 

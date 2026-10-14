@@ -86,13 +86,15 @@ function createAgentRuntime(
       sessionKey: string;
       fallbackEntry?: TestSessionEntry;
       replaceEntry?: boolean;
-      prepare: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
+      prepare: (
+        entry: TestSessionEntry,
+      ) => Partial<TestSessionEntry> | null | Promise<Partial<TestSessionEntry> | null>;
     }) => {
       const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
       if (!existing) {
         return null;
       }
-      const patch = params.prepare({ ...existing });
+      const patch = await params.prepare({ ...existing });
       if (!patch) {
         return existing;
       }

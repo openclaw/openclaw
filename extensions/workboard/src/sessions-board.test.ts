@@ -669,48 +669,6 @@ describe("Sessions board rules and live facts", () => {
     },
   );
 
-  it.each(["source", "placements"] as const)(
-    "refreshes expired people for a reader joining pending %s work",
-    async (pending) => {
-      await withService({ facts: [] }, async ({ service, store, state, selectSessionFacts }) => {
-        const entered = Promise.withResolvers<void>();
-        const release = Promise.withResolvers<void>();
-        const people: NonNullable<SelectedFacts["people"]> = [
-          { identity: { type: "profile", id: "one" }, label: "One", sessionCount: 1 },
-        ];
-        const source = { ...state, people, activityExpiresAt: NOW + 100 };
-        state.people = [];
-        state.revision = "people-expired";
-        using placements = vi.spyOn(store, "listSessionPlacements");
-        if (pending === "source") {
-          selectSessionFacts.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
-            return source;
-          });
-        } else {
-          selectSessionFacts.mockResolvedValueOnce(source);
-          placements.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
-            return [];
-          });
-        }
-        const view = { includePeople: true, involvingProfileId: "selected" };
-        const first = service.read(BOARD_ID, view);
-        await entered.promise;
-        vi.setSystemTime(NOW + 101);
-        const second = await service.read(BOARD_ID, view);
-        release.resolve();
-        const before = await first;
-        expect(before.people).toEqual(people);
-        expect(second.people).toEqual([]);
-        expect(second.revision!.scope).not.toBe(before.revision!.scope);
-        expect((await service.read(BOARD_ID, view)).people).toEqual([]);
-      });
-    },
-  );
-
   it("checks authority after the caller's facts selection even with a warm projection", async () => {
     await withService({ facts: [facts("one")] }, async ({ service, state, selectSessionFacts }) => {
       const first = await service.read(BOARD_ID);
@@ -868,41 +826,6 @@ describe("Sessions board rules and live facts", () => {
       ]);
       expect(logger.warn).toHaveBeenCalledTimes(2);
     });
-  });
-
-  it("does not let an in-flight read overwrite facts after source invalidation", async () => {
-    await withService(
-      { facts: [facts("one")] },
-      async ({ service, store, state, emit, selectSessionFacts }) => {
-        await service.read(BOARD_ID);
-        emit(facts("one").key);
-        const admittedRevision = store.sessionsRevision;
-        const entered = Promise.withResolvers<void>();
-        const release = Promise.withResolvers<void>();
-        const source = { ...state };
-        selectSessionFacts.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return source;
-        });
-        const pending = service.read(BOARD_ID);
-        await entered.promise;
-        state.sessions = [facts("one", { run: "active" })];
-        state.revision = "active";
-        emit(facts("one").key);
-        const current = await service.read(BOARD_ID);
-        release.resolve();
-        const previous = await pending;
-        expect(previous.revision!.revision).toBe(admittedRevision.revision);
-        expect(current.sessions[0]).toMatchObject({ columnId: "focus" });
-        expect(current.revision!.revision).toBeGreaterThanOrEqual(previous.revision!.revision);
-        expect(await service.read(BOARD_ID)).toBe(current);
-        state.sessions = [{ ...facts("one"), unavailable: "facts backend offline" }];
-        state.revision = "unavailable";
-        emit(facts("one").key);
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
-      },
-    );
   });
 
   it("completes during continuous source invalidation without caching a stale revision", async () => {

@@ -2,9 +2,13 @@ import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import {
+  hasOperatorApprovalsAccess,
+  hasOperatorReadAccess,
+  hasOperatorWriteAccess,
+} from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
+import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import { t } from "../../i18n/index.ts";
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
 import {
@@ -16,6 +20,7 @@ import {
   type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
 import { updateBoardSessionView } from "../../lib/board/settings.ts";
+import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   isGatewayCapabilityAdvertised,
@@ -259,7 +264,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return this.boardProvider;
     }
     const gateway = this.context?.gateway.snapshot;
-    const available = !gateway || isGatewayMethodAdvertised(gateway, "board.get") !== false;
+    const available =
+      !gateway ||
+      (hasOperatorReadAccess(gateway.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(gateway, "board.get") !== false);
     const canMutate = !gateway || hasOperatorWriteAccess(gateway.hello?.auth ?? null);
     const canGrant = !gateway || hasOperatorApprovalsAccess(gateway.hello?.auth ?? null);
     const canPinWidgets =
@@ -481,7 +489,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           return;
         }
         const swarmEnabled = isSwarmEnabledInConfig(
-          context.runtimeConfig?.state.configSnapshot?.config,
+          context.runtimeConfig ? currentDisplayConfig(context.runtimeConfig.state) : null,
           agentId,
         );
         if (this.swarmEnabled !== swarmEnabled) {
@@ -541,7 +549,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       snapshot,
       available:
         Boolean(this.boardProvider) ||
-        isGatewayMethodAdvertised(this.context.gateway.snapshot, "board.get") !== false,
+        (hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+          isGatewayMethodAdvertised(this.context.gateway.snapshot, "board.get") !== false),
       hasBoard,
       face: this.routeFace ?? "chat",
       activeTabId,

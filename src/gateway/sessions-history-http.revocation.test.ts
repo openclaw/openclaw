@@ -109,16 +109,6 @@ vi.mock("./session-sharing.js", () => ({
   prepareProjectedSessionSharing: ({ client }: { client: unknown }) => ({
     entryFilter: client ? () => fixture.visible : undefined,
   }),
-  resolveSessionSharingTarget: () => ({
-    canonicalKey: "agent:main:main",
-    agentId: "main",
-    entry: {
-      sessionId: fixture.sessionId,
-      lifecycleRevision: fixture.lifecycleRevision,
-      sessionStartedAt: fixture.sessionStartedAt,
-    },
-    storePath: "/tmp",
-  }),
 }));
 
 // mock-isolation: Revocation tests retain synthetic mutation facts without admitting a physical store.

@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
@@ -181,7 +181,7 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
               type="button"
               title={t("chat.sessionHeader.renameTooltip")}
               aria-label={t("chat.sessionHeader.renameAria", { title: props.title })}
-              onClick={props.onBeginRename}
+              onClick={() => props.onBeginRename()}
             >
               <SessionTitle {...props} />
             </button>
@@ -223,6 +223,7 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
 }
 
 function ProjectCrumb(props: ChatPaneHeaderProps) {
+  const [opened, setOpened] = createSignal(false);
   const copied = () => props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   return (
     <wa-dropdown
@@ -234,7 +235,10 @@ function ProjectCrumb(props: ChatPaneHeaderProps) {
           props.onMenuAction(value);
         }
       }}
-      onWa-show={() => props.onMenuOpenChange(true)}
+      onWa-show={() => {
+        setOpened(true);
+        props.onMenuOpenChange(true);
+      }}
       onWa-hide={() => props.onMenuOpenChange(false)}
     >
       <button
@@ -266,26 +270,28 @@ function ProjectCrumb(props: ChatPaneHeaderProps) {
         </Show>
         <span>{copied() ? t("chat.sessionHeader.copied") : props.workspaceLabel}</span>
       </button>
-      <Show when={props.canReveal && props.workspaceRoot}>
-        <wa-dropdown-item value="reveal">{revealLabel(props.platform)}</wa-dropdown-item>
-      </Show>
-      <Show when={props.workspaceRoot}>
-        <wa-dropdown-item value="copy-path">
-          {t(
-            props.copiedAction === "copy-path"
-              ? "chat.sessionHeader.copied"
-              : "chat.sessionHeader.copyPath",
-          )}
-        </wa-dropdown-item>
-      </Show>
-      <Show when={props.branch}>
-        <wa-dropdown-item value="copy-branch">
-          {t(
-            props.copiedAction === "copy-branch"
-              ? "chat.sessionHeader.copied"
-              : "chat.sessionHeader.copyBranch",
-          )}
-        </wa-dropdown-item>
+      <Show when={opened()}>
+        <Show when={props.canReveal && props.workspaceRoot}>
+          <wa-dropdown-item value="reveal">{revealLabel(props.platform)}</wa-dropdown-item>
+        </Show>
+        <Show when={props.workspaceRoot}>
+          <wa-dropdown-item value="copy-path">
+            {t(
+              props.copiedAction === "copy-path"
+                ? "chat.sessionHeader.copied"
+                : "chat.sessionHeader.copyPath",
+            )}
+          </wa-dropdown-item>
+        </Show>
+        <Show when={props.branch}>
+          <wa-dropdown-item value="copy-branch">
+            {t(
+              props.copiedAction === "copy-branch"
+                ? "chat.sessionHeader.copied"
+                : "chat.sessionHeader.copyBranch",
+            )}
+          </wa-dropdown-item>
+        </Show>
       </Show>
     </wa-dropdown>
   );
@@ -319,6 +325,7 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
         class={[
           "chat-pane__header",
           {
+            "chat-pane__header--mobile": props.mergedChrome,
             "chat-pane__header--closable": props.onClosePane !== undefined,
             "chat-pane__header--stacked-status":
               props.narrow && (props.runningSubagentCount ?? 0) > 0,
@@ -366,7 +373,7 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </openclaw-tooltip>
           </Show>
           <IdentityCrumbs {...props} /> <LitContent value={props.publicAccessIndicator} />
-          {hasSharingControl() ? undefined : (
+          {props.mergedChrome || hasSharingControl() ? undefined : (
             <LitContent
               value={renderStandalonePersonLink(
                 renderSessionOwnerChip(
@@ -387,17 +394,19 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
               )}
             />
           )}
-          {props.showOwnerChip && props.session?.participants?.length ? (
+          {!props.mergedChrome && props.showOwnerChip && props.session?.participants?.length ? (
             <openclaw-viewer-facepile
               class="chat-pane__participants"
               prop:staticParticipants={props.session.participants}
               prop:totalCount={props.session.participantCount}
               prop:maxVisible={4}
               prop:personActivity={props.personActivity}
-              variant="session"
             />
           ) : undefined}
-          <LitContent value={props.placementControl} /> <LitContent value={props.presence} />
+          <LitContent value={props.placementControl} />
+          <Show when={!props.mergedChrome}>
+            <LitContent value={props.presence} />
+          </Show>
         </div>
         <div class="chat-pane__header-trailing">
           <LitContent value={props.detailsControl} />
@@ -420,8 +429,13 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </Show>
             <LitContent value={props.runAction} />
             <LitContent value={props.sharingControl} />
-            <ChatPaneLayoutMenu {...props} />
-            <LitContent value={props.sessionMenuAction} />
+            <Show when={props.mergedChrome}>
+              <LitContent value={props.sessionMenuAction} />
+            </Show>
+            <ChatPaneLayoutMenu {...props} mobile={props.mergedChrome} />
+            <Show when={!props.mergedChrome}>
+              <LitContent value={props.sessionMenuAction} />
+            </Show>
           </div>
         </div>
         <Show when={props.narrow}>

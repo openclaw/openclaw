@@ -7,7 +7,7 @@ import { SessionRunStatusSchema } from "../../../packages/gateway-protocol/src/s
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/session-utils-core.js";
-import { resolveSessionChannelScope } from "../../plugin-sdk/session-visibility.js";
+import { resolveSessionChannelScope } from "../../plugin-sdk/session-visibility-internal.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
@@ -700,29 +700,25 @@ export function createSessionsListTool(opts?: {
         }
         return jsonResult(resultFor(count));
       };
-      let ownerVisible: readonly boolean[];
-      if (
-        !requireSessionReadOwner &&
-        !hydrateTranscriptFieldsAfterFiltering &&
-        messageLimit === 0
-      ) {
-        ownerVisible = rows.map(() => true);
-      } else {
-        const { withCurrentSessionListRows } =
-          await import("../../gateway/session-list-read-result.js");
-        ownerVisible = await withCurrentSessionListRows(
-          sessions.map(({ entry }) => entry),
-          (visible) => [...visible],
-          requireSessionReadOwner,
-        );
-      }
       const channelVisible = await pMap(
         sessions,
         ({ entry }) => channelAccess.revalidateCurrent(entry),
         { concurrency: 4, stopOnError: true },
       );
-      return finalize(
-        ownerVisible.map((visible, index) => visible && channelVisible[index] === true),
+      if (
+        !requireSessionReadOwner &&
+        !hydrateTranscriptFieldsAfterFiltering &&
+        messageLimit === 0
+      ) {
+        return finalize(channelVisible);
+      }
+      const { withCurrentSessionListRows } =
+        await import("../../gateway/session-list-read-result.js");
+      return await withCurrentSessionListRows(
+        sessions.map(({ entry }) => entry),
+        (ownerVisible) =>
+          finalize(ownerVisible.map((visible, index) => visible && channelVisible[index] === true)),
+        requireSessionReadOwner,
       );
     }),
   };

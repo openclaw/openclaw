@@ -537,8 +537,13 @@ Auto response, Labeler, PR context checks, and ClawSweeper acquire concurrency
 slots only after job admission. Skipped events cannot replace useful pending
 work. Labeler uses separate groups for each PR and issue, with manual backfills
 serialized separately; PR context checks cancel superseded checks on the same PR.
-ClawSweeper retains its existing per-item cancellation rules and all label/comment
-intake, skipping only explicitly empty metadata edits. Security Review omits PR
+ClawSweeper retains its per-item cancellation rules for issue and PR events and all
+label/comment intake, skipping only explicitly empty metadata edits. Each event
+kind has its own lane: comments serialize per comment, and review activity runs
+never share a group. PR events and reviews leave check runs on the PR head, where
+GitHub counts a cancelled run as non-passing even after a newer run succeeds, so
+only a newer PR event on the same PR may supersede a PR event run, and nothing
+cancels a review run. Security Review omits PR
 prose-only edits while retaining base/permission changes, head changes, and
 approval revocations; its per-head review serialization remains non-canceling.
 

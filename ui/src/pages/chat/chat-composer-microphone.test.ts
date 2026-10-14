@@ -79,6 +79,7 @@ describe("composer microphone picker", () => {
       HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
     >("wa-dropdown.chat-talk-input-picker");
     await dropdown?.updateComplete;
+    expect(dropdown?.querySelector("wa-dropdown-item")).toBeNull();
     button(container, t("chat.composer.microphoneInput")).click();
     await dropdown?.updateComplete;
 
@@ -176,6 +177,9 @@ describe("composer microphone picker", () => {
       discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
       patchSettings({ realtimeTalkInputDeviceId: "studio-mic" });
       const request = vi.fn(async (method: string) => {
+        if (method === "talk.config") {
+          return { config: {} };
+        }
         if (method === "talk.catalog") {
           return {
             realtime: { ready: realtimeReady, providers: [] },
@@ -199,7 +203,15 @@ describe("composer microphone picker", () => {
       });
       const { container, dropdown } = mountPicker(composerProps);
 
-      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+      );
+      expect(dropdown?.querySelector("wa-dropdown-item")).toBeNull();
+      if (pending) {
+        button(container, t("chat.composer.startVoiceInput")).click();
+      } else {
+        await openPicker(container);
+      }
       await vi.waitFor(() =>
         expect(
           [...container.querySelectorAll<HTMLElement>("[data-chat-talk-capability]")].map(
@@ -233,11 +245,10 @@ describe("composer microphone picker", () => {
           alert.parentElement?.matches(".chat-talk-input-picker__capability-copy strong"),
         ),
       ).toBe(true);
-      button(container, t("chat.composer.startVoiceInput")).click();
       await vi.waitFor(() => expect(dropdown?.open).toBe(true));
 
       expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
-      expect(request).toHaveBeenCalledWith("talk.catalog", {});
+      expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" });
       expect(request).not.toHaveBeenCalledWith("talk.client.create", expect.anything());
       expect(container.textContent).toContain(t("chat.composer.realtimeTalkProviderUnavailable"));
       expect(container.textContent).toContain(t("chat.composer.dictationProviderUnavailableShort"));

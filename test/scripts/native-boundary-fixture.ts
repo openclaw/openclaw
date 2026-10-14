@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -45,6 +45,14 @@ export function hasSemanticTestBackend(): boolean {
  */
 export function materializeNativeCompiler(rootDir: string, { javaScriptApi = true } = {}) {
   const root = fs.realpathSync.native(rootDir);
+  const installedExecutable = resolveInstalledNativeCompiler();
+  const fixtureExecutable = path.join(
+    root,
+    "node_modules",
+    platformPackage,
+    "lib",
+    nativeExecutable,
+  );
   const modules = path.join(root, "node_modules");
   fs.mkdirSync(modules, { recursive: true });
   if (fs.realpathSync.native(modules) !== modules) {
@@ -70,16 +78,24 @@ export function materializeNativeCompiler(rootDir: string, { javaScriptApi = tru
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     copyTreeCloseOnExec(source, destination, {
       dereference: true,
-      filter: (file) => !omitted.includes(file),
+      filter: (file) => file !== installedExecutable && !omitted.includes(file),
     });
   }
+  // Only this child opens the executable writable; sibling test forks cannot inherit its descriptor.
+  execFileSync(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    'import { copyFileSync, constants } from "node:fs"; copyFileSync(process.argv[1], process.argv[2], constants.COPYFILE_FICLONE);',
+    installedExecutable,
+    fixtureExecutable,
+  ]);
   const bin = path.join(root, "node_modules/.bin/tsgo");
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.symlinkSync("../typescript/bin/tsc", bin, "file");
   if (process.platform === "win32") {
     fs.writeFileSync(`${bin}.cmd`, '@node "%~dp0..\\typescript\\bin\\tsc" %*\r\n');
   }
-  return path.join(root, "node_modules", platformPackage, "lib", nativeExecutable);
+  return fixtureExecutable;
 }
 
 /** Intercept a fixture compiler process without changing the production resolver. */

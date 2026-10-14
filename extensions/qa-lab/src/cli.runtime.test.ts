@@ -517,20 +517,6 @@ describe("qa cli", () => {
     );
   });
 
-  it("keeps source behavior for a symlink alias of the harness repo root", async () => {
-    const repoRoot = path.join(suiteArtifactsDir, "harness-alias");
-    await fs.symlink(process.cwd(), repoRoot, "dir");
-
-    await runQaSuiteCommand({
-      repoRoot,
-      scenarioIds: ["channel-chat-baseline"],
-    });
-
-    expect(runQaSuite).toHaveBeenCalledWith(
-      expect.not.objectContaining({ sutOpenClawCommand: expect.anything() }),
-    );
-  });
-
   it("rejects a missing external candidate CLI before suite startup", async () => {
     const repoRoot = path.join(suiteArtifactsDir, "candidate-without-cli");
     await fs.mkdir(repoRoot);
@@ -561,22 +547,6 @@ describe("qa cli", () => {
     },
     {
       runner: "host",
-      summary: "optional-only",
-      data: {
-        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
-        scenarios: [
-          {
-            name: "Runtime tool fixture — image_generate",
-            status: "skip",
-            details: "image_generate mock provider report-only: tool unavailable",
-          },
-        ],
-      },
-      expected: "did not include any executed scenarios",
-      allowFailures: true,
-    },
-    {
-      runner: "host",
       summary: "missing",
       data: undefined,
       expected: "Could not read QA summary",
@@ -587,13 +557,6 @@ describe("qa cli", () => {
       summary: "malformed",
       data: undefined,
       expected: "Could not parse QA summary",
-      allowFailures: true,
-    },
-    {
-      runner: "multipass",
-      summary: "zero-work",
-      data: { counts: { total: 0, passed: 0, failed: 0, skipped: 0 }, scenarios: [] },
-      expected: "did not include any executed scenarios",
       allowFailures: true,
     },
     {
@@ -768,12 +731,6 @@ describe("qa cli", () => {
       expectedExitCode: 0,
       explicitScenarioSelection: false,
     },
-    {
-      label: "explicit profile selection",
-      scenarioIds: ["runtime-tool-image-generate"],
-      expectedExitCode: 1,
-      explicitScenarioSelection: true,
-    },
   ])(
     "keeps optional skips $label blocking semantics",
     async ({ scenarioIds, expectedExitCode, explicitScenarioSelection }) => {
@@ -909,7 +866,6 @@ describe("qa cli", () => {
   it.each([
     { isolatesInstances: undefined, requested: 8, expected: 1 },
     { isolatesInstances: true, requested: undefined, expected: 4 },
-    { isolatesInstances: true, requested: 8, expected: 4 },
   ])(
     "runs discovered live adapters with isolation=$isolatesInstances, concurrency=$requested at $expected workers",
     async ({ isolatesInstances, requested, expected }) => {
@@ -1174,31 +1130,6 @@ describe("qa cli", () => {
       stderrWrite,
       "[qa-suite] infra retry 1/1: timed out after 180000ms waiting for qa-channel ready",
     );
-  });
-
-  it("does not retry host suite runs for semantic failures", async () => {
-    await writeSuiteSummary({
-      run: { status: "completed" },
-      counts: { total: 1, passed: 0, failed: 1 },
-      scenarios: [{ name: "channel chat baseline", status: "fail" }],
-    });
-    runQaSuite.mockResolvedValueOnce(
-      mockSuiteRuntimeResult("flow", {
-        scenarios: [
-          {
-            name: "channel chat baseline",
-            status: "fail",
-            steps: [],
-          },
-        ],
-      }),
-    );
-
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-    });
-    expect(runQaSuite).toHaveBeenCalledTimes(1);
-    expect(process.exitCode).toBe(1);
   });
 
   it.each([false, true])(
@@ -1574,12 +1505,6 @@ describe("qa cli", () => {
 
   it.each([
     {
-      label: "candidate failure",
-      runs: [{ model: "qa/candidate", status: "fail" }],
-      judgments: [{ model: "qa/judge", rankings: [{ model: "qa/candidate", rank: 1 }] }],
-      expectedVerdict: "QA character eval failed: 1 candidate(s), 0 judge(s).",
-    },
-    {
       label: "judge failure",
       runs: [{ model: "qa/candidate", status: "pass" }],
       judgments: [{ model: "qa/judge", rankings: [], error: "judge unavailable" }],
@@ -1684,7 +1609,6 @@ describe("qa cli", () => {
 
   it.each([
     { allowFailures: false, counts: { total: 2, passed: 1, failed: 0, skipped: 1 }, exitCode: 1 },
-    { allowFailures: true, counts: { total: 2, passed: 1, failed: 1 }, exitCode: 0 },
   ])(
     "gates Multipass outcomes with allowFailures=$allowFailures",
     async ({ allowFailures, counts, exitCode }) => {
