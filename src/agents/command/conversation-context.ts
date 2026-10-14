@@ -36,6 +36,7 @@ export async function prepareCommandConversationContext(params: {
       allowBootstrap: true,
     });
   let conversationPrompt: string | undefined;
+  let inboundMetaPrompt: string | undefined;
   if (
     sessionEntry &&
     !isSubagentSessionKey(sessionKey) &&
@@ -75,10 +76,8 @@ export async function prepareCommandConversationContext(params: {
       silentToken: SILENT_REPLY_TOKEN,
     });
     if (sourceContext) {
-      // Metadata describes the conversation; delivery preflight owns formatting.
-      const metadata = buildInboundMetaSystemPrompt(ctx, cfg, { includeFormattingHints: false });
+      inboundMetaPrompt = buildInboundMetaSystemPrompt(ctx, cfg, { includeFormattingHints: false });
       conversationPrompt = [
-        deliveryFormat ? `${metadata}\n${deliveryFormat}` : metadata,
         sourceContext,
         shared &&
           buildGroupIntro({
@@ -92,16 +91,21 @@ export async function prepareCommandConversationContext(params: {
         .join("\n\n");
     }
   }
-  return conversationPrompt || deliveryFormat
+  const currentTurnContext = [inboundMetaPrompt, deliveryFormat].filter(Boolean).join("\n");
+  return conversationPrompt || currentTurnContext
     ? {
         ...opts,
-        extraSystemPrompt: [
-          conversationPrompt,
-          opts.extraSystemPrompt,
-          !conversationPrompt && deliveryFormat,
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
+        extraSystemPrompt: conversationPrompt
+          ? [conversationPrompt, opts.extraSystemPrompt].filter(Boolean).join("\n\n")
+          : opts.extraSystemPrompt,
+        ...(currentTurnContext
+          ? {
+              runtimeContextFragments: [
+                ...(opts.runtimeContextFragments ?? []),
+                { kind: "runtime-instruction" as const, text: currentTurnContext },
+              ],
+            }
+          : {}),
         ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
       }
     : opts;

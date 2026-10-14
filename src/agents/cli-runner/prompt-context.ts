@@ -107,8 +107,14 @@ export async function prepareCliTurnPromptContext(
       : undefined;
   let systemPrompt = runtimeFacts?.remainingPrompt ?? params.systemPrompt;
   let prependContext = "";
-  // Optional context failures must not erase Runtime facts or delivery instructions.
-  let appendContext = [runtimeFacts?.relocatable, params.deliveryGuidance]
+  // Optional context failures must not erase Runtime facts or trusted turn instructions.
+  let appendContext = [
+    runtimeFacts?.relocatable,
+    params.deliveryGuidance,
+    params.runtimeContextFragments?.length
+      ? labelRuntimeContextText(projectRuntimeContextFragments(params.runtimeContextFragments))
+      : undefined,
+  ]
     .filter((value): value is string => Boolean(value?.trim()))
     .join("\n\n");
   try {
