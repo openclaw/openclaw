@@ -85,9 +85,10 @@ Set `agentRuntime.id` on one model entry to route only that model, or on the
 `meta` provider to route every Meta model. Models without this routing use the
 built-in OpenClaw runtime through the [Meta provider](/providers/meta).
 
-Choosing **Muse Code** in Model Setup routes the selected model through Muse.
-Other Meta models and API-key-backed routes keep their existing runtime policy.
-An explicit runtime choice on the selected model takes precedence.
+Choosing **Muse Code** in Model Setup routes the selected model through Muse
+for the agent being set up. It writes that agent's model entry, replacing any
+runtime choice already on it. Global model defaults, other agents and other
+Meta models keep their existing runtime policy.
 
 The harness accepts only the standard `meta` provider route on Meta's official
 endpoint (`https://api.meta.ai/v1`). A `meta` provider entry with another
