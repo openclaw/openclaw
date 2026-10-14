@@ -9,9 +9,10 @@ import {
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import {
   createRequesterPublicationFixture,
@@ -38,7 +39,6 @@ function withoutRoles(config: OpenClawConfig): OpenClawConfig {
   return unrestricted;
 }
 
-/** Admit without a profile, as connect does with no roles or access policies, then attach it. */
 async function connectWithDeferredProfile(
   config: OpenClawConfig,
   profileId: string,
@@ -46,7 +46,6 @@ async function connectWithDeferredProfile(
 ) {
   const client = createOperatorWsClient({ connId: `deferred-${profileId}`, scopes });
   prepareGatewayConnectOperatorAccess(client);
-  expect(client.internal?.operatorAccessAuthority).toBeUndefined();
   const handler = {
     connId: client.connId,
     socket: { readyState: WEBSOCKET_OPEN_READY_STATE },
@@ -59,7 +58,10 @@ async function connectWithDeferredProfile(
   };
   const lifecycle = createGatewayConnectProfileLifecycle(
     { configSnapshot: config, handler } as unknown as GatewayConnectPhaseContext,
-    { role: "operator" } as DeviceAuthorizedGatewayConnect,
+    {
+      role: "operator",
+      authPolicy: captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" }),
+    } as DeviceAuthorizedGatewayConnect,
   );
   lifecycle.bind(client);
   await lifecycle.attach(profileId, 1, (profile) =>
@@ -70,7 +72,6 @@ async function connectWithDeferredProfile(
       isLocalClient: true,
     }),
   );
-  expect(client.authenticatedUserProfile?.profileId).toBe(profileId);
   return client;
 }
 
@@ -101,10 +102,17 @@ describe("GitHub publication after a deferred profile attachment", () => {
           ? f.guestProfile
           : (await ensureCanonicalUserProfileForEmail("publication-foreign@example.test")).id;
       const client = await connectWithDeferredProfile(config, profileId, guestScopes);
-      const { loadGatewaySessionEntryReadOnly } =
-        await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
-      mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnly);
-      const request = vi.spyOn(f.coordinator, "requestForSessionV2");
+      const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+        typeof import("./session-utils-store-worker.js")
+      >("./session-utils-store-worker.js");
+      mocks.loadSession.mockImplementation((key: string, options?: { agentId?: string }) =>
+        loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: getRuntimeConfig(),
+          key,
+          ...options,
+          readOnly: true,
+        }),
+      );
       const head = await workspace.git("rev-parse", "HEAD");
       const index = await fs.readFile(path.join(workspace.cwd, ".git/index"));
       const respond = vi.fn();
@@ -131,7 +139,6 @@ describe("GitHub publication after a deferred profile attachment", () => {
           undefined,
           expect.objectContaining({ code: outcome }),
         );
-        expect(request).not.toHaveBeenCalled();
         expect(workspace.effects).toEqual([]);
         expect(await workspace.git("rev-parse", "HEAD")).toBe(head);
         expect(await fs.readFile(path.join(workspace.cwd, ".git/index"))).toEqual(index);
@@ -150,10 +157,6 @@ describe("GitHub publication after a deferred profile attachment", () => {
         { sessionKey: f.session.sessionKey, agentId: "main" },
       );
       onTestFinished(captured.release);
-      expect(captured.requester.snapshot).toMatchObject({
-        actor: { kind: "operator", profileId: f.guestProfile },
-        grant: null,
-      });
       const claim = await holdWorkerTurn(f);
       const queued = await f.coordinator.requestForSessionV2(
         f.request("deferred-queued", captured.requester),

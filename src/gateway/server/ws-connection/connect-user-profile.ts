@@ -141,8 +141,7 @@ export function createGatewayConnectProfileLifecycle(
       } else {
         registered.authenticatedUserProfile = profile;
       }
-      // Deferred profiles attach after admission skipped operator access; without it,
-      // accepted runs carry no grant and publication rejects their requester.
+      // Deferred attachment must prepare access without replacing an admitted grant.
       if (registered.internal?.operatorAccessAuthority === undefined) {
         prepareGatewayConnectOperatorAccess(registered);
         if (!bindGatewayConnectOperatorAccess(context, registered)) {
