@@ -494,7 +494,14 @@ describe("known hourly main failures", () => {
       });
       expect(result.knownMainRed).toBe(!changed);
       expect(result.failureJobId).toBe(changed ? "10" : "");
-      const requests = vi.mocked(fetch).mock.calls.map(([url]) => new URL(String(url)).pathname);
+      const requests = vi
+        .mocked(fetch)
+        .mock.calls.map(
+          ([input]) =>
+            new URL(
+              typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+            ).pathname,
+        );
       for (const path of [
         "/actions/workflows/ci.yml/runs",
         "/actions/runs/200/attempts/1/jobs",
