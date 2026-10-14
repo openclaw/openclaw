@@ -210,7 +210,7 @@ function readExactClawArtifact(value: unknown, coordinate: ClawHubCoordinate) {
 }
 
 export async function listClawHubClaws(
-  params: ClawHubFetchOptions = {},
+  params: ClawHubFetchOptions & { limit?: number } = {},
 ): Promise<ClawHubClawCatalogEntry[]> {
   const entries = new Map<string, ClawHubClawCatalogEntry>();
   const seenCursors = new Set<string>();
