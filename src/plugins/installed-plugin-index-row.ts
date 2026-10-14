@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -42,7 +42,7 @@ export function readPluginMetadataStateRowsSync(
   databaseOptions: Parameters<typeof withExistingOpenClawStateDatabaseReadOnly>[1],
   artifactPreservingReadOnly = false,
 ): PluginMetadataStateRow[] {
-  const read = ({ db }: { db: DatabaseSync }) =>
+  const read = ({ db }: { db: EngineConnection }) =>
     readPluginMetadataStateRowsInDatabase(db, stateKeys);
   return (
     (artifactPreservingReadOnly

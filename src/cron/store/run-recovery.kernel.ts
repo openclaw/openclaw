@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -26,7 +26,7 @@ import type { InterruptedStartupRun } from "./run-recovery.types.js";
 import { parseCronScheduledRunId } from "./run-request-id.js";
 
 function recordInterruptedRun(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   storeKey: string;
   interrupted: InterruptedStartupRun;
   nowMs: number;

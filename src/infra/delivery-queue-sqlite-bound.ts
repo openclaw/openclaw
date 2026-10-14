@@ -1,5 +1,3 @@
-// Database-bound delivery queue serialization and mutations used by shared transactions.
-import type { DatabaseSync } from "node:sqlite";
 import type { RawBuilder, Selectable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -13,6 +11,8 @@ import {
   prepareSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+// Database-bound delivery queue serialization and mutations used by shared transactions.
+import type { EngineConnection } from "./sql-connection.js";
 import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
@@ -20,7 +20,7 @@ type QueueStatus = "pending" | "failed" | "completed";
 export type DeliveryQueueReadMode = "pending" | "unfinished" | "all";
 type DeliveryQueueTable = OpenClawStateKyselyDatabase["delivery_queue_entries"];
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-function boundedDeliveryReceipts(db: DatabaseSync) {
+function boundedDeliveryReceipts(db: EngineConnection) {
   return getNodeSqliteKysely<DeliveryQueueDatabase>(db)
     .selectFrom("delivery_queue_entries")
     .select([
@@ -74,7 +74,7 @@ export type UpsertDeliveryQueueEntryParams = {
 
 /** Prunes bounded receipts globally or for one exact producer namespace. */
 export function pruneDeliveryQueueTombstones(
-  db: DatabaseSync,
+  db: EngineConnection,
   now: number,
   prefix?: { queueName: string; idPrefix: string },
 ): boolean {
@@ -128,7 +128,7 @@ export function pruneDeliveryQueueTombstones(
 }
 
 /** Cheap maintenance cleanup: age predicates only, with no window sort. */
-export function pruneDeliveryQueueTombstoneAges(db: DatabaseSync, now: number): void {
+export function pruneDeliveryQueueTombstoneAges(db: EngineConnection, now: number): void {
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<DeliveryQueueDatabase>(db)
@@ -152,7 +152,7 @@ export function pruneDeliveryQueueTombstoneAges(db: DatabaseSync, now: number): 
 
 /** CAS-compacts one exact row, or deletes it when no fence is authored. */
 export function terminalizeBoundDeliveryQueueEntry(
-  db: DatabaseSync,
+  db: EngineConnection,
   queueName: string,
   id: string,
   expectedJson: string,
@@ -188,7 +188,7 @@ export function terminalizeBoundDeliveryQueueEntry(
   return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
 }
 
-function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): boolean {
+function pruneOrdinaryDeliveryReceipts(db: EngineConnection, now: number): boolean {
   const result = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<DeliveryQueueDatabase>(db)
@@ -302,7 +302,7 @@ export function bindDeliveryQueueEntry(
 
 type DeliveryQueueUpsertMode = "insert" | "pending" | "complete" | "replace";
 
-function createDeliveryQueueUpsert(database: DatabaseSync, mode: DeliveryQueueUpsertMode) {
+function createDeliveryQueueUpsert(database: EngineConnection, mode: DeliveryQueueUpsertMode) {
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database);
   return prepareSqliteQuerySync<BoundDeliveryQueueEntry["row"]>(database, (parameter) => {
     const values = {
