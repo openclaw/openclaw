@@ -144,7 +144,7 @@ describe("repository environment preparation", () => {
   });
 
   it.each(["pnpm-lock.yaml", "yarn.lock"])(
-    "installs through user-writable Corepack shims without auto-pinning during %s detection",
+    "installs through user-writable Corepack shims without auto-pinning or download prompts during %s detection",
     async (lockfile) => {
       const packageContent = '{"name":"fixture","private":true}\n';
       const f = await fixture({ [lockfile]: "fixture lock\n", "package.json": packageContent });
@@ -159,7 +159,7 @@ describe("repository environment preparation", () => {
       await fs.writeFile(path.join(bin, manager), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
       await fs.writeFile(
         path.join(bin, "package-manager"),
-        '#!/bin/sh\nif [ "${COREPACK_ENABLE_AUTO_PIN:-}" != 0 ]; then printf \'{"packageManager":"fixture"}\\n\' > package.json; fi\n',
+        '#!/bin/sh\nset -eu\ntest "${COREPACK_ENABLE_DOWNLOAD_PROMPT:-}" = 0\nif [ "${COREPACK_ENABLE_AUTO_PIN:-}" != 0 ]; then printf \'{"packageManager":"fixture"}\\n\' > package.json; fi\n',
         { mode: 0o755 },
       );
       const operation = await f.preparedOperation();

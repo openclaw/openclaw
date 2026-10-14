@@ -223,6 +223,8 @@ function requestCronRunsInDatabase(
       delete job.state.forcePreservedNextRunAtMs;
     } else if (request.preserveSchedule) {
       retainManualOneShotOccurrence(job, request.scheduleOwnershipAtMs ?? input.nowMs);
+    } else {
+      delete job.state.forcePreservedNextRunAtMs;
     }
     job.state.queuedAtMs = input.nowMs;
     if (persistQueuedState) {
