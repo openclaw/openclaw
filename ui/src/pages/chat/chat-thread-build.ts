@@ -103,6 +103,8 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
+  /** The runtime has finished the answer but still owns background settlement. */
+  runFinalizing?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
   /** Set while a run that handed off is idle and its subagents are still running. */
@@ -643,6 +645,7 @@ export function buildChatItems(
   // catches up.
   const hasEmptyLiveStream = props.stream !== null && props.stream.trim().length === 0;
   const showWorkingIndicator =
+    !props.runFinalizing &&
     (!compaction || compaction.phase === "complete") &&
     ((props.runWorking === true && !initialHistoryLoad) ||
       hasEmptyLiveStream ||

@@ -60,4 +60,22 @@ describe("chat view state contention", () => {
     expect(onAbort).toHaveBeenCalledOnce();
     expect(onSend).not.toHaveBeenCalled();
   });
+
+  it("hides finalized-answer activity without releasing the active run or Stop", () => {
+    const onAbort = vi.fn();
+    const container = renderChatView({
+      canAbort: true,
+      runActive: true,
+      runId: "run-1",
+      stream: "The answer is ready.",
+      startupStatus: { state: "status", runId: "run-1", phase: "finishing" },
+      onAbort,
+    });
+    expect(container.textContent).toContain("The answer is ready.");
+    expect(container.querySelector(".chat-working-indicator")).toBeNull();
+    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--stop");
+    expect(stop).not.toBeNull();
+    stop?.click();
+    expect(onAbort).toHaveBeenCalledOnce();
+  });
 });

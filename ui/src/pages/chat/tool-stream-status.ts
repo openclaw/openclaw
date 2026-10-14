@@ -369,6 +369,15 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
 }
 
 export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream === "lifecycle" && payload.data.phase === "finishing") {
+    reconcileChatRunStartup(host, {
+      state: "status",
+      runId: payload.runId,
+      phase: "finishing",
+      seq: payload.seq,
+    });
+    return true;
+  }
   if (payload.stream === "lifecycle" && payload.data.phase === "fallback_step") {
     const model = toTrimmedString(payload.data.fallbackStepToModel);
     if (payload.data.fallbackStepFinalOutcome === "next_fallback" && model) {

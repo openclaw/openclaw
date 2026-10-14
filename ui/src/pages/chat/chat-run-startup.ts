@@ -10,6 +10,7 @@ export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/
 
 export type ChatRunStartupState =
   | { state: "status"; runId: string; phase: ChatRunStartupPhase; seq?: number }
+  | { state: "status"; runId: string; phase: "finishing"; seq?: number }
   | {
       state: "status";
       runId: string;
@@ -36,8 +37,14 @@ export function reconcileChatRunStartup(
   }
   const current = host.chatRunStartup;
   if (current?.runId === next.runId) {
+    if (current.state === "status" && current.phase === "finishing" && next.seq === undefined) {
+      return;
+    }
     if (
-      (next.state === "status" && !isChatRunRecoveryStatus(next) && current.state === "activity") ||
+      (next.state === "status" &&
+        next.phase !== "finishing" &&
+        !isChatRunRecoveryStatus(next) &&
+        current.state === "activity") ||
       (current.seq !== undefined &&
         (next.seq === undefined ? next.state === "status" : next.seq <= current.seq))
     ) {
@@ -91,6 +98,9 @@ export function chatStartupStatusLabel(
     }
   }
   if (run) {
+    if (run.phase === "finishing") {
+      return undefined;
+    }
     if (run.phase === "retrying") {
       return t("chat.recovery.retrying");
     }

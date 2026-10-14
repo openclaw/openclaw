@@ -49,6 +49,7 @@ export type ChatProps = Omit<
   | "pendingInputs"
   | "runActive"
   | "runWorking"
+  | "runFinalizing"
   | "startupLabel"
   | "retryAt"
   | "failureActionsRunId"
@@ -234,6 +235,7 @@ export function createChatViewFrame(props: ChatProps) {
     pendingInputs: displayedPendingInputs,
     runActive: props.runActive === true,
     runWorking,
+    runFinalizing: props.startupStatus?.phase === "finishing",
     startupLabel: chatStartupStatusLabel(
       props.startupStatus,
       placementStartup,
