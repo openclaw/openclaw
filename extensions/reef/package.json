@@ -14,7 +14,7 @@
       "./index.ts"
     ],
     "install": {
-      "minHostVersion": ">=2026.7.2"
+      "minHostVersion": ">=2026.10.3"
     },
     "setupEntry": "./setup-entry.ts",
     "channel": {

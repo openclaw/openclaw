@@ -113,7 +113,9 @@ foreign key is retained and installed only after both tables exist. Generating a
 fragment does not activate PostgreSQL shared-state runtime support.
 
 `state.postgres.sql` and each manifest `file` contain the single runtime form of
-their state DDL. They omit transaction wrappers and fixed schema qualification;
+their state DDL. The generated `runtime.ts` module packages that same SQL with
+fragment activation/dependencies and the expected catalog for the state owner;
+it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The separate
 `agent.postgres.sql` readiness artifact retains its schema and transaction
 wrappers until the agent-store cutover.

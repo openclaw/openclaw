@@ -35,16 +35,16 @@ describe("gradium speech provider", () => {
     vi.restoreAllMocks();
   });
 
-  it("reports not configured for an invalid baseUrl instead of throwing", () => {
+  it("reports not configured for an invalid baseUrl instead of throwing", async () => {
     vi.stubEnv("GRADIUM_API_KEY", undefined);
     expect(
-      provider.isConfigured({
+      await provider.isConfiguredAsync?.({
         providerConfig: { apiKey: String(true), baseUrl: "https://example.com" },
         timeoutMs: 5_000,
       }),
     ).toBe(false);
     expect(
-      provider.isConfigured({
+      await provider.isConfiguredAsync?.({
         providerConfig: { apiKey: String(true), baseUrl: "not-a-url" },
         timeoutMs: 5_000,
       }),
@@ -151,7 +151,9 @@ describe("gradium speech provider", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 5_000 })).toBe(false);
+    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 5_000 })).toBe(
+      false,
+    );
     await expect(provider.synthesize({ ...request, providerConfig: {} })).rejects.toThrow(
       "Gradium API key missing",
     );

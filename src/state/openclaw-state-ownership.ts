@@ -8,7 +8,7 @@ import {
 } from "../infra/gateway-state-owner.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -158,9 +158,10 @@ export function inspectOpenClawStateOwnershipFromDatabase(
       return null;
     }
     // Raw admission must not mistake a damaged ownership index for an unclaimed store.
-    const ownershipSql = configMachineStateTableReady
-      ? "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1"
-      : "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1";
+    const ownershipSql =
+      configMachineStateTableReady || isPostgresSqlConnection(database)
+        ? "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1"
+        : "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1";
     const row = database.prepare(ownershipSql).get(STATE_SUPERVISION_KEY) as
       | { value_json?: unknown }
       | undefined;
