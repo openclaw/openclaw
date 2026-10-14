@@ -685,10 +685,31 @@ describe("noteMemorySearchHealth", () => {
           "memory sync also stops to protect it: new and changed memory files are not indexed",
         );
         expect(firstNoteMessage()).toContain("openclaw config set memory.search.provider none");
+        expect(firstNoteMessage()).toContain("openclaw memory index --force --agent agent-default");
       }
       expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
     },
   );
+
+  it("only claims that sync stops when the configured fallback is unavailable too", async () => {
+    hasAnyAuthProfileStoreSource.mockReturnValue(false);
+    await runMemorySearchHealth("openai", undefined, { fallback: "ollama" });
+    expect(firstNoteMessage()).toContain(
+      'If the "ollama" fallback is unavailable too and this agent already has a vector index, memory sync also stops',
+    );
+  });
+
+  it("points the keyword-only fix at the agent's own provider override", async () => {
+    hasAnyAuthProfileStoreSource.mockReturnValue(false);
+    const config = {
+      agents: { entries: { "agent-default": { memory: { search: { provider: "openai" } } } } },
+    } as OpenClawConfig;
+    await runMemorySearchHealth("openai", undefined, undefined, config);
+    expect(firstNoteMessage()).toContain(
+      "openclaw config set agents.entries.agent-default.memory.search.provider none",
+    );
+    expect(firstNoteMessage()).not.toContain("openclaw config set memory.search.provider none");
+  });
 
   it.each([
     ["resolves provider auth from the default agent directory", "gemini", "google", "GEMINI"],
