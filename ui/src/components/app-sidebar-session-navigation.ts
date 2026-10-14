@@ -176,7 +176,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       sessionsVisible
         ? [
             this.visibleSessionTreeInOrder().map(({ children: _children, ...row }) => row),
-            sections.map(({ rows, ...header }) => [header, summarizeTeamSessionSlots(rows, true)]),
+            sections.map(({ rows, ...header }) => [
+              header,
+              summarizeTeamSessionSlots(rows, true),
+              rows.reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
+            ]),
           ]
         : null,
       (this.sidebarAgentsMode === "chip" ? [this.expandedAgentId()] : (roster?.agentIds ?? [])).map(
@@ -242,6 +246,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       previous === next ||
       sidebarPresencePresentation(previous, scope) === this.admittedPresencePresentation
     );
+  }
+
+  refreshPresencePresentation(): void {
+    this.admittedPresencePresentation = sidebarPresencePresentation(
+      this.sessionData.presencePayload,
+      sidebarPresenceScope(this),
+    );
+    this.sessionData.requestSessionDataUpdate();
   }
 
   readonly navigationCatalog = new SidebarNavigationCatalog(this, () => this.context);

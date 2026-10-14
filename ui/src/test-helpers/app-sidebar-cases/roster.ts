@@ -696,6 +696,14 @@ describe("AppSidebar agent roster", () => {
     ).toBe(summary);
     expect(summary.querySelector(".session-glyph__ring")).toBeNull();
     expect(summary.querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
+    result.sessions = result.sessions.map((row) =>
+      row.key === "agent:working:recent" ? { ...row, workspaceConflictCount: 3 } : row,
+    );
+    await rosterActivityStore(context).refresh();
+    await settleRoster(sidebar);
+    expect(
+      summary.querySelector('[aria-label="Cloud worker children: 3 workspace conflicts"]'),
+    ).not.toBeNull();
     provider.remove();
     const remounted = await mountRoster();
     remounted.sidebar.sidebarEntries = ["session:agent:working:pinned"];

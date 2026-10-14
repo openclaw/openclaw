@@ -378,6 +378,13 @@ describe("AppSidebar viewer presence", () => {
     await vi.advanceTimersByTimeAsync(2);
     await settleLitElement(sidebar);
     expect(row.dataset.presenceActivity).toBe("idle");
+    gateway.publishEvent("presence", {
+      presence: [
+        { user: { id: "alice", name: "Alice" }, ts: Date.now(), lastActivityAt: Date.now() },
+      ],
+    });
+    await settleLitElement(sidebar);
+    expect(row.dataset.presenceActivity).toBe("active");
   });
 
   it("ages rows and an open card into idle without another presence event", async () => {
