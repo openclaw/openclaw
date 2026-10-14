@@ -28,6 +28,21 @@ function prepareTestWorkerSsh() {
 }
 
 describe("worker SSH preparation", () => {
+  it.each([
+    [`${HOST_KEY}\n${HOST_KEY}`, "Pinned worker SSH host key must contain exactly one public key"],
+    [`${HOST_KEY} comment`, "Pinned worker SSH host key must use OpenSSH public-key format"],
+  ])(
+    "rejects invalid pinned host-key material with its transport diagnostic",
+    (hostKey, message) => {
+      expect(() =>
+        resolveWorkerSshSandboxSettings({
+          ssh: { ...SSH, hostKey },
+          identity: { kind: "path", path: "/keys/worker" },
+        }),
+      ).toThrow(message);
+    },
+  );
+
   it("discards a late identity before writing it and closes the retained preparation guard", async () => {
     const controller = new AbortController();
     const closed = new Error("SSH preparation stopped");

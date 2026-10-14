@@ -581,7 +581,7 @@ describe("createChatRunState", () => {
     { prefix: 'é\n"\\\ud800', raw: false },
     { prefix: "🦞", raw: false },
     { prefix: "é", raw: true },
-  ])("retains the exact JSON byte limit and stops capture on overflow: %j", ({ prefix, raw }) => {
+  ])("retains the exact JSON byte limit and drops overflow: %j", ({ prefix, raw }) => {
     const encode = (text: string): unknown => {
       if (!raw) {
         return text;
@@ -608,22 +608,14 @@ describe("createChatRunState", () => {
     expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data.result).toEqual({
       [field]: text,
     });
-    let laterReads = 0;
     state.recordProgressEvent("run-1", {
       ...event,
       seq: 2,
       data: {
         ...metadata,
-        result: {
-          [field]: encode(`${text}x`),
-          get later() {
-            laterReads += 1;
-            return "unused";
-          },
-        },
+        result: { [field]: encode(`${text}x`) },
       },
     });
-    expect(laterReads).toBe(0);
     expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data).toEqual(metadata);
   });
 

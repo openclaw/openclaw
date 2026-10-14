@@ -10,43 +10,17 @@ import type {
   WorkerEnvironmentBootstrapReceipt,
   WorkerEnvironmentRecord,
 } from "./environment-record.js";
+import { normalizeWorkerSshHostKey } from "./ssh-host-key.js";
 import { workerEnvironmentStateRequiresLease } from "./state.js";
 
 const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
-const MAX_HOST_KEY_LENGTH = 16_384;
 const MAX_SSH_FALLBACK_PORTS = 10;
 const WORKER_CREDENTIAL_HASH_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
-const OPENSSH_HOST_KEY_TYPE_PATTERN =
-  /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
-const OPENSSH_HOST_KEY_DATA_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/u;
 export function requireWorkerEnvironmentString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`Worker environment ${field} must be a non-empty string`);
   }
   return value.trim();
-}
-function normalizeOpenSshHostKey(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    value.length > MAX_HOST_KEY_LENGTH ||
-    value.includes("\n") ||
-    value.includes("\r")
-  ) {
-    throw new Error("Worker environment SSH host key must be one OpenSSH public-key line");
-  }
-  const tokens = value.trim().split(/\s+/u);
-  const [algorithm, encodedKey] = tokens;
-  if (
-    tokens.length !== 2 ||
-    !algorithm ||
-    !encodedKey ||
-    !OPENSSH_HOST_KEY_TYPE_PATTERN.test(algorithm) ||
-    !OPENSSH_HOST_KEY_DATA_PATTERN.test(encodedKey) ||
-    encodedKey.length % 4 !== 0
-  ) {
-    throw new Error("Worker environment SSH host key must use OpenSSH public-key format");
-  }
-  return `${algorithm} ${encodedKey}`;
 }
 export function normalizeBootstrapReceipt(value: {
   bundleHash: unknown;
@@ -136,7 +110,7 @@ export function normalizeExpiry(value: unknown): number {
 export function normalizeWorkerSshEndpoint(value: WorkerSshEndpoint): WorkerSshEndpoint {
   const host = requireWorkerEnvironmentString(value.host, "SSH host");
   const user = requireWorkerEnvironmentString(value.user, "SSH user");
-  const hostKey = normalizeOpenSshHostKey(value.hostKey);
+  const hostKey = normalizeWorkerSshHostKey(value.hostKey, "environment");
   if (!Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65_535) {
     throw new Error("Worker environment SSH port must be an integer from 1 through 65535");
   }
