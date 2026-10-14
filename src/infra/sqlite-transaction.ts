@@ -432,6 +432,9 @@ function runSqliteTransactionSync<T>(
     sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
+  if (timing) {
+    timing.transactions.count += 1;
+  }
   return settleSqliteTransactionSync(db, operation, mode, beginMs, prepareMs, options);
 }
 

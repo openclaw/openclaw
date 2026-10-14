@@ -124,6 +124,8 @@ export type SqliteWorkerRequest = {
 
 export type SqliteWorkerReply = {
   id: number;
+  /** Explicit outer BEGINs in this frame, including rollback; excludes savepoints/autocommit. */
+  transactionCount?: number;
   timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
   databaseAdmissions?: SqliteDatabaseAdmissions;
