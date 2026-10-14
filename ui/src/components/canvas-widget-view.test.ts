@@ -95,7 +95,12 @@ function mount(
 }
 
 async function frameFor(view: OpenClawCanvasWidgetView) {
-  await expect.poll(() => view.querySelector("iframe")).not.toBeNull();
+  await expect
+    .poll(() => {
+      flush();
+      return view.querySelector("iframe");
+    })
+    .not.toBeNull();
   return view.querySelector("iframe")!;
 }
 
