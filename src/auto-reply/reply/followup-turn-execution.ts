@@ -316,7 +316,11 @@ export async function executeFollowupTurn(params: {
   turn.operation.abortSignal.throwIfAborted();
   const sourceTurnId = resolveReplySourceTurnId({
     sourceTurnId: sourceMessage?.idempotencyKey ?? turn.queued.sourceTurnId,
-    admissionRunId: turn.queued.messageId,
+    // System message IDs deduplicate queue work, not external input admission.
+    admissionRunId:
+      turn.queued.run.inputProvenance?.kind === "internal_system"
+        ? undefined
+        : turn.queued.messageId,
     ingressProvider: turn.queued.run.messageProvider,
     entry: turn.session.current(),
   });

@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
@@ -8,8 +9,9 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
-import type { ChatSummaryAutomationsElement } from "./chat-summary-automations.tsx";
-import "./chat-summary-automations.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
 function job(overrides: Partial<CronCompactJob> = {}): CronCompactJob {
   return {
@@ -66,15 +68,22 @@ function source(request = createGatewayRequestMock(async () => page())) {
 const mounted: HTMLElement[] = [];
 const observers: MutationObserver[] = [];
 function component(gateway: ApplicationGateway, presented = true) {
-  const element = document.createElement(
-    "openclaw-chat-summary-automations",
-  ) as ChatSummaryAutomationsElement;
-  element.gateway = gateway;
-  element.sessionKey = "agent:ops:task";
-  element.presented = presented;
-  mounted.push(element);
-  document.body.append(element);
-  return element;
+  type Props = Parameters<typeof ChatSummaryAutomations>[0];
+  let update!: (next: Partial<Props>) => void;
+  const view = mountSolid(() => {
+    const [props, setProps] = createSignal<Props>({
+      gateway,
+      sessionKey: "agent:ops:task",
+      presented,
+    });
+    update = (next) => setProps((current) => ({ ...current, ...next }));
+    return <ChatSummaryAutomations {...props()} />;
+  });
+  return {
+    ...view,
+    element: view.container.querySelector<HTMLElement>("openclaw-chat-summary-automations")!,
+    update,
+  };
 }
 
 // The rendered request state is the completion signal; no timer or polling loop.
@@ -120,11 +129,12 @@ describe("Details compact automations", () => {
   it("admits only presented session-scoped reads and uses the existing automation destination", async () => {
     const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
     const current = source(createGatewayRequestMock(() => pending.promise));
-    const element = component(current.gateway, false);
-    await element.updateComplete;
+    const view = component(current.gateway, false);
+    const { element } = view;
+    flush();
     expect(current.request).not.toHaveBeenCalled();
-    element.presented = true;
-    await element.updateComplete;
+    view.update({ presented: true });
+    flush();
     expect(element.textContent).toContain("Loading automations…");
     expect(element.textContent).not.toContain("No automations");
     expect(current.request).toHaveBeenCalledWith(
@@ -155,9 +165,11 @@ describe("Details compact automations", () => {
       element.querySelector<HTMLDetailsElement>('[data-details-group="automations"]')?.open,
     ).toBe(true);
     expect(link.querySelector("svg")).not.toBeNull();
-    element.onNavigate = vi.fn();
+    const onNavigate = vi.fn();
+    view.update({ onNavigate });
+    flush();
     link.click();
-    expect(element.onNavigate).toHaveBeenCalledWith("summary-job");
+    expect(onNavigate).toHaveBeenCalledWith("summary-job");
     expect(current.request).toHaveBeenCalledTimes(1);
   });
 
@@ -167,8 +179,9 @@ describe("Details compact automations", () => {
         .mockResolvedValueOnce(page())
         .mockResolvedValue(page([job()])),
     );
-    const element = component(current.gateway);
-    await element.updateComplete;
+    const view = component(current.gateway);
+    const { element } = view;
+    flush();
     await observe(element, () => element.querySelector(".chat-summary__automations") === null);
     expect(element.querySelector("summary")).toBeNull();
     current.publishEvent({ type: "event", event: "cron", payload: { action: "added" } });
@@ -177,9 +190,9 @@ describe("Details compact automations", () => {
     expect(group.open).toBe(true);
     group.open = false;
     group.dispatchEvent(new Event("toggle"));
-    await element.updateComplete;
+    flush();
     current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
-    await element.updateComplete;
+    flush();
     await textReady(element, "Check the task");
     expect(element.querySelector("details")).toBe(group);
     expect(group.open).toBe(false);
@@ -199,7 +212,8 @@ describe("Details compact automations", () => {
         .mockRejectedValueOnce(new Error("private server detail"))
         .mockImplementationOnce(() => pending.promise),
     );
-    const element = component(current.gateway);
+    const view = component(current.gateway);
+    const { element } = view;
     const sibling = document.createElement("details");
     sibling.open = false;
     mounted.push(sibling);
@@ -210,14 +224,14 @@ describe("Details compact automations", () => {
     expect(retry.textContent?.trim()).toBe("Retry");
     retry.focus();
     retry.click();
-    await element.updateComplete;
+    flush();
     expect(document.activeElement).toBe(retry);
     expect(retry.getAttribute("aria-disabled")).toBe("true");
     retry.click();
     expect(current.request).toHaveBeenCalledTimes(2);
     pending.resolve(page([job()]));
     await textReady(element, "Check the task");
-    await element.updateComplete;
+    flush();
     expect(document.activeElement).toBe(element.querySelector(".chat-summary__automation"));
     expect(sibling.open).toBe(false);
   });
@@ -229,7 +243,8 @@ describe("Details compact automations", () => {
         .mockRejectedValueOnce(new Error("offline"))
         .mockImplementationOnce(() => pending.promise),
     );
-    const element = component(current.gateway);
+    const view = component(current.gateway);
+    const { element } = view;
     await textReady(element, "Couldn't load automations.");
     element.querySelector<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
     const composer = document.createElement("textarea");
@@ -253,14 +268,15 @@ describe("Details compact automations", () => {
         .mockImplementationOnce(() => reconnectRetired.promise)
         .mockImplementationOnce(() => latest.promise),
     );
-    const element = component(current.gateway);
-    await element.updateComplete;
-    element.sessionKey = "agent:ops:second";
-    await element.updateComplete;
+    const view = component(current.gateway);
+    const { element } = view;
+    flush();
+    view.update({ sessionKey: "agent:ops:second" });
+    flush();
     const snapshot = current.gateway.snapshot;
     current.publish({ ...snapshot, phase: "reconnecting" });
     current.publish(snapshot);
-    await element.updateComplete;
+    flush();
     expect(current.request).toHaveBeenCalledTimes(3);
     expect(current.request.mock.calls[2]?.[1]).toMatchObject({ sessionKey: "agent:ops:second" });
     latest.resolve(page([job({ name: "Current session" })]));
@@ -269,56 +285,60 @@ describe("Details compact automations", () => {
     reconnectRetired.resolve(page([job({ name: "Retired connection" })]));
     await retired.promise;
     await reconnectRetired.promise;
-    await element.updateComplete;
+    flush();
     expect(element.textContent).toContain("Current session");
     expect(element.textContent).not.toMatch(/Wrong session|Retired connection/);
   });
 
-  it("coalesces hidden cron publications until presentation and removes subscriptions on disconnect", async () => {
+  it("coalesces hidden cron publications until presentation and removes subscriptions on unmount", async () => {
     const current = source(createGatewayRequestMock(async () => page([job()])));
-    const element = component(current.gateway);
+    const view = component(current.gateway);
+    const { element } = view;
     await textReady(element, "Check the task");
-    element.presented = false;
-    await element.updateComplete;
+    view.update({ presented: false });
+    flush();
     current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
     current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
-    await element.updateComplete;
+    flush();
     expect(current.request).toHaveBeenCalledTimes(1);
-    element.presented = true;
-    await element.updateComplete;
+    view.update({ presented: true });
+    flush();
     await textReady(element, "Check the task");
     expect(current.request).toHaveBeenCalledTimes(2);
-    element.remove();
+    view.unmount();
     current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
     current.publish(current.gateway.snapshot);
-    await element.updateComplete;
+    flush();
     expect(current.request).toHaveBeenCalledTimes(2);
   });
 
   it("retains same-scope automation facts offline and clears them on session replacement", async () => {
     const current = source(createGatewayRequestMock(async () => page([job()])));
-    const element = component(current.gateway);
+    const view = component(current.gateway);
+    const { element } = view;
     await textReady(element, "Check the task");
     current.publish({ ...current.gateway.snapshot, phase: "offline", client: null });
-    await element.updateComplete;
+    flush();
     expect(element.textContent).toContain("Check the task");
     expect(element.textContent).not.toContain("Reconnect to load");
-    element.sessionKey = "agent:ops:other";
-    await element.updateComplete;
+    view.update({ sessionKey: "agent:ops:other" });
+    flush();
     expect(element.textContent).not.toContain("Check the task");
   });
 
   it("does not invent empty inventory offline or for an unresolved session owner", async () => {
     const current = source();
     current.publish({ ...current.gateway.snapshot, phase: "offline" });
-    const element = component(current.gateway);
-    await element.updateComplete;
+    const view = component(current.gateway);
+    const { element } = view;
+    flush();
     expect(element.textContent).toContain("Offline · last-known automations");
     expect(element.textContent).not.toContain("No automations");
     expect(current.request).not.toHaveBeenCalled();
-    element.sessionKey = "unresolved-session";
+    view.update({ sessionKey: "unresolved-session" });
+    flush();
     current.publish({ ...current.gateway.snapshot, phase: "connected" });
-    await element.updateComplete;
+    flush();
     expect(element.textContent).toContain("Automations unavailable for this session.");
     expect(current.request).not.toHaveBeenCalled();
   });
@@ -340,7 +360,8 @@ describe("Details compact automations", () => {
           }),
         ),
     );
-    const element = component(current.gateway);
+    const view = component(current.gateway);
+    const { element } = view;
     await textReady(element, "First automation");
     expect(element.textContent).toContain("Paused");
     element.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!.click();
