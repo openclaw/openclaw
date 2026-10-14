@@ -1,7 +1,8 @@
 import { ButtonStyle, type APISelectMenuOption } from "discord-api-types/v10";
-import type {
-  ModelsProviderData,
-  ModelsRuntimeChoice,
+import {
+  getModelsRuntimeChoices,
+  type ModelsProviderData,
+  type ModelsRuntimeChoice,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -14,10 +15,6 @@ import {
   TextDisplay,
   type TopLevelComponents,
 } from "../internal/discord.js";
-import {
-  getDiscordModelPickerRuntimeChoices,
-  supportsDiscordModelPickerRuntimeChoices,
-} from "./model-picker.runtime.js";
 import {
   buildDiscordModelPickerCustomId,
   createDiscordModelPickerModelToken,
@@ -321,7 +318,7 @@ function buildModelRows(
   }
 
   const runtimeModel = parseCurrentModelRef(params.pendingModel ?? params.currentModel);
-  const runtimeChoices = getDiscordModelPickerRuntimeChoices(
+  const runtimeChoices = getModelsRuntimeChoices(
     params.data,
     params.modelPage.provider,
     runtimeModel?.provider === normalizeProviderId(params.modelPage.provider)
@@ -337,10 +334,9 @@ function buildModelRows(
   const selectedRuntime = explicitRuntime
     ? runtimeChoices?.find((choice) => choice.id === explicitRuntime)?.id
     : runtimeChoices?.[0]?.id;
-  const compactRuntime =
-    supportsDiscordModelPickerRuntimeChoices() && explicitRuntime
-      ? { runtimeToken: createDiscordModelPickerRuntimeToken(explicitRuntime) }
-      : {};
+  const compactRuntime = explicitRuntime
+    ? { runtimeToken: createDiscordModelPickerRuntimeToken(explicitRuntime) }
+    : {};
   const modelViewState = {
     command: params.command,
     userId: params.userId,
@@ -467,9 +463,7 @@ function buildModelRows(
       },
       {
         style: ButtonStyle.Primary,
-        disabled:
-          !hasPendingSelection ||
-          (supportsDiscordModelPickerRuntimeChoices() && selectedRuntime === undefined),
+        disabled: !hasPendingSelection || selectedRuntime === undefined,
       },
     ),
   );
@@ -607,15 +601,13 @@ export function renderDiscordModelPickerModelsView(
   const selectedRuntimeLabel = choices?.find((choice) => choice.id === selectedRuntime)?.label;
   const pendingLine = !params.pendingModel
     ? "Select a model, then press Submit."
-    : !supportsDiscordModelPickerRuntimeChoices()
-      ? `Selected: ${params.pendingModel} (press Submit)`
-      : choices === undefined
-        ? "Could not confirm how to run this model. Open /models to try again."
-        : choices.length === 0
-          ? "This model cannot run with your current connections. Choose another model."
-          : selectedRuntimeLabel
-            ? `Selected: ${params.pendingModel} · ${selectedRuntimeLabel} (press Submit)`
-            : "Choose how to run this model, then press Submit.";
+    : choices === undefined
+      ? "Could not confirm how to run this model. Open /models to try again."
+      : choices.length === 0
+        ? "This model cannot run with your current connections. Choose another model."
+        : selectedRuntimeLabel
+          ? `Selected: ${params.pendingModel} · ${selectedRuntimeLabel} (press Submit)`
+          : "Choose how to run this model, then press Submit.";
 
   const detailLines = [formatCurrentModelLine(params.currentModel), `Default: ${defaultModel}`];
   if (modelPage.totalPages > 1) {
