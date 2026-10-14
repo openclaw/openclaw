@@ -61,6 +61,7 @@ declare module "@solidjs/web" {
       "openclaw-plugin-view": HTMLAttributes<HTMLElement> &
         PluginViewProperties & {
           "prop:defaultView": unknown;
+          "prop:replacementCompanion"?: unknown;
           "prop:presented": boolean;
         };
       "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {

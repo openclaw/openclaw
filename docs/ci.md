@@ -18,6 +18,14 @@ agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites
 
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
+The `Linux App` Windows installer job allows 105 minutes for source staging and
+packaging. Its canonical core build uses the existing
+`OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS` override with a 60-minute allowance:
+cold Windows declarations exceeded the default 45-minute package deadline, while
+a complete installer job previously took 78 minutes. The remaining job budget
+covers dependency installation, Rust compilation, and NSIS packaging. Linux and
+release-workflow budgets are unchanged.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 

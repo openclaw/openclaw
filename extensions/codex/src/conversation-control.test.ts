@@ -1,5 +1,6 @@
 import path from "node:path";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   deleteSessionEntry,
   getSessionEntry,
@@ -497,11 +498,30 @@ describe("codex conversation controls", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("clears incompatible direct-session auth when the selected provider changes", async () => {
+  it.each([
+    {
+      name: "clears incompatible direct-session auth when the selected provider changes",
+      recordedProvider: undefined,
+      expectedProfile: undefined,
+    },
+    {
+      name: "preserves compatible recorded direct-session auth over the profile ID prefix",
+      recordedProvider: "openai",
+      expectedProfile: "lmstudio:work",
+    },
+  ])("$name", async ({ recordedProvider, expectedProfile }) => {
     const sessionKey = "agent:main:model-provider-switch";
     const sessionId = "session-provider-switch";
     const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
     const storePath = resolveStorePath(undefined, { agentId: "main" });
+    const agentDir = path.join(tempDir, "agent");
+    if (recordedProvider) {
+      await upsertAuthProfileAsync({
+        agentDir,
+        profileId: "lmstudio:work",
+        credential: { type: "api_key", provider: recordedProvider, key: "test-key" },
+      });
+    }
     await upsertSessionEntry({
       agentId: "main",
       storePath,
@@ -529,6 +549,7 @@ describe("codex conversation controls", () => {
         bindingStore: testCodexAppServerBindingStore,
         binding: testCodexAppServerBindingStore.read(identity),
         model: "openai/gpt-5.5",
+        agentDir,
         storePath,
         assertCurrent: () => {},
       }),
@@ -544,6 +565,6 @@ describe("codex conversation controls", () => {
       modelOverride: "gpt-5.5",
       liveModelSwitchPending: true,
     });
-    expect(getSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
+    expect(getSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBe(expectedProfile);
   });
 });

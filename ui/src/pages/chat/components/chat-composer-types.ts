@@ -1,4 +1,5 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
+import type { JSX } from "@solidjs/web";
 import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
@@ -149,9 +150,9 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   suggestionComposer?: boolean;
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
   composerControls?: TemplateResult | typeof nothing;
-  footerContent?: TemplateResult | typeof nothing;
+  footerContent?: JSX.Element;
   composerRecovery?: TemplateResult | typeof nothing;
-  notices?: TemplateResult | typeof nothing;
+  notices?: JSX.Element;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;

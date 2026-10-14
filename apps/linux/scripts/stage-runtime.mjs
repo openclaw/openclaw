@@ -4,15 +4,12 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resourceBytes, stagePackage } from "./stage-package.mjs";
+
+export { resourceBytes };
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const destination = path.join(root, "apps/linux/src-tauri/target/desktop-runtime");
-
-export function resourceBytes(executable) {
-  // linuxdeploy rewrites ELF resources even without executable permissions.
-  // This fixed envelope is stripped by bundled_runtime.rs; hashes cover raw bytes.
-  return Buffer.concat([Buffer.from("OPENCLAW-BUN-RUNTIME-V1\n"), executable]);
-}
 
 export function runtimeTarget(triple) {
   if (
@@ -42,7 +39,9 @@ export async function stageWindowsRuntime(work, target, pin) {
     const response = await fetch(`https://github.com/openclaw/bun/releases/download/${encodeURIComponent(pin.tag)}/${encodeURIComponent(name)}`, {
       signal: AbortSignal.timeout(300_000),
     });
-    if (!response.ok) throw new Error(`Bun ${name} download failed: HTTP ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Bun ${name} download failed: HTTP ${response.status}`);
+    }
     return Buffer.from(await response.arrayBuffer());
   };
   const sums = (await download("SHA256SUMS")).toString("utf8").trim().split("\n");
@@ -71,7 +70,9 @@ export async function stageWindowsRuntime(work, target, pin) {
     executableSha256: published.executable.sha256,
   };
   for (const field of ["authenticodeSigned", "testOnly", "signerSubject"]) {
-    if (Object.hasOwn(artifact, field)) expected[field] = published.executable[field];
+    if (Object.hasOwn(artifact, field)) {
+      expected[field] = published.executable[field];
+    }
   }
   assert.deepEqual(expected, artifact, "Bun release artifact differs from pin");
   assert.equal(checksum(artifact.asset), artifact.sha256, "Bun release archive sha256 mismatch");
@@ -123,7 +124,9 @@ export async function stageRuntime(triple) {
   try {
     if (target?.platform === "windows") {
       const pin = JSON.parse(fs.readFileSync(path.join(root, "scripts/lib/openclaw-bun.json"), "utf8"));
-      if (!(await stageWindowsRuntime(work, target, pin))) fs.writeFileSync(path.join(work, "manifest.json"), "{}\n");
+      if (!(await stageWindowsRuntime(work, target, pin))) {
+        fs.writeFileSync(path.join(work, "manifest.json"), "{}\n");
+      }
     } else if (target) {
       const pin = JSON.parse(fs.readFileSync(path.join(root, "scripts/lib/openclaw-bun.json"), "utf8"));
       execFileSync(path.join(root, "scripts/stage-openclaw-bun.sh"), [work, target.platform, target.arch], {
@@ -141,6 +144,9 @@ export async function stageRuntime(triple) {
       fs.rmSync(path.join(work, "bun-manifest.json"));
     } else {
       fs.writeFileSync(path.join(work, "manifest.json"), "{}\n");
+    }
+    if (target && JSON.parse(fs.readFileSync(path.join(work, "manifest.json"), "utf8")).files) {
+      stagePackage(root, work, target);
     }
     fs.rmSync(destination, { recursive: true, force: true });
     fs.renameSync(work, destination);

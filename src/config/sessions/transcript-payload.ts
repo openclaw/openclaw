@@ -7,6 +7,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -79,7 +80,8 @@ export function createTranscriptEventInserter(database: DatabaseSync, sessionId:
     const prepared = row.preparedPayload;
     const payload =
       prepared?.eventJson === row.eventJson &&
-      prepared.storageEncoding === readTranscriptStorageEncoding(database)
+      prepared.storageEncoding === readTranscriptStorageEncoding(database) &&
+      (!isPostgresSqlConnection(database) || prepared.payload.event_zstd === null)
         ? prepared.payload
         : prepareTranscriptPayload(database, row.eventJson, row.parsedEvent);
     return insert({ ...row, ...payload });
@@ -113,6 +115,9 @@ export function createTranscriptPayloadUpdater(database: DatabaseSync, sessionId
 }
 
 export function readTranscriptStorageEncoding(database: DatabaseSync): string {
+  if (isPostgresSqlConnection(database)) {
+    return "UTF-8";
+  }
   const facts = getAdmittedSqliteSchemaFacts(database);
   if (!facts) {
     throw new Error("Transcript payload preparation requires admitted SQLite schema facts");
@@ -237,6 +242,10 @@ export function prepareTranscriptPayload(
     event_utf8_bytes: utf8 ? rawBytes : null,
     navigation_json: null,
   };
+  // PostgreSQL rows never carry event_zstd; TOAST owns their physical compression.
+  if (isPostgresSqlConnection(database)) {
+    return identity;
+  }
   // Giant identity values stay available to native SQL without a second full buffer or projection.
   // SQLite and JS can disagree on escaped surrogates and embedded NUL; retain the native path.
   if (
@@ -331,6 +340,11 @@ export function transcriptEventJsonSql(
   database: DatabaseSync,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string> {
+  if (isPostgresSqlConnection(database)) {
+    return /* kysely-allow-raw: closed transcript aliases select PostgreSQL's canonical text. */ sql.ref<string>(
+      `${alias}.event_json`,
+    );
+  }
   registerDecoder(database);
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the canonical identity column. */ sql.ref(

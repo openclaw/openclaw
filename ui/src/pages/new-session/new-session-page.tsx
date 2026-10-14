@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
@@ -34,6 +34,7 @@ import { restoredInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionPageOwner, type PageHost } from "./new-session-page-owner.ts";
 import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx";
+import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -54,7 +55,20 @@ const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
 function DraftBlock(props: { page: () => NewSessionPageOwner; revision: () => object }) {
   const submission = () => props.page().submission;
   const place = () => props.page().place;
-  const options = () => props.page().composerOptions();
+  const options = createMemo(() => props.page().composerOptions());
+  const placeOptions = createMemo((): NewSessionPlaceControlsOptions => ({
+    context: props.page().context,
+    data: props.page().data,
+    gateway: props.page().gateway,
+    place: place(),
+    submitting: submission().submitting,
+    pendingPlacement: Boolean(submission().pendingPlacement.sessionKey),
+    onConnectMachine: () => props.page().openConnectMachine(),
+    onNavigate: (route, routeOptions) => props.page().context?.navigate(route, routeOptions),
+    onFocusComposer: () =>
+      submission().composerTextarea.getTextarea()?.focus({ preventScroll: true }),
+    requestUpdate: () => props.page().requestUpdate(),
+  }));
   const permissionControl = (
     <Show when={!catalog.isTarget(props.page().data)}>
       <ChatPermissionPicker
@@ -116,24 +130,7 @@ function DraftBlock(props: { page: () => NewSessionPageOwner; revision: () => ob
             />
           </Show>
         }
-        placeSelect={
-          <NewSessionPlaceControls
-            params={{
-              context: props.page().context,
-              data: props.page().data,
-              gateway: props.page().gateway,
-              place: place(),
-              submitting: submission().submitting,
-              pendingPlacement: Boolean(submission().pendingPlacement.sessionKey),
-              onConnectMachine: () => props.page().openConnectMachine(),
-              onNavigate: (route, routeOptions) =>
-                props.page().context?.navigate(route, routeOptions),
-              onFocusComposer: () =>
-                submission().composerTextarea.getTextarea()?.focus({ preventScroll: true }),
-              requestUpdate: () => props.page().requestUpdate(),
-            }}
-          />
-        }
+        placeSelect={<NewSessionPlaceControls params={placeOptions()} />}
       />
       <Show when={place().worktree && !isWorktreeNameValid(place().worktreeName)}>
         <DraftError message={t("newSession.worktreeNameInvalid")} />
@@ -184,6 +181,9 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     revision();
     return owner;
   };
+  // The retained Lit slot must not republish identical Solid inputs on each
+  // draft edit; the revision accessor already carries the changed state.
+  const draftProps = { page, revision };
   createEffect(revision, () =>
     untrack(() => {
       owner.updated();
@@ -265,7 +265,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
                 <LitContent
                   value={renderWelcomeState({
                     ...page().welcomeOptions(),
-                    composer: solidContent(DraftBlock, { page, revision }),
+                    composer: solidContent(DraftBlock, draftProps),
                   })}
                 />
               }

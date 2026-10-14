@@ -504,7 +504,10 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
               {renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs)}
               <button
                 type="button"
-                class="sidebar-pages__pin"
+                class={[
+                  "sidebar-pages__pin",
+                  { "sidebar-pages__pin--pinned": host.sidebarEntries.includes(key) },
+                ]}
                 disabled={Boolean(host.sidebarSnapshot)}
                 aria-label={t(host.sidebarEntries.includes(key) ? "nav.unpin" : "nav.pin")}
                 onClick={() => {

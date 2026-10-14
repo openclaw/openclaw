@@ -2452,6 +2452,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload image handoff failure crops
+        if: failure() && matrix.task == 'control-ui' && hashFiles('.artifacts/control-ui-e2e/control-ui-mocked-gateway-e2e-*/image-handoff-*.png') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-image-handoff-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e/control-ui-mocked-gateway-e2e-*/image-handoff-*.png
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Test browser extension bootstrap end-to-end
         if: matrix.task == 'browser-extension'
         run: pnpm test:e2e:browser-extension

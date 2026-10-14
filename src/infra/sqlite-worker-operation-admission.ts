@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { sqlPublicationAnchor, type PostgresSqlConnection } from "./sql-connection.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -657,7 +658,7 @@ function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation
 
 /** Record facts only after the real transaction commits, before native settlement is announced. */
 export function deferSqliteWorkerCommitReceipt(
-  database: DatabaseSync,
+  database: DatabaseSync | PostgresSqlConnection,
   facts: unknown,
   delivery: "commit" | "settlement" = "commit",
 ): void {
@@ -669,9 +670,11 @@ export function deferSqliteWorkerCommitReceipt(
 }
 
 /** A typed fenced write cannot commit without its destination owner's settlement evidence. */
-export function assertSqliteWorkerCommitReceiptPending(database: DatabaseSync): void {
+export function assertSqliteWorkerCommitReceiptPending(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
   const scope = currentAdmission.getStore();
-  if (!scope?.active || !scope.owner.pendingReceipts?.get(database)) {
+  if (!scope?.active || !scope.owner.pendingReceipts?.get(sqlPublicationAnchor(database))) {
     throw new SqliteWorkerError(
       "SQLite source fence requires a destination commit receipt",
       "closed",

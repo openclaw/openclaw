@@ -9,7 +9,12 @@ title: "Panels and docks"
 sidebarTitle: "Panels and docks"
 ---
 
-Surfaces that dock beside the current page instead of replacing it.
+Surfaces that dock beside the current page instead of replacing it. In mobile
+chat, the rightmost **Panels** button groups **Details**, files, and the available
+tools. A selected tool fills the conversation area instead of sharing a cramped
+split; widening the window restores the saved desktop layout. **Details** opens
+a full-width overlay above the composer. Desktop keeps the **Layout** menu and
+separate **Details** control.
 
 ## OpenClaw system care
 
@@ -90,7 +95,7 @@ A connected **Desktop** viewer stays connected for 30 seconds while its tab is h
 
 When you open a chat, the panel automatically reveals an available desktop assigned to that exact session and the browser tab from its latest successful browser-tool result, when that tab is still running. Discovery only reads existing resources: it never starts a browser, provisions a desktop, or attaches an unrelated global or child-session resource. Session and inventory events, plus new browser results, refresh discovery while the chat is visible. Resources without explicit session metadata remain available through the manual panel controls.
 
-Automatic reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered tabs stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. Narrow screens use the same bottom-docked layout as manually opened panels. Minimizing the panel or closing a Browser or Desktop tab disables further automatic reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
+Automatic reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered tabs stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. Mobile chat shows these panels full-width, just like manually opened panels; other narrow panes retain their bottom-docked layout. Minimizing the panel or closing a Browser or Desktop tab disables further automatic reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
 
 Owner-authorized, unsandboxed agents can use the `terminal` tool to list, read, resize, or close terminals an operator already opened from the same Chat session's Terminal panel. Agents cannot open shells, and access remains exact-session scoped: an agent cannot inspect or control standalone operator terminals or terminals belonging to another session. Terminal input follows the effective session and host-exec permission policy: **Full access** (`full`, or YOLO) sends it immediately; **Guarded** (`guarded`) and **Workspace** (`workspace`, including accept-only or Guardian-reviewed flows) require an explicit, one-time approval for that exact input; **Read only** (`read-only`) or `tools.exec.mode: "deny"` forbids input entirely. Approving one input never grants unrestricted access to the terminal.
 

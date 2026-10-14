@@ -279,6 +279,156 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-accessor.sqlite-replacement-read.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readSessionEntryReplacementLabelOwnerKeys"],
+        evidence:
+          "Label keys are read by the replacement snapshot helper in session-entry-read.worker.ts or the native replacement branch, and rechecked by replacement-state commit. The latter serves execution-worker commit or native replacement under worker/maintenance custody after the memory/worker split.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-replacement-projection.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["applySqliteSessionEntryReplacementProjection.commit"],
+        evidence:
+          "Replacement returns memory state first. The commit callback reaches this transaction only when useWorker is false: creation always uses the worker, and ordinary main-thread durable replacement uses execution-worker commit. Native execution requires off-thread or schema/agent-maintenance custody; live deletion cleanup supplies workerAuthority.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-reclamation.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["reclaimSqliteRowsInTransaction"],
+        evidence:
+          "The private row kernel is called only by reclaimSqliteSessionInTransaction. Its entrants are the archive mutation-worker runtime, session-native-binding.worker.ts and reclamation-run.ts, whose native branch requires off-thread or schema/agent-maintenance ownership; ordinary main-thread callers use worker dispatch.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-raw-delta-read.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readRawDeltaInTransaction"],
+        evidence:
+          "The database wrapper is called by session-history-read-operation.worker.ts and the execution-worker rawDelta operation. The projection wrapper is called only by history-query within the transcript worker reader lifetime. The unused native facade has only internal reexports; SDK delta readers use the async reader owner.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-projection.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["applySessionEntryLifecycleMutation.commitProjectedLifecycleMutation"],
+        evidence:
+          "Lifecycle mutation returns memory state first and dispatches ordinary main-thread durable planning/commit to workers. This private native commit is called only after that split: off thread, schema/agent-maintenance custody, or allowCanonicalRepair set only by doctor-session-canonical-keys.ts. Live deletion cleanup supplies workerAuthority and retains dispatch.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-history-source.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readSessionTranscriptSourcePageFromProjection"],
+        evidence:
+          "Only session-transcript-read-kernel.ts calls this source projection. Its reader is constructed only in session-history-readonly-reader.ts, whose sole production constructor is gateway/session-history-worker-reader.ts under session-transcript.worker.ts.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-history-query.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readTranscriptDisplayDeltaFromProjection"],
+        evidence:
+          "Projection callers are the readonly history reader and transcript-read-kernel selection reader. The latter is constructed only by the former, whose sole production constructor is gateway/session-history-worker-reader.ts inside session-transcript.worker.ts.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-history-input-visibility.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readSessionTranscriptRunInputVisibilityFromProjection"],
+        evidence:
+          "Only the readonly history reader calls this projection. Its sole production constructor is gateway/session-history-worker-reader.ts, invoked by session-transcript.worker.ts; callbacks remain inside that worker-owned reader lifetime.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-entry-store.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "deleteSessionEntryRows",
+          "deleteLegacySessionEntryRows",
+          "rehomeSessionWindows",
+        ],
+        evidence:
+          "Entry deletion is reached by worker/maintenance lifecycle, reclamation, purge and finalization kernels, or cleanup-utils.ts offline reset. Legacy deletion and window rehome also serve replacement-state and Doctor legacy repair. Lifecycle/replacement dispatch durable main-thread work to workers after memory exits; legacy mutation requires doctor-fix, while startup, onboarding and agent creation use detect.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-entry-inventory.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readSessionEntryCount"],
+        evidence:
+          "Count callers are projection-state lifecycle commit and maintenance-store preparation, captured apply and fast-path read. Lifecycle native commits require maintenance custody; preparation/apply stays in the execution worker or its reclamation/native-maintenance branch. The fast-path reader is called only by worker maintenance reads.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-entry-clear.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["clearSqliteSessionEntryPreservingWindows"],
+        evidence:
+          "Only deleteSessionEntryRows calls this clearer. Its callers are the worker/maintenance lifecycle projection, reclamation, agent-purge and maintenance-finalization kernels, plus resetSessionStore from cleanup-utils.ts offline reset.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-creation.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["createSessionEntryWithTranscriptInScope.initialize"],
+        evidence:
+          "The creation entry returns memory state first. Ordinary main-thread durable creation retains the history worker and initializes there; this native initialize transaction runs only off thread or under schema/agent-maintenance custody. The only main-thread deletion-cleanup producer supplies workerAuthority, so it retains worker dispatch. Worker errors do not select this native branch.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-active-events.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "everySessionTranscriptUserInputFrom.read",
+          "readSessionTranscriptVisibleMessageDeltaCore",
+        ],
+        evidence:
+          "Harness completion reaches the predicate only through session-history-read-operation.worker.ts or openclaw-agent-execution.worker.ts -> session-actor.worker.ts -> session-actor-phase.worker.ts. Visible delta has only session-history-read-operation.worker.ts and the registered execution-worker visibleDelta operation as callers; the accessor reexport adds no native value caller.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-pending-input-source.kernel.ts",
     [
       {
@@ -359,7 +509,13 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["assignSessionOwner"],
         evidence:
-          "Only session-sharing-store.worker.ts executes assignSessionOwner under owner.assign; session-metadata-write.async.ts dispatches through runSessionCollaborationWrite. The accessor reexport serves fixtures. replaceSessionOwnerInTransaction retains native creation, replacement, migration, and Doctor callers.",
+          "Only session-sharing-store.worker.ts executes assignSessionOwner under owner.assign; session-metadata-write.async.ts dispatches through runSessionCollaborationWrite. The accessor reexport serves fixtures. Owner replacement has a separate worker/maintenance classification.",
+      },
+      {
+        tier: "T3",
+        operations: ["replaceSessionOwnerInTransaction"],
+        evidence:
+          "Owner replacement serves worker/maintenance lifecycle and replacement commits, Doctor canonical/legacy repair, the offline team-shape-sessions fixture CLI, and assignSessionOwner. Only session-sharing-store.worker.ts calls assignSessionOwner in production; its accessor reexport adds no native SDK caller.",
       },
     ],
   ],
@@ -383,6 +539,12 @@ const reviewedOperations = new Map([
         evidence:
           "Only openclaw-agent-execution-operations.ts handles session.maintenance.size and session-accessor.sqlite-archive.worker.ts handles maintenance-size with this reader. Other maintenance preparation operations remain mixed.",
       },
+      {
+        tier: "T3",
+        operations: ["prepareSessionEntryMaintenanceInDatabase.readInputs"],
+        evidence:
+          "Preparation is called only by maintenance-transaction worker prepare/read and inline maintenance. The captured apply remains in the execution-worker maintenance owner or runs immediately in inline lifecycle/replacement/purge/reclamation commits; their native branches require maintenance custody. Both readInputs calls therefore retain the same worker/maintenance ownership.",
+      },
     ],
   ],
   [
@@ -392,7 +554,13 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["collectRecentSessionHistoryIds"],
         evidence:
-          "Only readHistoricalSessionIdsInDatabase calls this collector, through session-transcript.worker.ts or native reclamation with reclamationMode=in-process. Production selectors of native mode are commands/sessions-cleanup.runtime.ts; the separate synchronous recency probe remains mixed.",
+          "Only readHistoricalSessionIdsInDatabase calls this collector, through session-transcript.worker.ts or native reclamation with reclamationMode=in-process. Production selectors of native mode are commands/sessions-cleanup.runtime.ts; the recency probe has its own reviewed reclamation/archive-worker classification.",
+      },
+      {
+        tier: "T3",
+        operations: ["isRecentHistoricalSessionId"],
+        evidence:
+          "Only reclamation.ts and archive.worker.ts materialization call this probe. Reclamation native execution requires an off-thread or schema/agent-maintenance owner; ordinary durable callers dispatch to workers. Archive materialization is called by its same-module batch under the materialize worker message.",
       },
     ],
   ],
@@ -683,7 +851,13 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["assertRawSessionEntryRemovalUnchanged"],
         evidence:
-          "Doctor-only raw-row removal: commands/doctor-session-canonical-keys.ts constructs expectedRawEntryJson; lifecycle-state.ts and projection-state.ts call this guard only for that removal variant. Ordinary lifecycle reads and writes remain T1.",
+          "Doctor-only raw-row removal: commands/doctor-session-canonical-keys.ts constructs expectedRawEntryJson; lifecycle-state.ts and projection-state.ts call this guard only for that removal variant. Other lifecycle operations retain their separate classifications.",
+      },
+      {
+        tier: "T3",
+        operations: ["readSessionGenerationIdsForKeys", "deleteSqliteSessionStateRows"],
+        evidence:
+          "Generation reads serve lifecycle planning, deletion planning, maintenance apply and Doctor canonical-repair aliases. Lifecycle/reclamation/purge native branches require worker or maintenance custody; deletion planning with expectedDatabaseIdentity is produced only by Doctor legacy repair. Physical deletion is private to materialized-state deletion, called by the same lifecycle/reclamation/purge kernels and worker or reclamation maintenance finalization.",
       },
     ],
   ],
@@ -757,7 +931,13 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readSessionMaintenanceInWorker"],
         evidence:
-          "Only session-transcript.worker.ts:276 and openclaw-agent-execution-maintenance.ts:61 call this read-only planner; the latter owner is constructed only in openclaw-agent-execution.worker.ts:372. Shared native maintenance transactions remain T1.",
+          "Only session-transcript.worker.ts:276 and openclaw-agent-execution-maintenance.ts:61 call this read-only planner; the latter owner is constructed only in openclaw-agent-execution.worker.ts:372. Metadata transactions have separate reviewed worker/maintenance ownership.",
+      },
+      {
+        tier: "T3",
+        operations: ["runSessionMaintenanceMetadataInTransaction"],
+        evidence:
+          "Only openclaw-agent-execution-maintenance.ts and runSessionMaintenanceMetadataInDatabase call this transaction. The former is registered solely in the execution worker; the latter is called only by the reclamation kernel, whose native branch requires an off-thread or schema/agent-maintenance owner.",
       },
     ],
   ],
@@ -1601,6 +1781,16 @@ const reviewedOperations = new Map([
         evidence:
           "Member cleanup is Doctor canonical repair. Full readClaim is Doctor-only; deletion-plan fingerprint reads require expectedNodeArtifactFingerprint, supplied only by Doctor deleteExpectedClaim. Worker detection omits artifact custody; other native artifact kernels remain separately classified",
       },
+      {
+        tier: "T3",
+        operations: [
+          "copySessionNodeArtifactsForRepair",
+          "deleteSessionDeliveryArtifacts",
+          "deleteSessionNodeArtifacts",
+        ],
+        evidence:
+          "Copy callers are entry-store legacy alias rehome, Doctor canonical-key repair, Doctor-only canonical-repair aliases and legacy migration guarded by doctor-fix. Alias rehome uses worker/maintenance lifecycle or replacement commits. Node deletion is called only by entry deletion; delivery deletion additionally serves reclamation. These deletion roots are worker/maintenance kernels or cleanup-utils.ts offline reset.",
+      },
     ],
   ],
   [
@@ -1612,6 +1802,12 @@ const reviewedOperations = new Map([
         binding: "existing",
         evidence:
           "node-artifacts.ts:151 is shared, but entry-store.ts:372 runtime alias moves pass the same database and return at pending-inputs-repair.ts:130. The existing initializer is cross-database Doctor repair only, via canonical-repair.ts:514,521 and legacy-main-session-migration-operations.ts:343.",
+      },
+      {
+        tier: "T3",
+        operations: ["copySessionPendingInputsForRepair", "copySessionInputCompletionsForRepair"],
+        evidence:
+          "Both copy helpers are called only by copySessionNodeArtifactsForRepair: worker/maintenance alias rehome, Doctor canonical repair and legacy migration guarded by doctor-fix. The cross-database completion lookup retains its narrower Doctor-only classification.",
       },
     ],
   ],

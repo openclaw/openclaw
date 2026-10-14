@@ -430,6 +430,19 @@ describe("session cost usage refresh", () => {
             sessions: [{ sessionFile }],
             requestRefresh: false,
           });
+          let settled = false;
+          void reading.then(
+            () => {
+              settled = true;
+            },
+            () => {
+              settled = true;
+            },
+          );
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 150);
+          });
+          expect(settled).toBe(false);
           releaseFirstBatch.resolve("refreshed");
           const result = await withinTest(reading, signal);
           expect(result.summaries[0]).toMatchObject({
@@ -445,6 +458,70 @@ describe("session cost usage refresh", () => {
           releaseBulk.resolve("refreshed");
           await Promise.allSettled([reading, scope.drain()]);
           vi.mocked(refreshCostUsageCacheForAgent).mockReset();
+        }
+      });
+    },
+  );
+
+  it.each(["completes", "slow", "cancelled"] as const)(
+    "bounds publication waiting when the request is %s without adopting background work",
+    async (phase) => {
+      await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+        const refreshOwner = new AsyncWorkScope();
+        const requestOwner = new AsyncWorkScope();
+        const release = createDeferredCore<"refreshed">();
+        const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockReturnValue(release.promise);
+        const reason = new Error("usage client disconnected");
+        refreshOwner.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+        const reading = requestOwner.track(() =>
+          loadSessionCostSummariesFromCache({
+            config,
+            agentId,
+            sessions: [{ sessionFile: sessionFiles[0] }],
+            requestRefresh: false,
+            maxPublicationWaitMs: 100,
+          }),
+        );
+        // Observe rejection immediately; scope cancellation must not become an
+        // unhandled rejection while the fake clock advances other work.
+        const result = Promise.allSettled([reading]);
+        try {
+          await vi.advanceTimersByTimeAsync(0);
+          expect(refresh).toHaveBeenCalledOnce();
+          if (phase === "completes") {
+            release.resolve("refreshed");
+          } else if (phase === "cancelled") {
+            requestOwner.beginClose(reason);
+          } else {
+            await vi.advanceTimersByTimeAsync(100);
+          }
+          const [outcome] = await result;
+          if (phase === "cancelled") {
+            expect(outcome).toMatchObject({ status: "rejected", reason });
+          } else {
+            expect(outcome).toMatchObject({
+              status: "fulfilled",
+              value: { summaries: [null], cacheStatus: { status: "stale" } },
+            });
+          }
+          if (phase !== "completes") {
+            expect(refreshOwner.hasPendingWork).toBe(true);
+            expect(refreshOwner.signal.aborted).toBe(false);
+          }
+          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+        } finally {
+          release.resolve("refreshed");
+          await result;
+          await refreshOwner.drain();
+          await requestOwner.drain();
         }
       });
     },

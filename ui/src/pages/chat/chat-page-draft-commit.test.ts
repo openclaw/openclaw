@@ -5,7 +5,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 
 // mock-isolation: the real ChatPage owns routing; a deferred Lit child isolates its commit boundary from Gateway bootstrap.
-vi.mock("./chat-pane.ts", () => ({}));
+vi.mock("./chat-pane.tsx", async () => {
+  const { mockChatPagePane } = await import("./chat-page-pane.test-support.ts");
+  return { ChatPaneView: mockChatPagePane };
+});
 
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";

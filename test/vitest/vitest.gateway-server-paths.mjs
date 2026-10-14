@@ -260,6 +260,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-projection.accepted-facts.test.ts",
   "src/gateway/session-row-projection.actor.test.ts",
   "src/gateway/session-row-projection.archived.test.ts",
+  "src/gateway/session-row-projection.backfill.test.ts",
   "src/gateway/session-row-projection.entry-placement.test.ts",
   "src/gateway/session-row-projection.foreground.test.ts",
   "src/gateway/session-row-projection.invalidation.test.ts",

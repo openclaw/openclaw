@@ -127,6 +127,7 @@ it.each(["before handoff", "after handoff"] as const)(
       () => context.admission.assertCurrent(),
       undefined,
       () => {},
+      () => {},
     );
     let validation: ReturnType<typeof getOpenClawAgentDatabaseValidationForTransfer>;
     const publish = () => {

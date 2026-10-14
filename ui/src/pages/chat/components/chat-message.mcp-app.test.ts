@@ -5,7 +5,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import {
   createAssistantCanvasBlock,
   createAssistantMessage,

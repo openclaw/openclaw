@@ -101,6 +101,51 @@ describe("sidebar layout", () => {
     }
   });
 
+  it("presents every open mobile panel full-width without changing the saved desktop layout", () => {
+    for (const slot of [
+      "workspace",
+      "terminal",
+      "browser",
+      "dashboard",
+      "subagents",
+      "processes",
+    ] as const) {
+      const saved = openSlot(ensureSidebarConversation({ columns: [] }), slot);
+      const before = structuredClone(saved);
+      const shown = presentNarrowSidebarLayout(saved, { allPanels: true });
+      expect(isSidebarSlotVisible(shown, slot)).toBe(true);
+      expect(isSidebarSlotVisible(shown, "conversation")).toBe(false);
+      expect(presentNarrowSidebarLayout(saved, { allPanels: true })).toBe(shown);
+      expect(saved).toEqual(before);
+      expect(isSidebarSlotVisible(saved, "conversation")).toBe(true);
+      const closed = setSidebarOpen(saved, false);
+      expect(presentNarrowSidebarLayout(closed, { allPanels: true })).toBe(closed);
+    }
+  });
+
+  it("keeps a promoted main view visible when restoring a mobile split", () => {
+    const split = ensureSidebarConversation(openSlot({ columns: [] }, "dashboard"));
+    const promoted = promoteSidebarPanel(split, sidebarActivePanel(split)!.id);
+    expect(sidebarMainPanel(promoted)?.slot).toBe("dashboard");
+    expect(presentNarrowSidebarLayout(promoted, { allPanels: true })).toBe(promoted);
+    expect(isSidebarSlotVisible(promoted, "dashboard")).toBe(true);
+    expect(isSidebarSlotVisible(promoted, "conversation")).toBe(true);
+  });
+
+  it("presents newly selected mobile tools over a promoted main view without changing it", () => {
+    const split = ensureSidebarConversation(openSlot({ columns: [] }, "dashboard"));
+    const promoted = promoteSidebarPanel(split, sidebarActivePanel(split)!.id);
+    for (const slot of ["workspace", "terminal"] as const) {
+      const saved = openSlot(promoted, slot);
+      const before = structuredClone(saved);
+      const shown = presentNarrowSidebarLayout(saved, { allPanels: true });
+      expect(isSidebarSlotVisible(shown, slot)).toBe(true);
+      expect(isSidebarSlotVisible(shown, "dashboard")).toBe(false);
+      expect(sidebarMainPanel(shown)?.slot).toBe("dashboard");
+      expect(saved).toEqual(before);
+    }
+  });
+
   it("opens every slot as a tab in one right-side column", () => {
     const layout = openAll();
     expect(layout.columns).toHaveLength(1);
