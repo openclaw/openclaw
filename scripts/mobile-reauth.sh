@@ -16,7 +16,7 @@ echo "=== Claude Code Mobile Re-Auth ==="
 echo ""
 
 echo "Checking auth status..."
-AUTH_STATUS=$("$SCRIPT_DIR/claude-auth-status.sh" simple 2>/dev/null || echo "ERROR")
+AUTH_STATUS=$("$SCRIPT_DIR/claude-auth-status.sh" simple 2>/dev/null || true)
 
 case "$AUTH_STATUS" in
     OK)
@@ -27,6 +27,10 @@ case "$AUTH_STATUS" in
     CLAUDE_EXPIRING|OPENCLAW_EXPIRING)
         echo -e "${YELLOW}Auth is expiring soon.${NC}"
         echo ""
+        ;;
+    UNKNOWN)
+        echo -e "${YELLOW}Auth status is unavailable; no re-authentication requested.${NC}"
+        exit 3
         ;;
     *)
         echo -e "${RED}Auth needs refresh.${NC}"

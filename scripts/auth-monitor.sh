@@ -1,19 +1,18 @@
 #!/bin/bash
-# Auth Expiry Monitor
-# Run via cron or systemd timer to get proactive notifications
-# before Claude Code auth expires.
+# Auth Monitor
+# Run via cron or systemd timer to get native login alerts and
+# proactive notifications before OpenClaw-managed credentials expire.
 #
 # Suggested cron: */30 * * * * /path/to/openclaw/scripts/auth-monitor.sh
 #
 # Environment variables:
 #   NOTIFY_PHONE - Phone number to send OpenClaw notification (e.g., +1234567890)
 #   NOTIFY_NTFY  - ntfy.sh topic for push notifications (e.g., openclaw-alerts)
-#   WARN_HOURS   - Hours before expiry to warn (default: 2)
+#   WARN_HOURS   - Hours before managed credential expiry to warn (default: 2)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLAUDE_CREDS="$HOME/.claude/.credentials.json"
 STATE_FILE="$HOME/.openclaw/auth-monitor-state"
 
 WARN_HOURS="${WARN_HOURS:-2}"
@@ -72,24 +71,43 @@ send_notification() {
     fi
 }
 
-if [ ! -f "$CLAUDE_CREDS" ]; then
-    send_notification "Claude Code credentials missing! Run: claude setup-token" "high"
+STATUS_JSON=$("$SCRIPT_DIR/claude-auth-status.sh" json) || {
+    echo "Auth status unavailable; not requesting re-authentication." >&2
+    exit 3
+}
+CLAUDE_STATUS=$(printf '%s\n' "$STATUS_JSON" | jq -r '.claude_code.status')
+OPENCLAW_STATUS=$(printf '%s\n' "$STATUS_JSON" | jq -r '.openclaw.status')
+
+if [ "$CLAUDE_STATUS" = "MISSING" ]; then
+    MESSAGE=$(printf '%s\n' "$STATUS_JSON" | jq -r '.claude_code.message // "Claude Code login missing. Run: claude auth login"')
+    send_notification "$MESSAGE" "high"
     exit 1
 fi
 
-EXPIRES_AT=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS")
-NOW_MS=$((NOW * 1000))
-DIFF_MS=$((EXPIRES_AT - NOW_MS))
-HOURS_LEFT=$((DIFF_MS / 3600000))
-MINS_LEFT=$(((DIFF_MS % 3600000) / 60000))
+case "$OPENCLAW_STATUS" in
+    MISSING*|EXPIRED*)
+        send_notification "OpenClaw-managed auth missing or expired. Run: openclaw models auth login --provider anthropic" "urgent"
+        exit 1
+        ;;
+    UNKNOWN)
+        echo "Auth status unavailable; not requesting re-authentication." >&2
+        exit 3
+        ;;
+esac
 
-if [ "$DIFF_MS" -lt 0 ]; then
-    send_notification "Claude Code auth EXPIRED! OpenClaw is down. Run on the OpenClaw host: ${SCRIPT_DIR}/mobile-reauth.sh" "urgent"
-    exit 1
-elif [ "$HOURS_LEFT" -lt "$WARN_HOURS" ]; then
-    send_notification "Claude Code auth expires in ${HOURS_LEFT}h ${MINS_LEFT}m. Consider re-auth soon." "high"
-    exit 0
-else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Auth OK: ${HOURS_LEFT}h ${MINS_LEFT}m remaining"
-    exit 0
+EXPIRES_AT=$(printf '%s\n' "$STATUS_JSON" | jq -r '.openclaw.expires_at_ms')
+if [ "$EXPIRES_AT" -gt 0 ]; then
+    DIFF_MS=$((EXPIRES_AT - NOW * 1000))
+    HOURS_LEFT=$((DIFF_MS / 3600000))
+    MINS_LEFT=$(((DIFF_MS % 3600000) / 60000))
+
+    if [ "$DIFF_MS" -le 0 ]; then
+        send_notification "OpenClaw-managed auth expired. Run: openclaw models auth login --provider anthropic" "urgent"
+        exit 1
+    elif [ "$DIFF_MS" -lt $((WARN_HOURS * 3600000)) ]; then
+        send_notification "OpenClaw-managed auth expires in ${HOURS_LEFT}h ${MINS_LEFT}m. Consider re-auth soon." "high"
+        exit 0
+    fi
 fi
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Auth OK (Claude Code: $CLAUDE_STATUS; OpenClaw: $OPENCLAW_STATUS)"

@@ -24,6 +24,9 @@ case "$STATUS" in
         sleep 2
         termux-notification -t "OpenClaw Re-Auth" -c "After getting key, run: ssh $SERVER '~/openclaw/scripts/mobile-reauth.sh'" --id openclaw-auth
         ;;
+    UNKNOWN)
+        termux-toast "Auth status unavailable - try again later"
+        ;;
     *)
         termux-toast "Connection error"
         ;;

@@ -16,13 +16,13 @@ title: "Scripts"
 
 ## Auth monitoring scripts
 
-General model auth is covered in [Authentication](/gateway/authentication). The scripts below are a separate, optional system. They monitor a **Claude Code CLI subscription token** on a remote/headless host. They also let you re-authenticate from a phone:
+General model auth is covered in [Authentication](/gateway/authentication). The scripts below are a separate, optional system. They consume `openclaw models status --json` through the status helper to monitor Claude CLI login readiness and OpenClaw-managed authentication on a remote/headless host. They do not read Claude CLI credentials or monitor native token expiry; the Claude process owns refresh.
 
 - `scripts/setup-auth-system.sh` - one-time setup: checks current auth, helps generate a long-lived `claude setup-token`, and prints systemd/Termux install steps.
-- `scripts/claude-auth-status.sh [full|json|simple]` - checks Claude Code + OpenClaw auth status.
-- `scripts/auth-monitor.sh` - polls status and sends a notification (via `openclaw message send`, and/or ntfy.sh) when the token nears expiry, including its final hour while authentication remains usable. Env: `WARN_HOURS` (default `2`), `NOTIFY_PHONE`, `NOTIFY_NTFY`. Run on a schedule via the bundled `scripts/systemd/openclaw-auth-monitor.{service,timer}` (every 30 minutes).
+- `scripts/claude-auth-status.sh [full|json|simple]` - reports native Claude CLI readiness and OpenClaw-managed auth status. Configured or unknown native readiness is not an expired login. If status cannot be fetched, simple mode returns `UNKNOWN` with exit code `3`, without requesting login.
+- `scripts/auth-monitor.sh` - sends a notification (via `openclaw message send`, and/or ntfy.sh) for a definitely missing native login, using the runtime owner's recovery message, or missing/expired OpenClaw-managed credentials. It also warns before managed credentials expire, including their final hour while authentication remains usable. Native configured/unknown readiness never triggers an expiry alert. Env: `WARN_HOURS` (default `2`, managed credentials only), `NOTIFY_PHONE`, `NOTIFY_NTFY`. Failed delivery does not start the one-hour cooldown. Run on a schedule via the bundled `scripts/systemd/openclaw-auth-monitor.{service,timer}` (every 30 minutes).
 - `scripts/mobile-reauth.sh` - re-runs `claude setup-token` and prints URLs to open on a phone, for use over SSH from Termux.
-- `scripts/termux-quick-auth.sh`, `scripts/termux-auth-widget.sh` - Termux:Widget scripts. They SSH to the host and show a status toast. They open the re-auth console/instructions when auth has expired.
+- `scripts/termux-quick-auth.sh`, `scripts/termux-auth-widget.sh` - Termux:Widget scripts. They SSH to the host and show a status toast. They open the re-auth console/instructions when auth has expired; `UNKNOWN` only shows an unavailable-status message. `scripts/mobile-reauth.sh` also stops without requesting login when status is unavailable.
 
 To use a Claude CLI login with OpenClaw, follow [Claude CLI reuse](/gateway/authentication#anthropic-claude-cli-reuse). The Claude process owns its login credentials.
 
