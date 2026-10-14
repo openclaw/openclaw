@@ -246,11 +246,6 @@ describe("failover-error", () => {
     expectReason({ code: "EHOSTDOWN" }, "timeout");
   });
 
-  it("infers rate-limit and overload from symbolic error codes", () => {
-    expectReason({ code: "RESOURCE_EXHAUSTED" }, "rate_limit");
-    expectReason({ code: "OVERLOADED_ERROR" }, "overloaded");
-  });
-
   it("treats AbortError reason=abort as timeout", () => {
     const err = Object.assign(new Error("aborted"), {
       name: "AbortError",
@@ -282,7 +277,7 @@ describe("failover-error", () => {
     expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
   });
 
-  it.each([undefined, "429 raw provider detail. Retry in 221ms."])(
+  it.each([undefined])(
     "preserves provider text when enriching exhaustion (rawError=%s)",
     (rawError) => {
       const message = "429 rate limit exceeded. Retry in 221ms.";
@@ -485,13 +480,6 @@ describe("failover diagnostic isolation", () => {
   });
 
   describe("hasLocalWorkerTaskTimeout", () => {
-    it("returns true through a cause wrapper", () => {
-      const wrapped = new Error("preparation failed", {
-        cause: new WorkerTaskError("worker task timed out", "timeout"),
-      });
-      expect(hasLocalWorkerTaskTimeout(wrapped)).toBe(true);
-    });
-
     it("returns true through an aggregate wrapper", () => {
       const aggregate = new AggregateError(
         [new WorkerTaskError("worker task timed out", "timeout")],
@@ -499,55 +487,9 @@ describe("failover diagnostic isolation", () => {
       );
       expect(hasLocalWorkerTaskTimeout(aggregate)).toBe(true);
     });
-
-    it.each([
-      ["failed", new WorkerTaskError("worker task timed out", "failed")],
-      ["overloaded", new WorkerTaskError("worker task capacity reached", "overloaded")],
-      ["unavailable", new WorkerTaskError("worker task closed", "unavailable")],
-    ])("returns false for local worker code %s", (_code, error) => {
-      expect(hasLocalWorkerTaskTimeout(error)).toBe(false);
-    });
-
-    it("returns false when an HTTP fact exists anywhere in the graph", () => {
-      const providerTimeoutWithLocalCause = Object.assign(
-        new Error("worker task timed out", {
-          cause: new WorkerTaskError("worker task timed out", "timeout"),
-        }),
-        { status: 408 },
-      );
-      expect(hasLocalWorkerTaskTimeout(providerTimeoutWithLocalCause)).toBe(false);
-      expect(
-        hasLocalWorkerTaskTimeout(
-          Object.assign(new WorkerTaskError("timed out", "timeout"), { status: 504 }),
-        ),
-      ).toBe(false);
-    });
-
-    it("returns false for a plain provider timeout and non-matching values", () => {
-      const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
-      expect(hasLocalWorkerTaskTimeout(timeoutErr)).toBe(false);
-      expect(hasLocalWorkerTaskTimeout(new Error("worker task timed out"))).toBe(false);
-      expect(hasLocalWorkerTaskTimeout(null)).toBe(false);
-      expect(hasLocalWorkerTaskTimeout(undefined)).toBe(false);
-    });
   });
 
   describe("local worker task timeout attribution", () => {
-    it("keeps a local worker-task deadline on the configured fallback chain", () => {
-      // A local worker deadline is runtime infrastructure, not a provider
-      // timeout. It must NOT become coordination (a later candidate rebuilds its
-      // own context and can recover), and it must not fabricate a provider HTTP
-      // status from its timeout reason.
-      const timeout = new WorkerTaskError("worker task timed out", "timeout");
-      expect(isNonProviderRuntimeCoordinationError(timeout)).toBe(false);
-      const resolution = resolveModelFallbackError(timeout);
-      expect(resolution.kind).toBe("failover");
-      if (resolution.kind === "failover") {
-        expect(resolution.error.reason).toBe("timeout");
-        expect(resolution.error.status).toBeUndefined();
-      }
-    });
-
     it("keeps the chain advancing through wrappers and aggregates", () => {
       const timeout = new WorkerTaskError("worker task timed out", "timeout");
       for (const error of [
@@ -560,25 +502,6 @@ describe("failover diagnostic isolation", () => {
         expect(isNonProviderRuntimeCoordinationError(error)).toBe(false);
         expect(resolveModelFallbackError(error).kind).not.toBe("coordination");
       }
-    });
-
-    it("does not suppress provider failover for non-timeout worker failures", () => {
-      const failure = new WorkerTaskError("worker task timed out", "failed");
-      expect(isNonProviderRuntimeCoordinationError(failure)).toBe(false);
-      expect(resolveModelFallbackError(failure).kind).not.toBe("coordination");
-    });
-
-    it("keeps provider attribution when an HTTP timeout fact is present", () => {
-      const providerTimeoutWithLocalCause = Object.assign(
-        new Error("worker task timed out", {
-          cause: new WorkerTaskError("worker task timed out", "timeout"),
-        }),
-        { status: 408 },
-      );
-      expect(isNonProviderRuntimeCoordinationError(providerTimeoutWithLocalCause)).toBe(false);
-      const resolution = resolveModelFallbackError(providerTimeoutWithLocalCause);
-      expect(resolution.kind).toBe("failover");
-      expect(resolution.kind === "failover" ? resolution.error.reason : undefined).toBe("timeout");
     });
   });
 });

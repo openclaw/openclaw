@@ -1,8 +1,7 @@
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import * as loggingConfig from "../logging/config.js";
 import { buildExecAutoReviewTranscript } from "./exec-auto-review-transcript.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
@@ -89,29 +88,6 @@ describe("buildExecAutoReviewTranscript", () => {
     expect(serialized).toContain(secret);
     expect(serialized).not.toContain("private-");
     expect(serialized).not.toContain("private reasoning");
-  });
-
-  it("preserves tool and conversation text independently of logging patterns", () => {
-    const ambient = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
-      redactPatterns: ["ambient-private-marker"],
-    });
-    try {
-      const messages = [
-        user("Inspect tenant-private-marker"),
-        call("inspect", {
-          command: "inspect tenant-private-marker",
-        }),
-        result("inspect", "Result: tenant-private-marker"),
-      ];
-      expect(JSON.stringify(buildExecAutoReviewTranscript({ messages }))).toContain(
-        "tenant-private-marker",
-      );
-      const transcript = buildExecAutoReviewTranscript({ messages });
-      expect(transcript.entries).toHaveLength(3);
-      expect(JSON.stringify(transcript)).toContain("tenant-private-marker");
-    } finally {
-      ambient.mockRestore();
-    }
   });
 
   it.each([

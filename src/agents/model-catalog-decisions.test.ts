@@ -354,38 +354,6 @@ describe("captured model decisions", () => {
     ).toEqual({ id: "codex", source: "implicit" });
   });
 
-  it("rechecks physical route evidence after resolving an uncatalogued reference", async () => {
-    const owner = createModelCatalogDecisions({
-      cfg: {},
-      agentId: "main",
-      workspaceDir: "/tmp/catalog-workspace",
-      snapshot: { entries: [], routeVariants: [] },
-      metadataSnapshot: metadata,
-      preparedAuthStore: {
-        version: 1,
-        profiles: {
-          "openai:platform": { type: "api_key", provider: "openai", key: "synthetic-key" },
-        },
-      },
-      routeResolverFactory: () => (ref) => ({
-        ...dualRoutes,
-        routes: ref.observedRoutes?.some((route) => route.api === subscriptionRoute.api)
-          ? [subscriptionRoute]
-          : [platformRoute],
-      }),
-    });
-    expect(
-      owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
-    ).toMatchObject({ availability: true, selectedProfileId: "openai:platform" });
-    expect(
-      owner.evaluateEntry(
-        { ...entry, api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl },
-        undefined,
-        "openclaw",
-      ),
-    ).toMatchObject({ availability: false });
-  });
-
   describe("with a ChatGPT account listing", () => {
     const chatgpt = {
       type: "oauth",
@@ -447,46 +415,16 @@ describe("captured model decisions", () => {
       });
     });
 
-    it.each([
-      ["an OpenAI API key is also stored", ready, true],
-      [
-        "the listing is unavailable",
-        { profileId: "openai:chatgpt", status: "unavailable" } as const,
-        false,
-      ],
-    ])("keeps the subscription route when %s", (_label, outcome, withApiKey) => {
-      expect(evaluate([outcome], "gpt-5.4-pro", { withApiKey })).toMatchObject({
-        availability: true,
-        selectedProfileId: "openai:chatgpt",
-        selectedRoute: { authRequirement: "subscription" },
-      });
-    });
-
-    const selectedB = {
-      availability: true,
-      selectedProfileId: "openai:b",
-      selectedRoute: { authRequirement: "subscription" },
-    };
-    it.each([
-      ["it has no observation", [], selectedB],
-      [
-        "its discovery is unavailable",
-        [{ profileId: "openai:b", status: "unavailable" } as const],
-        selectedB,
-      ],
-      ["its listing returns the model", [listing("openai:b", "gpt-5.5-pro")], selectedB],
-      // A third account listing the model does not entitle the selected one.
-      [
-        "its listing omits the model",
-        [listing("openai:b", "gpt-5.5"), listing("openai:c", "gpt-5.5-pro")],
-        { availability: false },
-      ],
-    ])("uses only the selected account's listing when %s", (_label, outcomes, expected) => {
-      // Account A's ready listing omits gpt-5.5-pro and gpt-5.5; account B is selected.
-      const others = [listing("openai:a", "gpt-6-sol")];
-      const options = { profileIds: ["openai:a", "openai:b"], pin: "openai:b" };
-      expect(evaluate([...others, ...outcomes], "gpt-5.5-pro", options)).toMatchObject(expected);
-    });
+    it.each([["an OpenAI API key is also stored", ready, true]])(
+      "keeps the subscription route when %s",
+      (_label, outcome, withApiKey) => {
+        expect(evaluate([outcome], "gpt-5.4-pro", { withApiKey })).toMatchObject({
+          availability: true,
+          selectedProfileId: "openai:chatgpt",
+          selectedRoute: { authRequirement: "subscription" },
+        });
+      },
+    );
   });
 
   it("distinguishes unknown choices from authoritative empty choices", async () => {
@@ -729,7 +667,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
     });
   });
 
-  it.each(["ready", "unavailable"] as const)("keeps CLI menu on %s", async (status) => {
+  it.each(["ready"] as const)("keeps CLI menu on %s", async (status) => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,

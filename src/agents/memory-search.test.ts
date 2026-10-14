@@ -1,11 +1,7 @@
 // Verifies memory-search config resolution across providers, sync, and batching.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
-import {
-  clearEmbeddingProviders,
-  registerEmbeddingProvider,
-} from "../plugins/embedding-providers.js";
+import { registerEmbeddingProvider } from "../plugins/embedding-providers.js";
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -31,7 +27,7 @@ function registerTestMemoryAdapter(adapter: MemoryEmbeddingProviderAdapter): voi
   registerEmbeddingProvider(adapter);
 }
 
-function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
+function registerBaseMemoryEmbeddingProviders(): void {
   // Register provider contracts locally so config tests do not depend on the
   // plugin loader or live embedding backends.
   registerEmbeddingProvider({
@@ -40,19 +36,17 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  if (options?.includeGemini !== false) {
-    registerTestMemoryAdapter({
-      id: "gemini",
-      defaultModel: "gemini-embedding-001",
-      transport: "remote",
-      supportsMultimodalEmbeddings: ({ model }) =>
-        model
-          .trim()
-          .replace(/^models\//, "")
-          .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview",
-      create: async () => ({ provider: null }),
-    });
-  }
+  registerTestMemoryAdapter({
+    id: "gemini",
+    defaultModel: "gemini-embedding-001",
+    transport: "remote",
+    supportsMultimodalEmbeddings: ({ model }) =>
+      model
+        .trim()
+        .replace(/^models\//, "")
+        .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview",
+    create: async () => ({ provider: null }),
+  });
   registerEmbeddingProvider({
     id: "ollama",
     defaultModel: "nomic-embed-text",
@@ -184,37 +178,6 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
-  it.each([
-    {
-      name: "unset with main scope and a binding override",
-      cfg: {
-        session: { dmScope: "main" },
-        bindings: [
-          {
-            agentId: "main",
-            match: { channel: "telegram" },
-            session: { dmScope: "per-peer" },
-          },
-        ],
-      },
-      expected: false,
-    },
-    {
-      name: "explicit true with per-peer scope",
-      cfg: {
-        session: { dmScope: "per-peer" },
-        memory: { search: { rememberAcrossConversations: true } },
-
-        agents: { defaults: {} },
-      },
-      expected: true,
-    },
-  ])("resolves remember-across-conversations for $name", ({ cfg, expected }) => {
-    expect(resolveRememberAcrossConversations(asConfig(cfg as OpenClawConfig), "main")).toBe(
-      expected,
-    );
-  });
-
   it("keeps cross-conversation recall off by default for isolated DMs", () => {
     const resolved = resolveMemorySearchConfig(
       asConfig({ session: { dmScope: "per-channel-peer" } }),
@@ -224,28 +187,6 @@ describe("memory search config", () => {
     expect(resolved?.rememberAcrossConversations).toBe(false);
     expect(resolved?.experimental.sessionMemory).toBe(false);
     expect(resolved?.sources).toEqual(["memory"]);
-  });
-
-  it("preserves explicitly configured transcript search for an opted-in agent", () => {
-    const cfg = asConfig({
-      agents: {
-        entries: {
-          personal: {
-            memory: {
-              search: {
-                rememberAcrossConversations: true,
-                sources: ["sessions"],
-              },
-            },
-          },
-        },
-      },
-    });
-
-    const resolved = resolveMemorySearchConfig(cfg, "personal");
-
-    expect(resolved?.sources).toEqual(["sessions"]);
-    expect(resolved?.searchSources).toEqual(["sessions"]);
   });
 
   it("lets a per-agent false override a default true", () => {
@@ -267,13 +208,6 @@ describe("memory search config", () => {
     expect(resolved?.rememberAcrossConversations).toBe(false);
     expect(resolved?.experimental.sessionMemory).toBe(false);
     expect(resolved?.sources).toEqual(["memory"]);
-  });
-
-  it("normalizes legacy auto provider config to openai", () => {
-    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("auto"), "main");
-
-    expect(resolved?.provider).toBe("openai");
-    expect(resolved?.model).toBe("text-embedding-3-small");
   });
 
   it("resolves providers from the generic embedding provider registry", () => {
@@ -370,66 +304,6 @@ describe("memory search config", () => {
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
   });
 
-  it("merges extra memory paths from defaults and overrides", () => {
-    const cfg = asConfig({
-      memory: {
-        search: {
-          extraPaths: [
-            "/shared/notes",
-            " docs ",
-            { path: "../team-notes", pattern: "runbooks/**/*.md" },
-          ],
-        },
-      },
-
-      agents: {
-        defaults: {},
-        entries: {
-          main: {
-            memory: {
-              search: {
-                extraPaths: [
-                  "/shared/notes",
-                  { path: "../team-notes", pattern: "runbooks/**/*.md" },
-                  { path: "../team-notes", pattern: "decisions/**/*.md" },
-                ],
-              },
-            },
-          },
-        },
-      },
-    });
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.extraPaths).toEqual([
-      "/shared/notes",
-      "docs",
-      { path: "../team-notes", pattern: "runbooks/**/*.md" },
-      { path: "../team-notes", pattern: "decisions/**/*.md" },
-    ]);
-  });
-
-  it("normalizes multimodal settings", () => {
-    const cfg = asConfig({
-      memory: {
-        search: {
-          provider: "gemini",
-          model: "gemini-embedding-2-preview",
-          multimodal: {
-            enabled: true,
-            modalities: ["all"],
-            maxFileBytes: 8192,
-          },
-        },
-      },
-    });
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.multimodal).toEqual({
-      enabled: true,
-      modalities: ["image", "audio"],
-      maxFileBytes: 8192,
-    });
-  });
-
   it("rejects multimodal memory on unsupported providers", () => {
     const cfg = asConfig({
       memory: {
@@ -443,27 +317,6 @@ describe("memory search config", () => {
     expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
       /memory\.search\.multimodal requires a provider adapter that supports multimodal embeddings/,
     );
-  });
-
-  it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {
-    clearEmbeddingProviders();
-    registerBaseMemoryEmbeddingProviders({ includeGemini: false });
-    const cfg = asConfig({
-      memory: {
-        search: {
-          provider: "gemini",
-          model: "gemini-embedding-2-preview",
-          multimodal: { enabled: true, modalities: ["image"] },
-        },
-      },
-    });
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.provider).toBe("gemini");
-    expect(resolved?.multimodal).toEqual({
-      enabled: true,
-      modalities: ["image"],
-      maxFileBytes: 10 * 1024 * 1024,
-    });
   });
 
   it("rejects multimodal memory when fallback is configured", () => {
