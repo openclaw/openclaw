@@ -7893,7 +7893,6 @@
 ["src/infra/approval-turn-source.test.ts","../config/config.js","dcecd67d7a74fcca231a232d45797935f1e587f5bff990a8d1b54f00930927f9",1]
 ["src/infra/browser-open.test.ts","../process/exec.js","4a4cecdf875448e7c275f876c20257a18fc6faee7af04666873973760c2e2c14",1]
 ["src/infra/browser-open.test.ts","./detect-binary.js","888bd5bb849d88c009581c25c9ec604ddf774be818a6e683252cf44a035c8842",1]
-["src/infra/bun-sqlite-close-probe.test.ts","./runtime-process-entrypoints.js","2e94184cacca230838abe315c52f9c168ee4e401b9d37a67b30369c0710c0741",1]
 ["src/infra/bun-sqlite-close-probe.test.ts","./runtime-worker-url.js","fb351a87f31a2b0dbffe6897b1484afd265e5f44a57a140431681c53844566da",1]
 ["src/infra/bun-sqlite-library.worker.test.ts","./bun-sqlite-close-probe.js","10da6525381f9e924a2e76ca489b0e0d8a3bcbb00f6889190fdce87f8935a0da",1]
 ["src/infra/channels-status-issues.test.ts","../channels/plugins/index.js","17c02d7735ff4d10d31ffa1fc57c1d5e91557b17fb9fac62b22d1b382136e5a3",1]

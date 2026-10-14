@@ -216,7 +216,7 @@ describe("Fish Audio speech provider", () => {
     vi.stubEnv("FISH_API_KEY", "   ");
     vi.stubEnv("FISH_AUDIO_API_KEY", "   ");
     const providerConfig = { apiKey: "   " };
-    expect(provider.isConfigured({ providerConfig, timeoutMs: 1_000 })).toBe(false);
+    expect(await provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 1_000 })).toBe(false);
     await expect(
       provider.synthesize({
         ...request,

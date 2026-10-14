@@ -303,7 +303,8 @@ prepares transcript anchors through the history reader before releasing the
 turn lease, then starts the portable `agent_end` hook without waiting for it.
 Use `awaitAgentEndSideEffects(...)` for local, non-interactive runs that must
 also wait for plugin hooks. The synchronous `runAgentEndSideEffects(...)`
-remains deprecated until the next Plugin SDK major. These helpers accept the
+remains deprecated through 2026-12-31, with removal in the first January 2027
+stable release. These helpers accept the
 same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.

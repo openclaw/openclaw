@@ -382,7 +382,7 @@ type ResolvedCommandArgMenu = {
   title?: string;
 };
 
-/** @deprecated Use resolveCommandArgMenuAsync; removal follows a stable deprecation period. */
+/** @deprecated Use resolveCommandArgMenuAsync. Supported through 2026-12-31. */
 export function resolveCommandArgMenu(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {
   warnPluginSdkDeprecation({
     family: "native-command-menu",

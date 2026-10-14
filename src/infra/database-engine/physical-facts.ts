@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { PostgresSqlConnection } from "../sql-connection.js";
+import type { EngineConnection, PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -60,6 +60,10 @@ const admissionKey: SqliteDatabaseAdmissionKey<PostgresPhysicalFacts> = {
   },
 };
 
+export function getPostgresPhysicalFacts(db: EngineConnection) {
+  return getSqliteDatabaseAdmission(db, admissionKey);
+}
+
 /** The anchor carries PG admission facts without treating its native catalog as application data. */
 export function admitPostgresPhysicalFacts(params: {
   anchor: DatabaseSync;
@@ -70,7 +74,7 @@ export function admitPostgresPhysicalFacts(params: {
   version: number;
   expected?: readonly PostgresCatalogFact[];
 }): PostgresPhysicalFacts {
-  const retained = getSqliteDatabaseAdmission(params.anchor, admissionKey);
+  const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
     if (
       retained.store !== params.store ||
@@ -122,7 +126,7 @@ export function admitPostgresPhysicalFacts(params: {
     version: row.version,
     catalog,
   };
-  publishSqliteDatabaseAdmission(params.anchor, admissionKey, facts);
+  publishSqliteDatabaseAdmission(params.db, admissionKey, facts);
   return facts;
 }
 

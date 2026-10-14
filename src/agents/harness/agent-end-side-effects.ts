@@ -97,7 +97,7 @@ function runCoreAgentEndSideEffects(
   }
 }
 
-/** @deprecated Await runAgentEndSideEffectsAsync. Retained during stable deprecation. */
+/** @deprecated Await runAgentEndSideEffectsAsync. Supported through 2026-12-31. */
 export function runAgentEndSideEffects(params: AgentEndSideEffectsParams): void {
   warnPluginSdkDeprecation({
     family: "agent-end-side-effects",

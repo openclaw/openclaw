@@ -60,14 +60,26 @@ first_hop_timing() {
   printf 'first-hop timing: %s %ss\n' "$1" "$((SECONDS - $2))"
 }
 
+# Shipped extended-stable updaters refuse explicit --tag targets on their
+# inferred channel, so a tag update first selects stable as an operator would.
+update_channel_args() {
+  local version version_pattern='^[1-9][0-9]{3}\.([1-9]|1[0-2])\.([1-9][0-9]*)$'
+  version="$(node -p 'require(process.argv[1]).version' "$(package_root)/package.json")"
+  if [[ "$version" =~ $version_pattern ]] && ((10#${BASH_REMATCH[2]} >= 33)); then
+    printf '%s\n' --channel stable
+  fi
+}
+
 run_update() {
   local started=$SECONDS
   local output="$ARTIFACT_DIR/$1" target="$2" update_status=0
+  local channel_args=()
+  mapfile -t channel_args < <(update_channel_args)
   cp "$(package_root)/package.json" "$output-source-package.json"
   printf '%q ' env "PATH=$PATH" "npm_config_prefix=$npm_config_prefix" openclaw \
-    update --yes "--tag=$target" --json >"$output-command.txt"
+    update --yes "${channel_args[@]}" "--tag=$target" --json >"$output-command.txt"
   printf '\n' >>"$output-command.txt"
-  openclaw update --yes "--tag=$target" --json \
+  openclaw update --yes "${channel_args[@]}" "--tag=$target" --json \
     >"$output.stdout" 2>"$output.stderr" || update_status="$?"
   printf '%s\n' "$update_status" >"$output.exit"
   node - "$output.stdout" <<'TIMINGS'

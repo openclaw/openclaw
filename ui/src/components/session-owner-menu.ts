@@ -5,7 +5,7 @@ import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../lib/reactive/gateway-page.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 
 /** Assignment uses the Gateway directory, independently of session filters and presence. */
 export class SessionOwnerMenu {

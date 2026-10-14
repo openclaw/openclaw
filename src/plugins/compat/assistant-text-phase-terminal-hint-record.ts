@@ -7,7 +7,7 @@ export const ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD = {
   introduced: "2026-08-17",
   deprecated: "2026-10-11",
   warningStarts: "2026-10-11",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "stable-deprecation-period",
   replacement: "Omit textPhaseRequiresTerminal; unphased text is never retroactively classified.",
   docsPath: "/concepts/streaming#text-phases-and-final-replies",
   surfaces: ["AssistantMessage.openclawDelivery.textPhaseRequiresTerminal"],

@@ -58,8 +58,6 @@ import type {
 import type {
   LifecycleArtifactCleanupRequest,
   LifecycleArtifactCleanupWorkerResult,
-  SessionMaintenanceReadCommand,
-  SessionMaintenanceReadResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
@@ -82,7 +80,7 @@ import type {
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
 import type * as HarnessCompletionSourceWorker from "./session-harness-completion-source.types.js";
-import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
+import type { SessionArchivePruningSnapshot } from "./session-history-archive-pruning.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import type {
   ChatHistoryDisplayRequest,
@@ -249,13 +247,6 @@ export type {
   SessionRowPresenceWorkerInput,
 } from "./session-row-facts.types.js";
 
-type SessionMaintenanceReadWorkerInput = {
-  kind: "session-maintenance-read";
-  database: { agentId: string; path: string };
-  env: NodeJS.ProcessEnv;
-  plan: SessionMaintenanceReadCommand;
-};
-
 type SessionStoreTargetWorkerInput = {
   kind: "session-store-target";
   request: SessionStoreTargetReadRequest;
@@ -353,7 +344,6 @@ export type SessionHistoryWorkerInput =
   | SessionStoreSummaryWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
-  | SessionMaintenanceReadWorkerInput
   | SessionStoreTargetWorkerInput
   | SessionTargetInventoryWorkerInput
   | CombinedSessionStoreTopologyWorkerInput
@@ -416,11 +406,6 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       kind: "board-widget-document";
       value: BoardReadOperations["boards.readWidgetDocument"]["output"];
     };
-    "session-maintenance-read": {
-      kind: "session-maintenance-read";
-      result: SessionMaintenanceReadResult;
-      workerThreadId: number;
-    };
     "cli-process-history": ChatHistoryDisplayResult;
     "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
     "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
@@ -433,7 +418,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     );
     "session-archive-pruning": {
       kind: "session-archive-pruning";
-      result: PublishedSessionTranscriptArchive[];
+      result: SessionArchivePruningSnapshot;
     };
     "transcript-search": { kind: "transcript-search"; result: SessionTranscriptSearchResult };
     "transcript-match": {
@@ -623,7 +608,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       signal?: AbortSignal,
     ) => Promise<SessionExactEntriesWorkerResult>;
     readRowFacts: SessionHistoryReader<"session-row-facts">;
-    readSessionMaintenance: CancellableSessionHistoryReader<"session-maintenance-read">;
     readStoreProjection: SessionHistoryReader<"session-store-projection">;
     readEntries: (
       scope: SessionEntryListWorkerInput["scope"],

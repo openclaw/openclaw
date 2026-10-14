@@ -15,10 +15,40 @@ import {
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
   isSessionWorkAdmissionActive,
+  observeSessionWorkAdmissionReleases,
   captureGatewaySessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
 } from "./session-lifecycle-admission.js";
+
+it("notifies only the released scope when acquired identity protection shrinks", async () => {
+  const scope = "release-observer.sqlite";
+  const listener = vi.fn();
+  const otherListener = vi.fn();
+  const unsubscribe = observeSessionWorkAdmissionReleases(` ${scope} `, listener);
+  const unsubscribeOther = observeSessionWorkAdmissionReleases("other.sqlite", otherListener);
+  const first = await beginSessionWorkAdmission({ scope, identities: ["shared"] });
+  const second = await beginSessionWorkAdmission({ scope, identities: ["shared"] });
+  const unrelated = await beginSessionWorkAdmission({ scope, identities: ["unrelated"] });
+  try {
+    first.release();
+    expect(listener).not.toHaveBeenCalled();
+    second.release();
+    second.release();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(otherListener).not.toHaveBeenCalled();
+    expect(isSessionWorkAdmissionActive(scope, ["unrelated"])).toBe(true);
+    unsubscribe();
+    unrelated.release();
+    expect(listener).toHaveBeenCalledTimes(1);
+  } finally {
+    unsubscribe();
+    unsubscribeOther();
+    first.release();
+    second.release();
+    unrelated.release();
+  }
+});
 
 it.each(["completed", "cancelled", "cancelled-then-restart", "restart", "timeout"] as const)(
   "uses the adopted run's %s outcome when capturing restart work",
@@ -543,6 +573,8 @@ it("an initial validator finishing after pending cancellation cannot enter the w
   const entered = createDeferred();
   const release = createDeferred();
   const writer = vi.fn();
+  const released = vi.fn();
+  const unsubscribe = observeSessionWorkAdmissionReleases(scope, released);
   const reason = createAgentRunDirectAbortError();
   const pending = beginSessionWorkAdmission({
     scope,
@@ -565,11 +597,13 @@ it("an initial validator finishing after pending cancellation cannot enter the w
       await interruptSessionWorkAdmissions({ scope, identities, reason, timeoutMs: 1000 }),
     ).toBe(true);
     expect(await pending).toBe(reason);
+    expect(released).not.toHaveBeenCalled();
     release.resolve();
     // A later mutation must wait for the validator's existing identity lock to finish.
     await runExclusiveSessionLifecycleMutation("patch", { scope, identities, run: async () => {} });
     expect(writer).not.toHaveBeenCalled();
   } finally {
+    unsubscribe();
     release.resolve();
     await pending;
   }
