@@ -47,7 +47,9 @@ export function SessionPicker(props: {
           aria-label={props.label}
           {...props.triggerAttributes}
           id={`new-session-${props.kind}-trigger`}
-          ref={trigger}
+          ref={(node) => {
+            trigger = node;
+          }}
           type="button"
           class={[
             "new-session-page__trigger",
@@ -100,7 +102,9 @@ export function SessionPicker(props: {
           popover = handle;
           const surface = handle.overlay.surface;
           const afterHide = (event: Event) => {
-            if (event.target !== surface) return;
+            if (event.target !== surface) {
+              return;
+            }
             props.state.onPopoverAfterHide();
             props.onAfterHide?.();
           };
