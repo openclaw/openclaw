@@ -2,6 +2,7 @@ import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
   createKnownMainRed,
+  createMainCiEvidence,
   createMainFailureClassifier,
   readCiRunJobs,
 } from "./ci-known-main-red.mjs";
@@ -68,7 +69,8 @@ export async function reportPrFailures(options) {
   const failed = jobs
     .filter((job) => ["failure", "timed_out"].includes(job.conclusion))
     .toSorted((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
-  const classifier = createMainFailureClassifier(options);
+  const mainEvidence = createMainCiEvidence(options);
+  const classifier = createMainFailureClassifier(options, mainEvidence);
   const failures = [];
   for (const job of failed) {
     failures.push(await classifier.classifyJob(job));
@@ -77,7 +79,7 @@ export async function reportPrFailures(options) {
   // the gate's first-attempt exemption for unchanged tests and direct subjects.
   let knownMainRed = false;
   let failureJobId = "";
-  const allowance = createKnownMainRed(options);
+  const allowance = createKnownMainRed(options, mainEvidence);
   for (const job of failed) {
     if (runAttempt !== 1 || !(await allowance.classifyJob(job)).known) {
       failureJobId = String(job.id);

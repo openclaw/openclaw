@@ -138,7 +138,6 @@ function executionAssociationPatch(
     if (attempt) {
       attempts[attemptIndex] = {
         ...attempt,
-        id: input.runId ?? attempt.id,
         sessionKey: input.sessionKey,
         ...(input.runId ? { runId: input.runId } : {}),
       };
