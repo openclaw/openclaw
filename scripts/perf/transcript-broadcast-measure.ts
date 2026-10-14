@@ -34,7 +34,7 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     scenario: { type: "string", default: "transcript-broadcast" },
     revision: { type: "string" },
-    operations: { type: "string", default: "100" },
+    operations: { type: "string" },
     limit: { type: "string", default: "100" },
     entry: { type: "string", default: "dist/entry.js" },
     port: { type: "string", default: "41033" },
@@ -69,7 +69,10 @@ const turnScenario = scenario === "chat.send" || scenario === "transcript-broadc
 if (!values.allocations && scenario !== "transcript-broadcast") {
   throw new Error("--scenario requires --allocations");
 }
-const operations = integer(values.operations, "--operations");
+const operations = integer(
+  values.operations ?? (scenario === "plugins.reload" ? "1" : "100"),
+  "--operations",
+);
 const limit = integer(values.limit, "--limit");
 const clientCount = scenario === "chat.send" ? 1 : integer(values.clients, "--clients");
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");

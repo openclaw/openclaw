@@ -189,7 +189,10 @@ Supported scenarios:
 | `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                      |
 
 RPC scenarios use `--operations` per round. Turn scenarios use `--runs` (forced
-to one for `chat.send`); `--chunks` controls streamed answer size. Setup, startup
+to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`
+defaults to one operation per round; other RPC scenarios default to 100. Count
+the warmup when choosing reload batches: the admin RPC allows 30 calls per minute.
+Setup, startup
 recovery, subscription establishment, and one warmup round are outside capture.
 Each measured window includes completion and event drain, including the one-second
 quiet interval. The fixture inventory and request/client/run counts are recorded
