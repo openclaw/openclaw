@@ -413,14 +413,16 @@ export type LoadedChatSendSession = Extract<
 
 export type PreparedChatSendSession = LoadedChatSendSession & {
   sessionTarget: QualifiedSessionEntryAccessTarget;
-  assertSessionTargetCurrent: () => void;
-  releaseSessionTarget: () => void;
+  releaseSessionStorage?: () => void;
   activeRunScopeKey: string;
   readSource?: CapturedSessionEntryReadSource;
 };
 
-export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedChatSendSession {
-  const qualified = prepareQualifiedSessionEntryTarget(
+export async function qualifyChatSendSession(
+  loaded: LoadedChatSendSession,
+  releaseSessionStorage?: () => void,
+): Promise<PreparedChatSendSession> {
+  const qualified = await prepareQualifiedSessionEntryTarget(
     {
       ...loaded,
       canonicalKey: loaded.sessionKey,
@@ -432,11 +434,10 @@ export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedC
   );
   return {
     ...loaded,
-    sessionTarget: qualified.target,
-    assertSessionTargetCurrent: qualified.assertCurrent,
-    releaseSessionTarget: qualified.release,
-    activeRunScopeKey: qualified.target.canonicalKey,
-    readSource: qualified.target.readSource,
+    sessionTarget: qualified,
+    releaseSessionStorage,
+    activeRunScopeKey: qualified.canonicalKey,
+    readSource: qualified.readSource,
   };
 }
 
@@ -455,7 +456,6 @@ function assertCurrentChatSendSession(
   ) {
     throw new Error("Session storage changed while starting work. Retry.");
   }
-  session.assertSessionTargetCurrent();
 }
 
 export function withCurrentChatSendSession<T>(params: {
@@ -655,11 +655,10 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       ...scope,
       activeSessionKey: sessionKey,
       expectedRevision: snapshot.revision,
+      databaseSource: snapshot.databaseSource,
       sessionEntry: prepared.entry,
       commitGuard: () => {
         params.assertCurrent?.();
-        // The initialization CAS checks absence; the qualified target keeps its physical store.
-        session.assertSessionTargetCurrent();
         prepared.assertSkillSelection();
         const currentConfig = context.getRuntimeConfig();
         const currentCreation = resolveOperatorSessionCreation(client);

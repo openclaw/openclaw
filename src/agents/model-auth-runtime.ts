@@ -12,7 +12,11 @@ import { mintSecretSentinel } from "../secrets/sentinel.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
-import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  isNonSecretApiKeyMarker,
+  isSecretRefHeaderValueMarker,
+} from "./model-auth-markers.js";
 import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
@@ -267,7 +271,7 @@ type SyntheticProviderAuthParams = {
 
 type ResolveSyntheticProviderAuth = (
   config: OpenClawConfig | undefined,
-) => ResolvedProviderAuth | undefined;
+) => ReturnType<typeof resolveProviderSyntheticAuthWithPlugin>;
 
 function syntheticAuthLookup(
   params: SyntheticProviderAuthParams,
@@ -287,11 +291,33 @@ function syntheticAuthLookup(
   };
 }
 
+/** A managed process owns auth only when its provider supplies a non-secret credential. */
+export function resolveManagedLocalProviderAuth(
+  params: SyntheticProviderAuthParams,
+  resolveFromConfig: ResolveSyntheticProviderAuth = (config) =>
+    resolveProviderSyntheticAuthWithPlugin(syntheticAuthLookup(params, config)),
+): ResolvedProviderAuth | undefined {
+  if (!resolveMergedModelProviderConfig(params.cfg, params.provider)?.localService) {
+    return undefined;
+  }
+  const auth = resolveFromConfig(params.cfg);
+  return auth?.mode === "api-key" &&
+    !auth.nativeAuth &&
+    isNonSecretApiKeyMarker(auth.apiKey, { includeEnvVarName: false }) &&
+    !isSecretRefHeaderValueMarker(auth.apiKey)
+    ? auth
+    : undefined;
+}
+
 function resolveProviderSyntheticRuntimeAuth(
   params: SyntheticProviderAuthParams,
   resolveFromConfig: ResolveSyntheticProviderAuth = (config) =>
     resolveProviderSyntheticAuthWithPlugin(syntheticAuthLookup(params, config)),
 ): SyntheticProviderAuthResolution {
+  const managedLocalAuth = resolveManagedLocalProviderAuth(params, resolveFromConfig);
+  if (managedLocalAuth) {
+    return { auth: managedLocalAuth };
+  }
   const runtimeAuth = resolveManagedSecretRefRuntimeProviderAuth(params);
   if (runtimeAuth) {
     return { auth: runtimeAuth };

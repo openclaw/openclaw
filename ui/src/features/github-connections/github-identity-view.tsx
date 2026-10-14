@@ -432,77 +432,79 @@ export function GitHubConnectionSetup(props: ControllerProps) {
 export function GitHubIdentity(props: ControllerProps & { onOpenConnections: () => void }) {
   const identity = () => props.controller.status?.effective ?? null;
   return (
-    <SettingsSection
-      title={t("githubConnections.agentTitle")}
-      description={t("githubConnections.agentDescription")}
-      actions={
-        <Show when={props.controller.statusReadable}>
-          <button
-            class="btn btn--sm"
-            disabled={
-              props.controller.loading ||
-              props.controller.busy ||
-              props.controller.authorizationActive
-            }
-            onClick={() => void props.controller.verify()}
-          >
-            {t("agentTools.githubVerify")}
-          </button>
-        </Show>
-      }
-    >
-      <SettingsRow
-        title={
-          identity()?.account ? `@${identity()!.account!.login}` : t("agentTools.githubNoAccount")
-        }
-        description={
-          identity()?.source === "agent-override"
-            ? t("githubConnections.agentOverride")
-            : t("githubConnections.system")
-        }
-        control={
-          <>
-            <GitHubHealth identity={identity()} request={props.controller} />
-            <button class="btn btn--sm" onClick={() => props.onOpenConnections()}>
-              {t("githubConnections.manageCommon")}
-            </button>
-          </>
-        }
-      />
-      <GitHubConnectionError error={props.controller.error} />
-      <Show when={props.controller.configurable}>
-        <details class="settings-row settings-row--stacked">
-          <summary class="settings-row__title">{t("githubConnections.advancedOverride")}</summary>
-          <div class="settings-subrows">
-            <SettingsRow
-              title={t("githubConnections.agentOverride")}
-              description={
-                props.controller.status?.selected.configured
-                  ? t("agentTools.githubConfiguredHere")
-                  : t("agentTools.githubInheritedHere")
+    <openclaw-github-identity style={{ display: "contents" }}>
+      <SettingsSection
+        title={t("githubConnections.agentTitle")}
+        description={t("githubConnections.agentDescription")}
+        actions={
+          <Show when={props.controller.statusReadable}>
+            <button
+              class="btn btn--sm"
+              disabled={
+                props.controller.loading ||
+                props.controller.busy ||
+                props.controller.authorizationActive
               }
-            />
-            <GitHubConnectionSetup controller={props.controller} />
-            <Show when={props.controller.status?.selected.configured}>
+              onClick={() => void props.controller.verify()}
+            >
+              {t("agentTools.githubVerify")}
+            </button>
+          </Show>
+        }
+      >
+        <SettingsRow
+          title={
+            identity()?.account ? `@${identity()!.account!.login}` : t("agentTools.githubNoAccount")
+          }
+          description={
+            identity()?.source === "agent-override"
+              ? t("githubConnections.agentOverride")
+              : t("githubConnections.system")
+          }
+          control={
+            <>
+              <GitHubHealth identity={identity()} request={props.controller} />
+              <button class="btn btn--sm" onClick={() => props.onOpenConnections()}>
+                {t("githubConnections.manageCommon")}
+              </button>
+            </>
+          }
+        />
+        <GitHubConnectionError error={props.controller.error} />
+        <Show when={props.controller.configurable}>
+          <details class="settings-row settings-row--stacked">
+            <summary class="settings-row__title">{t("githubConnections.advancedOverride")}</summary>
+            <div class="settings-subrows">
               <SettingsRow
-                title={t("agentTools.githubUseSystemNewRuns")}
-                description={t("agentTools.githubAgentMutationHint")}
-                control={
-                  <button
-                    class="btn"
-                    disabled={props.controller.busy || props.controller.authorizationActive}
-                    onClick={() => void props.controller.inherit()}
-                  >
-                    {t("agentTools.githubUseSystemNewRuns")}
-                  </button>
+                title={t("githubConnections.agentOverride")}
+                description={
+                  props.controller.status?.selected.configured
+                    ? t("agentTools.githubConfiguredHere")
+                    : t("agentTools.githubInheritedHere")
                 }
               />
-            </Show>
-          </div>
-        </details>
-      </Show>
-      <GitHubDetails identity={identity()} />
-    </SettingsSection>
+              <GitHubConnectionSetup controller={props.controller} />
+              <Show when={props.controller.status?.selected.configured}>
+                <SettingsRow
+                  title={t("agentTools.githubUseSystemNewRuns")}
+                  description={t("agentTools.githubAgentMutationHint")}
+                  control={
+                    <button
+                      class="btn"
+                      disabled={props.controller.busy || props.controller.authorizationActive}
+                      onClick={() => void props.controller.inherit()}
+                    >
+                      {t("agentTools.githubUseSystemNewRuns")}
+                    </button>
+                  }
+                />
+              </Show>
+            </div>
+          </details>
+        </Show>
+        <GitHubDetails identity={identity()} />
+      </SettingsSection>
+    </openclaw-github-identity>
   );
 }
 

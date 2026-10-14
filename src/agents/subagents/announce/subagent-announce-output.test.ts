@@ -104,19 +104,21 @@ describe("buildCompactAnnounceStatsLine", () => {
       expected: "Stats: runtime n/a • tokens 500 prompt/cache",
     },
   ])("$name", async ({ usage, expected }) => {
+    const readEntry = vi.fn(() => ({
+      sessionId: "child-session",
+      updatedAt: 0,
+      ...usage,
+    }));
     testing.setDepsForTest({
       getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
-      readSubagentSessionEntry: (() => ({
-        sessionId: "child-session",
-        updatedAt: 0,
-        ...usage,
-      })) as ReadSessionEntry,
+      readSubagentSessionEntry: readEntry as ReadSessionEntry,
       resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
     });
 
     await expect(
       buildCompactAnnounceStatsLine({ sessionKey: "agent:main:subagent:child" }),
     ).resolves.toBe(expected);
+    expect(readEntry).toHaveBeenCalledOnce();
   });
 });
 
@@ -310,6 +312,26 @@ describe("buildChildCompletionFindings", () => {
       expect(findings).toContain(`status: ${expected}`);
     },
   );
+
+  it("includes the stopped recovery reason in parent-visible findings", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:replaced",
+        task: "interrupted task",
+        createdAt: 1,
+        execution: {
+          interruptionReason: "gateway-restart",
+          outcome: {
+            status: "error",
+            error: "Original child session was replaced; no child work was changed.",
+          },
+        },
+      },
+    ]);
+    expect(findings).toContain(
+      "status: interrupted by gateway restart: Original child session was replaced; no child work was changed.",
+    );
+  });
 
   it("bounds failure metadata while preserving the complete escaped child result", () => {
     const findings = buildChildCompletionFindings([

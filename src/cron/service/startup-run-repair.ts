@@ -34,11 +34,13 @@ export function markInterruptedStartupRun(params: {
   state: CronJobPolicyContext;
   job: CronJob;
   runningAtMs: number;
+  preservedOccurrenceAtMs?: number;
   nowMs: number;
   deferredNotifications: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
-  const replacementAtMs = resolveOneShotReplacementAtMs(job, runningAtMs);
+  const replacementAtMs =
+    params.preservedOccurrenceAtMs ?? resolveOneShotReplacementAtMs(job, runningAtMs);
   // A persisted running marker means the gateway stopped mid-run; mark it as a
   // normal failed run so retries, alerts, and run logs all see one outcome.
   const previousErrors =
@@ -114,6 +116,7 @@ export function restoreFinalizedStartupRun(params: {
   state: CronJobPolicyContext;
   job: CronJob;
   runningAtMs: number;
+  preservedOccurrenceAtMs?: number;
   entry: CronRunLogEntry & { status: CronRunStatus };
   scriptResult?: { scriptStateChanged: true; scriptState?: unknown };
   triggerEval?: CronTriggerEvalOutcome;
@@ -131,14 +134,15 @@ export function restoreFinalizedStartupRun(params: {
     );
     return undefined;
   }
-  const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
-  const persistedNextRunAtMs = asDateTimestampMs(job.state.nextRunAtMs);
+  const replacementAtMs =
+    (entry.nextRunAtMs === params.preservedOccurrenceAtMs
+      ? params.preservedOccurrenceAtMs
+      : undefined) ?? resolveOneShotReplacementAtMs(job, startedAt);
   // Committed edits own scheduling even if the clock repeats or moves back.
   // Older pending one-shots still retain a later replacement deadline.
   const scheduleOwnership =
     typeof job.state.runningScheduleChangeId === "string" ||
-    (job.schedule.kind === "at" &&
-      (!job.enabled || (persistedNextRunAtMs !== undefined && persistedNextRunAtMs > startedAt)))
+    (job.schedule.kind === "at" && (!job.enabled || replacementAtMs !== undefined))
       ? "stale"
       : "current";
   // A once result can record no next run before a later edit retires its

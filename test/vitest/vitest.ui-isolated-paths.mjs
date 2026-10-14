@@ -7,8 +7,12 @@ export const uiIsolatedTestFiles = [
   "ui/src/app/app-host.server-prefs.test.ts",
   "ui/src/app/bootstrap.gateway-credentials.test.ts",
   "ui/src/app/bootstrap.test.ts",
-  "ui/src/app/router-outlet.test.ts",
+  "ui/src/app/router-outlet.test.tsx",
   "ui/src/components/app-sidebar-native-gateways.test.ts",
+  // Captured native frame functions must belong to this file's JSDOM window.
+  "ui/src/components/app-sidebar.catalog-events.test.ts",
+  // The catalog suite exceeds the CI deadline in a shared Bun worker.
+  "ui/src/components/app-sidebar.catalog.test.ts",
   "ui/src/components/gateway-url-confirmation.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
   "ui/src/components/markdown-tables.test.ts",
@@ -23,6 +27,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/agents/memory/memory-panel.test.ts",
   "ui/src/pages/chat/chat-outbox-recovery.test.ts",
   "ui/src/pages/chat/chat-page-attachment-handoff.test.ts",
+  "ui/src/pages/chat/chat-page-draft-commit.test.ts",
   "ui/src/pages/chat/chat-page-session-refresh.test.ts",
   "ui/src/pages/chat/chat-page.test.ts",
   "ui/src/pages/chat/chat-pane-attachment-handoff.test.ts",

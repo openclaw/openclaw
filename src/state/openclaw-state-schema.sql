@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS skill_library_uploads (
 -- End profile-owned skill library.
 
 CREATE TABLE IF NOT EXISTS skill_workshop_changes (
+  cursor_id INTEGER NOT NULL,
   change_id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
   skill_name TEXT NOT NULL,
@@ -92,6 +93,9 @@ CREATE TABLE IF NOT EXISTS skill_workshop_changes (
   run_id TEXT,
   created_at_ms INTEGER NOT NULL
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS skill_workshop_changes_cursor_id_idx
+  ON skill_workshop_changes(cursor_id);
 
 CREATE INDEX IF NOT EXISTS idx_skill_workshop_changes_agent_time
   ON skill_workshop_changes(agent_id, created_at_ms);
@@ -224,6 +228,7 @@ CREATE INDEX IF NOT EXISTS execution_identity_contexts_run_created_idx
   ON execution_identity_contexts (run_id, created_at, execution_id);
 
 CREATE TABLE IF NOT EXISTS execution_decision_facts (
+  cursor_id INTEGER NOT NULL,
   receipt_id TEXT NOT NULL PRIMARY KEY CHECK (length(receipt_id) BETWEEN 1 AND 256),
   context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),
   execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
@@ -244,6 +249,9 @@ CREATE TABLE IF NOT EXISTS execution_decision_facts (
   receipt_json TEXT NOT NULL CHECK (length(receipt_json) > 0),
   UNIQUE (occurred_at, receipt_id)
 ) STRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS execution_decision_facts_cursor_id_idx
+  ON execution_decision_facts(cursor_id);
+
 CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
   ON execution_decision_facts (context_id, occurred_at, receipt_id);
 CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
@@ -363,6 +371,7 @@ CREATE TABLE IF NOT EXISTS exec_approvals_config (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS operator_approvals (
+  cursor_id INTEGER NOT NULL,
   approval_id TEXT NOT NULL PRIMARY KEY CHECK (
     length(approval_id) > 0 AND approval_id NOT IN ('.', '..')
   ),
@@ -467,6 +476,9 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
     )
   )
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_cursor_id
+  ON operator_approvals(cursor_id);
 
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry
   ON operator_approvals(status, expires_at_ms, approval_id);
@@ -1149,6 +1161,8 @@ CREATE TABLE IF NOT EXISTS acp_sessions (
   agent TEXT NOT NULL,
   runtime_session_name TEXT NOT NULL,
   identity_json TEXT,
+  resume_agent_session_id TEXT,
+  resume_acpx_session_id TEXT,
   mode TEXT NOT NULL,
   runtime_options_json TEXT,
   cwd TEXT,
@@ -1165,12 +1179,10 @@ CREATE INDEX IF NOT EXISTS idx_acp_sessions_agent_activity
   ON acp_sessions(agent, last_activity_at DESC, session_key);
 
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_agent
-  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.agentSessionId'),
-    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+  ON acp_sessions(resume_agent_session_id);
 
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_acpx
-  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.acpxSessionId'),
-    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+  ON acp_sessions(resume_acpx_session_id);
 
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -1458,6 +1470,7 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_order
 -- One owner-native receipt is also the durable execution fence. Receipts
 -- survive job deletion so operators can distinguish a run from log inference.
 CREATE TABLE IF NOT EXISTS cron_run_receipts (
+  cursor_id INTEGER NOT NULL,
   receipt_id TEXT PRIMARY KEY,
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -1478,6 +1491,9 @@ CREATE TABLE IF NOT EXISTS cron_run_receipts (
     (status != 'running' AND finished_at_ms IS NOT NULL)
   )
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS cron_run_receipts_cursor_id_idx
+  ON cron_run_receipts(cursor_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_run_receipts_active_job
   ON cron_run_receipts(store_key, job_id)

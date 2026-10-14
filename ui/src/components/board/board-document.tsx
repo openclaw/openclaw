@@ -13,7 +13,11 @@ import {
   Show,
 } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import {
+  hasOperatorApprovalsAccess,
+  hasOperatorReadAccess,
+  hasOperatorWriteAccess,
+} from "../../app/operator-access.ts";
 import {
   acquireBoardProviderForSession,
   type BoardProvider,
@@ -116,7 +120,10 @@ class BoardDocumentController {
       this.documentState = "loading";
       return;
     }
-    if (isGatewayMethodAdvertised(snapshot, "board.get") === false) {
+    if (
+      !hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
+      isGatewayMethodAdvertised(snapshot, "board.get") === false
+    ) {
       this.releaseProvider();
       this.documentState = "unavailable";
       return;

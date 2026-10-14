@@ -84,6 +84,7 @@ export function SessionsCard(props: {
       totalSessions,
       isTokenMode,
       avgValue,
+      usageReport: totals?.usageReport,
       totalErrors,
       sessionsTab,
       onDisplayChange,
@@ -113,8 +114,8 @@ export function SessionsCard(props: {
           <div class="sessions-card-stats">
             <span>
               {state().isTokenMode
-                ? formatUsageTokens(state().avgValue)
-                : formatAnalysisCost(state().avgValue)}{" "}
+                ? formatUsageTokens(state().avgValue, state().usageReport)
+                : formatAnalysisCost(state().avgValue, state().usageReport)}{" "}
               {t("usage.sessions.avg")}
             </span>
             <span>
@@ -268,7 +269,9 @@ function SessionRows(props: {
           meta={buildSessionMeta(entry().session)}
           agentId={entry().session.agentId}
           valueLabel={
-            props.isTokenMode ? formatUsageTokens(entry().value) : formatAnalysisCost(entry().value)
+            props.isTokenMode
+              ? formatUsageTokens(entry().value, entry().session.usage?.usageReport)
+              : formatAnalysisCost(entry().value, entry().session.usage?.usageReport)
           }
           isSelected={props.selectedSessions.includes(entry().session.key)}
           onSelect={(event) => props.onSelect(entry().session.key, event.shiftKey, orderedKeys())}

@@ -122,18 +122,19 @@ function modelsText(card: ModelProviderCard): string | null {
 
 function renderLocalCost(card: ModelProviderCard) {
   const cost = card.localCost;
-  if (!cost || (cost.totalTokens === 0 && cost.totalCost === 0)) {
+  const unavailable = cost?.usageReport?.state === "unavailable";
+  if (!cost || (!unavailable && cost.totalTokens === 0 && cost.totalCost === 0)) {
     return undefined;
   }
   return (
     <div class="model-providers__local-cost">
       <div class="provider-usage-billing-row">
         <span>{t("modelProviders.localCost", { days: String(MODEL_PROVIDERS_COST_DAYS) })}</span>
-        <strong>{formatCost(cost.totalCost)}</strong>
+        <strong>{unavailable ? t("common.unknown") : formatCost(cost.totalCost)}</strong>
       </div>
       <div class="model-providers__local-cost-detail">
         {t("modelProviders.localCostDetail", {
-          tokens: formatCompactTokenCount(cost.totalTokens),
+          tokens: unavailable ? t("common.unknown") : formatCompactTokenCount(cost.totalTokens),
           messages: String(cost.messageCount),
         })}
       </div>

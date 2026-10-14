@@ -8,6 +8,8 @@ import type { SessionActorHotState, SessionActorOutcome } from "./session-actor-
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
+import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
 
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
 type Limits = { maxBytes: number; maxEvents: number };
@@ -50,13 +52,14 @@ function simplePath(rows: SessionActorTranscriptRow[]) {
     if (event.type === "session") {
       continue;
     }
-    // Controls can change ancestry, retention or display policy. The canonical reader owns them.
+    // Boundary controls need the canonical reader; ordinary metadata stays in the complete path.
     if (
-      !["message", "model_change", "thinking_level_change"].includes(String(event.type)) ||
+      !isCanonicalSessionTranscriptEntry(event) ||
+      ["reset", "compaction", "branch_summary"].includes(event.type) ||
       event.appendMode === "side" ||
       typeof event.id !== "string" ||
       event.parentId !== parent ||
-      (isRecord(event.message) && event.message.excludeFromContext === true)
+      transcriptEventContextEligibility(event) === 0
     ) {
       return undefined;
     }

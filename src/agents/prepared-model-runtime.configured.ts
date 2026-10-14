@@ -18,6 +18,8 @@ import type { PreparedProviderStaticCatalog } from "../plugins/provider-discover
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveAgentEntry, toAgentEntriesRecord } from "./agent-scope-config.js";
 import {
   listAgentIds,
@@ -290,8 +292,16 @@ export function listConfiguredOwnerInputs(
 ): PreparedModelRuntimeInput[] {
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
+  const statePath = resolveOpenClawStateSqlitePath();
   return listAgentIds(config)
-    .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
+    .filter((agentId) => {
+      const deletion = getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined);
+      return (
+        deletion !== "pending" &&
+        deletion !== "complete" &&
+        !readAgentDatabaseAdmissionRefusal(agentId)
+      );
+    })
     .map((agentId) => {
       const agentDir = resolveAgentDir(config, agentId);
       const launchWorkspaceDir =

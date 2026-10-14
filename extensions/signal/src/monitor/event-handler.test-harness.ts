@@ -6,6 +6,7 @@ import type {
   runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { setSignalRuntime } from "../runtime.js";
 import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
@@ -89,7 +90,9 @@ export function createSignalPreparedDispatchRunner(
             channel: resolved.channel,
             accountId: resolved.accountId,
             routeSessionKey: resolved.route.sessionKey,
-            storePath: "/tmp/openclaw/signal-sessions.json",
+            storePath: resolveStorePath(resolved.cfg.session?.store, {
+              agentId: resolved.route.agentId,
+            }),
             ctxPayload: resolved.ctxPayload,
             recordInboundSession,
             afterRecord: resolved.afterRecord,

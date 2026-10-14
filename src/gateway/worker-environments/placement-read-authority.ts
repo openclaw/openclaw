@@ -16,12 +16,16 @@ export function hasPendingPublication(owner: PlacementAuthorityOwner, sessionId?
 }
 
 export function affectsPlacementObservation(change: ClaimChange, sessionId?: string): boolean {
-  return (
-    change.kind !== "tools" &&
-    (sessionId === undefined
-      ? change.kind !== "claim" || !change.localOnly
-      : change.sessionId === sessionId)
-  );
+  if (change.kind === "tools") {
+    return false;
+  }
+  if (sessionId !== undefined) {
+    return change.sessionId === sessionId;
+  }
+  // Turn, ACK, result, and journal bookkeeping leave preservation ownership unchanged.
+  return change.kind === "claim"
+    ? !change.localOnly && (!change.inventoryUnchanged || change.indeterminate === true)
+    : change.indeterminate === true;
 }
 
 export function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): void {
@@ -91,6 +95,38 @@ export function retainSessionPlacementRead(
   readers.add(reader);
   owner.placementReaders.set(sessionId, readers);
   return {
+    prepareRead(this: void): Promise<void> | undefined {
+      assertUsable();
+      const pending = [...owner.pending].filter(
+        (change): change is Extract<ClaimChange, { kind: "claim" }> =>
+          change.kind === "claim" && change.sessionId === sessionId,
+      );
+      const settlements = pending.flatMap((change) =>
+        change.nativeSettlement ? [change.nativeSettlement] : [],
+      );
+      if (
+        reader.revoked ||
+        pending.some((change) => change.indeterminate) ||
+        settlements.length !== pending.length
+      ) {
+        throw new Error(`Session ${sessionId} placement authority changed`);
+      }
+      if (settlements.length === 0) {
+        return undefined;
+      }
+      // Join the existing native owner; callers must release synchronous readers first.
+      return Promise.all(settlements).then((outcomes) => {
+        assertUsable();
+        if (reader.revoked) {
+          throw new Error(`Session ${sessionId} placement authority changed`);
+        }
+        for (const outcome of outcomes) {
+          if (outcome.kind !== "completed") {
+            throw outcome.error;
+          }
+        }
+      });
+    },
     current(this: void) {
       assertUsable();
       // Result, ACK, and journal writes leave this read's execution target unchanged.
@@ -262,10 +298,11 @@ export async function readCachedPlacementRecoveryCandidates(
     const signal = getAsyncWorkSignal();
     signal?.throwIfAborted();
     assertUsable();
-    const candidates = owner.recoveryCandidatesEmpty ? [] : await read();
+    // Candidate discovery is a snapshot; each recovery effect acquires its exact owner.
+    const candidates =
+      owner.recoveryCandidatesEmpty && !hasPendingPublication(owner) ? [] : await read();
     signal?.throwIfAborted();
     assertUsable();
-    // Discovery may overlap Stop; recovery acquires exact session authority before acting.
     if (
       candidates.length === 0 &&
       observation.revokedBy.size === 0 &&

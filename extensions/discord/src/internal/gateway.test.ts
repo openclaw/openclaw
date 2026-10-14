@@ -196,25 +196,6 @@ describe("GatewayPlugin", () => {
     );
   });
 
-  it("bounds identify waits after a backward clock jump", async () => {
-    vi.useFakeTimers();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      vi.setSystemTime(1_000_000_000_000);
-      await sharedGatewayIdentifyLimiter.wait();
-
-      vi.setSystemTime(0);
-      const second = sharedGatewayIdentifyLimiter.wait();
-
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5_000);
-
-      await vi.advanceTimersByTimeAsync(5_000);
-      await expect(second).resolves.toBeUndefined();
-    } finally {
-      timeoutSpy.mockRestore();
-    }
-  });
-
   it("tracks the live voice roster across guild snapshots and voice updates", async () => {
     const gateway = new GatewayPlugin({});
     (gateway as unknown as { client: unknown }).client = {

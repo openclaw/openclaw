@@ -114,6 +114,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         });
         context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => pageClosed ? [] : [page],
           newPage: async () => { context.emit("page", page); return page; },
           browser: () => ({ isConnected: () => true }),
@@ -188,6 +189,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         });
         context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => [page],
           newPage: async () => { context.emit("page", page); return page; },
           route: async (pattern, handler) => { contextHandlers.push({ pattern, handler }); },
@@ -211,6 +213,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
       }
       const context = Object.assign(new EventEmitter(), {
         setDefaultTimeout() {},
+        addInitScript: async () => {},
         pages: () => [],
         newPage: async () => { context.emit("page", closedPage); return closedPage; },
         unrouteAll: async () => {},
@@ -544,11 +547,14 @@ beforeAll(async () => {
     path.join(fixtureRoot, "vitest.config.ts"),
     `
 import { defineConfig } from "vitest/config";
-import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.shared.config.ts"))};
+import { createVitestResolveConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.resolve.ts"))};
+if (process.versions.bun) {
+  await import(${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.sqlite-preload.mts"))});
+}
 const hookTimeout = Number(process.env.UI_LIFETIME_HOOK_TIMEOUT_MS);
 export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(fixtureRoot, ".vite"))},
-  resolve: sharedVitestConfig.resolve,
+  resolve: createVitestResolveConfig(${JSON.stringify(repoRoot)}),
   test: { pool: "forks", isolate: true, maxWorkers: 1, fileParallelism: false,
     fsModuleCache: true,
     fsModuleCachePath: ${JSON.stringify(path.join(fixtureRoot, "transforms"))},

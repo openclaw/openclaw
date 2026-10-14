@@ -5,8 +5,8 @@ import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
@@ -246,11 +246,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await page.goto(`${server.baseUrl}settings/appearance`);
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await gateway.waitForRequest("config.get");
-      await page.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { runtime: { router: ApplicationRouter } }
-        >("openclaw-app");
-        const route = app?.runtime.router.getRoute("model-providers");
+      await evaluateControlUiContext(page, async (application) => {
+        const route = (application.router as ApplicationRouter).getRoute("model-providers");
         if (!route) {
           throw new Error("Models route is unavailable");
         }
@@ -337,11 +334,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await page.goto(`${server.baseUrl}settings/appearance`);
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await gateway.waitForRequest("config.get");
-      await page.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { runtime: { router: ApplicationRouter } }
-        >("openclaw-app");
-        const route = app?.runtime.router.getRoute("model-providers");
+      await evaluateControlUiContext(page, async (application) => {
+        const route = (application.router as ApplicationRouter).getRoute("model-providers");
         if (!route) {
           throw new Error("Models route is unavailable");
         }
@@ -463,14 +457,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         models: currentModels,
         defaultModels: { automaticUtilityModel: "fixture/current" },
       });
-      await page.evaluate(() => {
-        const app = document.querySelector<
-          HTMLElement & { runtime: { context: ApplicationContext } }
-        >("openclaw-app");
-        if (!app) {
-          throw new Error("Application is unavailable");
-        }
-        app.runtime.context.gateway.connect();
+      await evaluateControlUiContext(page, (application) => {
+        application.gateway.connect();
       });
       await gateway.waitForRequest("config.get", { after: configReads });
       await gateway.emitGatewayEvent("models.snapshot", {
@@ -484,12 +472,10 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await gateway.rejectDeferred("config.get", { message: "Current config is unavailable." });
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector<
-              HTMLElement & { runtime: { context: ApplicationContext } }
-            >("openclaw-app");
-            return app?.runtime.context.runtimeConfig.state.lastError;
-          }),
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.lastError,
+          ),
         )
         .toContain("Current config is unavailable.");
       if (recordVisuals) {
@@ -765,11 +751,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           if (moduleState === "cached") {
             await gateway.emitGatewayEvent("chat.metadata.changed", {});
           }
-          await page.evaluate(async () => {
-            const app = document.querySelector<
-              HTMLElement & { runtime: { router: ApplicationRouter } }
-            >("openclaw-app");
-            const route = app?.runtime.router.getRoute("model-providers");
+          await evaluateControlUiContext(page, async (application) => {
+            const route = (application.router as ApplicationRouter).getRoute("model-providers");
             if (!route) {
               throw new Error("Models route is unavailable");
             }

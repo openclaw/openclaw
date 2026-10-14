@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."github_personal_publication_requests" (
+CREATE TABLE "github_personal_publication_requests" (
   "request_id" text COLLATE "C" NOT NULL,
   "owner_profile_id" text COLLATE "C" NOT NULL,
   "connection_generation" text COLLATE "C" NOT NULL,
@@ -81,8 +77,6 @@ CREATE TABLE "openclaw_state"."github_personal_publication_requests" (
   UNIQUE ("owner_profile_id", "session_id", "idempotency_key")
 );
 
-CREATE INDEX "idx_github_personal_publication_owner_session" ON "openclaw_state"."github_personal_publication_requests" (("owner_profile_id") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("created_at_ms") ASC NULLS FIRST);
+CREATE INDEX "idx_github_personal_publication_owner_session" ON "github_personal_publication_requests" (("owner_profile_id") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("created_at_ms") ASC NULLS FIRST);
 
-CREATE INDEX "idx_github_personal_publication_pending" ON "openclaw_state"."github_personal_publication_requests" (("status") ASC NULLS FIRST, ("updated_at_ms") ASC NULLS FIRST, ("request_id") ASC NULLS FIRST);
-
-COMMIT;
+CREATE INDEX "idx_github_personal_publication_pending" ON "github_personal_publication_requests" (("status") ASC NULLS FIRST, ("updated_at_ms") ASC NULLS FIRST, ("request_id") ASC NULLS FIRST);

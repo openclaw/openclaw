@@ -93,6 +93,39 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
+it("rejects unexpected remote functions before Gateway execution when forwarding is disabled", async () => {
+  const fixture = await createAttempt({ forwarding: { gatewayTools: false, mcpServers: false } });
+  fixture.params.disableTools = false;
+  const construct = vi.spyOn(fixture.params.hostCapabilities, "createToolSurfaceAsync");
+  const beforeTool = vi.spyOn(fixture.params.hostCapabilities, "runBeforeToolCall");
+  const close = vi.fn(async () => {});
+  createSession.mockImplementationOnce((options) => ({
+    ...completedSession(options),
+    close,
+    run: async () => {
+      await options.executeFunction!({
+        type: "function_call",
+        turn_id: completedTurn.id,
+        call_id: "unexpected-call",
+        name: "memory_search",
+        arguments: { query: "must not execute" },
+      });
+      throw new Error("A disabled Gateway callback must not return normally");
+    },
+  }));
+  const result = await fixture.run();
+  expect(result.terminal).toMatchObject({
+    kind: "failed",
+    error: expect.objectContaining({
+      message:
+        "Agents API Gateway tool forwarding is disabled; refusing remote function call: memory_search",
+    }),
+  });
+  expect(construct).not.toHaveBeenCalled();
+  expect(beforeTool).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
+});
+
 describe("Agents API completed reply settlement", () => {
   it("preserves native tool ownership when another run reconciles prior turns", async () => {
     const fixture = await createAttempt();
@@ -323,7 +356,7 @@ describe("Agents API completed reply settlement", () => {
 
 it("leaves PDF steering uncommitted so its next turn transfers the original in the same session", async () => {
   await withOpenClawTestState({ label: "agentsapi-pdf-steering" }, async () => {
-    const fixture = await createAttempt();
+    const fixture = await createAttempt({ forwarding: { gatewayTools: false, mcpServers: false } });
     const bytes = Buffer.from("%PDF-1.4\nThe launch window is October.\n%%EOF\n");
     const saved = await saveMediaBuffer(bytes, "application/pdf", "inbound");
     const media = [
@@ -604,7 +637,7 @@ describe("Agents API retry prompt history", () => {
   );
 });
 
-async function createAttempt() {
+async function createAttempt(pluginConfig: unknown = {}) {
   const config = {};
   setRuntimeConfigSnapshot(config);
   const workspaceDir = tempDirs.make();
@@ -685,7 +718,7 @@ async function createAttempt() {
         assertCurrent,
         () => {},
         target,
-        () => ({}),
+        () => pluginConfig,
         promptHistories,
       );
     },

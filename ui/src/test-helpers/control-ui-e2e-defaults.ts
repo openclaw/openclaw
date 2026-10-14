@@ -2,7 +2,13 @@ import type {
   ChannelsStatusResult,
   UserProfile,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type {
+  PluginsCatalogBrowseResult,
+  PluginsCatalogCategoriesResult,
+} from "../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { BUILTIN_THEMES } from "../../../packages/gateway-protocol/src/theme.js";
+import type { DoctorMemoryStatusPayload } from "../../../src/gateway/server-methods/doctor.ts";
+import type { ChannelsPairingListResult } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
 export const defaultControlUiFeatureMethods = [
@@ -91,6 +97,11 @@ export function createControlUiDefaultResponses(scenario: {
     current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
   };
   return {
+    "doctor.memory.status": {
+      agentId: "main",
+      provider: "none",
+      embedding: { ok: false, checked: false },
+    } satisfies DoctorMemoryStatusPayload,
     "channels.status": {
       ts: 0,
       channelOrder: [],
@@ -99,6 +110,14 @@ export function createControlUiDefaultResponses(scenario: {
       channelAccounts: {},
       channelDefaultAccountId: {},
     } satisfies ChannelsStatusResult,
+    "channels.pairing.list": {
+      accounts: [],
+      requests: [],
+      commandOwnerConfigured: true,
+      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+    } satisfies ChannelsPairingListResult,
+    "plugins.catalog.categories": { categories: [] } satisfies PluginsCatalogCategoriesResult,
+    "plugins.catalog.browse": { items: [] } satisfies PluginsCatalogBrowseResult,
     "users.self": profile
       ? { profile }
       : {

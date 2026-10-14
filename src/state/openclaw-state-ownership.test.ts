@@ -14,6 +14,7 @@ import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js"
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
+  invalidateSqliteDatabaseCleanClose,
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import {
@@ -23,6 +24,7 @@ import {
 import * as sqliteReadonlyLocation from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withArtifactPreservingStateReads } from "./artifact-preserving-state-reads.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -763,7 +765,7 @@ describe("external shared-state ownership", () => {
   it("fences a claim made during a canonical current-schema cold open", () => {
     const env = createEnv();
     const { path: databasePath, db: seeded } = openOpenClawStateDatabase({ env });
-    const databaseLocation = seeded.location();
+    const databaseLocation = requireNativeSqliteDatabase(seeded).location();
     closeOpenClawStateDatabaseForTest();
     retireFixtureAdmissions(databasePath);
     fs.renameSync(databasePath, `${databasePath}.seed`);
@@ -860,8 +862,9 @@ describe("external shared-state ownership", () => {
       )
       .run(STATE_SUPERVISION_KEY, '{"version":1,"mode":"external"}', Date.now());
     database.db.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
-    const location = database.db.location();
-    const owner = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
+    const owners = captureSqliteDatabaseAdmissions(undefined, { location: database.path });
+    assert.equal(owners.length, 1);
+    const [owner] = owners;
     assert(owner);
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -913,6 +916,8 @@ describe("external shared-state ownership", () => {
 
   it("fences state repair and config health writes while allowing health reads", async () => {
     const fixture = claimFixture();
+    // Maintenance can discard derived seal proof before refusing a database write.
+    invalidateSqliteDatabaseCleanClose(fixture.databasePath);
     if (process.platform !== "win32") {
       fs.chmodSync(fixture.databasePath, 0o666);
     }

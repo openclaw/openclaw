@@ -1,5 +1,5 @@
 ---
-summary: "Use Fish Audio S2.1 hosted TTS or local S2 Pro on Apple silicon"
+summary: "Use Fish Audio Drama 3 or S2.1 hosted TTS, or local S2 Pro on Apple silicon"
 read_when:
   - You want Fish Audio text-to-speech in OpenClaw
   - You want expressive or cloned voices with Fish Audio
@@ -9,7 +9,7 @@ title: "Fish Audio"
 
 OpenClaw supports Fish Audio in two distinct ways:
 
-- **Hosted S2.1** runs through the `fish-audio` speech provider on the Gateway and works across channels, voice notes, Talk, and telephony.
+- **Hosted S2.1 and Drama 3** run through the `fish-audio` speech provider on the Gateway and work across channels, voice notes, Talk, and telephony.
 - **Local S2 Pro** runs inside the native macOS app through the existing `mlx` Talk provider. It stays on the Mac and does not require a Fish API key.
 
 <Warning>
@@ -61,12 +61,13 @@ plugins, but `FISH_API_KEY` is the canonical Fish SDK environment variable.
 
 ### Hosted models
 
-| Model           | Use                                                                                        |
-| --------------- | ------------------------------------------------------------------------------------------ |
-| `s2.1-pro`      | Default. Production S2.1 service with the hosted service guarantees attached to your plan. |
-| `s2.1-pro-free` | Promotional S2.1 access that ended on August 31, 2026; no TTFA or DPA guarantees.          |
-| `s2-pro`        | Previous S2 generation.                                                                    |
-| `s1`            | Previous generation with parenthesized emotion controls.                                   |
+| Model             | Use                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| `drama-3-preview` | Preview. Natural-language voice direction and word-level delivery tags; behavior and availability may change. |
+| `s2.1-pro`        | Default. Production S2.1 service with the hosted service guarantees attached to your plan.                    |
+| `s2.1-pro-free`   | Promotional S2.1 access that ended on August 31, 2026; no TTFA or DPA guarantees.                             |
+| `s2-pro`          | Previous S2 generation.                                                                                       |
+| `s1`              | Previous generation with parenthesized emotion controls.                                                      |
 
 The provider requests MP3 for ordinary audio, Opus at 48 kHz for native voice
 notes, and raw PCM at 8 kHz for telephony. For Discord voice, OpenClaw consumes
@@ -83,6 +84,30 @@ S2 and S2.1 accept inline natural-language tags. Put them in the spoken text:
 
 Common tags include `[whisper]`, `[laughing]`, `[excited]`, `[sad]`, `[pause]`,
 and free-form instructions such as `[professional broadcast tone]`.
+
+### Drama 3 preview
+
+Set `tts.providers.fish-audio.model` to `"drama-3-preview"` to opt in. The
+provider continues to default to `s2.1-pro`; existing configurations do not
+automatically switch to the preview. For a Talk-specific override, use
+`talk.providers.fish-audio.modelId: "drama-3-preview"`.
+
+Drama 3 uses the same hosted API, API key, and voice ids. It accepts
+plain-language directions in square brackets, sounds and pauses, and paired
+tags that affect only the enclosed words:
+
+```text
+[calm, reassuring] We have time. [short pause] <whisper>One step at a time.</whisper>
+```
+
+Supported delivery tags include `<whisper>`, `<emphasis>`, `<soft>`, `<fast>`,
+`<slow>`, `<stress>`, and `<forceful>`. Directions belong in the spoken text,
+not a separate model or voice setting.
+
+See [Fish Audio Drama 3](https://docs.fish.audio/features/text-to-speech/drama-3)
+for direction examples and preview limitations. OpenClaw currently selects one
+Fish voice per synthesis request; Fish's multi-speaker `reference_id` arrays
+are not exposed by this provider.
 
 ### Voice selection and cloning
 

@@ -1,5 +1,4 @@
 import { createMemo, createSignal, onCleanup, untrack } from "solid-js";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
@@ -9,7 +8,7 @@ export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.
 
 type ChatComposerInput = ChatComposerProps & { renderRevision?: object };
 
-function ChatComposer(props: ChatComposerInput) {
+export function ChatComposer(props: ChatComposerInput) {
   const state = getChatComposerState(untrack(() => props.paneId));
   const [revision, setRevision] = createSignal(0);
   let inputDepth = 0;
@@ -98,8 +97,4 @@ function ChatComposer(props: ChatComposerInput) {
         Object.hasOwn(handlers, key) ? Reflect.get(handlers, key) : fields.get(String(key))?.(),
     }),
   );
-}
-
-export function renderChatComposer(props: ChatComposerProps) {
-  return solidTemplate(ChatComposer, { ...props, renderRevision: {} });
 }

@@ -1,6 +1,10 @@
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import {
+  sameFileIdentity,
+  type ExactFileIdentity,
+  type FileIdentityStat,
+} from "@openclaw/fs-safe/advanced";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { writeFileWindowFully } from "../infra/file-descriptor.js";
@@ -47,11 +51,11 @@ export function memoryHostEventExportOwnerContent(
   content: {
     currentSha256?: string;
     pendingSha256?: string;
-    identity?: FileIdentityStat;
+    identity?: ExactFileIdentity;
   },
 ): string {
   return `${JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     kind: "openclaw-memory-host-events-export",
     stateHash: owner.stateHash,
     workspaceHash: owner.workspaceHash,
@@ -156,7 +160,7 @@ export async function publishMemoryHostEventArtifact(params: {
   expectedOwnerContent: string;
   content: string;
   contentSha256: string;
-}): Promise<FileIdentityStat | undefined> {
+}): Promise<ExactFileIdentity | undefined> {
   const writeTarget = await openMemoryHostEventArtifact(() =>
     params.workspaceRoot.openWritable(params.owner.relativePath, {
       mode: 0o600,

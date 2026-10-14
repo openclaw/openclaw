@@ -477,7 +477,6 @@ export async function spawnAcpDirect(
         parentEntry,
         expectedParentSessionId: ctx.expectedParentSessionId,
         senderIsOwner: ctx.senderIsOwner,
-        readParentEntry,
       });
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
@@ -494,7 +493,6 @@ export async function spawnAcpDirect(
             subagentControlScope: admission.childSessionPatch.subagentControlScope,
           }
         : {};
-      await parentLineage.assertParentUnchanged();
       ctx.assertActive?.();
       childCreationEntry =
         (await upsertSessionEntryCore(
@@ -523,7 +521,7 @@ export async function spawnAcpDirect(
               : {}),
             ...(params.label ? { label: params.label } : {}),
             // Same trust rules as native spawn: stamped last, from trusted host facts only.
-            ...parentLineage.receipt,
+            ...parentLineage,
           },
           sessionEntryCommitGuardOptions(ctx.assertActive),
         )) ?? undefined;

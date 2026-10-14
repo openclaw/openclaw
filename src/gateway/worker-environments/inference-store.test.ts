@@ -27,6 +27,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { AcceptedWorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import {
@@ -323,7 +324,7 @@ describe("worker inference SQLite store", async () => {
               job.request.actor === target.actor &&
               reply.id === target.id &&
               !reply.ok &&
-              job.nativeDispatched &&
+              job.custody.dispatched &&
               refusal instanceof Error &&
               refusal.cause === ordinary
             ) {
@@ -492,7 +493,7 @@ describe("worker inference SQLite store", async () => {
           .mockImplementation((slot, reply, owner) => {
             if (
               slot.current?.request.type === "execute" &&
-              slot.current.nativeDispatched &&
+              slot.current.custody.dispatched &&
               reply.ok &&
               !reply.transfer &&
               !reply.input
@@ -755,8 +756,10 @@ describe("worker inference SQLite store", async () => {
     const outcome = { ...PROVIDER_ERROR, message: "🦞".repeat(128) };
     await completeTurn("run-first", outcome);
     await completeTurn("run-second", outcome);
-    const counter = trackSqliteStatementExecutions(database.db, ["inference"], (query) =>
-      query.includes("worker_inference_turns") ? "inference" : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["inference"],
+      (query) => (query.includes("worker_inference_turns") ? "inference" : null),
     );
     try {
       const kernel = createWorkerInferenceStoreKernel({ db: database.db, now: () => nowMs });

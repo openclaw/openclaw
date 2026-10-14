@@ -1,4 +1,3 @@
-import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,16 +6,18 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  SubscriptionsController,
+  type ControllerHost,
+} from "../../lit/subscriptions-controller.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
+import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
 import "../../components/web-awesome-popover.ts";
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
-import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
 import {
   appendChatAttachmentFiles,
   handleChatAttachmentPaste,
-  renderAttachmentPreview,
 } from "../chat/components/chat-attachments.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
@@ -31,7 +32,7 @@ import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-no
 registerCommandPaletteEnglish();
 
 /** Launcher-local prompt and selections; never binds the full page's durable draft or handoff. */
-export class PaletteSessionDraft implements ReactiveController {
+export class PaletteSessionDraft {
   private draft: NewSessionDraftController | undefined;
   private data: NewSessionRouteData | undefined;
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
@@ -47,7 +48,10 @@ export class PaletteSessionDraft implements ReactiveController {
   private readonly idPrefix = `palette-session-${++PaletteSessionDraft.nextId}`;
 
   constructor(
-    private readonly host: ReactiveControllerHost &
+    private readonly host: Pick<
+      ControllerHost,
+      "addController" | "removeController" | "requestUpdate" | "updateComplete"
+    > &
       Pick<HTMLElement, "isConnected" | "ownerDocument" | "querySelector" | "querySelectorAll">,
     private readonly read: () => { context: ApplicationContext | undefined; open: boolean },
     private readonly callbacks: {
@@ -136,7 +140,7 @@ export class PaletteSessionDraft implements ReactiveController {
     this.draft.submission.setMessage(value, mentions);
   }
 
-  private attachmentProps(): ChatAttachmentControlsProps | undefined {
+  attachmentProps(): ChatAttachmentControlsProps | undefined {
     const attachmentDraft = this.draft?.submission.attachmentDraft;
     if (!attachmentDraft) {
       return undefined;
@@ -190,14 +194,6 @@ export class PaletteSessionDraft implements ReactiveController {
     }
   }
 
-  renderAttachments() {
-    const props = this.attachmentProps();
-    const preview = props ? renderAttachmentPreview(props) : nothing;
-    return preview === nothing
-      ? nothing
-      : html`<div class="cmd-palette__attachments">${preview}</div>`;
-  }
-
   open() {
     this.synchronizePresentationScope();
     // Reopening cannot abandon a request or turn an uncertain create into a second one.
@@ -237,7 +233,11 @@ export class PaletteSessionDraft implements ReactiveController {
           pickerIdPrefix: this.idPrefix,
           preferenceScope: "palette",
           readPalettePreference: () => this.preferences.selection,
-          closeTransientUi: () => closeSessionMenus(this.host),
+          closeTransientUi: () => {
+            this.draft?.browser.close();
+            this.settings.close();
+            closeSessionMenus(this.host);
+          },
           onInvalidate: () => this.connectMachine.close(),
           onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
           onAccepted: (result) => this.accepted(result),
@@ -366,12 +366,12 @@ export class PaletteSessionDraft implements ReactiveController {
     this.draft?.disconnect();
   }
 
-  renderControls() {
+  settingsView() {
     const draft = this.draft;
     if (!draft) {
-      return nothing;
+      return undefined;
     }
-    return this.settings.render({
+    return this.settings.view({
       draft,
       context: this.read().context,
       preferences: this.preferences,
@@ -403,16 +403,12 @@ export class PaletteSessionDraft implements ReactiveController {
     this.draft.place.restorePreferenceSelections();
   }
 
-  renderRecovery() {
-    return this.rejectedOpen
-      ? html`<button class="btn btn--sm" type="button" @click=${this.rejectedOpen}>
-          ${t("sessionsView.openSession")}
-        </button>`
-      : undefined;
+  get recoveryAction() {
+    return this.rejectedOpen;
   }
 
-  renderAuxiliary() {
-    return this.connectMachine.render(
+  auxiliaryView() {
+    return this.connectMachine.view(
       this.read().open && (this.draft?.place.isAdmin() ?? false),
       () => {
         this.callbacks.onClose();

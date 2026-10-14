@@ -109,11 +109,9 @@ function SessionDiffContent(props: SessionDiffProps) {
   const fileTextCache = new WeakMap<FileView, Promise<string[] | null>>();
   const unavailableFileText = new WeakSet<FileView>();
   let generation = 0;
-  let disposed = false;
   const nativeGateways = nativeGatewaysCapability();
   const unsubscribe = nativeGateways?.subscribe(() => setMenu(null));
   onCleanup(() => {
-    disposed = true;
     generation += 1;
     unsubscribe?.();
   });
@@ -133,13 +131,7 @@ function SessionDiffContent(props: SessionDiffProps) {
     setPending(true);
     try {
       const result = prefetched ?? (await loader(requestedScope));
-      if (
-        disposed ||
-        request !== generation ||
-        props.loader !== loader ||
-        props.owner !== owner ||
-        untrack(scope) !== requestedScope
-      ) {
+      if (request !== generation) {
         return;
       }
       const views = result.files.map((file) => ({
@@ -154,17 +146,11 @@ function SessionDiffContent(props: SessionDiffProps) {
       const currentPaths = new Set(views.map((view) => view.file.path));
       setCollapsedPaths((paths) => new Set([...paths].filter((path) => currentPaths.has(path))));
     } catch (error) {
-      if (
-        !disposed &&
-        request === generation &&
-        props.loader === loader &&
-        props.owner === owner &&
-        untrack(scope) === requestedScope
-      ) {
+      if (request === generation) {
         setFailure({ error });
       }
     } finally {
-      if (!disposed && request === generation) {
+      if (request === generation) {
         setPending(false);
       }
     }
@@ -352,17 +338,8 @@ function SessionDiffContent(props: SessionDiffProps) {
       return;
     }
     const requestedScope = scope();
-    const owner = props.owner;
-    const fileTextLoader = props.loadFileText;
     const request = generation;
-    const isCurrent = () =>
-      !disposed &&
-      generation === request &&
-      props.loader === loader &&
-      props.owner === owner &&
-      props.loadFileText === fileTextLoader &&
-      scope() === requestedScope &&
-      Boolean(untrack(value)?.views.includes(view));
+    const isCurrent = () => generation === request && Boolean(untrack(value)?.views.includes(view));
     let freshResult: SessionsDiffResult;
     try {
       freshResult = await loader(requestedScope);

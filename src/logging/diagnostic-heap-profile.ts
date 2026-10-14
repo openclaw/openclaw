@@ -6,6 +6,7 @@ import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   assertProfile,
   captureDiagnosticProfile,
+  createInspectorProfileCapture,
   DIAGNOSTIC_PROFILE_MAX_BYTES,
   sanitizeDiagnosticProfileFrame,
 } from "./diagnostic-profile.js";
@@ -179,8 +180,10 @@ export function captureDiagnosticHeapProfile(
 ) {
   const samplingIntervalBytes = Math.max(4_096, options.samplingIntervalBytes ?? 32_768);
   const collectionOptions = {
-    includeObjectsCollectedByMajorGC: options.includeObjectsCollectedByMajorGC ?? false,
-    includeObjectsCollectedByMinorGC: options.includeObjectsCollectedByMinorGC ?? false,
+    includeObjectsCollectedByMajorGC:
+      options.includeObjectsCollectedByMajorGC ?? options.includeCollected ?? false,
+    includeObjectsCollectedByMinorGC:
+      options.includeObjectsCollectedByMinorGC ?? options.includeCollected ?? false,
   };
   const maxDurationMs =
     collectionOptions.includeObjectsCollectedByMajorGC ||
@@ -192,14 +195,17 @@ export function captureDiagnosticHeapProfile(
     signal: options.signal,
     hasAuthority: options.hasAuthority,
     durationMs,
-    setup: (session) => session.post("HeapProfiler.enable"),
-    start: (session) =>
-      session.post("HeapProfiler.startSampling", {
-        samplingInterval: samplingIntervalBytes,
-        ...collectionOptions,
+    create: (inspector) =>
+      createInspectorProfileCapture(inspector, {
+        setup: (session) => session.post("HeapProfiler.enable"),
+        start: (session) =>
+          session.post("HeapProfiler.startSampling", {
+            samplingInterval: samplingIntervalBytes,
+            ...collectionOptions,
+          }),
+        stop: (session) => session.post("HeapProfiler.stopSampling"),
+        disable: (session) => session.post("HeapProfiler.disable"),
       }),
-    stop: (session) => session.post("HeapProfiler.stopSampling"),
-    disable: (session) => session.post("HeapProfiler.disable"),
     sanitize: (profile, packageRoot, measurement) =>
       boundProfile(profile, packageRoot, {
         durationMs: measurement.durationMs,

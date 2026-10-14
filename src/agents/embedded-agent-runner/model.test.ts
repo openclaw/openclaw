@@ -13,6 +13,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../auth-profiles.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.owner.js";
 import { registerModelAuthReadTests } from "./model.auth-read.test-support.js";
 import {
@@ -26,6 +27,7 @@ let state: OpenClawTestState;
 let auth: ReturnType<typeof guardModelFixtureAuth>;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "model-resolution" });
+  prepareSharedAuthStoreOwnershipForNative(state.env);
   auth = guardModelFixtureAuth(state.root);
 });
 afterEach(async () => {

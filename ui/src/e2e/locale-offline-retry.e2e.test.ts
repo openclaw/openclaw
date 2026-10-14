@@ -8,6 +8,7 @@ import {
   startControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -28,12 +29,7 @@ async function createContext(): Promise<BrowserContext> {
 }
 
 async function gatewayPhase(page: Page): Promise<string | undefined> {
-  return page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-    };
-    return app.runtime?.context.gateway.snapshot.phase;
-  });
+  return page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase ?? undefined);
 }
 
 async function documentMarker(page: Page): Promise<string | undefined> {
@@ -75,8 +71,7 @@ suite.define(() => {
       expect(requests.size).toBe(0);
 
       for (const locale of SUPPORTED_LOCALES.slice(1)) {
-        await picker.locator(".picker-select__trigger").click();
-        await picker.locator(`[role="option"][data-value="${locale}"]`).click();
+        await selectPickerValue(picker, locale);
         await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(locale);
         expect(requests.get(locale)).toBe(1);
       }
@@ -115,8 +110,7 @@ suite.define(() => {
       });
 
       const languageSelect = page.locator("#settings-language openclaw-select-picker");
-      await languageSelect.locator(".picker-select__trigger").click();
-      await languageSelect.locator('[role="option"][data-value="fr"]').click();
+      await selectPickerValue(languageSelect, "fr");
 
       await expect.poll(() => abortedLocaleRequests).toBe(1);
       await page.locator(".settings-row__title", { hasText: "Language" }).waitFor();

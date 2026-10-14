@@ -103,7 +103,9 @@ function heldReads() {
   return { ...fixture, firstList, secondList, secondListStarted };
 }
 function installPageLifecycle() {
-  const documentEvents = new EventTarget();
+  const documentEvents = Object.assign(new EventTarget(), {
+    documentElement: { getAttribute: () => null },
+  });
   const pageEvents = new EventTarget();
   let visibilityState: DocumentVisibilityState = "visible";
   Object.defineProperty(documentEvents, "visibilityState", {

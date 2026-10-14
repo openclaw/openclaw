@@ -6,6 +6,7 @@ import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-
 import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { navigateToControlUiSession, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -180,15 +181,15 @@ export function defineSessionPlacementModuleBoundaryTests(
           })),
         ).toEqual({ hasSubtleCrypto: true, isSecureContext: true });
         await gateway.waitForRequest("environments.list");
-        const place = page.locator("wa-popover.new-session-page__where-popover");
+        const place = page.locator(".oc-popover.new-session-page__where-popover");
         await place.evaluate((element) => {
           const onAfterShow = (event: Event) => {
             if (event.target === element) {
-              element.removeEventListener("wa-after-show", onAfterShow);
+              element.removeEventListener("overlay-after-show", onAfterShow);
               element.setAttribute("data-test-picker-ready", "true");
             }
           };
-          element.addEventListener("wa-after-show", onAfterShow);
+          element.addEventListener("overlay-after-show", onAfterShow);
         });
         await page.locator("#new-session-where-trigger").click();
         await expect.poll(() => place.getAttribute("data-test-picker-ready")).toBe("true");
@@ -204,7 +205,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         await page.locator("#new-session-project-trigger").click();
         await page.locator('.new-session-page__project-popover [data-value="workspace"]').click();
         const checkoutTrigger = page.locator("#new-session-checkout-trigger");
-        const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+        const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
         await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
         await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
           "Starting branch",
@@ -257,7 +258,7 @@ export function defineSessionPlacementModuleBoundaryTests(
 
         // Both Gateway folders and registered projects remain eligible cloud sources.
         const projectTrigger = page.locator("#new-session-project-trigger");
-        const project = page.locator("wa-popover.new-session-page__project-popover");
+        const project = page.locator(".oc-popover.new-session-page__project-popover");
         await projectTrigger.click();
         await project.getByRole("button", { name: "Browse folders" }).click();
         await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
@@ -278,25 +279,19 @@ export function defineSessionPlacementModuleBoundaryTests(
         );
         await page.keyboard.press("Escape");
         await expect
-          .poll(() =>
-            checkout.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-          )
+          .poll(() => checkout.evaluate((element) => element.matches(":popover-open")))
           .toBe(false);
 
         await projectTrigger.click();
         await expect
-          .poll(() =>
-            project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-          )
+          .poll(() => project.evaluate((element) => element.matches(":popover-open")))
           .toBe(true);
         await project.getByRole("button", { name: "OpenClaw", exact: true }).click();
         await expect.poll(() => projectTrigger.getAttribute("data-project-id")).toBe("openclaw");
         await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
         await checkoutTrigger.click();
         await expect
-          .poll(() =>
-            checkout.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-          )
+          .poll(() => checkout.evaluate((element) => element.matches(":popover-open")))
           .toBe(true);
         await checkout.getByLabel("Name", { exact: true }).fill("cloud-e2e");
         await pollLocatorText(checkout.locator(".new-session-page__menu-note").last()).toContain(
@@ -342,11 +337,9 @@ export function defineSessionPlacementModuleBoundaryTests(
               "cloud-profile-refresh-retention",
               "01-before-refresh.png",
             ),
-            await takeControlUiViewportScreenshot(
-              page,
-              place.locator('wa-popup.popover > [part="popup"]'),
-              [place.locator('[data-value="cloud:aws"]')],
-            ),
+            await takeControlUiViewportScreenshot(page, place, [
+              place.locator('[data-value="cloud:aws"]'),
+            ]),
           );
           await page.keyboard.press("Escape");
         }
@@ -564,16 +557,11 @@ export function defineSessionPlacementModuleBoundaryTests(
         expect(childReads.length).toBeLessThanOrEqual(transitions.length + 1);
         await navigateToControlUiSession(page, "agent:cloud:neutral-e2e");
         await expect.poll(() => page.url()).toContain("neutral-e2e");
-        await page.evaluate((pathname) => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: {
-              context: {
-                navigate: (routeId: string, options: { pathname: string }) => void;
-              };
-            };
-          };
-          app.runtime?.context.navigate("chat", { pathname });
-        }, controlUiSessionPath(sessionKey));
+        await evaluateControlUiContext(
+          page,
+          (application, pathname) => application.navigate("chat", { pathname }),
+          controlUiSessionPath(sessionKey),
+        );
         await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
         await pollLocatorText(startupStatus).toContain("Starting…");
         expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);

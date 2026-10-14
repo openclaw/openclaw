@@ -202,12 +202,7 @@ suite.define(() => {
             gateway = undefined;
             signal.throwIfAborted();
             await page.waitForFunction(() => {
-              const app = document.querySelector("openclaw-app") as
-                | (HTMLElement & {
-                    runtime?: { context?: { gateway?: { snapshot?: { phase?: string } } } };
-                  })
-                | null;
-              return app?.runtime?.context?.gateway?.snapshot?.phase === "reconnecting";
+              return window.openclawControlUi?.snapshot().gatewayPhase === "reconnecting";
             });
             await expect
               .poll(() => page.locator(".gateway-status__label").textContent())

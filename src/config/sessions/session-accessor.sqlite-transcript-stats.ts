@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sql, type AliasableExpression } from "kysely";
 import {
   createSqliteQueryCache,
@@ -34,7 +35,7 @@ function transcriptStatsFromRow(row: TranscriptStatsRow | undefined): SessionTra
   };
 }
 
-const transcriptStatsQuery = createSqliteQueryCache((database) => {
+const transcriptStatsQuery = createSqliteQueryCache((database: DatabaseSync) => {
   const db = getSessionKysely(database);
   const prepare = (point: boolean, includeGeneration = false) =>
     prepareSqliteQuerySync<readonly string[], TranscriptStatsRow>(database, (parameter) => {
@@ -99,21 +100,41 @@ const transcriptStatsQuery = createSqliteQueryCache((database) => {
           ).as("generation"),
         ]);
     });
-  return { point: prepare(true), batch: prepare(false), export: prepare(true, true) };
+  return {
+    point: prepare(true),
+    batch: prepare(false),
+    export: prepare(true, true),
+    batchWithGeneration: prepare(false, true),
+  };
 });
 
 /** Read ordered stats in bounded statements, preserving duplicate and missing session IDs. */
 export function readTranscriptStatsBatchFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionIds: readonly string[],
-): SessionTranscriptStats[] {
+  options: { includeGeneration?: boolean } = {},
+): Array<SessionTranscriptStats & { generation?: string | null; cold?: boolean }> {
   const queries = transcriptStatsQuery(database.db);
   // Keep cheap indexed point reads for small requests; both shapes share projection and decoding.
   const point = sessionIds.length <= 10;
-  const read = point ? queries.point : queries.batch;
+  const read = options.includeGeneration
+    ? point
+      ? queries.export
+      : queries.batchWithGeneration
+    : point
+      ? queries.point
+      : queries.batch;
   return chunkItems(sessionIds, point ? 1 : 400).flatMap((chunk) => {
     const rows = new Map(read(chunk).rows.map((row) => [row.position, row]));
-    return chunk.map((_, position) => transcriptStatsFromRow(rows.get(position)));
+    return chunk.map((_, position) => {
+      const row = rows.get(position);
+      return {
+        ...transcriptStatsFromRow(row),
+        ...(options.includeGeneration
+          ? { generation: row?.generation ?? null, cold: row?.coldSessionId != null }
+          : {}),
+      };
+    });
   });
 }
 

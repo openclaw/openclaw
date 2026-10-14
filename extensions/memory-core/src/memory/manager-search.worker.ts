@@ -6,11 +6,17 @@ import {
 import {
   readCuratedMemoryTriggerCandidates,
   readCuratedProjectMemoryCandidates,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_STATE_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { withOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  readOpenClawAgentDatabaseIdentity,
+  withOpenClawAgentDatabaseReadOnly,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  getAdmittedSqliteSchemaFacts,
   runSqliteDeferredTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
@@ -21,10 +27,12 @@ import type {
 } from "../memory-entry-origins-task.js";
 import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
 import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
+import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
 import { readMemoryIndex, type MemoryIndexReadCommand } from "./manager-index-read.js";
 import {
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
+  readMemoryDatabaseFacts,
   type MemoryRecallData,
   type MemoryRecallQuery,
 } from "./manager-retrieval-read.js";
@@ -34,8 +42,8 @@ import {
   type searchKeyword,
   type searchPathKeyword,
 } from "./manager-search.js";
-import { assertMemoryShadowIdentity, type MemoryShadowConnection } from "./manager-shadow-task.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
+import { collectMemoryStatusSnapshot, type MemoryStatusQuery } from "./manager-status-state.js";
 
 type KeywordParameters = Omit<Parameters<typeof searchKeyword>[0], "db">;
 type PathParameters = Omit<Parameters<typeof searchPathKeyword>[0], "db">;
@@ -57,11 +65,12 @@ export type MemorySearchWorkerInput =
       | { kind: "keyword"; query: MemoryKeywordWorkerQuery; includeIndexState?: boolean }
       | { kind: "vector"; query: MemoryVectorWorkerQuery }
       | { kind: "index-state" }
+      | { kind: "admission" }
+      | { kind: "status"; query: MemoryStatusQuery }
       | { kind: "vector-load"; extensionPath?: string }
       | {
           kind: "index-read";
           command: MemoryIndexReadCommand;
-          fileIdentity: MemoryShadowConnection["fileIdentity"];
         }
       | ({ kind: "recall-metadata" } & MemoryRecallQuery)
       | {
@@ -79,6 +88,8 @@ export type MemorySearchWorkerOutput =
   | { kind: "prewarm" }
   | { kind: "presence"; present: boolean }
   | { kind: "index-state"; state: ReturnType<typeof readMemoryRetrievalIndexState> }
+  | { kind: "admission"; admission: MemoryDatabaseAdmission }
+  | { kind: "status"; snapshot: ReturnType<typeof collectMemoryStatusSnapshot> }
   | { kind: "vector-load"; result: Awaited<ReturnType<typeof loadSqliteVecExtension>> }
   | { kind: "index-read"; read: ReturnType<typeof readMemoryIndex> }
   | ({ kind: "recall-metadata" } & ReturnType<typeof readMemoryRecallData>)
@@ -125,15 +136,21 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     }
     return { kind: "recall-metadata", ...result.value };
   }
-  if (request.kind === "index-read") {
-    assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
-  }
   const target = { agentId: request.agentId, path: request.databasePath };
   const opened =
     request.kind === "vector-load"
       ? openOpenClawAgentDatabaseReadOnly(target, { allowExtension: true })
       : retainOpenClawAgentDatabaseReadOnly(target);
   if (!opened.found) {
+    if (opened.reason === "database-missing" && request.kind === "admission") {
+      return { kind: "admission", admission: { hasIndex: false, ftsAvailable: false } };
+    }
+    if (opened.reason === "database-missing" && request.kind === "status") {
+      return {
+        kind: "status",
+        snapshot: collectMemoryStatusSnapshot(undefined, request.databasePath, request.query),
+      };
+    }
     if (
       opened.reason === "database-missing" &&
       (request.kind === "index-state" || (request.kind === "keyword" && request.includeIndexState))
@@ -152,6 +169,33 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   }
   const { db } = opened.database;
   try {
+    if (request.kind === "admission" || request.kind === "status") {
+      const schema = getAdmittedSqliteSchemaFacts(db);
+      if (!schema) {
+        throw new Error("Memory reader requires admitted schema facts");
+      }
+      const hasIndex = schema.tables.has(MEMORY_INDEX_STATE_TABLE);
+      if (request.kind === "admission") {
+        return {
+          kind: "admission",
+          admission: {
+            hasIndex,
+            ftsAvailable: hasIndex && schema.tables.has(MEMORY_INDEX_FTS_TABLE),
+            facts: hasIndex ? readMemoryDatabaseFacts(db) : undefined,
+            identity: readOpenClawAgentDatabaseIdentity(opened.database),
+            schemaVersion: schema.userVersion,
+          },
+        };
+      }
+      return {
+        kind: "status",
+        snapshot: collectMemoryStatusSnapshot(
+          hasIndex ? db : undefined,
+          request.databasePath,
+          request.query,
+        ),
+      };
+    }
     if (request.kind === "vector-load") {
       return {
         kind: "vector-load",
@@ -159,7 +203,6 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       };
     }
     if (request.kind === "index-read") {
-      assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
       const read = () => readMemoryIndex(db, request.command);
       return {
         kind: "index-read",

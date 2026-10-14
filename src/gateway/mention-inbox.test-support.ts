@@ -31,21 +31,28 @@ import { usersMentionableHandlers } from "./server-methods/users-mentionable.js"
 export const SESSION_KEY = "agent:main:dashboard:mention-test";
 export const SESSION_ID = "mention-test-session";
 const handlers = { ...mentionHandlers, ...usersMentionableHandlers };
-type InboxFixtureOptions = { notifications?: boolean; beforeInbox?: () => void };
+type InboxFixtureOptions = {
+  notifications?: boolean;
+  beforeInbox?: () => void;
+  retainProfileCatalog?: boolean;
+};
 
 export async function withMentionInbox(
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
   cfg: OpenClawConfig = {},
   options: InboxFixtureOptions = {},
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = await createFixture(cfg, options);
-    try {
-      await run(fixture);
-    } finally {
-      await fixture.dispose();
-    }
-  });
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: options.retainProfileCatalog !== false },
+    async () => {
+      const fixture = await createFixture(cfg, options);
+      try {
+        await run(fixture);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
 }
 
 async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) {
@@ -77,7 +84,8 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
       },
     );
   await setSession({ displayName: "Design review" });
-  const catalog = await prepareUserProfileCatalog();
+  const catalog =
+    options.retainProfileCatalog === false ? undefined : await prepareUserProfileCatalog();
   const inboxes = new Set<MentionInbox>();
   const openInbox = (gatewayInstanceId = "mention-gateway") => {
     const inbox = createMentionInbox({
@@ -149,7 +157,7 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
         await Promise.all([...inboxes].map((instance) => instance.dispose()));
         await scheduler.stop();
       } finally {
-        catalog.release();
+        catalog?.release();
       }
     },
     post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}, target = inbox) {

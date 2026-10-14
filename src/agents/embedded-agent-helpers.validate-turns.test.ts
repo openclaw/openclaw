@@ -55,37 +55,49 @@ describe("turn validation", () => {
     ).toEqual([...prefix, assistant([text("Answer"), text("Extra")]), user("Next")]);
   });
 
-  it("keeps consecutive users separate when merging is disabled", () => {
+  it("keeps consecutive users and assistants separate when merging is disabled", () => {
     const messages = asMessages([
       user("Switch model"),
       user("Read notes.txt"),
       assistant([text("Done")]),
+      assistant([text("Extra")]),
     ]);
-    expect(validateAnthropicTurns(messages, { mergeConsecutiveUserTurns: false })).toEqual(
-      messages,
-    );
+    expect(validateAnthropicTurns(messages, { mergeConsecutiveTurns: false })).toEqual(messages);
   });
 
-  it("merges injected assistant turns before checking signed tool-result pairing", () => {
-    const result = {
-      role: "toolResult",
-      toolUseId: "tool-1",
-      toolName: "gateway",
-      content: [text("done")],
-      isError: false,
-    };
-    expect(
-      validateToolTurn(
-        signed(),
-        [{ ...assistant([text("Subagent completion delivered.")]), stopReason: "stop" }, result],
-        { stopReason: "toolUse" },
-      ),
-    ).toEqual([
-      user("Use tool"),
-      { ...assistant([...signed(), text("Subagent completion delivered.")]), stopReason: "stop" },
-      result,
-    ]);
-  });
+  it.each([true, false])(
+    "preserves signed tool-result pairing across an injected assistant (merging=%s)",
+    (mergeConsecutiveTurns) => {
+      const result = {
+        role: "toolResult",
+        toolUseId: "tool-1",
+        toolName: "gateway",
+        content: [text("done")],
+        isError: false,
+      };
+      const source = { ...assistant(signed()), stopReason: "toolUse" };
+      const injected = {
+        ...assistant([text("Subagent completion delivered.")]),
+        stopReason: "stop",
+      };
+      expect(
+        validateAnthropicTurns(asMessages([user("Use tool"), source, injected, result]), {
+          mergeConsecutiveTurns,
+        }),
+      ).toEqual([
+        user("Use tool"),
+        ...(mergeConsecutiveTurns
+          ? [
+              {
+                ...assistant([...signed(), text("Subagent completion delivered.")]),
+                stopReason: "stop",
+              },
+            ]
+          : [source, injected]),
+        result,
+      ]);
+    },
+  );
 
   it("normalizes string user content while merging", () => {
     expect(

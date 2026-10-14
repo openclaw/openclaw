@@ -465,7 +465,7 @@ async function resolveProvisionedSandboxContext(
           } catch (error) {
             params.assertCurrent?.();
             const message = error instanceof Error ? error.message : JSON.stringify(error);
-            defaultRuntime.error?.(`Sandbox browser auth ensure failed: ${message}`);
+            defaultRuntime.error?.(`Sandbox browser auth setup failed: ${message}`);
           }
           return browserAuth;
         })()
@@ -501,6 +501,7 @@ async function resolveProvisionedSandboxContext(
         : {}),
       backendId: backend.id,
       sessionKey: rawSessionKey,
+      agentId: runtime.agentId,
       workspaceDir,
       agentWorkspaceDir,
       skillsWorkspaceDir,

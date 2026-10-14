@@ -2051,48 +2051,48 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
-    const sessionKey = "agent:main:direct:canonical-claude-cli";
-    const sessionEntry = makeSessionEntry("openclaw-session-canonical-cli");
-    const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical cli"));
-    const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
-    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
-    const imageOrder = ["inline" as const];
+  it.each([undefined, "lightweight"] as const)(
+    "routes canonical Anthropic models through CLI with %s bootstrap context",
+    async (bootstrapContextMode) => {
+      const sessionKey = "agent:main:direct:canonical-claude-cli";
+      const sessionEntry = makeSessionEntry("openclaw-session-canonical-cli");
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical cli"));
+      const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
+      const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
 
-    await runStoredAttempt({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-7",
-      cfg: cliRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
-      sessionEntry,
-      sessionKey,
-      body: "route this",
-      isFallbackRetry: true,
-      runId: "run-canonical-claude-cli",
-      opts: { images, imageOrder },
-      messageChannel: "telegram",
-      sessionStore,
-      fallbackRuntimeState,
-    });
+      await runStoredAttempt({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        cfg: cliRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
+        sessionEntry,
+        sessionKey,
+        body: "route this",
+        isFallbackRetry: true,
+        opts: { images, imageOrder: ["inline"], bootstrapContextMode },
+        sessionStore: await seedSessionStore(sessionKey, sessionEntry),
+        fallbackRuntimeState,
+      });
 
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expectMockArgFields(runCliAgentMock, {
-      provider: "claude-cli",
-      model: "claude-opus-4-7",
-      imagePrompt: "route this",
-      images,
-      imageOrder,
-    });
-    expect(fallbackRuntimeState.originRuntime).toBe("cli");
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expectMockArgFields(runCliAgentMock, {
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        imagePrompt: "route this",
+        images,
+        imageOrder: ["inline"],
+        bootstrapContextMode,
+      });
+      expect(fallbackRuntimeState.originRuntime).toBe("cli");
 
-    const fallbackArg = await runOpenClawEmbeddedAttemptForTest({
-      runId: "run-canonical-claude-cli-fallback",
-      isFallbackRetry: true,
-      fallbackRuntimeState,
-      opts: { images },
-    });
-    expect(fallbackArg.images).toEqual(images);
-  });
+      const fallbackArg = await runOpenClawEmbeddedAttemptForTest({
+        isFallbackRetry: true,
+        fallbackRuntimeState,
+        opts: { images, bootstrapContextMode },
+      });
+      expect(fallbackArg.images).toEqual(images);
+      expect(fallbackArg.bootstrapContextMode).toBe(bootstrapContextMode);
+    },
+  );
 
   it("publishes logical cancellation before an embedded-to-CLI fallback starts", async () => {
     const sessionKey = "agent:main:direct:cli-lifecycle-handoff";

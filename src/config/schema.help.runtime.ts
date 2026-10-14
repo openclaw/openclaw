@@ -319,6 +319,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Opt in to full OpenClaw worker session hosting from Gateway-managed bundles. Disabled by default.",
   "nodeHost.workerRuns.enabled":
     "Allow this paired node to host sessions from exact bundles installed by its Gateway (default: false).",
+  "nodeHost.workerRuns.folders":
+    "Optional directory roots restricting in-place sessions to those roots and their subdirectories. Unset allows any existing directory except filesystem roots and private worker storage; [] disables device-folder sessions. Use absolute or ~/ paths. Existing files stay on the device; session deletion never removes these folders. Requires workerRuns.enabled.",
   "nodeHost.workerRuns.capacity":
     "Maximum concurrent worker sessions hosted by this node (default: the number of available CPU cores). Must be an integer from 1 through 1024.",
   "nodeHost.workerRuns.isolation":
@@ -534,7 +536,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "skills.load.allowSymlinkTargets":
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
-    "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
+    "Enable passive skill rescans in one background worker about once per minute. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
   "skills.workshop.autonomous.mode":
     'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "off" disables background learning. Default: "auto".',
   "skills.workshop.autonomous.channelNotices":

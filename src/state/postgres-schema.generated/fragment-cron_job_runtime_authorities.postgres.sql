@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."cron_job_runtime_authorities" (
+CREATE TABLE "cron_job_runtime_authorities" (
   "store_key" text COLLATE "C" NOT NULL,
   "job_id" text COLLATE "C" NOT NULL,
   "authority_json" text COLLATE "C",
@@ -15,6 +11,4 @@ CREATE TABLE "openclaw_state"."cron_job_runtime_authorities" (
   CHECK ((("recovery_required" = 0) AND "authority_json" IS NOT NULL AND "authority_input_fingerprint" IS NOT NULL) OR (("recovery_required" = 1) AND "authority_json" IS NULL AND "authority_input_fingerprint" IS NULL))
 );
 
-ALTER TABLE "openclaw_state"."cron_job_runtime_authorities" ADD FOREIGN KEY ("store_key", "job_id") REFERENCES "openclaw_state"."cron_jobs" ("store_key", "job_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
-
-COMMIT;
+ALTER TABLE "cron_job_runtime_authorities" ADD FOREIGN KEY ("store_key", "job_id") REFERENCES "cron_jobs" ("store_key", "job_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

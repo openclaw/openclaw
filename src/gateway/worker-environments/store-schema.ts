@@ -1,5 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../../infra/sqlite-schema-facts.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -7,28 +12,37 @@ import {
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL } from "./session-attachment-store.js";
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
+const ensuredDatabases = new WeakMap<EngineConnection, SqliteSchemaFacts>();
 const WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(
   "worker_environment_ssh_fallback_ports",
+);
+const ensureStoreSchema = createSqliteSchemaEnsurer(
+  () =>
+    `${WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL}\n${WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL}`,
+  {
+    tables: ["worker_environment_ssh_fallback_ports", "worker_environment_session_attachments"],
+    indexes: ["worker_environment_session_attachments_session_key"],
+  },
 );
 
 /** The worker store prepares its additive companion tables together on first use. */
 export function ensureWorkerEnvironmentStoreSchema(database: OpenClawStateDatabase): void {
-  if (ensuredDatabases.has(database.db)) {
+  const facts = getAdmittedSqliteSchemaFacts(database.db);
+  if (facts && ensuredDatabases.get(database.db) === facts) {
     return;
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; companion row operations use Kysely.
-      db.exec(
-        `${WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL}\n${WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL}`,
-      );
+      ensureStoreSchema(db);
     },
     { database },
     { operationLabel: "worker-environments.companion.schema.ensure" },
   );
   const remember = () => {
-    ensuredDatabases.add(database.db);
+    const initialized = getAdmittedSqliteSchemaFacts(database.db);
+    if (initialized) {
+      ensuredDatabases.set(database.db, initialized);
+    }
   };
   if (!deferSqlitePostCommitPublication(database.db, remember)) {
     remember();

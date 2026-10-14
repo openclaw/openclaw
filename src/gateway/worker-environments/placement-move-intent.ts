@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
@@ -8,6 +7,12 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureColumn, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type {
@@ -47,31 +52,38 @@ type MoveSourceCompletion = {
   expectedGeneration: number;
 };
 
-const moveQuery = (db: DatabaseSync) => getNodeSqliteKysely<MoveDatabase>(db);
+const moveQuery = (db: EngineConnection) => getNodeSqliteKysely<MoveDatabase>(db);
 
 // Placement reads feed the resident session projection; do not repeat DDL/PRAGMA per row.
-const ensuredMoveSchemaHandles = new WeakSet<DatabaseSync>();
-
-function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
-  if (ensuredMoveSchemaHandles.has(db)) {
-    return;
-  }
-  // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
-  db.exec(
+const ensuredMoveSchemaHandles = new WeakMap<EngineConnection, SqliteSchemaFacts>();
+const installWorkerPlacementMoveSchema = createSqliteSchemaEnsurer(
+  () =>
     getOpenClawStateFeatureSchemaSql("worker_session_placement_moves", {
       errorMessage: "Worker placement move schema marker is missing",
     }),
-  );
+  { tables: ["worker_session_placement_moves"] },
+);
+
+function ensureWorkerPlacementMoveSchema(db: EngineConnection): void {
+  const facts = getAdmittedSqliteSchemaFacts(db);
+  if (facts && ensuredMoveSchemaHandles.get(db) === facts) {
+    return;
+  }
+  installWorkerPlacementMoveSchema(db);
   // Databases that created this table before the column shipped upgrade in place;
   // the column is bare and nullable, so old readers stay compatible.
   ensureColumn(db, "worker_session_placement_moves", "target_machine_class TEXT");
   ensureColumn(db, "worker_session_placement_moves", "target_os TEXT");
   ensureColumn(db, "worker_session_placement_moves", "abandon_source INTEGER");
-  ensuredMoveSchemaHandles.add(db);
+  const initialized = getAdmittedSqliteSchemaFacts(db);
+  if (initialized) {
+    ensuredMoveSchemaHandles.set(db, initialized);
+  }
 }
 
-function ensureExistingWorkerPlacementMoveSchema(db: DatabaseSync): boolean {
-  if (ensuredMoveSchemaHandles.has(db)) {
+function ensureExistingWorkerPlacementMoveSchema(db: EngineConnection): boolean {
+  const facts = getAdmittedSqliteSchemaFacts(db);
+  if (facts && ensuredMoveSchemaHandles.get(db) === facts) {
     return true;
   }
   // Reads stay lazy: never create the optional table from a read path.
@@ -226,7 +238,7 @@ export function workerPlacementMoveFromRow(row: MoveRow): WorkerPlacementMoveInt
 }
 
 function findMoveRow(
-  db: DatabaseSync,
+  db: EngineConnection,
   column: "session_id" | "operation_id",
   value: string,
 ): MoveRow | undefined {
@@ -244,7 +256,7 @@ function findMoveRow(
 
 /** Display reads tolerate the shipped additive columns without mutating their source. */
 export function readWorkerPlacementMovesReadOnly(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionIds: readonly string[],
 ): ReadonlyMap<string, WorkerPlacementMoveIntent> {
   const results = new Map<string, WorkerPlacementMoveIntent>();
@@ -272,7 +284,7 @@ export function readWorkerPlacementMovesReadOnly(
 }
 
 function requireExactMove(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { operationId: string; sessionId: string },
 ): WorkerPlacementMoveIntent {
   const operationId = normalizeOperationId(input.operationId);
@@ -296,7 +308,7 @@ function exactMoveValues(intent: WorkerPlacementMoveIntent) {
   };
 }
 
-function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): void {
+function deleteExactMove(db: EngineConnection, intent: WorkerPlacementMoveIntent): void {
   const statement = moveQuery(db)
     .deleteFrom("worker_session_placement_moves")
     .where((eb) => eb.and(exactMoveValues(intent)));
@@ -308,7 +320,7 @@ function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): v
 }
 
 function requireExactAttachedEnvironment(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: {
     sessionId: string;
     environmentId: string;

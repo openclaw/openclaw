@@ -166,7 +166,8 @@ describe("update recovery reporting", () => {
         cwd: "/fixture",
         durationMs: 1,
         exitCode: 1,
-        stderrTail: "Runtime inventory refused a retained backup link",
+        stderrTail: "Cannot safely retain a host-owned plugin dependency",
+        failureFacts: [{ check: "updater-runtime-retention", code: "host-owned-plugin-link" }],
       };
       const result = failure({
         reason: "update-failed",
@@ -212,9 +213,11 @@ describe("update recovery reporting", () => {
       expect(reportPath).toBeDefined();
       const markdown = fs.readFileSync(reportPath!.slice("Report: ".length), "utf8");
       for (const output of [terminal, markdown, stored?.origin.nextAction ?? ""]) {
+        expect(output).toContain("https://docs.openclaw.ai/cli/update#runtime-retention-failures");
+        expect(output).toContain("Do not skip runtime retention");
         if (healthy) {
           expect(output).toContain("Your Gateway is still serving 2026.9.6; nothing to restore.");
-          expect(output).toContain("Fix update-failed then run `openclaw update` again.");
+          expect(output).toContain("After repairing the link, retry the update.");
           expect(output).not.toContain("did not pass verification");
         } else {
           expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");
@@ -514,6 +517,48 @@ describe("update recovery reporting", () => {
     expect(action).toContain("retained migration originals eligible for permanent cleanup");
     expect(action).toContain("`openclaw --profile work update cleanup --dry-run`");
     expect(action).toContain("state `/fixture/state`");
+    expect(action).toContain("stop the Gateway first (`openclaw --profile work gateway stop`)");
     expect(action).toContain("Use the same profile, state, and config settings.");
   });
+
+  it.each([false, true])(
+    "retains plugin activation guidance when restart was skipped (core current=%s)",
+    async (coreAlreadyCurrent) => {
+      const run = createRun({ profile: "work" });
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      await publishUpdateCommandTerminalResult(
+        { opts: { json: true, restart: false, run }, coreAlreadyCurrent },
+        {
+          status: "ok",
+          mode: "npm",
+          before: { version: coreAlreadyCurrent ? "2026.9.7" : "2026.9.6" },
+          after: { version: "2026.9.7" },
+          steps: [],
+          durationMs: 0,
+          postUpdate: {
+            plugins: {
+              status: "ok",
+              changed: true,
+              sync: {
+                changed: false,
+                switchedToBundled: [],
+                switchedToNpm: [],
+                warnings: [],
+                errors: [],
+              },
+              npm: { changed: true, outcomes: [] },
+              integrityDrifts: [],
+            },
+          },
+        },
+        { rolledBack: false },
+      );
+      const stored = getUpdateRun(run.runId, { env: run.env });
+      const action =
+        "Plugins updated; Gateway restart skipped (--no-restart). Run `openclaw --profile work gateway restart` to activate them in the running Gateway.";
+      expect(stored?.origin.nextAction).toBe(action);
+      expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
+      expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
+    },
+  );
 });

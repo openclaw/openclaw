@@ -44,21 +44,14 @@ export async function readExpiredCronRunEntriesInWorker(
   assertAgentDatabaseAdmitted(expiredCronRuns.agentId, { env: input.env });
   return withSessionStoreReaderInWorker(
     input,
-    async ({ reader, database, assertCurrent }) => {
-      const assertAdmitted = () => {
-        assertAgentDatabaseAdmitted(expiredCronRuns.agentId, { env: database.env });
-        assertAgentDatabaseAdmitted(database.agentId, { env: database.env });
-      };
-      assertAdmitted();
-      const { entries } = await reader.readEntries({
+    async ({ reader, database }) => {
+      const { entries, nextCronRunUpdatedAt } = await reader.readEntries({
         agentId: database.agentId,
         storePath: database.path,
         env: database.env,
         expiredCronRuns,
       });
-      assertAdmitted();
-      assertCurrent();
-      return entries;
+      return { entries, nextCronRunUpdatedAt };
     },
     { lane: maintenanceLane, dataOnly: true },
   );

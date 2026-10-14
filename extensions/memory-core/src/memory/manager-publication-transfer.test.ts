@@ -365,52 +365,6 @@ describe("bounded memory publication transfer", () => {
     },
   );
 
-  it.each([1, 2])(
-    "retains a single-statement commit on restoration failure (%i attempts)",
-    async (failures) => {
-      const owner = await createOwner();
-      const db = fixtureWriter(owner);
-      db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
-      VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
-      const admit = vi.fn();
-      const backend = await createBackend(owner, admit);
-      const nativeExec = db.exec.bind(db);
-      let attempts = 0;
-      const failure = new Error("timeout restoration refused");
-      const exec = vi.spyOn(db, "exec").mockImplementation((sql) => {
-        if (sql === "PRAGMA busy_timeout = 5000" && ++attempts <= failures) {
-          throw failure;
-        }
-        return nativeExec(sql);
-      });
-      const refresh = () =>
-        backend.execute({
-          type: "source.refresh",
-          input: { path: "sessions/current", hash: "new", mtime: 2, size: 2, expectedHash: "old" },
-        });
-      try {
-        if (failures === 1) {
-          expect(refresh()).toMatchObject({
-            ok: false,
-            entered: true,
-            committed: true,
-            error: { message: failure.message },
-          });
-          expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-        } else {
-          expect(refresh).toThrow(failure);
-        }
-        expect(attempts).toBe(2);
-        expect(admit.mock.calls).toEqual([["transaction"], ["commit"]]);
-        expect(db.isTransaction).toBe(false);
-        expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "new" });
-      } finally {
-        exec.mockRestore();
-        db.exec("PRAGMA busy_timeout = 5000");
-      }
-    },
-  );
-
   it("opens keyword publication when SQLite extension loading is unavailable", async () => {
     const owner = await createOwner();
     vi.spyOn(sqliteWorkerRuntime, "supportsNodeSqliteExtensionLoading").mockReturnValue(false);

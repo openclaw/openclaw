@@ -87,6 +87,7 @@ async function waitForQueuedLane(lane: string): Promise<void> {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
 });

@@ -34,6 +34,7 @@ import type {
   WorkboardLinkedCreateInput,
   WorkboardListOptions,
   WorkboardMutationScope,
+  WorkboardOwnedCardPatch,
   WorkboardStatsResult,
   WorkboardUpdateCardOptions,
 } from "./store-inputs.js";
@@ -69,15 +70,19 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   private compensationJournal?: WorkboardMutationJournalEntry[];
 
   protected async withCardCompensation<T>(run: () => Promise<T>): Promise<T> {
-    if (this.compensationJournal) {
-      return await run();
-    }
     const journal: WorkboardMutationJournalEntry[] = [];
     this.compensationJournal = journal;
     try {
       return await run();
     } catch (operationError) {
-      const compensationErrors = await this.rollbackCardMutations(journal);
+      const compensationErrors: unknown[] = [];
+      for (const { before, after } of journal.toReversed()) {
+        try {
+          await this.rollbackCardMutation(before, after);
+        } catch (error) {
+          compensationErrors.push(error);
+        }
+      }
       if (compensationErrors.length > 0) {
         const message =
           operationError instanceof Error ? operationError.message : String(operationError);
@@ -94,20 +99,6 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   private recordCardMutation(before: WorkboardCard | undefined, after: WorkboardCard): void {
     // Undo later steps first so each saved state is restored before its predecessor.
     this.compensationJournal?.push({ before, after });
-  }
-
-  private async rollbackCardMutations(
-    journal: WorkboardMutationJournalEntry[],
-  ): Promise<unknown[]> {
-    const errors: unknown[] = [];
-    for (const entry of journal.toReversed()) {
-      try {
-        await this.rollbackCardMutation(entry.before, entry.after);
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    return errors;
   }
 
   async compensateWorkspaceMutation(before: WorkboardCard, after: WorkboardCard): Promise<void> {
@@ -171,7 +162,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
 
   protected async updateLatestCard(
     id: string,
-    buildPatch: (current: WorkboardCard) => WorkboardCardPatch | undefined,
+    buildPatch: (current: WorkboardCard) => WorkboardOwnedCardPatch | undefined,
     options: WorkboardUpdateCardOptions = {},
   ): Promise<{ card: WorkboardCard; updated: boolean }> {
     const current = await this.requireCard(id);
@@ -181,12 +172,14 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     ) {
       throw new WorkboardCardConflictError(current);
     }
-    const patch = buildPatch(current);
-    if (!patch) {
+    const ownedPatch = buildPatch(current);
+    if (!ownedPatch) {
       return { card: current, updated: false };
     }
+    const { ownedLaunch, ...patch } = ownedPatch;
     const card = await this.updateCard(current, patch, {
       ...options,
+      automationLaunch: ownedLaunch,
       expectedUpdatedAt: current.updatedAt,
     });
     return { card, updated: card.updatedAt !== current.updatedAt };
@@ -577,7 +570,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
-      allowAutomationLaunch: options.allowAutomationLaunch,
+      automationLaunch: options.automationLaunch,
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
       preserveProofId: options.preserveProofId,
     });
@@ -718,13 +711,8 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       return;
     }
     const parents = cardParentIds(next);
-    if (parents.length > 0) {
-      const cards = new Map(
-        (await this.store.listCardStatuses(parents)).map((card) => [card.id, card]),
-      );
-      if (!parents.every((parentId) => cards.get(parentId)?.status === "done")) {
-        throw new Error("card dependencies are not done.");
-      }
+    if (parents.length > 0 && !(await this.parentsDone(parents))) {
+      throw new Error("card dependencies are not done.");
     }
     if (next.status === "done") {
       return;
@@ -848,10 +836,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       const parentIds = [...cardParentIds(child), parent.id].filter(
         (id, index, ids) => ids.indexOf(id) === index,
       );
-      const cardsById = new Map(
-        (await this.store.listCardStatuses(parentIds)).map((card) => [card.id, card]),
-      );
-      if (parentIds.some((id) => cardsById.get(id)?.status !== "done")) {
+      if (!(await this.parentsDone(parentIds))) {
         throw new Error("terminal child cards cannot gain incomplete parent dependencies.");
       }
     }
@@ -889,6 +874,13 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     return await this.promoteDependencyReady(nextChild.id);
   }
 
+  protected async parentsDone(parentIds: readonly string[]): Promise<boolean> {
+    const statusById = new Map(
+      (await this.store.listCardStatuses(parentIds)).map((card) => [card.id, card.status]),
+    );
+    return parentIds.every((id) => statusById.get(id) === "done");
+  }
+
   private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
     const scheduledAt = card.metadata?.automation?.scheduledAt;
     const parents = cardParentIds(card);
@@ -901,11 +893,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       }
       return card.status === "scheduled" ? "ready" : card.status;
     }
-    const parentIds = parents.map((parentId) => parentId.trim());
-    const parentCards = new Map(
-      (await this.store.listCardStatuses(parentIds)).map((parent) => [parent.id, parent]),
-    );
-    const parentsDone = parentIds.every((id) => parentCards.get(id)?.status === "done");
+    const parentsDone = await this.parentsDone(parents.map((parentId) => parentId.trim()));
     if (!isDependencyPromotableStatus(card.status)) {
       return card.status;
     }

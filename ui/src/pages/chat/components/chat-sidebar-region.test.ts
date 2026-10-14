@@ -3,12 +3,13 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { emptyLegacyContent, solidContent } from "../../../lit/solid-content.tsx";
-import "../../../components/resizable-divider.ts";
 import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
+import "../../../components/resizable-divider.ts";
 import {
   ControlUiPluginRuntime,
   type ControlUiPluginOwner,
 } from "../../../plugins/control-ui-runtime.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
@@ -510,18 +511,18 @@ describe("chat sidebar region", () => {
         }),
       );
       await region.updateComplete;
+      root(region).querySelector<HTMLButtonElement>(".side-panel-type-menu__trigger")!.click();
+      await waitForSolid(() =>
+        expect(root(region).querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+      );
       const menuItem = Array.from(
-        root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
+        root(region).querySelectorAll<HTMLButtonElement>(".side-panel-type-menu__item"),
       ).find((item) => Reflect.get(item, "value") === slot);
 
       expect(menuItem).toBeDefined();
-      root(region)
-        .querySelector(".side-panel-type-menu")
-        ?.dispatchEvent(
-          new CustomEvent("wa-select", { bubbles: true, detail: { item: { value: slot } } }),
-        );
+      menuItem!.click();
 
-      expect(region.callbacks?.openSlot).toHaveBeenCalledWith(slot);
+      await waitForSolid(() => expect(region.callbacks?.openSlot).toHaveBeenCalledWith(slot));
       expect(region.callbacks?.openSlot).toHaveBeenCalledBefore(handleToggleRequest);
       expect(handleToggleRequest).toHaveBeenCalledWith(
         expect.objectContaining({ type: eventType, detail }),
@@ -578,6 +579,13 @@ describe("chat sidebar region", () => {
     );
     await region.updateComplete;
 
+    expect(
+      root(region).querySelector(".side-panel-type-menu__trigger")?.getAttribute("aria-expanded"),
+    ).toBe("false");
+    root(region).querySelector<HTMLButtonElement>(".side-panel-type-menu__trigger")!.click();
+    await waitForSolid(() =>
+      expect(root(region).querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+    );
     expect(
       Array.from(root(region).querySelectorAll(".side-panel-type-menu__item"), (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),

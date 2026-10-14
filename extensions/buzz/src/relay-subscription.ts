@@ -20,7 +20,6 @@ type BuzzRelaySnapshotParams<TResult> = {
   result: () => TResult;
   onTimeout?: (error: Error) => void;
   closeRelayOnTimeout?: boolean;
-  checkAbortAfterSubscribe?: boolean;
 };
 
 export function openBuzzRelaySubscription(
@@ -35,17 +34,7 @@ export function openBuzzRelaySubscription(
   relay.idleSince = undefined;
   relay.ongoingOperations += 1;
 
-  let subscription: ReturnType<Relay["prepareSubscription"]>;
-  try {
-    subscription = relay.prepareSubscription(filters, params);
-  } catch (error) {
-    relay.ongoingOperations -= 1;
-    if (relay.ongoingOperations === 0) {
-      relay.idleSince = Date.now();
-      relay.scheduleIdleClose();
-    }
-    throw error;
-  }
+  const subscription = relay.prepareSubscription(filters, params);
 
   // Buzz can route on stored channel metadata absent from signed event tags.
   // Gateway owns reconnects; nostr-tools automatic refires must stay disabled
@@ -119,7 +108,6 @@ async function queryBuzzRelaySnapshotNow<TResult>(
     let settled = false;
     let receivedEose = false;
     let subscriptionClosed = false;
-    let subscription: ReturnType<Relay["prepareSubscription"]> | undefined;
     const timeout = setTimeout(() => {
       const error = new Error(params.timeoutMessage);
       finish(error);
@@ -150,31 +138,22 @@ async function queryBuzzRelaySnapshotNow<TResult>(
     };
     const onAbort = () => finish(params.signal?.reason ?? new Error(params.abortMessage));
     params.signal?.addEventListener("abort", onAbort, { once: true });
-    try {
-      subscription = openBuzzRelaySubscription(params.relay, params.filters, {
-        onevent: params.onEvent,
-        oneose: () => {
-          receivedEose = true;
-          if (settled) {
-            closeAfterRealEose();
-          } else {
-            finish();
-          }
-        },
-        onclose: (reason) => {
-          if (reason !== params.closeReason) {
-            finish(new Error(params.closeMessage(reason)));
-          }
-        },
-      });
-    } catch (error) {
-      finish(error);
-      return;
-    }
-    closeAfterRealEose();
-    if (params.checkAbortAfterSubscribe && params.signal?.aborted) {
-      onAbort();
-    }
+    const subscription = openBuzzRelaySubscription(params.relay, params.filters, {
+      onevent: params.onEvent,
+      oneose: () => {
+        receivedEose = true;
+        if (settled) {
+          closeAfterRealEose();
+        } else {
+          finish();
+        }
+      },
+      onclose: (reason) => {
+        if (reason !== params.closeReason) {
+          finish(new Error(params.closeMessage(reason)));
+        }
+      },
+    });
   });
 }
 

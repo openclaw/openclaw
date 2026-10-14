@@ -42,6 +42,7 @@ export async function prepareAndAdmitChatSend(
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
   diagnostics?: ChatSendDiagnostics,
+  releaseSessionStorage?: () => void,
 ) {
   const phase = diagnostics?.scope("admission");
   const assertCurrent =
@@ -141,42 +142,36 @@ export async function prepareAndAdmitChatSend(
   }
   let session: PreparedChatSendSession;
   try {
-    session = qualifyChatSendSession(loadedSession.value);
+    session = await qualifyChatSendSession(loadedSession.value, releaseSessionStorage);
   } catch (error) {
     respondChatSendAdmissionError(error, respond);
     return undefined;
   }
-  let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
-  try {
-    const nativeRestriction = await prepareChatSendNativeRuntimeRestriction({
-      ...preparation,
-      session,
-    });
-    if (nativeRestriction) {
-      respond(false, undefined, nativeRestriction);
-      return undefined;
-    }
-    phase?.mark("runAdmission");
-    admitted = await admitChatSend({
-      ...preparation,
-      session,
-      onAdmissionOwned,
-      hasCurrentClientAuthority,
-      withPreparedCurrent: sessionMutationAuthorization?.withPreparedCurrent,
-      followRegistration: sessionMutationAuthorization?.followRegistration,
-    });
-    if (!admitted.ok) {
-      return undefined;
-    }
-    phase?.finish();
-    return {
-      request: normalizedRequest.value,
-      session,
-      admission: admitted.value,
-    };
-  } finally {
-    if (!admitted?.ok) {
-      session.releaseSessionTarget();
-    }
+  const nativeRestriction = await prepareChatSendNativeRuntimeRestriction({
+    ...preparation,
+    session,
+  });
+  if (nativeRestriction) {
+    respond(false, undefined, nativeRestriction);
+    return undefined;
   }
+  phase?.mark("runAdmission");
+  const admitted = await admitChatSend({
+    ...preparation,
+    session,
+    onAdmissionOwned,
+    hasCurrentClientAuthority,
+    withPreparedCurrent: sessionMutationAuthorization?.withPreparedCurrent,
+    followRegistration: sessionMutationAuthorization?.followRegistration,
+    diagnostics,
+  });
+  if (!admitted.ok) {
+    return undefined;
+  }
+  phase?.finish();
+  return {
+    request: normalizedRequest.value,
+    session,
+    admission: admitted.value,
+  };
 }

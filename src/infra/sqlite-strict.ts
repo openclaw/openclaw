@@ -1,5 +1,6 @@
 // Migrates OpenClaw-owned SQLite tables to canonical STRICT schemas.
 import type { DatabaseSync } from "node:sqlite";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
@@ -199,7 +200,7 @@ function readPreservedSchemaObjects(
     });
 }
 
-function readAutoincrementHighWater(db: DatabaseSync, tableName: string): string | null {
+export function readAutoincrementHighWater(db: DatabaseSync, tableName: string): string | null {
   const sequenceTable = db
     .prepare(
       "SELECT 1 AS found FROM sqlite_schema WHERE type = 'table' AND name = 'sqlite_sequence'",
@@ -223,7 +224,7 @@ function readAutoincrementHighWater(db: DatabaseSync, tableName: string): string
   return normalized;
 }
 
-function restoreAutoincrementHighWater(
+export function restoreAutoincrementHighWater(
   db: DatabaseSync,
   tableName: string,
   previousHighWater: string | null,
@@ -267,6 +268,26 @@ function assertMatchingColumns(
 function readForeignKeysEnabled(db: DatabaseSync): boolean {
   const row = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys?: unknown } | undefined;
   return Number(row?.foreign_keys ?? 0) === 1;
+}
+
+/** Temporarily relax foreign keys around synchronous staging work, outside a transaction. */
+export function withSqliteForeignKeysDisabled<T>(db: DatabaseSync, fn: () => T): T {
+  if (db.isTransaction) {
+    throw new Error("SQLite foreign-key enforcement cannot change inside a transaction");
+  }
+  const enabled = readForeignKeysEnabled(db);
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    const result = fn();
+    if (isPromiseLike(result)) {
+      throw new Error(
+        "SQLite foreign-key scope must be synchronous; Promise returns are not supported",
+      );
+    }
+    return result;
+  } finally {
+    db.exec(enabled ? "PRAGMA foreign_keys = ON;" : "PRAGMA foreign_keys = OFF;");
+  }
 }
 
 /**

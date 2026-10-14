@@ -69,6 +69,7 @@ import {
   TOOLING_CONFIG,
   TOOLING_LARGE_CAPACITY_TEST_FILES,
   resolveCompactNodeTestRunner,
+  resolveSelectedNodeTestRunner,
 } from "./ci-node-test-capacity.mts";
 import {
   COMPACT_EMBEDDED_BASE_GROUP_NAME,
@@ -3286,6 +3287,7 @@ function packHostedReleaseShards(shards: NodeTestShard[]): NodeTestShard[] {
 // These owners retain their execution contract as test inventory changes. Keep
 // complete historical observations until the current selection is measured.
 const RELEASE_TIMING_CONTINUITY_SHARDS = new Set([
+  "agentic-agents-support",
   "agentic-cli-process",
   "agentic-control-plane-agent-chat",
   "agentic-gateway-methods",
@@ -4318,25 +4320,21 @@ export function createSelectedNodeTestShardBundles(
         ]
       : [];
   });
-  return applyNativeSoloTimings(
-    [
-      ...(tooling.size
-        ? createCompactNodeTestShardBundles(
-            shards.filter((shard) => owners.has(shard)),
-            options,
-            "pull-request",
-            tooling,
-          )
-        : []),
-      ...packSelectedNodeTestJobs(
-        projected,
-        options.runnerBackend,
-        canonicalFamilies,
-        groupSeconds,
-      ),
-    ],
-    options.runnerBackend,
-  );
+  const selectedJobs = [
+    ...(tooling.size
+      ? createCompactNodeTestShardBundles(
+          shards.filter((shard) => owners.has(shard)),
+          options,
+          "pull-request",
+          tooling,
+        )
+      : []),
+    ...packSelectedNodeTestJobs(projected, options.runnerBackend, canonicalFamilies, groupSeconds),
+  ];
+  for (const job of selectedJobs) {
+    job.runner = resolveSelectedNodeTestRunner(job, options.runnerBackend);
+  }
+  return applyNativeSoloTimings(selectedJobs, options.runnerBackend);
 }
 
 function compactPreparationSeconds(

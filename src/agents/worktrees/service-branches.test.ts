@@ -751,6 +751,25 @@ describe("ManagedWorktreeService branch discovery", () => {
     });
   });
 
+  it("reuses inventories with more than 1,024 pack metadata files and refreshes changed refs", async () => {
+    const packs = path.join(repo, ".git", "objects", "pack");
+    await fs.mkdir(packs, { recursive: true });
+    // Git ignores keep markers during discovery; all still participate in the revision.
+    await Promise.all(
+      Array.from({ length: 1_100 }, (_, index) =>
+        fs.writeFile(path.join(packs, `pack-${index}.keep`), "synthetic keep marker\n"),
+      ),
+    );
+    const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    await expectWarmBranchAdmission(repo, () => run.mockClear());
+    expect(run).toHaveBeenCalledTimes(0);
+    await git(repo, "branch", "new-branch");
+    expect((await service.listRepositoryBranches(repo)).branches).toContainEqual({
+      name: "new-branch",
+      kind: "local",
+    });
+  });
+
   it.each(["missing loose", "corrupt loose", "missing pack", "missing index", "corrupt pack"])(
     "rejects a %s HEAD object after a branch-list cache hit",
     async (damage) => {

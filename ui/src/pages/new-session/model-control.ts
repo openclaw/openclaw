@@ -17,7 +17,7 @@ import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
-import { renderChatModelControls } from "../chat/components/chat-model-controls.tsx";
+import type { renderChatModelControls } from "../chat/components/chat-model-controls.tsx";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
 import { resolveHostedEnvironments, resolveHostEnvironmentChoice } from "./hosted-environments.ts";
@@ -30,15 +30,22 @@ import {
   reconcileDraftModelSelection,
   createEmptyDraftModelMetadata,
   isDraftAccountModelAvailable,
-  resolveDraftAgentRuntime,
   resolveDraftModelControls,
   resolveDraftModelUnavailableReason,
   resolveDraftModelSelectionBlockedReason,
   type NewSessionModelMetadata,
 } from "./model-target.ts";
 import { hasNewSessionModelPreference, type NewSessionPreference } from "./preferences.ts";
+import { createDraftAgentRuntimeResolver } from "./runtime-resolution.ts";
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+
+export type NewSessionModelRenderOptions = {
+  agent?: GatewayAgentRow;
+  agentId: string;
+  context: ApplicationContext | undefined;
+  sending: boolean;
+};
 
 export class NewSessionModelControl extends NewSessionModelSelection {
   private selectionGeneration = 0;
@@ -61,6 +68,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private pendingContext: ApplicationContext | undefined;
   private pendingSelectionGeneration = 0;
   private readonly catalogTargets: CatalogTargetDiscovery;
+  private resolveRuntime = createDraftAgentRuntimeResolver();
 
   constructor(
     private readonly notify: () => void,
@@ -300,6 +308,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   }
 
   reset() {
+    this.resolveRuntime = createDraftAgentRuntimeResolver();
     this.invalidate(true);
   }
 
@@ -538,7 +547,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       context: ApplicationContext | undefined;
     } = { agent: this.pendingAgent, context: this.pendingContext },
   ) {
-    return resolveDraftAgentRuntime({
+    return this.resolveRuntime({
       model: this.effectiveModel,
       agentRuntime: this.agentRuntime,
       agent: options.agent,
@@ -614,12 +623,9 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         );
   }
 
-  render(options: {
-    agent?: GatewayAgentRow;
-    agentId: string;
-    context: ApplicationContext | undefined;
-    sending: boolean;
-  }) {
+  renderProps(
+    options: NewSessionModelRenderOptions,
+  ): Parameters<typeof renderChatModelControls>[0] {
     const snapshot = options.context?.gateway.snapshot;
     const sessionKey = `new-session:${normalizeAgentId(options.agentId)}`;
     const sourceResult = options.context?.sessions.state.result ?? null;
@@ -641,7 +647,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.ownsMetadata(client, scope) &&
         this.metadataState.accountSelection === accountSelection,
       );
-    return renderChatModelControls({
+    return {
       ...modelControls,
       renderAccountSection: (model) =>
         renderChatModelAccountControl({
@@ -727,6 +733,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.catalogTargets.retry(metadataClient, this.agentId);
       },
       onRequestUpdate: this.notify,
-    });
+    };
   }
 }

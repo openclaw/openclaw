@@ -4,6 +4,7 @@ import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
+import { prepareOpenAIFunctionTool } from "../providers/openai-function-tool.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
   isOpenAIGpt54MiniModel,
@@ -198,26 +199,14 @@ function convertTools(
     return {
       projection,
       tools: sortTransportToolsByName(projection.tools).map((tool) => {
-        const functionTool: {
-          name: string;
-          description: string | undefined;
-          parameters: ReturnType<typeof normalizeOpenAIStrictToolParameters>;
-          strict?: boolean;
-        } = {
-          name: tool.name,
-          description: tool.description,
-          parameters:
-            mode === "direct"
-              ? tool.parameters
-              : normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, model.compat),
-        };
-        if (strict !== undefined) {
-          functionTool.strict = strict;
-        }
-        return {
-          type: "function" as const,
-          function: functionTool,
-        };
+        return prepareOpenAIFunctionTool(
+          tool.name,
+          tool.description,
+          mode === "direct"
+            ? tool.parameters
+            : normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, model.compat),
+          strict,
+        ).completions;
       }),
     };
   };

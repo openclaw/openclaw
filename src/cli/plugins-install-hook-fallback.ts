@@ -4,6 +4,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
+  HOOK_INSTALL_ERROR_CODE,
   installHooksFromNpmSpec,
   installHooksFromPath,
   type InstallHooksResult,
@@ -225,7 +226,21 @@ async function installInspectedHookPack(
   params: InstallParams,
 ): Promise<InstallResult | undefined> {
   const probe = await attemptHookInstall(source, params, { inspection: "package-kind" });
-  if (!probe.ok || probe.packageKind !== "hook-only") {
+  if (!probe.ok) {
+    // A package without hook manifest entries is a confirmed negative. Any other
+    // failure leaves the artifact unidentified, so its reason must stay visible
+    // beside the original rejection the caller still returns.
+    if (
+      probe.code !== HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS &&
+      probe.code !== HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS
+    ) {
+      (params.runtime ?? defaultRuntime).log(
+        theme.warn(`Hook-pack fallback skipped: package inspection failed: ${probe.error}`),
+      );
+    }
+    return undefined;
+  }
+  if (probe.packageKind !== "hook-only") {
     return undefined;
   }
   const pinned =

@@ -56,9 +56,11 @@ export async function readFailedUpdateGatewayState(
   }
   const executor = run.executorFence;
   executor?.assertCurrent();
-  const deadline = createGatewayRestartDeadline({
-    timeoutMs: Math.min(timeoutMs, GATEWAY_RESTART_PROBE_TIMEOUT_MS),
-  });
+  const deadline =
+    run.deadline ??
+    createGatewayRestartDeadline({
+      timeoutMs: Math.min(timeoutMs, GATEWAY_RESTART_PROBE_TIMEOUT_MS),
+    });
   let runtime: GatewayServiceRuntime | undefined;
   try {
     runtime = await deadline.run(() =>
@@ -75,7 +77,9 @@ export async function readFailedUpdateGatewayState(
       throw new CommandProcessCleanupError({ cause: error });
     }
   } finally {
-    deadline.dispose();
+    if (!run.deadline) {
+      deadline.dispose();
+    }
   }
   executor?.assertCurrent();
   const verified = getUpdateRun(run.runId, { env: run.env })?.verification;
@@ -212,6 +216,7 @@ export async function verifyUpdatedGateway(
   const { health, readyz, http, launchAgentRecovery } = await observeUpdateGatewayReadiness({
     ...params,
     assertCurrent,
+    deadline: params.opts.run?.deadline ?? params.deadline,
   });
   const channelWarnings = [
     ...(health.channelProbeTimeouts ?? []),
@@ -430,7 +435,7 @@ export async function verifyUpdatedGateway(
       code: health.waitOutcome ?? "restart-unhealthy",
       message:
         health.probeError ??
-        `Gateway did not settle${health.startupPhase ? `; startup phase: ${health.startupPhase}` : "."}`,
+        `Gateway readiness was not verified; service status: ${health.runtime.status ?? "unknown"}${health.startupPhase ? `; startup phase: ${health.startupPhase}` : ""}. Check ${formatCliCommand("openclaw gateway status --deep", params.serviceEnv)}.`,
     });
   }
   recordVerificationStep(

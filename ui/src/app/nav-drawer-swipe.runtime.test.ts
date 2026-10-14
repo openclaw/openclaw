@@ -13,17 +13,24 @@ afterEach(() => {
 
 it.each(["none", "before", "during"])("opens the drawer only without a modal (%s)", (modal) => {
   document.openClawModalLayers = new Set();
-  const element = Object.assign(document.createElement("div"), {
-    onboardingMode: false,
-    navDrawerOpen: false,
-    updateComplete: Promise.resolve(true),
-  });
+  const element = document.createElement("div");
   host = element;
   element.innerHTML =
     '<div class="content"><video></video></div><nav class="shell-nav"></nav><div class="shell-nav-backdrop"></div>';
   document.body.append(element);
   const open = vi.fn();
-  owner = new NavDrawerSwipeOwner(element, open);
+  owner = new NavDrawerSwipeOwner(
+    {
+      element,
+      querySelector: element.querySelector.bind(element),
+      get isConnected() {
+        return element.isConnected;
+      },
+      onboardingMode: false,
+      navDrawerOpen: false,
+    },
+    open,
+  );
   owner.connect();
   const touch = (type: string, x: number) => {
     const event = new Event(type, { bubbles: true, cancelable: true, composed: true });
@@ -46,12 +53,8 @@ it.each(["none", "before", "during"])("opens the drawer only without a modal (%s
   expect(open).toHaveBeenCalledTimes(modal === "none" ? 1 : 0);
 });
 
-it("preserves menu focus when gesture support connects to an open drawer", async () => {
-  const element = Object.assign(document.createElement("div"), {
-    onboardingMode: false,
-    navDrawerOpen: true,
-    updateComplete: Promise.resolve(true),
-  });
+it("preserves menu focus when gesture support connects to an open drawer", () => {
+  const element = document.createElement("div");
   host = element;
   const drawer = element.appendChild(document.createElement("nav"));
   drawer.className = "shell-nav";
@@ -62,10 +65,20 @@ it("preserves menu focus when gesture support connects to an open drawer", async
   }
   document.body.append(element);
   selected.focus();
-  owner = new NavDrawerSwipeOwner(element, vi.fn());
+  owner = new NavDrawerSwipeOwner(
+    {
+      element,
+      querySelector: element.querySelector.bind(element),
+      get isConnected() {
+        return element.isConnected;
+      },
+      onboardingMode: false,
+      navDrawerOpen: true,
+    },
+    vi.fn(),
+  );
 
   owner.connect();
-  await element.updateComplete;
 
   expect(document.activeElement).toBe(selected);
 });

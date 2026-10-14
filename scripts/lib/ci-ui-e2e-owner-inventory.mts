@@ -561,7 +561,10 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-flow.reactions.e2e.test.ts",
     ["chat", "profile"],
-    ["ui/src/pages/chat/components/chat-message-reaction-chips-view.tsx"],
+    [
+      "ui/src/pages/chat/components/chat-message-reaction-chips-view.tsx",
+      "ui/src/pages/chat/components/chat-message-reactions-view.tsx",
+    ],
   ),
   pageWatch(
     "ui/src/e2e/chat-flow.session-start.e2e.test.ts",
@@ -1869,7 +1872,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat", "plugin"],
     [
       "ui/src/components/board/board-view.ts",
-      "ui/src/lib/board/widgets/session-progress.ts",
+      "ui/src/lib/board/widgets/session-progress.tsx",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/sidebar-layout.ts",
     ],

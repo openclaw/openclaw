@@ -140,9 +140,7 @@ export function ActivityGroup(props: {
 }) {
   return (
     <ActivityGroupContent
-      groups={props.groups}
-      options={props.options}
-      presentation={props.presentation}
+      {...props}
       renderEntries={(overrides) => (
         <For each={props.groups} keyed={(group) => group.key}>
           {(group) => (

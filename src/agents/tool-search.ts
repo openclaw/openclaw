@@ -228,7 +228,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
         query: Type.Optional(
           Type.Union([Type.String(), Type.Null()], {
@@ -344,14 +344,11 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             onUpdate,
           });
           const { id, name, source } = callResult.tool;
+          const { details: _details, ...modelResult } = callResult.result;
           const images = callResult.result.content.filter((block) => block.type === "image");
-          const modelResult =
-            images.length > 0
-              ? {
-                  ...callResult.result,
-                  content: callResult.result.content.filter((block) => block.type !== "image"),
-                }
-              : callResult.result;
+          if (images.length > 0) {
+            modelResult.content = modelResult.content.filter((block) => block.type !== "image");
+          }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
           const controlResult = formatToolSearchControlResult(

@@ -1,7 +1,9 @@
 // Coverage for normalizing assistant replay content before provider requests.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.js";
+import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
@@ -11,6 +13,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../internal-runtime-context.js";
 import type { StreamFn } from "../runtime/index.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { normalizeAssistantReplayContent, validateReplayTurns } from "./replay-history.js";
@@ -129,6 +132,60 @@ describe("normalizeAssistantReplayContent", () => {
         completed,
         unfinished,
       ]);
+    },
+  );
+
+  it.each([false, true])(
+    "replays speech-only assistant content without changing the transcript (empty block: %s)",
+    (emptyBlock) => {
+      const model = makeProviderModelFixture<"openai-completions">({
+        id: "test-model",
+        api: "openai-completions",
+        provider: "custom-openai-compatible",
+        baseUrl: "https://proxy.example/v1",
+      });
+      const speech = makeAssistantMessageFixture({
+        content: [
+          { type: "thinking", thinking: "plan the reply", thinkingSignature: "reasoning_content" },
+          ...(emptyBlock ? [{ type: "text" as const, text: "" }] : []),
+        ],
+        stopReason: "stop",
+        errorMessage: undefined,
+        usage: { ...createZeroUsageFixture(), output: 5, totalTokens: 5 },
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        openclawDelivery: { tts: { tagged: true, text: "Done, it is sent." } },
+      });
+      const storedContent = structuredClone(speech.content);
+
+      const normalized = normalizeAssistantReplayContent([
+        userMessage("send it"),
+        speech,
+        userMessage("heartbeat"),
+      ]);
+      const converted = convertMessages(
+        model,
+        {
+          messages: normalized.filter(
+            (message) =>
+              message.role === "user" ||
+              message.role === "assistant" ||
+              message.role === "toolResult",
+          ),
+        },
+        resolveOpenAICompletionsCompat(model),
+      );
+
+      expect(converted.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+      expect(converted[1]?.content).toBe("Done, it is sent.");
+      const written = makeAssistantMessageFixture({
+        ...speech,
+        content: [{ type: "text", text: "Written answer" }],
+      });
+      const withText = [userMessage("send it"), written];
+      expect(normalizeAssistantReplayContent(withText)).toBe(withText);
+      expect(speech.content).toEqual(storedContent);
     },
   );
 
@@ -574,11 +631,14 @@ describe("normalizeAssistantReplayContent", () => {
     const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
     const messages = [
       userMessage("hi"),
-      bedrockAssistant([
-        { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
-        { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
-        toolCall,
-      ]),
+      bedrockAssistant(
+        [
+          { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
+          { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
+          toolCall,
+        ],
+        "toolUse",
+      ),
     ];
     const out = normalizeAssistantReplayContent(messages);
     const normalized = out[1] as AgentMessage & { content: unknown[] };

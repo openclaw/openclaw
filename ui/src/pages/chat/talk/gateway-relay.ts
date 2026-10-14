@@ -1,11 +1,13 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import {
+  GATEWAY_SERVER_CAPS,
   validateTalkSessionCancelOutputResult,
   type TalkCatalogResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../../i18n/index.ts";
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { isGatewayCapabilityAdvertised } from "../../../lib/gateway-methods.ts";
 import { RealtimeTalkAudioInputBudget } from "./audio-input-budget.ts";
 import {
   floatToPcm16,
@@ -103,6 +105,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       .request<TalkCatalogResult>(
         "talk.catalog",
         {
+          sessionKey: this.ctx.sessionKey,
           provider: this.session.provider,
           ...(this.session.model ? { model: this.session.model } : {}),
         },
@@ -125,7 +128,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             provider.aliases?.includes(this.session.provider),
         )?.supportsBargeIn !== false
       : false;
-    const media = this.input.adopt((detail) => this.failAudioAppend(detail));
+    const media = this.input.adopt((detail) => this.fail(detail));
     const startupError = this.currentStartupError();
     if (startupError) {
       this.input.stop();
@@ -158,12 +161,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.pendingActivationEvents = [];
     this.pendingActivationEventBytes = 0;
     for (const event of events) {
-      try {
-        this.handleRelayEvent(event);
-      } catch (error) {
-        void this.stop();
-        throw error;
-      }
+      this.handleRelayEvent(event);
       if (this.closed) {
         return;
       }
@@ -171,19 +169,34 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   stop(): Promise<void> {
+    return this.close("abort");
+  }
+
+  private close(disposition: "abort" | "detach"): Promise<void> {
     const wasClosed = this.closed;
     this.stopLocal();
     if (!wasClosed) {
+      const hello = this.ctx.client.hello;
       this.closeCompletion = this.ctx.client
         .request(
           "talk.session.close",
           {
             sessionId: this.session.relaySessionId,
+            ...(isGatewayCapabilityAdvertised(
+              this.ctx.client,
+              GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION,
+            ) === true
+              ? { disposition }
+              : {}),
           },
           { timeoutMs: RELAY_CLOSE_TIMEOUT_MS },
         )
         .then(() => undefined);
-      void this.closeCompletion.catch(() => undefined);
+      void this.closeCompletion.catch(() => {
+        if (disposition === "detach" && this.ctx.client.hello === hello) {
+          this.ctx.client.forceReconnect("Talk detach close failed");
+        }
+      });
     }
     return this.closeCompletion;
   }
@@ -249,7 +262,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             timeoutMs: AUDIO_APPEND_TIMEOUT_MS,
           },
         )
-        .catch((error: unknown) => this.failAudioAppend(error))
+        .catch((error: unknown) => this.fail(error))
         // Close resets the budget first, so late settlements cannot report recovery.
         .finally(() => this.audioInputBudget.settle(frameMs));
     });
@@ -261,15 +274,13 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.audioInputBudget.reset();
   }
 
-  private failAudioAppend(error: unknown): void {
+  private fail(error: unknown): void {
     if (this.closed) {
       return;
     }
-    try {
-      this.ctx.callbacks.onStatus?.("error", formatUiError(error));
-    } finally {
-      void this.stop();
-    }
+    // Status callbacks can synchronously stop Talk; commit detachment first.
+    void this.close("detach");
+    this.ctx.callbacks.onStatus?.("error", formatUiError(error));
   }
 
   // Keep callback-written errors outside start()'s field narrowing.
@@ -311,7 +322,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       );
       // Overflow is locally terminal, so release the server relay immediately even
       // if the browser's microphone permission prompt never settles.
-      void this.stop();
+      void this.close("detach");
       return;
     }
     this.pendingActivationEvents.push(event);
@@ -335,11 +346,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           if (event.audioBase64 && !this.playbackOverflowed) {
             const turnId = event.talkEvent?.turnId?.trim();
             if (!turnId) {
-              this.ctx.callbacks.onStatus?.(
-                "error",
-                t("chat.composer.realtimeTalkMissingTurnIdentity"),
-              );
-              void this.stop();
+              this.fail(t("chat.composer.realtimeTalkMissingTurnIdentity"));
               return;
             }
             if (this.activeOutputTurnId !== turnId || !this.outputQueue.isPlaying) {
@@ -379,7 +386,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           return;
         case "toolCall":
           void this.handleToolCall(event).catch((error: unknown) => {
-            this.reportToolResultSubmissionError(error);
+            this.fail(error);
           });
           return;
         case "toolCallCancelled":
@@ -409,6 +416,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           );
         default:
       }
+    } catch (error) {
+      if (!closesRelay) {
+        this.fail(error);
+      }
+      throw error;
     } finally {
       // The provider has ended this relay; consumer exceptions must not retain browser media.
       if (closesRelay && !this.closed) {
@@ -455,7 +467,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         sessionId: this.session.relaySessionId,
         markName,
       })
-      .catch((error: unknown) => this.reportToolResultSubmissionError(error));
+      .catch((error: unknown) => this.fail(error));
   }
 
   private async handleToolCall(event: Extract<GatewayRelayEvent, { type?: "toolCall" }>) {
@@ -547,7 +559,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     result: unknown,
     willContinue = false,
   ): Promise<void> {
-    if (this.completedToolCalls.has(callId)) {
+    if (this.closed || this.completedToolCalls.has(callId)) {
       return;
     }
     this.submittingToolCalls.add(callId);
@@ -591,7 +603,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
     this.discardDelayedToolResult(pending);
     void this.sendToolResultNow(pending.callId, pending.result).catch((error: unknown) => {
-      this.reportToolResultSubmissionError(error);
+      this.fail(error);
     });
   }
 
@@ -624,15 +636,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.delayedToolResults.delete(pending);
   }
 
-  private reportToolResultSubmissionError(error: unknown): void {
-    if (this.closed) {
-      return;
-    }
-    const message = formatUiError(error);
-    this.lastRelayError = message;
-    this.ctx.callbacks.onStatus?.("error", message);
-  }
-
   private completeToolCall(callIdRaw: string | undefined, cancelled = false): void {
     const callId = callIdRaw?.trim();
     if (!callId) {
@@ -662,8 +665,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
     const turnId = this.activeOutputTurnId;
     if (!turnId) {
-      this.ctx.callbacks.onStatus?.("error", t("chat.composer.realtimeTalkMissingTurnIdentity"));
-      void this.stop();
+      this.fail(t("chat.composer.realtimeTalkMissingTurnIdentity"));
       return;
     }
     this.cancelRequestedForPlayback = true;
@@ -693,8 +695,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       })
       .catch((error: unknown) => {
         this.pendingOutputCancellations -= 1;
-        this.reportToolResultSubmissionError(error);
-        void this.stop();
+        this.fail(error);
       });
   }
 

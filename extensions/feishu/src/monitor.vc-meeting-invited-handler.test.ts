@@ -1,5 +1,8 @@
+import { EventDispatcher } from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -9,7 +12,9 @@ import type * as FeishuDedupModule from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { monitorSingleAccount } from "./monitor.account.js";
+import { createFeishuTestIngressQueue } from "./monitor.test-mocks.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
+import { setFeishuRuntime } from "./runtime.js";
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -26,7 +31,7 @@ const dedupMocks = vi.hoisted(() => ({
   hasProcessedFeishuMessage: vi.fn(async () => false),
 }));
 
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
+let dispatcher: EventDispatcher;
 
 vi.mock("./bot.js", async () => {
   const actual = await vi.importActual<typeof FeishuBotModule>("./bot.js");
@@ -117,6 +122,11 @@ const vcEvent = {
   },
   invite_time: "1712345678",
 };
+const vcEnvelope = {
+  schema: "2.0",
+  header: { event_type: "vc.bot.meeting_invited_v1" },
+  event: vcEvent,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -133,7 +143,10 @@ beforeEach(() => {
   dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
   dedupMocks.hasProcessedFeishuMessage.mockResolvedValue(false);
 });
-afterEach(() => feishuDedupeState.reset());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  feishuDedupeState.reset();
+});
 
 function createHandler(options?: {
   autoJoin?: boolean;
@@ -194,14 +207,15 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
 
 describe("monitorSingleAccount VC event registration", () => {
   beforeEach(() => {
-    handlers = {};
     vi.clearAllMocks();
     dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
-    createEventDispatcherMock.mockReturnValue({
-      register: vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
-        handlers = registered;
+    dispatcher = new EventDispatcher({});
+    createEventDispatcherMock.mockReturnValue(dispatcher);
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        state: { openChannelIngressQueue: createFeishuTestIngressQueue },
       }),
-    });
+    );
   });
 
   it("keeps meeting invitations inert until the live account opts in", async () => {
@@ -224,8 +238,7 @@ describe("monitorSingleAccount VC event registration", () => {
 
     try {
       await started.promise;
-      expect(typeof handlers["vc.bot.meeting_invited_v1"]).toBe("function");
-      await handlers["vc.bot.meeting_invited_v1"]?.(vcEvent);
+      await expect(dispatcher.invoke(vcEnvelope)).resolves.toBeUndefined();
       expect(handleFeishuMessageMock).not.toHaveBeenCalled();
     } finally {
       finish.resolve();
@@ -257,11 +270,7 @@ describe("monitorSingleAccount VC event registration", () => {
     });
     try {
       await started.promise;
-      const handler = handlers["vc.bot.meeting_invited_v1"];
-      if (!handler) {
-        throw new Error("VC invitation handler was not registered");
-      }
-      await handler(vcEvent);
+      await dispatcher.invoke(vcEnvelope);
       const key = dedupMocks.claimUnprocessedFeishuMessage.mock.calls[0]?.[0].messageId;
       expect((await feishuDedupeState.guard.claim(key, { namespace: "default" })).kind).toBe(
         "inflight",
@@ -270,7 +279,7 @@ describe("monitorSingleAccount VC event registration", () => {
       await monitor;
       expect(lifecycle?.abortSignal.aborted).toBe(true);
       expect(() => lifecycle?.onAdopted()).toThrow();
-      await handler(vcEvent);
+      await dispatcher.invoke(vcEnvelope);
       expect(handleFeishuMessageMock).toHaveBeenCalledOnce();
       await createHandler()(vcEvent);
       expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);

@@ -88,15 +88,23 @@ export function claimCronRunReceiptInDatabaseForTest(params: {
 }
 
 export async function finishCronRunReceiptAsync(
-  params: Omit<Parameters<typeof finishCronRunReceiptInDatabase>[0], "database" | "receiptSchema">,
+  params: Omit<
+    Parameters<typeof finishCronRunReceiptInDatabase>[0],
+    "database" | "receiptSchema" | "pendingReceiptId"
+  >,
 ): Promise<void> {
-  runOpenClawStateWriteTransaction(({ db }) =>
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const job = loadedCronStoreFromRows(
+      loadCronRows(db, params.handle.storeKey, new Set([params.handle.jobId])),
+    ).store.jobs[0];
     finishCronRunReceiptInDatabase({
       database: db,
       receiptSchema: prepareCronRunReceiptWriteSchema(db),
+      pendingReceiptId:
+        job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
       ...params,
-    }),
-  );
+    });
+  });
 }
 
 export function prepareCronRunReceiptClaim(params: {

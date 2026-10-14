@@ -18,17 +18,6 @@ type LoadWorkboardParams = WorkboardClientContext & {
 };
 
 export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolean> {
-  return await loadWorkboardInternal(params);
-}
-
-export async function loadWorkboardCatalog(params: WorkboardClientContext): Promise<boolean> {
-  return await loadWorkboardInternal({ ...params, force: true }, true);
-}
-
-async function loadWorkboardInternal(
-  params: LoadWorkboardParams,
-  catalogOnly = false,
-): Promise<boolean> {
   const runtime = getWorkboardRuntime(params.host);
   const state = getWorkboardState(params.host);
   if (
@@ -42,29 +31,25 @@ async function loadWorkboardInternal(
   const client = params.client;
   const existingLoad = runtime.loadPromise;
   if (existingLoad) {
-    const requiresTaskLoad = !catalogOnly && runtime.loadCatalogOnly;
     const result = await existingLoad;
     // Forced callers carry their own diagnostics/task-refresh contract, so a
     // weaker in-flight load cannot satisfy them.
-    return (params.force || requiresTaskLoad) &&
+    return params.force &&
       runtime.loadClient === client &&
       !state.dispatching &&
       !workboardHasActiveWrites(state)
-      ? await loadWorkboardInternal(params, catalogOnly)
+      ? await loadWorkboard(params)
       : result;
   }
-  runtime.loadCatalogOnly = catalogOnly;
   runtime.loadClient = client;
-  if (!catalogOnly) {
-    state.loadAttempted = true;
-    state.loading = true;
-    if (!params.preserveError) {
-      delete runtime.loadError;
-      state.error = null;
-    }
-    state.lastRefreshError = null;
-    params.requestUpdate?.();
+  state.loadAttempted = true;
+  state.loading = true;
+  if (!params.preserveError) {
+    delete runtime.loadError;
+    state.error = null;
   }
+  state.lastRefreshError = null;
+  params.requestUpdate?.();
   const loadPromise: Promise<boolean> = Promise.resolve().then(async () => {
     try {
       if (params.refreshDiagnostics) {
@@ -84,29 +69,14 @@ async function loadWorkboardInternal(
         return false;
       }
       const unchanged = isRecord(payload) && payload.unchanged === true;
-      if (
-        catalogOnly &&
-        !unchanged &&
-        (!isRecord(payload) || !Array.isArray(payload.cards) || !Array.isArray(payload.boards))
-      ) {
-        return false;
-      }
       const normalized = unchanged ? state : normalizeCardsPayload(payload);
-      if (catalogOnly) {
-        state.boards = normalized.boards;
-      }
-      // Keep navigation current without replacing cards beneath an unfinished draft.
-      if ((catalogOnly || params.preserveError) && shouldDeferWorkboardLiveRefresh(state)) {
-        return catalogOnly;
+      if (params.preserveError && shouldDeferWorkboardLiveRefresh(state)) {
+        return false;
       }
       runtime.cardsRevision = normalizeWorkboardChange(isRecord(payload) ? payload.revision : null);
       setWorkboardCards(state, normalized.cards);
       state.boards = normalized.boards;
       state.statuses = normalized.statuses;
-      // Catalog hydration never authorizes stale edits.
-      if (catalogOnly) {
-        return true;
-      }
       const recoveredLoadError = runtime.loadError;
       if (recoveredLoadError !== undefined && state.error === recoveredLoadError) {
         state.error = null;
@@ -118,7 +88,7 @@ async function loadWorkboardInternal(
       state.loaded = true;
       return true;
     } catch (error) {
-      if (!catalogOnly && runtime.loadPromise === loadPromise) {
+      if (runtime.loadPromise === loadPromise) {
         const formattedError = formatError(error);
         if (params.preserveError) {
           state.lastRefreshError = formattedError;
@@ -130,11 +100,10 @@ async function loadWorkboardInternal(
       return false;
     } finally {
       if (runtime.loadPromise === loadPromise) {
-        if (!catalogOnly && !state.draftSaving) {
+        if (!state.draftSaving) {
           state.loading = false;
         }
         delete runtime.loadPromise;
-        delete runtime.loadCatalogOnly;
       }
       params.requestUpdate?.();
     }

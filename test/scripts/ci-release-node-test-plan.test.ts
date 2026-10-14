@@ -10,6 +10,7 @@ import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
+  { owner: "agentic-agents-support", configs: ["test/vitest/vitest.agents-support.config.ts"] },
   {
     owner: "agentic-gateway-methods",
     configs: [
@@ -56,7 +57,7 @@ it.each([
       expect(unmeasured).toHaveLength(1);
       expect(unmeasured[0]?.predictedSeconds).toBeUndefined();
       expect(unmeasured[0]?.timeoutMinutes).toBe(
-        owner === "agentic-gateway-methods" ? undefined : 90,
+        owner === "agentic-cli-process" || owner === "core-runtime-config" ? 90 : undefined,
       );
       const pullRequest = { compactMode: "pull-request", runnerBackend: "github" } as const;
       const beforePr = createNodeTestShardBundles(pullRequest);

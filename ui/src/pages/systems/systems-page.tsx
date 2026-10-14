@@ -577,20 +577,3 @@ declare global {
     "openclaw-systems-page": SystemsPageElement;
   }
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-desktop-panel": HTMLAttributes<HTMLElementTagNameMap["openclaw-desktop-panel"]> & {
-        embedded?: boolean;
-        "prop:client"?: HTMLElementTagNameMap["openclaw-desktop-panel"]["client"];
-        "prop:available"?: boolean;
-        "prop:presented"?: boolean;
-        "prop:workspaceControls"?: boolean;
-        "prop:suppliedEnvironments"?: HTMLElementTagNameMap["openclaw-desktop-panel"]["suppliedEnvironments"];
-        "prop:requestedSource"?: string;
-        "prop:basePath"?: string;
-      };
-    }
-  }
-}

@@ -9,6 +9,7 @@ import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../../../src/talk/voice-tra
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
 import { RealtimeTalkInputController } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
@@ -16,6 +17,7 @@ import type {
   RealtimeTalkStatus,
   RealtimeTalkTransport,
 } from "./shared.ts";
+import type { SplitTalkOptions } from "./split.ts";
 import {
   type ClientVoiceSessionOwner,
   ClientVoiceTranscriptQueue,
@@ -34,6 +36,8 @@ type RealtimeTalkLaunchOptions = SchemaContract<
 type RealtimeTalkLocalOptions = {
   inputDeviceId?: string;
   videoDeviceId?: string;
+  split?: SplitTalkOptions;
+  playback?: GatewaySpeechPlayback;
 };
 
 const activeRealtimeTalkSessions = new Set<RealtimeTalkSession>();
@@ -71,14 +75,25 @@ export class RealtimeTalkSession {
   private transcriptItems: ClientVoiceTranscriptQueue | undefined;
   private transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
   private clientVoiceSessionOwner: ClientVoiceSessionOwner | undefined;
+  private readonly callbacks: RealtimeTalkCallbacks;
 
   constructor(
     private readonly client: GatewayBrowserClient,
     private readonly sessionKey: string,
-    private readonly callbacks: RealtimeTalkCallbacks = {},
+    callbacks: RealtimeTalkCallbacks = {},
     private readonly options: RealtimeTalkLaunchOptions = {},
     private readonly localOptions: RealtimeTalkLocalOptions = {},
-  ) {}
+  ) {
+    this.callbacks = {
+      ...callbacks,
+      onStatus: (status, detail) => {
+        if (status === "idle" || status === "error") {
+          this.localOptions.playback?.stop();
+        }
+        callbacks.onStatus?.(status, detail);
+      },
+    };
+  }
 
   async start(): Promise<void> {
     const owner = reserveClientVoiceSessionOwner(this.client, this.sessionKey);
@@ -91,6 +106,40 @@ export class RealtimeTalkSession {
       const lifecycleGeneration = this.lifecycleGeneration;
       this.closed = false;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
+      if (this.localOptions.split) {
+        const { SplitTalkTransport } = await import("./split.ts");
+        if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
+          return;
+        }
+        const transport = new SplitTalkTransport(
+          this.client,
+          this.sessionKey,
+          this.callbacks,
+          this.localOptions.split,
+          this.localOptions.inputDeviceId,
+        );
+        this.pendingStartup = transport;
+        try {
+          const result = await transport.start();
+          if (
+            result === "cancelled" ||
+            this.closed ||
+            lifecycleGeneration !== this.lifecycleGeneration
+          ) {
+            transport.stop();
+            return;
+          }
+          this.transport = transport;
+        } catch (error) {
+          transport.stop();
+          throw error;
+        } finally {
+          if (this.pendingStartup === transport) {
+            this.pendingStartup = null;
+          }
+        }
+        return;
+      }
       const [{ createRealtimeTalkTransport }, providerVideoCapable] = await Promise.all([
         import("./transport.runtime.ts"),
         this.resolveVideoCapability(),
@@ -253,6 +302,7 @@ export class RealtimeTalkSession {
       const catalog = await this.client.request<TalkCatalogResult>(
         "talk.catalog",
         {
+          sessionKey: this.sessionKey,
           ...(requestedProvider ? { provider: requestedProvider } : {}),
           ...(requestedModel ? { model: requestedModel } : {}),
         },

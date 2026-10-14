@@ -4,8 +4,12 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionResetCommitContext } from "../../config/sessions/session-accessor.lifecycle-types.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resetSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -23,7 +27,7 @@ import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import { rebindDurableAcpSessionMetaAfterReset } from "./session-meta-reset.js";
 
-it("retains native incognito reset context only through its callback", async () => {
+it("retains incognito reset context until its memory owner closes", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", label: "incognito-reset-context" },
     async (state) => {
@@ -33,22 +37,35 @@ it("retains native incognito reset context only through its callback", async () 
         env: state.env,
       };
       await replaceSessionEntry(scope, { sessionId: "private-session", updatedAt: 1 });
-      let captured: SessionResetCommitContext | undefined;
-      const reset = await resetSessionEntryLifecycle({
+      const source = {
         agentId: scope.agentId,
-        storePath: resolveIncognitoOpenClawAgentSqlitePath(scope),
-        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-        buildNextEntry: () => ({ sessionId: "private-reset", updatedAt: 2 }),
-        async afterEntryMutation(_mutation, context) {
-          captured = context;
-          context.assertCurrent();
-          await Promise.resolve();
-          context.assertCurrent();
-        },
-      });
-      expect(reset.nextEntry.sessionId).toBe("private-reset");
-      expect(captured).toBeDefined();
-      expect(() => captured!.assertCurrent()).toThrow("claim is no longer current");
+        path: resolveIncognitoOpenClawAgentSqlitePath(scope),
+      };
+      let captured: SessionResetCommitContext | undefined;
+      const sql = observeHostDataSql();
+      try {
+        const reset = await resetSessionEntryLifecycle({
+          agentId: scope.agentId,
+          storePath: source.path,
+          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          buildNextEntry: () => ({ sessionId: "private-reset", updatedAt: 2 }),
+          async afterEntryMutation(_mutation, context) {
+            captured = context;
+            context.assertCurrent();
+            await Promise.resolve();
+            context.assertCurrent();
+          },
+        });
+        expect(reset.nextEntry.sessionId).toBe("private-reset");
+        expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "private-reset", updatedAt: 2 });
+        expect(captured?.source).toEqual(source);
+        expect(() => captured!.assertCurrent()).not.toThrow();
+        memorySessionActorOwners.closeDatabase(source);
+        expect(() => captured!.assertCurrent()).toThrow("Incognito session actor owner is closed");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
     },
   );
 });

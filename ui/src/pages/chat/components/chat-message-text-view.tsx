@@ -215,11 +215,7 @@ export function MarkdownText(
 ) {
   return (
     <div class={props.class ?? "chat-text"} dir={props.direction}>
-      <MarkdownContent
-        content={props.content}
-        media={props.media}
-        incremental={props.incremental}
-      />
+      <MarkdownContent {...props} />
     </div>
   );
 }

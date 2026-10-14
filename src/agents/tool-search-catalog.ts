@@ -1,3 +1,4 @@
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { generateSecureHex } from "../infra/secure-random.js";
@@ -51,10 +52,12 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
           entry.description,
           entry.directVisible === true,
           entry.source === "openclaw"
-            ? entry.parameters
+            ? (getPublishedRuntimeToolInputSchema(entry.parameters)?.fingerprint ??
+              entry.parameters)
             : untrustedSchemaFingerprint(entry.parameters),
           entry.source === "openclaw"
-            ? entry.outputSchema
+            ? (getPublishedRuntimeToolInputSchema(entry.outputSchema)?.fingerprint ??
+              entry.outputSchema)
             : untrustedSchemaFingerprint(entry.outputSchema),
         ]).digest,
     )
@@ -442,7 +445,11 @@ export function applyToolCatalogCompaction(
   let catalog: ToolSearchCatalogEntry[] = [];
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
-      visible.push(tool);
+      visible.push(
+        params.toolHookContext && !isToolWrappedWithBeforeToolCallHook(tool)
+          ? wrapToolWithBeforeToolCallHook(tool, params.toolHookContext)
+          : tool,
+      );
       continue;
     }
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {

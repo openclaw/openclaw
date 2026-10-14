@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -29,14 +29,18 @@ import type { CronAdmittedStoreTransactionHooks } from "./transaction-hooks.type
 
 type MutationInput = CronRuntimeWorkerOperations["cron.mutateJobs"]["input"];
 
-function loadCronMutationStore(db: DatabaseSync, storeKey: string) {
+function loadCronMutationStore(db: EngineConnection, storeKey: string) {
   const rows = loadCronRows(db, storeKey);
   const store = loadedCronStoreFromRows(rows).store;
   loadCronRuntimeAuthorities({ db, storeKey, jobs: store.jobs });
   return store;
 }
 
-function retireCronMutationTriggerState(db: DatabaseSync, storeKey: string, jobId: string): void {
+function retireCronMutationTriggerState(
+  db: EngineConnection,
+  storeKey: string,
+  jobId: string,
+): void {
   const active = findActiveCronRunReceiptInDatabase({ database: db, storePath: storeKey, jobId });
   if (active) {
     retireCronRunTriggerStateInDatabase({ database: db, handle: active });
@@ -61,7 +65,7 @@ function retireCronMutationTriggerState(db: DatabaseSync, storeKey: string, jobI
 }
 
 function applyCronReceiptMutation(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: MutationInput,
   changes: PreparedCronStoreChanges,
 ): void {
@@ -90,15 +94,14 @@ function applyCronReceiptMutation(
 }
 
 function cancelChangedQueuedRuns(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: MutationInput,
   changes: PreparedCronStoreChanges,
   previousJobs: ReturnType<typeof loadCronMutationStore>["jobs"],
+  currentStore: ReturnType<typeof loadCronMutationStore>,
   receiptSchema: ReturnType<typeof prepareCronRunReceiptWriteSchema>,
 ): void {
-  const currentJobs = new Map(
-    loadCronMutationStore(db, input.storeKey).jobs.map((job) => [job.id, job]),
-  );
+  const currentJobs = new Map(currentStore.jobs.map((job) => [job.id, job]));
   for (const previous of previousJobs) {
     if (previous.state.queuedAtMs === undefined || !changes.changedIds.has(previous.id)) {
       continue;
@@ -127,6 +130,8 @@ function cancelChangedQueuedRuns(
         database: db,
         receiptSchema,
         handle: receipt,
+        pendingReceiptId:
+          current?.state.runningAtMs === undefined ? undefined : current.state.runningReceiptId,
         status: "skipped",
         finishedAtMs: input.snapshot.nowMs,
         error,
@@ -199,7 +204,7 @@ export function mutateCronJobsInWorker(
               },
             },
           };
-          saveCronStoreChangesInDatabase(
+          const store = saveCronStoreChangesInDatabase(
             db,
             input.storeKey,
             input.storeKey,
@@ -207,10 +212,10 @@ export function mutateCronJobsInWorker(
             undefined,
             hooks,
           );
-          cancelChangedQueuedRuns(db, input, changes, previous.jobs, receiptSchema);
+          cancelChangedQueuedRuns(db, input, changes, previous.jobs, store, receiptSchema);
           return {
             outcome: {
-              store: loadCronMutationStore(db, input.storeKey),
+              store,
               names: readCronJobNamesInDatabase(db, undefined, input.storeKey),
               changed: changes.changedIds.size > 0,
               notifications: plan.notifications,

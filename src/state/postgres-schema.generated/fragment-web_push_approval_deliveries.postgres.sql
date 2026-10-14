@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."web_push_approval_deliveries" (
+CREATE TABLE "web_push_approval_deliveries" (
   "approval_id" text COLLATE "C" NOT NULL,
   "subscription_id" text COLLATE "C" NOT NULL,
   "device_id" text COLLATE "C" NOT NULL,
@@ -13,10 +9,8 @@ CREATE TABLE "openclaw_state"."web_push_approval_deliveries" (
   PRIMARY KEY ("approval_id", "subscription_id")
 );
 
-CREATE INDEX "idx_web_push_approval_deliveries_subscription" ON "openclaw_state"."web_push_approval_deliveries" (("subscription_id") ASC NULLS FIRST, ("approval_id") ASC NULLS FIRST);
+CREATE INDEX "idx_web_push_approval_deliveries_subscription" ON "web_push_approval_deliveries" (("subscription_id") ASC NULLS FIRST, ("approval_id") ASC NULLS FIRST);
 
-ALTER TABLE "openclaw_state"."web_push_approval_deliveries" ADD FOREIGN KEY ("subscription_id") REFERENCES "openclaw_state"."web_push_subscriptions" ("subscription_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
+ALTER TABLE "web_push_approval_deliveries" ADD FOREIGN KEY ("subscription_id") REFERENCES "web_push_subscriptions" ("subscription_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
-ALTER TABLE "openclaw_state"."web_push_approval_deliveries" ADD FOREIGN KEY ("approval_id") REFERENCES "openclaw_state"."operator_approvals" ("approval_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
-
-COMMIT;
+ALTER TABLE "web_push_approval_deliveries" ADD FOREIGN KEY ("approval_id") REFERENCES "operator_approvals" ("approval_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

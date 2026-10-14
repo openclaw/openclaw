@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { assertNoRetainedSessionSharingReads } from "../../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -43,7 +44,7 @@ describe("Talk voice RPC ownership", () => {
   let browser: GatewayClient;
   let originalId: string;
   let dispatchCurrent: boolean;
-  let changeRequested = createDeferred();
+  let changeRequested: ReturnType<typeof createDeferred<void>>;
   const connections = new Set<string>();
   const authorities: AgentRunDelegatedAuthority[] = [];
   const pending: Promise<void>[] = [];
@@ -194,11 +195,18 @@ describe("Talk voice RPC ownership", () => {
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "talk-voice-rpc", scenario: "minimal" });
+    changeRequested = createDeferred();
     const cfg = {};
     setRuntimeConfigSnapshot(cfg);
-    changeRequested = createDeferred();
-    broadcast.mockClear().mockImplementation((event) => {
-      if (event === "talk.voice.change") {
+    broadcast.mockClear();
+    broadcast.mockImplementation((event, payload) => {
+      if (
+        event === "talk.voice.change" &&
+        payload &&
+        typeof payload === "object" &&
+        "phase" in payload &&
+        payload.phase === "requested"
+      ) {
         changeRequested.resolve();
       }
     });
@@ -244,7 +252,11 @@ describe("Talk voice RPC ownership", () => {
       clearAgentRunContext(authority.operationalRunInstance.runId);
     }
     clientVoiceSessionTesting.reset();
-    await state.cleanup();
+    try {
+      assertNoRetainedSessionSharingReads();
+    } finally {
+      await state.cleanup();
+    }
   });
 
   it.each(["talk.voice.set"])(

@@ -659,7 +659,7 @@ describe("config cli", () => {
       await expect(runConfigCommand(["config", "get", "gateway.port", "--json"])).rejects.toThrow(
         ExitError,
       );
-      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(mockReadConfigFileSnapshot.mock.calls.at(-1)?.[0]?.observe).toBe(false);
       expect(mockWriteStdout).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
       expect(parseLastLogPayload()).toMatchObject({
@@ -1628,7 +1628,7 @@ describe("config cli", () => {
       const written = firstWrittenConfig();
       // The real writer's roster-loss guard is exercised by config-cli.integration.test.ts.
       expect(written.agents?.entries).toEqual({ "agent-a": {}, "agent-c": {} });
-      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli" });
+      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli", observe: false });
     });
   });
 

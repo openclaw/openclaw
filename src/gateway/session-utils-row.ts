@@ -60,14 +60,11 @@ import { projectSessionProviderReview } from "./session-provider-review-projecti
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
-import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
 import {
-  deriveSessionTitle,
-  prepareSessionTitleRead,
   resolveEstimatedSessionCostUsd,
   readStoreChildSessionLinks,
   type SessionChildLink,
@@ -81,6 +78,7 @@ import {
 } from "./session-utils-display.js";
 import {
   buildSessionListRowMetadataContext,
+  projectSessionRowChildLinks,
   resolveTranscriptUsageFallbacks,
 } from "./session-utils-projection.js";
 import { parseGroupKey } from "./session-utils-store.js";
@@ -105,8 +103,7 @@ export function readSessionRowInputs(params: {
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
-  includeDerivedTitles?: boolean;
-  includeLastMessage?: boolean;
+  preparedTitle?: Pick<GatewaySessionRow, "derivedTitle" | "lastMessagePreview">;
   childLinks?: SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
@@ -175,23 +172,6 @@ export function readSessionRowInputs(params: {
     storePath,
   });
 
-  const titleRead = prepareSessionTitleRead(entry, displayName, params);
-  let derivedTitle = titleRead?.derivedTitle;
-  let lastMessagePreview: string | undefined;
-  if (entry?.sessionId && titleRead?.needsTranscript) {
-    const fields = readScopedSessionTitleFieldsFromTranscript({
-      agentId: params.storeAgentId ?? agentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: key,
-      storePath,
-    });
-    if (params.includeDerivedTitles) {
-      derivedTitle ??= deriveSessionTitle(entry, fields.firstUserMessage, displayName);
-    }
-    lastMessagePreview = (params.includeLastMessage && fields.lastMessagePreview) || undefined;
-  }
-
   const contextWindowProfile = resolveModelContextWindowProfile({
     catalogEntry,
     selected: entry?.contextWindow,
@@ -244,8 +224,8 @@ export function readSessionRowInputs(params: {
       configuredAgentIds: params.configuredAgentIds,
       agentId,
       displayName,
-      derivedTitle,
-      lastMessagePreview,
+      derivedTitle: params.preparedTitle?.derivedTitle,
+      lastMessagePreview: params.preparedTitle?.lastMessagePreview,
       thinkingProjection,
       agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
       contextWindowProfile,
@@ -418,26 +398,6 @@ export function refreshSessionRowProfiles(materialized: ReturnType<typeof materi
   Object.assign(materialized.row, projectSessionRowProfiles(materialized.source));
 }
 
-/** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
-export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
-  return links?.map(({ key, entry }) => ({
-    key,
-    entry: {
-      sessionId: entry.sessionId,
-      updatedAt: entry.updatedAt,
-      archivedAt: entry.archivedAt,
-      status: entry.status,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-      spawnedBy: entry.spawnedBy,
-      parentSessionKey: entry.parentSessionKey,
-      createdActor: entry.createdActor,
-      visibility: entry.visibility,
-      incognito: entry.incognito,
-    },
-  }));
-}
-
 export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
   const { cfg, key, entry } = input;
   const observerDigest =
@@ -456,7 +416,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const pinnable = isPinnableSessionEntry(key, entry);
   const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
 
-  // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
     key,
     sessionModelRevision: sessionModelRevision(entry),
@@ -464,8 +423,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
     incognito: entry?.incognito,
-    spawnedBy: undefined,
-    controlOwnerSessionKey: undefined,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
@@ -481,6 +438,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       ? { sessionRoot: entry.sessionRoot }
       : {}),
     worktree: entry?.worktree,
+    deviceFolder: entry?.deviceFolder,
     repositoryWorkspaceId: entry?.repositoryWorkspaceId,
     ...(input.repository ? { repository: input.repository } : {}),
     execNode: entry?.execNode,
@@ -530,7 +488,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,
-    agentStatus: undefined,
     observerDigest: observerDigest
       ? {
           ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
@@ -567,24 +524,13 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
     outputTokens: entry?.outputTokens,
-    totalTokens: undefined,
-    totalTokensFresh: undefined,
-    goal: undefined,
-    estimatedCostUsd: undefined,
-    status: undefined,
-    subagentRunState: undefined,
-    hasActiveSubagentRun: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    lastRunError: undefined,
+    usageReport: entry?.usageReport,
     providerReview: projectSessionProviderReview(entry, key),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
     parentSessionKey: entry?.parentSessionKey,
     parentSessionId: entry?.parentSessionId,
-    childSessions: undefined,
     responseUsage: entry?.responseUsage,
     effectiveResponseUsage: resolveEffectiveResponseUsage(
       entry?.responseUsage,
@@ -599,8 +545,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     }).mode,
     modelProvider: input.rowModelIdentity.provider,
     model: input.rowModelIdentity.model,
-    activeModelProvider: undefined,
-    activeModel: undefined,
     modelOverrideSource:
       input.selectedModel.storedOverrideSource === "parent"
         ? "inherited"
@@ -622,6 +566,12 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastThreadId: deliveryFields.lastThreadId,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
+  // JSON omits undefined fields; keep the resident projection equally sparse.
+  for (const field in row) {
+    if (Reflect.get(row, field) === undefined) {
+      Reflect.deleteProperty(row, field);
+    }
+  }
   return {
     row,
     source: {
@@ -672,6 +622,7 @@ export function presentSessionRow(
   });
   Object.assign(row, fields);
   const usage = source.usageByFallbackModel?.get(subagentRun?.model);
+  row.usageReport ??= usage?.usageReport;
   row.totalTokens = freshSessionTotalTokens ?? asNonNegativeFiniteNumber(usage?.totalTokens);
   row.totalTokensFresh =
     freshSessionTotalTokens !== undefined ||

@@ -1,21 +1,27 @@
 import { nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { createComponent, onCleanup } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { ControllerHost } from "../../lit/subscriptions-controller.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { renderChatQueue } from "./components/chat-composer-queue.tsx";
+import { renderChatQueue } from "./chat-composer-queue.test-support.ts";
+import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
+import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 import baseStyles from "../../styles/base.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
 
 const imageData =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
 
-describe("queued image snippets", () => {
+describe("composer queue", () => {
   let container: HTMLDivElement;
   let styles: HTMLStyleElement;
   let attachments: ChatAttachment[];
@@ -54,6 +60,81 @@ describe("queued image snippets", () => {
       container,
     );
   }
+
+  it.each([
+    { key: "ArrowUp", expected: ["c", "b"] },
+    { key: "ArrowDown", expected: ["c", "d"] },
+  ])("moves the focused row on $key", async ({ key, expected }) => {
+    const host = new ControllerHost();
+    const waiting = (id: string, createdAt: number): ChatQueueItem => ({
+      id,
+      text: id,
+      createdAt,
+      sendState: "waiting-reconnect",
+    });
+    let queue = [waiting("a", 1), waiting("b", 2), waiting("c", 3), waiting("d", 4)];
+    const ids = key === "ArrowUp" ? ["a", "c", "b", "d"] : ["a", "b", "d", "c"];
+    const onQueueMove = vi.fn<(id: string, targetId: string) => void>(() => {
+      queue = ids.map((id, index) => waiting(id, index));
+      host.requestUpdate();
+    });
+    const onQueueRemove = vi.fn();
+    mountSolid(
+      () => {
+        const lifecycle = createSolidRenderLifecycle({
+          host,
+          presented: () => true,
+          read: () => queue,
+        });
+        onCleanup(host.subscribe(() => lifecycle.invalidate()));
+        return createComponent(renderChatQueueSolid, {
+          get queue() {
+            return lifecycle.snapshot();
+          },
+          onQueueMove,
+          onQueueRemove,
+        });
+      },
+      { container },
+    );
+    host.connect();
+    onTestFinished(() => host.disconnect());
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-queue__grip")).toHaveLength(4),
+    );
+    // SAFETY: The preceding count assertion proves that the third handle exists.
+    const grip = container.querySelectorAll<HTMLButtonElement>(".chat-queue__grip")[2]!;
+    grip.focus();
+    expect(document.activeElement).toBe(grip);
+
+    let moveEvent: KeyboardEvent | undefined;
+    container.addEventListener(
+      "keydown",
+      (event) => {
+        moveEvent = event;
+      },
+      { once: true },
+    );
+    await userEvent.keyboard(`{${key}}`);
+    expect(onQueueMove.mock.calls).toEqual([expected]);
+    // Arrow keys belong to the handle, so the transcript must not also scroll.
+    expect(moveEvent?.defaultPrevented).toBe(true);
+    await waitForSolid(() =>
+      expect(
+        [...container.querySelectorAll<HTMLElement>("[data-chat-queue-item]")].map(
+          (row) => row.dataset.chatQueueItem,
+        ),
+      ).toEqual(ids),
+    );
+    expect(container.querySelector('[data-chat-queue-item="c"] .chat-queue__grip')).toBe(grip);
+    expect(document.activeElement).toBe(grip);
+    await userEvent.keyboard(`{${key}}`);
+    if (key === "ArrowUp") {
+      expect(onQueueMove).toHaveBeenLastCalledWith("c", "a");
+    } else {
+      expect(onQueueMove).toHaveBeenCalledOnce();
+    }
+  });
 
   it.each([
     [960, "dark", undefined, true],

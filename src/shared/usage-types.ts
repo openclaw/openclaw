@@ -91,6 +91,7 @@ export type SessionsUsageAggregates = {
   modelDaily?: SessionDailyModelUsage[];
   daily: Array<{
     date: string;
+    usageReport?: CostUsageSummary["totals"]["usageReport"];
     tokens: number;
     cost: number;
     messages: number;
@@ -128,17 +129,26 @@ export type UsageOverviewOptions = {
 };
 
 export type SessionsUsageOverview = {
+  /** Completeness of full-session chart sources before selected-day totals. */
+  usageReport?: CostUsageSummary["totals"]["usageReport"];
   total: number;
   unfilteredSessionCount: number;
   /** Sessions with activity in the selected population; empty comparison rows do not count. */
   selectedSessionCount: number;
   /** Matching rows in the selected population, including empty sessions eligible for detail reads. */
   selectedRowCount: number;
+  /** Every explicitly selected source has complete usage before query/day/hour filtering. */
+  selectedUsageComplete?: boolean;
   /** Explicitly selected matching rows, in selection order and independent of the table page. */
   selectedRows: SessionUsageEntry[];
   /** Comparison statistics before paging and the Recent roster selection. */
   tableSessionCount: number;
-  tableTotals: { tokens: number; cost: number; errors: number };
+  tableTotals: {
+    tokens: number;
+    cost: number;
+    errors: number;
+    usageReport?: CostUsageSummary["totals"]["usageReport"];
+  };
   offset: number;
   limit: number;
   queryWarnings: string[];
@@ -150,12 +160,6 @@ export type SessionsUsageOverview = {
   hourlyMessages: number[];
   hourlyErrors: number[];
   filterOptions: Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
-};
-
-/** Already-authorized metadata; the worker supplies usage from the owning store. */
-export type UsageOverviewSession = Omit<SessionUsageEntry, "usage" | "contextWeight"> & {
-  agentId: string;
-  instances: Array<{ sessionId?: string; sessionFile: string }>;
 };
 
 /** Aggregated report with one final, bounded comparison page. */

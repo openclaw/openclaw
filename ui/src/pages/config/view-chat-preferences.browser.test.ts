@@ -32,12 +32,18 @@ describe("chat appearance preferences", () => {
     expect(width).not.toBeNull();
     expect(terminal).not.toBeNull();
 
-    width!.value = "82%";
+    width!.focus();
+    width!.value = "max-content";
+    width!.dispatchEvent(new Event("input", { bubbles: true }));
     terminal!.value = "Iosevka";
-    renderConfigInto({ ...props, connected: true }, container);
-    expect(width!.value).toBe("82%");
+    renderConfigInto({ ...props, connected: true, chatShowTaskProgress: false }, container);
+    expect(container.querySelector("[data-settings-chat-message-width]")).toBe(width);
+    expect(width!.value).toBe("max-content");
     expect(terminal!.value).toBe("Iosevka");
+    expect(props.onAppearanceChange).not.toHaveBeenCalled();
 
+    width!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(props.onAppearanceChange).toHaveBeenCalledWith({ chatMessageMaxWidth: "max-content" });
     renderConfigInto(
       { ...props, chatMessageMaxWidth: "48rem", terminalFontFamily: "Menlo" },
       container,

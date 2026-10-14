@@ -1,19 +1,18 @@
-import type { ReactiveControllerHost } from "lit";
-import { WizardLoginController } from "../../components/wizard-login-controller.ts";
+import { WizardLoginController } from "../../components/wizard-login-controller.tsx";
 import { t } from "../../i18n/index.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts";
 import type { PluginsPageDetail } from "./plugins-page-model.ts";
 
 /** Binds the shared OAuth dialog to the selected plugin and live Gateway. */
 export class PluginMcpLoginController {
   private selection: { pluginId: string; scope: GatewayConnectionScope } | null = null;
-  private readonly dialog: WizardLoginController;
+  readonly dialog: WizardLoginController;
 
   constructor(
-    host: ReactiveControllerHost,
-    private readonly gateway: GatewayPageController,
+    host: { requestUpdate: () => void },
+    private readonly gateway: GatewayPageBinding,
     private readonly options: {
       getDetail: () => PluginsPageDetail | null;
       getName: (pluginId: string) => string | undefined;
@@ -58,10 +57,6 @@ export class PluginMcpLoginController {
   reset() {
     this.selection = null;
     this.dialog.reset();
-  }
-
-  render() {
-    return this.dialog.render();
   }
 
   async start(serverName: string): Promise<void> {

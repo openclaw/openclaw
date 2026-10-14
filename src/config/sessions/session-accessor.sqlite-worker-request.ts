@@ -16,6 +16,7 @@ import {
   captureOpenClawAgentDatabaseValidationTransfer,
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
+  hasRevokedOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
@@ -149,6 +150,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   onCommitRequest?: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
   validationOwner?: SqliteMutationWorkerValidationOwner;
+  validationPath?: string;
   /** Opening proof remains revocable and is adopted only against the worker's native identity. */
   readOpeningValidation?: () => OpenClawAgentDatabaseValidation | undefined;
   dispatch?: () => void;
@@ -157,6 +159,11 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
 }): Promise<Result> {
   const { transport, operationId } = params;
   const validationOwner = params.validationOwner;
+  const validationPath = validationOwner
+    ? "database" in validationOwner
+      ? validationOwner.database.path
+      : validationOwner.source.path
+    : params.validationPath;
   if (validationOwner && "source" in validationOwner) {
     validationOwner.claim.assertCurrent();
   }
@@ -335,7 +342,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 });
               };
               metadata.bindDatabaseAuthority({
-                databasePath: authority.databasePath,
+                databasePath: resolveIdentityPathViaExistingAncestorSync(authority.databasePath),
                 assertRequest: assertCreationCurrent,
                 assertAccess,
                 assertCreate(location) {
@@ -376,6 +383,10 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                   operationId,
                   allowed,
                   validation: allowed ? readValidation() : undefined,
+                  integrityRevoked:
+                    allowed && validationPath !== undefined
+                      ? hasRevokedOpenClawAgentDatabaseValidation(validationPath)
+                      : false,
                   ...(metadata ? { databaseAdmissionPort: metadata.port } : {}),
                 },
                 metadata ? [metadata.port] : [],

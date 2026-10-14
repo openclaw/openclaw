@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
-import "../../ui/src/app/app-host.ts";
+import { ShellGatewayOwner } from "../../ui/src/app/app-shell-gateway.ts";
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
 import { makeChatHost, makeRequestMock } from "../../ui/src/pages/chat/chat-host.test-support.ts";
 import { handlePageGatewayEvent } from "../../ui/src/pages/chat/chat-state-events.ts";
@@ -21,7 +21,7 @@ import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 it("refreshes a retained pane from a persisted profile-only selection through the Gateway lifecycle broadcaster", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -53,9 +53,11 @@ it("refreshes a retained pane from a persisted profile-only selection through th
     const request = makeRequestMock({
       "chat.metadata": async () => ({ commands: [] }),
       "models.list": async (params: unknown) => {
-        const selected = loadGatewaySessionEntryReadOnly(
-          (params as { sessionKey: string }).sessionKey,
-          { agentId: "main" },
+        const selected = (
+          await loadGatewaySessionEntryReadOnlyAsync(
+            (params as { sessionKey: string }).sessionKey,
+            { agentId: "main" },
+          )
         ).entry;
         const available = selected?.authProfileOverride === "anthropic:restored";
         return {
@@ -74,17 +76,22 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       client,
     }) as ChatPageHost;
     const sibling = makeChatHost({ sessionKey: otherKey, client }) as ChatPageHost;
-    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
-      runtime: { context: ApplicationContext };
-      handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
-    };
-    shell.runtime = {
+    const shell = new ShellGatewayOwner({
       context: {
         gateway: { snapshot: { client, hello: retained.hello, phase: "connected" } },
         agents: { state: { agentsList: null } },
         sessions: retained.sessions,
       } as unknown as ApplicationContext,
-    };
+      routeState: { routeId: "chat" },
+      activeSessionKey: sessionKey,
+      desktopNavigationExpanded: false,
+      lastLocalePrefSignature: null,
+      outboxStoreImport: { load: async () => undefined },
+      observeDeletedSessions() {},
+      recoverDeletedActiveSession() {},
+      selectChatSession() {},
+      requestUpdate() {},
+    });
     await refreshChatMetadata(retained);
     await refreshChatMetadata(sibling);
     expect(retained.chatModelCatalog[0]?.available).toBe(false);
@@ -96,7 +103,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
       chatAbortControllers: new Map(),
       broadcastToConnIds: (event, payload) => {
-        shell.handleGatewayEvent({ event, payload });
+        shell.handleGatewayEvent({ type: "event", event, payload });
         handlePageGatewayEvent(retained, { type: "event", event, payload });
         handlePageGatewayEvent(sibling, { type: "event", event, payload });
       },

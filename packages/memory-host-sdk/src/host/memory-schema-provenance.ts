@@ -1,6 +1,11 @@
 // Memory Host SDK module owns additive memory chunk provenance schema.
 import type { DatabaseSync } from "node:sqlite";
-import { runSqliteImmediateTransactionSync } from "./openclaw-runtime-sqlite.js";
+import {
+  createSqliteTableContractReader,
+  createSqliteSchemaEnsurer,
+  getAdmittedSqliteSchemaFacts,
+  runSqliteImmediateTransactionSync,
+} from "./openclaw-runtime-sqlite.js";
 
 export const MEMORY_INDEX_CHUNK_PROVENANCE_TABLE = "memory_index_chunk_provenance";
 
@@ -15,6 +20,12 @@ export const MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL = `
   ) STRICT;
 `;
 
+const ensureProvenanceTable = createSqliteSchemaEnsurer(
+  () => MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL,
+  { tables: [MEMORY_INDEX_CHUNK_PROVENANCE_TABLE] },
+);
+const retiredProvenanceTrigger = "memory_index_chunk_provenance_after_insert";
+
 const missingChunkIdsSql = `
   SELECT chunk.id
   FROM memory_index_chunks AS chunk
@@ -28,8 +39,16 @@ export function ensureMemoryChunkProvenance(db: DatabaseSync): void {
     // The former chunk trigger made the additive table visible to older schema
     // validators. Writers upsert provenance explicitly; this backfill covers
     // legacy/imported rows without changing the canonical chunk table.
-    db.exec("DROP TRIGGER IF EXISTS memory_index_chunk_provenance_after_insert");
-    db.exec(MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL);
+    const facts = getAdmittedSqliteSchemaFacts(db);
+    const hasRetiredTrigger = facts
+      ? facts.triggers.has(retiredProvenanceTrigger)
+      : createSqliteTableContractReader(db)("memory_index_chunks")?.triggers.some(
+          ({ name }) => name === retiredProvenanceTrigger,
+        );
+    if (hasRetiredTrigger) {
+      db.exec(`DROP TRIGGER ${retiredProvenanceTrigger}`);
+    }
+    ensureProvenanceTable(db);
     backfillMemoryChunkProvenance(db);
   };
   if (db.isTransaction) {

@@ -4,6 +4,10 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
+import {
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./path-resolve.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
@@ -169,8 +173,12 @@ export async function persistAuthProfileBatch(
   const authorityProfileIds = [...profiles.entries()]
     .filter(([, entry]) => needsOAuthRefreshAuthority(entry.credential))
     .map(([profileId]) => profileId);
+  const env = resolveAuthProfileWriteEnv(params);
+  if (authorityProfileIds.length > 0 && !getPreparedSharedAuthStoreOwnership(env)) {
+    await prepareSharedAuthStoreOwnership(env);
+  }
   const readAuthorities = () => loadAuthProfileWriteAuthorities(params, authorityProfileIds);
-  // Capture before yielding so a queued batch cannot restore an OAuth generation consumed while waiting.
+  // Capture before the lock wait so a queued batch cannot restore a consumed OAuth generation.
   const observedProfiles = readAuthorities();
 
   return await withOAuthProfileLocks(
@@ -372,6 +380,9 @@ export async function upsertAuthProfileWithLock(
   params: AuthProfileUpsertParams,
 ): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
+  if (needsOAuthRefreshAuthority(credential)) {
+    await prepareSharedAuthStoreOwnership(resolveAuthProfileWriteEnv(params));
+  }
   const observed = needsOAuthRefreshAuthority(credential)
     ? loadAuthProfileWriteAuthorities(params, [params.profileId]).get(params.profileId)
     : undefined;

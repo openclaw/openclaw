@@ -10,6 +10,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
+import { SqliteDatabaseAdmissionRegistry } from "./sqlite-database-admission-record.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -23,6 +24,7 @@ import {
   revokeSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
+import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import { readSqliteTextEncoding, schemaAdmission } from "./sqlite-schema-admission.js";
 import {
@@ -218,8 +220,9 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
     expect(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)).toBe(inherited);
 
-    installSqliteDatabaseAdmissions(before);
+    installSqliteDatabaseAdmissions(structuredClone(before));
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)).toBe(inherited);
     expect(
       captureSqliteDatabaseAdmissions().find(
         (record) => record.identity === firstSnapshot.identity,
@@ -254,6 +257,61 @@ describe("native SQLite schema snapshots and callbacks", () => {
         (record) => record.identity === secondSnapshot.identity,
       ),
     ).toBe(false);
+  });
+
+  it("reclaims another isolate's retired metadata at the next publication", () => {
+    const root = tempDirs.make("sqlite-retired-publication-");
+    const first = openDatabase("CREATE TABLE proof(value)", true, path.join(root, "first.sqlite"));
+    const second = openDatabase(
+      "CREATE TABLE proof(value)",
+      true,
+      path.join(root, "second.sqlite"),
+    );
+    const firstSnapshot = captureSqliteDatabaseAdmissions(undefined, {
+      location: first.location()!,
+    })[0]!;
+    const secondSnapshot = captureSqliteDatabaseAdmissions(undefined, {
+      location: second.location()!,
+    })[0]!;
+    const receiver = new SqliteDatabaseAdmissionRegistry();
+    receiver.install(structuredClone([firstSnapshot, secondSnapshot]));
+    try {
+      first.close();
+      receiver.publish(receiver.records.get(secondSnapshot.identity)!);
+      expect(receiver.records.has(firstSnapshot.identity)).toBe(false);
+    } finally {
+      captureSqliteDatabaseAdmissions();
+    }
+  });
+
+  it("installs a recreated scope when only the sender's latest publication is delivered", () => {
+    const location = path.join(tempDirs.make("sqlite-recreated-scope-"), "proof.sqlite");
+    const database = openDatabase("CREATE TABLE proof(value)", true, location);
+    const original = readSqliteDatabaseScopedWriteToken(database, "reused");
+    const [snapshot] = captureSqliteDatabaseAdmissions(undefined, { location });
+    const sender = new SqliteDatabaseAdmissionRegistry();
+    sender.install(structuredClone([snapshot!]));
+    const receipts = createSqliteDatabaseWriteReceipts({
+      admission: () => sender.records.get(snapshot!.identity),
+      pathAdmission: () => sender.records.get(snapshot!.identity),
+      readRevision: () => 0,
+      writer: () => sender.records.get(snapshot!.identity),
+      suspended: () => false,
+      exchange: () => {},
+      publish: (record) => sender.publish(record),
+    });
+    try {
+      receipts.retireSqliteDatabaseWriteScopes(database, ["reused"]);
+      const replacement = receipts.readSqliteDatabaseScopedWriteToken(database, "reused");
+      expect(replacement).toBeTypeOf("string");
+      expect(replacement).not.toBe(original);
+
+      installSqliteDatabaseAdmissions(structuredClone(sender.capture()));
+      expect(readSqliteDatabaseScopedWriteToken(database, "reused")).toBe(replacement);
+    } finally {
+      // The synthetic sender's environment publication must not replace the process owner.
+      captureSqliteDatabaseAdmissions();
+    }
   });
 
   it.each(["scoped", "full"] as const)(

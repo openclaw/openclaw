@@ -185,6 +185,9 @@ export function createMergeOutcomeFixtureHarness() {
       restDuplicate: "",
       restSuite: "pass",
       restUnseenSuite: "",
+      restUnseenSuiteCount: 0,
+      restBulkFault: "",
+      restBulkRead: false,
       restAdvanceMain: false,
       restMainFault: "",
       restMainFaultAfterReads: 0,
@@ -402,7 +405,7 @@ const restCheckSuites=()=>{
     const empty=s.restUnseenSuite.startsWith("queued-empty");
     const pending=empty||["pending","other-app"].includes(s.restUnseenSuite);
     const failed=["failed","irrelevant-failure"].includes(s.restUnseenSuite);
-    for(const id of s.restUnseenSuite==="labeler"?[30,31]:[30]) suites.push({id,head_sha:s.pr.headRefOid,
+    for(const id of Array.from({length:s.restUnseenSuiteCount||(s.restUnseenSuite==="labeler"?2:1)},(_,index)=>30+index)) suites.push({id,head_sha:s.pr.headRefOid,
       app:{id:s.restUnseenSuite==="other-app"?999:s.restCheckApp,slug:s.restUnseenSuite==="other-app"?"another-app":s.restCheckApp===15368?"github-actions":"custom-ci"},
       status:empty?"queued":pending?"in_progress":"completed",conclusion:pending?null:failed?"failure":"skipped",
       updated_at:s.restUnseenSuite==="missing-version"?undefined:"2026-09-20T00:01:00Z",
@@ -410,6 +413,15 @@ const restCheckSuites=()=>{
   }
   return suites;
 };
+const suiteChecks=(suite)=>{
+  const id=suite.id;
+  const names=s.restUnseenSuite.startsWith("queued-empty")?[]:["failed","hidden-skipped"].includes(s.restUnseenSuite)?["CI"]:["label","label-issues","backfill-pr-labels"];
+  return names.map((name,index)=>({id:id*100+index,head_sha:s.pr.headRefOid,name,app:suite.app,check_suite:{id},
+    status:"completed",conclusion:suite.conclusion,started_at:"2026-09-20T00:00:00Z"}));
+};
+const currentSuite=(suite)=>suite.id<30?suite:s.restUnseenSuite==="changed-suite"?{...suite,updated_at:"2026-09-20T00:02:00Z"}:
+  ["changed-count","queued-empty-drift"].includes(s.restUnseenSuite)?{...suite,latest_check_runs_count:4}:suite;
+const paginated=(values,key,total=values.length)=>Array.from({length:Math.max(1,Math.ceil(values.length/100))},(_,index)=>({total_count:total,[key]:values.slice(index*100,index*100+100)}));
 const advanceMain=()=>{
   const parent=main();
   const next=git(["--git-dir="+process.env.FIXTURE_REMOTE,"commit-tree",git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse",parent+"^{tree}"]),"-p",parent],"Remote advance\\n");
@@ -542,26 +554,40 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check
   const suite=restCheckSuites().find(suite=>suite.id===id);
   if(!suite) fail("unknown check suite");
   if(endpoint.includes("/check-runs?")) {
-    const names=s.restUnseenSuite.startsWith("queued-empty")?[]:["failed","hidden-skipped"].includes(s.restUnseenSuite)?["CI"]:["label","label-issues","backfill-pr-labels"];
-    const checks=names.map((name,index)=>({id:id*100+index,head_sha:s.pr.headRefOid,name,app:suite.app,check_suite:{id},
-      status:"completed",conclusion:suite.conclusion,started_at:"2026-09-20T00:00:00Z"}));
-    out([{total_count:checks.length+(s.restUnseenSuite==="incomplete-suite"?1:0),check_runs:checks}]);
-  } else out(s.restUnseenSuite==="changed-suite"?{...suite,updated_at:"2026-09-20T00:02:00Z"}:["changed-count","queued-empty-drift"].includes(s.restUnseenSuite)?{...suite,latest_check_runs_count:4}:suite);
+    const checks=suiteChecks(suite);
+    out(paginated(checks,"check_runs",checks.length+(s.restUnseenSuite==="incomplete-suite"?1:0)));
+  } else out(currentSuite(suite));
 }
 else if(args[0]==="api"&&args.some(arg=>arg.includes("/check-runs?"))) {
   const endpoint=args.find(arg=>arg.includes("/check-runs?"));
   const context=new URL(endpoint,"https://github.com").searchParams.get("check_name");
-  const checks=restCheckRuns().filter(check=>context===null||check.name===context);
-  out([{total_count:checks.length,check_runs:checks}]);
+  let checks=restCheckRuns().filter(check=>context===null||check.name===context);
+  if(context===null) {
+    checks.push(...restCheckSuites().filter(suite=>suite.id>=30).flatMap(suiteChecks));
+    s.restBulkRead=true;save();
+    if(s.restBulkFault==="duplicate") checks.push(checks.at(-1));
+    if(s.restBulkFault==="head") checks.at(-1).head_sha="f".repeat(40);
+    if(s.restBulkFault==="app") checks.at(-1).app={id:999};
+    if(s.restBulkFault==="suite") checks.at(-1).check_suite={id:9999};
+  }
+  const pages=paginated(checks,"check_runs",checks.length+(context===null&&s.restUnseenSuite==="incomplete-suite"?1:0));
+  if(context===null&&s.restBulkFault==="partial") pages.pop();
+  if(context===null&&s.restBulkFault==="changed-total") pages.at(-1).total_count++;
+  out(pages);
 }
 else if(args[0]==="api"&&args.some(arg=>arg.includes("/status?"))) {
   const statuses=["bound-status","status-only","wrong-app-status","failed-status"].includes(s.restChecks)?[{id:2,context:"CI",state:s.restChecks==="failed-status"?"failure":"success"}]:[];
   out([{total_count:statuses.length,sha:s.pr.headRefOid,state:s.restChecks==="inconsistent-status"?"failure":statuses[0]?.state??"pending",statuses}]);
 }
 else if(args[0]==="api"&&args.some(arg=>arg.includes("/check-suites?"))) {
-  const suites=restCheckSuites();
-  const page={total_count:suites.length,check_suites:suites};
-  out(args.includes("--slurp")?[page]:page);
+  let suites=restCheckSuites();
+  if(s.restBulkRead) {
+    suites=suites.map(currentSuite);
+    if(s.restBulkFault==="removed-suite") suites.pop();
+    if(s.restBulkFault==="duplicate-suite") suites[suites.length-1]=suites[0];
+    s.restBulkRead=false;save();
+  }
+  out(args.includes("--slurp")?paginated(suites,"check_suites"):{total_count:suites.length,check_suites:suites});
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs?"))) {
   const runs=restCheckRuns().map((check,index)=>({id:100+index,head_sha:s.pr.headRefOid,check_suite_id:check.check_suite.id,

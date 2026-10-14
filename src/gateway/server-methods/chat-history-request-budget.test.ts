@@ -201,7 +201,7 @@ describe("chat history request byte budgets", () => {
     },
   );
 
-  it("bounds default older-history responses below 1 MB without losing messages", async () => {
+  it("honors larger older-history budgets without growing the default or losing messages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await captureRuntimeConfigAsyncReader()();
       const scope = {
@@ -214,56 +214,65 @@ describe("chat history request byte budgets", () => {
         { length: 320 },
         (_, index) => `record-${index}: ${"x".repeat(7_000)}`,
       );
-      for (const [index, text] of texts.entries()) {
-        await appendTranscriptMessage(scope, {
+      await appendTranscriptMessages(scope, {
+        messages: texts.map((text, index) => ({
           message: {
             role: index % 2 === 0 ? "user" : "assistant",
             content: [{ type: "text", text }],
           },
-        });
-      }
+        })),
+      });
       const request = createHistoryRequest(
         "chat.history",
         scope.sessionKey,
         await createHistoryReadContext(),
       );
       const tail = await request({ maxBytes: 256 * 1024 });
-      const restored: unknown[] = expectDefined(
-        Array.isArray(tail.messages) ? tail.messages : undefined,
-        "tail messages",
-      ).slice();
-      let offset = expectDefined(
-        typeof tail.nextOffset === "number" ? tail.nextOffset : undefined,
-        "older-history offset",
-      );
-      let pages = 0;
-      for (;;) {
-        const page = await request({ limit: 1000, offset });
-        const messages = expectDefined(
-          Array.isArray(page.messages) ? page.messages : undefined,
-          "older-history messages",
+      expect(Buffer.byteLength(JSON.stringify(tail.messages))).toBeLessThanOrEqual(256 * 1024);
+      const pageCounts: number[] = [];
+      for (const maxBytes of [undefined, 1024 * 1024]) {
+        const restored: unknown[] = expectDefined(
+          Array.isArray(tail.messages) ? tail.messages : undefined,
+          "tail messages",
+        ).slice();
+        let offset = expectDefined(
+          typeof tail.nextOffset === "number" ? tail.nextOffset : undefined,
+          "older-history offset",
         );
-        expect(messages.length).toBeGreaterThan(0);
-        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1_000_000);
-        restored.unshift(...messages);
-        expect(restored.length).toBeLessThanOrEqual(texts.length);
-        pages += 1;
-        if (page.hasMore !== true) {
-          break;
+        let pages = 0;
+        for (;;) {
+          const page = await request({ limit: 1000, offset, ...(maxBytes ? { maxBytes } : {}) });
+          const messages = expectDefined(
+            Array.isArray(page.messages) ? page.messages : undefined,
+            "older-history messages",
+          );
+          const bytes = Buffer.byteLength(JSON.stringify(messages));
+          expect(messages.length).toBeGreaterThan(0);
+          expect(bytes).toBeLessThanOrEqual(maxBytes ?? 512 * 1024);
+          if (maxBytes && pages === 0) {
+            expect(bytes).toBeGreaterThan(512 * 1024);
+          }
+          restored.unshift(...messages);
+          expect(restored.length).toBeLessThanOrEqual(texts.length);
+          pages += 1;
+          if (page.hasMore !== true) {
+            break;
+          }
+          const nextOffset = expectDefined(
+            typeof page.nextOffset === "number" ? page.nextOffset : undefined,
+            "advancing older-history offset",
+          );
+          expect(nextOffset).toBeGreaterThan(offset);
+          offset = nextOffset;
         }
-        const nextOffset = expectDefined(
-          typeof page.nextOffset === "number" ? page.nextOffset : undefined,
-          "advancing older-history offset",
-        );
-        expect(nextOffset).toBeGreaterThan(offset);
-        offset = nextOffset;
-      }
 
-      expect(pages).toBeGreaterThan(1);
-      expect(restored).toHaveLength(texts.length);
-      for (const [index, message] of restored.entries()) {
-        expect(JSON.stringify(message)).toContain(texts[index]);
+        pageCounts.push(pages);
+        expect(restored).toHaveLength(texts.length);
+        for (const [index, message] of restored.entries()) {
+          expect(JSON.stringify(message)).toContain(texts[index]);
+        }
       }
+      expect(pageCounts[1]).toBeLessThan(expectDefined(pageCounts[0], "default page count"));
     });
   });
 

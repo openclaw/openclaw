@@ -58,20 +58,24 @@ enum VoiceWakeForwarder {
             await GatewayConnection.shared.mainSessionKey()
         }
 
-        let routeEntry = await self.loadSessionRouteEntry(sessionKey: sessionKey)
+        let routeEntries = await self.loadSessionRouteEntries()
         return await self.forward(invocation: self.makeInvocation(
             transcript: transcript,
             sessionKey: sessionKey,
-            routeEntry: routeEntry,
+            routeEntries: routeEntries,
             voiceWakeTrigger: voiceWakeTrigger))
     }
 
     static func makeInvocation(
         transcript: String,
         sessionKey: String = "main",
-        routeEntry: SessionRouteEntry? = nil,
+        routeEntries: [SessionRouteEntry] = [],
         voiceWakeTrigger: String? = nil) -> GatewayAgentInvocation
     {
+        let comparisonKey = OpenClawChatSessionKey.comparisonKey(sessionKey)
+        let routeEntry = routeEntries.first {
+            OpenClawChatSessionKey.comparisonKey($0.key) == comparisonKey
+        }
         let parsedRoute = self.parseSessionKeyRoute(sessionKey)
         let channelRaw = self.firstNonEmpty(
             routeEntry?.deliveryContext?.channel,
@@ -115,7 +119,7 @@ enum VoiceWakeForwarder {
         return .failure(.rpcFailed(message))
     }
 
-    private static func loadSessionRouteEntry(sessionKey: String) async -> SessionRouteEntry? {
+    private static func loadSessionRouteEntries() async -> [SessionRouteEntry] {
         do {
             let request = OpenClawChatGatewayRequests.sessionsList(
                 limit: 500,
@@ -124,15 +128,11 @@ enum VoiceWakeForwarder {
                 includeGlobal: false,
                 timeoutMs: 10000)
             let data = try await GatewayConnection.shared.request(request)
-            let response = try JSONDecoder().decode(SessionListResponse.self, from: data)
-            return response.sessions.first {
-                $0.key.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .caseInsensitiveCompare(sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
-            }
+            return try JSONDecoder().decode(SessionListResponse.self, from: data).sessions
         } catch {
             self.logger.debug(
                 "voice wake selected route lookup failed: \(error.localizedDescription, privacy: .public)")
-            return nil
+            return []
         }
     }
 

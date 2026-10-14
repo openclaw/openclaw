@@ -40,7 +40,7 @@ function cacheSessionEntryQuery<Row extends ResolvedSessionEntryRow["row"]>(
 }
 
 // Each query retains only its last exact row at the connection's admitted revision.
-export const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
+export const getExactSessionEntryQueries = createSqliteQueryCache((database: DatabaseSync) => {
   const rowQueries = new Map<string, (key: string) => ResolvedSessionEntryRow["row"] | undefined>();
   const canonicalQueries = new Map<
     string,

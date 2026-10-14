@@ -88,22 +88,18 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
           }
           const controller = new AbortController();
           abortController = controller;
-          let timeout: ReturnType<typeof setTimeout> | undefined;
+          const timeout = setTimeout(
+            () =>
+              controller.abort(new DOMException("SVG attachment fetch timed out", "TimeoutError")),
+            SVG_PREVIEW_FETCH_TIMEOUT_MS,
+          );
           try {
-            const response = await Promise.race([
-              fetch(src, {
-                credentials: "same-origin",
-                headers: { Accept: "image/svg+xml" },
-                method: "GET",
-                signal: controller.signal,
-              }),
-              new Promise<never>((_resolve, reject) => {
-                timeout = setTimeout(() => {
-                  controller.abort();
-                  reject(new DOMException("SVG attachment fetch timed out", "TimeoutError"));
-                }, SVG_PREVIEW_FETCH_TIMEOUT_MS);
-              }),
-            ]);
+            const response = await fetch(src, {
+              credentials: "same-origin",
+              headers: { Accept: "image/svg+xml" },
+              method: "GET",
+              signal: controller.signal,
+            });
             if (!response.ok) {
               await response.body?.cancel().catch(() => undefined);
               throw new Error("SVG attachment is unavailable");

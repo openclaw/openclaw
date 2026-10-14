@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   runVectorKnnQuery,
-  validateVectorKnnRequest,
   type VectorKnnRequest,
   type VectorKnnResponse,
 } from "./manager-search-knn.js";
@@ -16,7 +15,6 @@ const MAX_STDIN_BYTES = 1024 * 1024;
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 
 export type VectorKnnChildInput = {
-  id: number;
   databasePath: string;
   extensionPath?: string;
   sqliteLibraryPath?: string;
@@ -34,7 +32,6 @@ function isChildInput(value: unknown): value is VectorKnnChildInput {
   // SAFETY: the object guard above permits explicit validation of every field read below.
   const input = value as Partial<VectorKnnChildInput>;
   return (
-    Number.isSafeInteger(input.id) &&
     typeof input.databasePath === "string" &&
     input.databasePath.length > 0 &&
     (input.sqliteLibraryPath === undefined ||
@@ -45,7 +42,6 @@ function isChildInput(value: unknown): value is VectorKnnChildInput {
 }
 
 async function run(input: VectorKnnChildInput): Promise<VectorKnnResponse> {
-  validateVectorKnnRequest(input.request);
   ensureSqliteLibrarySelected({ explicitPath: input.sqliteLibraryPath });
   const extensionLoadingSupported = supportsNodeSqliteExtensionLoading();
   const db = openNodeSqliteDatabase(input.databasePath, {
@@ -66,12 +62,11 @@ async function run(input: VectorKnnChildInput): Promise<VectorKnnResponse> {
   }
 }
 
-function writeResult(id: number, result: VectorKnnChildResult): void {
-  let payload = Buffer.from(JSON.stringify({ ...result, id }), "utf8");
+function writeResult(result: VectorKnnChildResult): void {
+  let payload = Buffer.from(JSON.stringify(result), "utf8");
   if (payload.byteLength > MAX_STDOUT_BYTES) {
     payload = Buffer.from(
       JSON.stringify({
-        id,
         status: "failed",
         error: "memory vector KNN child result is too large",
       }),
@@ -105,9 +100,9 @@ for await (const chunk of process.stdin) {
   }
   try {
     // Reopen for each query so publication and path replacement stay visible.
-    writeResult(input.id, { status: "ok", value: await run(input) });
+    writeResult({ status: "ok", value: await run(input) });
   } catch (error) {
-    writeResult(input.id, {
+    writeResult({
       status: "failed",
       error: error instanceof Error ? error.message : String(error),
     });

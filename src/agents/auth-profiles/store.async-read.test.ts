@@ -3,13 +3,22 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import * as sqliteWorker from "../../infra/sqlite-readonly-worker.js";
+import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
+import { revokeAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import { refreshAuthProfileFileState } from "./file-state.js";
 import * as migration from "./legacy-source-diagnostic.js";
+import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import * as persistedStore from "./persisted.js";
+import { authProfileRuntimeMode } from "./runtime-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   noteRuntimeAuthProfileStorePersistedMutation,
@@ -22,6 +31,8 @@ import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
 const reader = vi.hoisted(() => ({
   identity: undefined,
+  signal: new AbortController().signal,
+  captureCredentialAuthority: () => undefined,
   read: vi.fn(),
   assertCurrent: vi.fn(),
   dispose: vi.fn(async () => {}),
@@ -32,6 +43,11 @@ beforeEach(() => {
   reader.read.mockReset();
   vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockReturnValue(reader);
 });
+
+function useAgentWorkerRows() {
+  vi.mocked(sqliteRead.prepareAgentAuthProfileRowsRead).mockRestore();
+  vi.spyOn(sqliteWorker, "runSqliteReadOnlyWorker").mockImplementation(reader.read);
+}
 
 afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
@@ -54,6 +70,62 @@ function createRuntime(overlayExternalAuthProfiles = (store: AuthProfileStore) =
   });
 }
 
+it.each(["agent", "shared"] as const)(
+  "seeds selected %s credential authority from canonical rows instead of runtime overlays",
+  async (source) => {
+    const root = tempDirs.make("openclaw-auth-authority-rows-");
+    const agentDir = path.join(root, "agents/worker/agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    createCacheDatabase(agentDir);
+    fs.mkdirSync(path.join(root, "state"));
+    using sharedDatabase = openNodeSqliteDatabase(path.join(root, "state/openclaw.sqlite"));
+    sharedDatabase.exec("CREATE TABLE cache_fixture (value)");
+    const env = { OPENCLAW_STATE_DIR: root };
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
+    const context = captureOpenClawStateWorkerContext({ env });
+    const databasePath =
+      source === "agent"
+        ? path.join(agentDir, "openclaw-agent.sqlite")
+        : context.admission.databasePath;
+    const profileId = "custom:account";
+    const persisted: AuthProfileStore = {
+      version: 1,
+      profiles: { [profileId]: { type: "api_key", provider: "custom", key: "persisted-fixture" } },
+    };
+    reader.read.mockResolvedValue(readableRows(persisted));
+    useAgentWorkerRows();
+    vi.spyOn(sqliteRead, "readSharedAuthProfileRows").mockResolvedValue(readableRows(persisted));
+    const runtime = createRuntime((store) => {
+      store.profiles[profileId] = { type: "api_key", provider: "custom", key: "runtime-overlay" };
+      return store;
+    });
+    const selectedDir = source === "agent" ? agentDir : undefined;
+    const options = {
+      inheritedAuthDir: selectedDir,
+      externalCli: { mode: "none" as const },
+    };
+    try {
+      await runtime.loadAuthProfileStoreForRuntimeAsync(selectedDir, options);
+      await runtime.loadAuthProfileStoreForRuntimeAsync(selectedDir, { ...options, profileId });
+      const identity = inspectDatabasePathIdentitySync(databasePath);
+      if (!identity) {
+        throw new Error("Missing fixture database identity");
+      }
+      const authority = captureAuthProfileCredentialAuthority(
+        context,
+        { identity: `${identity.key}:${identity.birthtime ?? ""}`, databasePath },
+        profileId,
+      );
+      expect(authority.readCurrentCredential()).toEqual(persisted.profiles[profileId]);
+      if (source === "agent") {
+        expect(reader.read).toHaveBeenCalledOnce();
+      }
+    } finally {
+      await Promise.all(revokeAgentDatabaseResources({ rootPath: root }));
+    }
+  },
+);
+
 it.each(["snapshot", "requested", "shared", "absent"] as const)(
   "prepares the %s provider from recorded facts without synchronous persisted reads",
   async (source) => {
@@ -73,6 +145,7 @@ it.each(["snapshot", "requested", "shared", "absent"] as const)(
       readableRows(store(source === "absent" ? undefined : "shared")),
     );
     if (source === "snapshot") {
+      prepareSharedAuthStoreOwnershipForNative();
       setRuntimeAuthProfileStoreSnapshot(store("snapshot"), agentDir);
     }
     const syncRead = vi
@@ -97,6 +170,7 @@ it("keeps cached credentials and selection state separate from mutable runtime v
   const root = tempDirs.make("openclaw-auth-cached-mutation-");
   const localDir = path.join(root, "agents/worker/agent");
   createCacheDatabase(localDir);
+  useAgentWorkerRows();
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const persisted: AuthProfileStore = {
     version: 1,
@@ -166,6 +240,33 @@ it("keeps cached credentials and selection state separate from mutable runtime v
   expect(reader.read).toHaveBeenCalledTimes(1);
 });
 
+it("shares canonical rows while keeping scoped read-through credentials separate", async () => {
+  const root = tempDirs.make("openclaw-auth-scope-cache-");
+  const agentDir = path.join(root, "agents/worker/agent");
+  createCacheDatabase(agentDir);
+  useAgentWorkerRows();
+  const env = { OPENCLAW_STATE_DIR: root };
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  reader.read.mockResolvedValue(readableRows());
+  const runtime = createRuntime();
+  for (const key of ["fixture-one", "fixture-two"]) {
+    const sharedStore: AuthProfileStore = {
+      version: 1,
+      profiles: { "custom:key": { type: "api_key", provider: "custom", key } },
+    };
+    const store = await authProfileRuntimeMode.run(
+      { kind: "agent-dir", agentDir, env, sharedStore },
+      () =>
+        runtime.loadAuthProfileStoreForRuntimeAsync(agentDir, {
+          inheritedAuthDir: agentDir,
+          externalCli: { mode: "none" },
+        }),
+    );
+    expect(store.profiles["custom:key"]).toEqual(sharedStore.profiles["custom:key"]);
+  }
+  expect(reader.read).toHaveBeenCalledOnce();
+});
+
 function createCacheDatabase(agentDir: string): void {
   fs.mkdirSync(agentDir, { recursive: true });
   using database = openNodeSqliteDatabase(path.join(agentDir, "openclaw-agent.sqlite"));
@@ -178,6 +279,8 @@ function prepareCachedRuntimeRead() {
   fs.mkdirSync(agentDir, { recursive: true });
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   createCacheDatabase(agentDir);
+  useAgentWorkerRows();
+  prepareSharedAuthStoreOwnershipForNative();
   const rows = readableRows();
   reader.read.mockResolvedValue(rows);
   const runtime = createRuntime();
@@ -257,6 +360,7 @@ it.each([false, true])(
           },
         }),
       );
+      await refreshAuthProfileFileState();
       inheritedRows.resolve(inherited);
       if (populated) {
         await expect(loading).resolves.toMatchObject({ profiles: local.profiles });

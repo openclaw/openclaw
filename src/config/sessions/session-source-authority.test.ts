@@ -98,3 +98,41 @@ it("keeps native opacity and full checks on transaction source preparation", asy
   expect(plain).toHaveBeenCalledTimes(2);
   expect(external).toHaveBeenCalledOnce();
 });
+
+it("retains every composed source until accepted work releases its hold", () => {
+  let references = 1;
+  const source = Object.assign(
+    () => {
+      if (references === 0) {
+        throw new Error("source released");
+      }
+    },
+    {
+      retain: () => {
+        references++;
+        return () => references--;
+      },
+    },
+  );
+  const assertion = composeSessionSourceAssertion([composeSessionSourceAssertion([source])]);
+  const release = assertion.retain!();
+  references--;
+  expect(assertion).not.toThrow();
+  release();
+  release();
+  expect(assertion).toThrow("source released");
+});
+
+it("releases earlier source holds when a later acquisition fails", () => {
+  const release = vi.fn();
+  const assertion = composeSessionSourceAssertion([
+    Object.assign(() => {}, { retain: () => release }),
+    Object.assign(() => {}, {
+      retain: () => {
+        throw new Error("source released");
+      },
+    }),
+  ]);
+  expect(() => assertion.retain!()).toThrow("source released");
+  expect(release).toHaveBeenCalledOnce();
+});

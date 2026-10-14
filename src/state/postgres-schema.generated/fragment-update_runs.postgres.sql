@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."update_runs" (
+CREATE TABLE "update_runs" (
   "run_id" text COLLATE "C" NOT NULL,
   "created_at_ms" bigint NOT NULL,
   "updated_at_ms" bigint NOT NULL,
@@ -36,8 +32,6 @@ CREATE TABLE "openclaw_state"."update_runs" (
   CHECK ((("status" = 'running') AND ("phase" != 'finished') AND "finished_at_ms" IS NULL) OR (("status" != 'running') AND ("phase" = 'finished') AND "finished_at_ms" IS NOT NULL))
 );
 
-CREATE INDEX "idx_update_runs_active" ON "openclaw_state"."update_runs" (("status") ASC NULLS FIRST, ("created_at_ms") DESC NULLS LAST, ("run_id") ASC NULLS FIRST);
+CREATE INDEX "idx_update_runs_active" ON "update_runs" (("status") ASC NULLS FIRST, ("created_at_ms") DESC NULLS LAST, ("run_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_update_runs_created" ON "openclaw_state"."update_runs" (("created_at_ms") DESC NULLS LAST, ("run_id") ASC NULLS FIRST);
-
-COMMIT;
+CREATE INDEX "idx_update_runs_created" ON "update_runs" (("created_at_ms") DESC NULLS LAST, ("run_id") ASC NULLS FIRST);

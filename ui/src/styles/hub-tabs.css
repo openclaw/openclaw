@@ -72,6 +72,19 @@
     0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+@media (forced-colors: active) {
+  .hub-tab[active] {
+    text-decoration-line: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 4px;
+  }
+
+  .hub-tab:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
 /* Equal outer columns keep hub tabs centered whether or not the active route
    fills its trailing actions slot. */
 .content-header.hub-page-header {

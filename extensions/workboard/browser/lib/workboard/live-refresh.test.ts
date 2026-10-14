@@ -9,7 +9,7 @@ import {
   handleWorkboardChanged,
   resumeWorkboardLiveRefresh,
 } from "./live-refresh.ts";
-import { loadWorkboard, loadWorkboardCatalog } from "./loading.ts";
+import { loadWorkboard } from "./loading.ts";
 import { stopWorkboardLiveRefresh, getWorkboardState } from "./runtime.ts";
 import { createWorkboardCard } from "./test/index-helpers.ts";
 
@@ -241,9 +241,9 @@ it("retains cards on unchanged responses and still refreshes caller-scoped Sessi
     .mockResolvedValueOnce({ cards: [card], boards: [], revision })
     .mockResolvedValue({ unchanged: true, revision });
   const client = { request } as never;
-  await loadWorkboardCatalog({ host, client });
-  expect(getWorkboardState(host).loaded).toBe(false);
   await loadWorkboard({ host, client });
+  expect(getWorkboardState(host).loaded).toBe(true);
+  await loadWorkboard({ host, client, force: true });
   expect(getWorkboardState(host).loaded).toBe(true);
   expect(getWorkboardState(host).cards).toEqual([card]);
   expect(request).toHaveBeenLastCalledWith("workboard.cards.list", { sinceRevision: revision });

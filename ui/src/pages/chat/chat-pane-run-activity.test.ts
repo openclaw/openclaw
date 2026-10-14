@@ -11,7 +11,8 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerProps } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -65,6 +66,8 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
       hasActiveRun: parentActive,
       activeRunIds: parentActive ? ["parent-run"] : [],
       hasActiveSubagentRun: true,
+      startedAt: 1_000,
+      endedAt: parentActive ? undefined : 2_000,
       childSessions: [childKey],
     } satisfies GatewaySessionRow;
     const child = {
@@ -124,6 +127,7 @@ describe("composer run status", () => {
         hasActiveRun: false,
         hasActiveSubagentRun: true,
         startedAt: 1_000,
+        endedAt: 2_500,
       };
       const child: GatewaySessionRow = {
         key: "agent:main:subagent:backend",

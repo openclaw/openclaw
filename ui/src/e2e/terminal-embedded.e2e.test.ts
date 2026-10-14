@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -226,24 +227,10 @@ suite.define(() => {
         const panel = document.querySelector("openclaw-terminal-panel") as
           | (HTMLElement & { available: boolean })
           | null;
-        const shell = document.querySelector("openclaw-app-shell") as
-          | (HTMLElement & {
-              runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
-            })
-          | null;
-        return (
-          panel?.available && typeof shell?.runtime?.context?.agentSelection?.set === "function"
-        );
+        return panel?.available === true;
       });
-      await page.evaluate(() => {
-        const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
-          runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
-        };
-        const setAgent = shell.runtime?.context?.agentSelection?.set;
-        if (!setAgent) {
-          throw new Error("Agent selection is not ready");
-        }
-        setAgent("research");
+      await evaluateControlUiContext(page, (context) => {
+        context.agentSelection.set("research");
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
             detail: { agentId: "research", open: true },
@@ -443,7 +430,10 @@ suite.define(() => {
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("terminal.list");
-        await page.waitForTimeout(250);
+        const status = page.locator("openclaw-terminal-panel .tabstrip-tab__status");
+        await expect
+          .poll(async () => await status.textContent(), { timeout: 5_000 })
+          .toBe("exited");
 
         if (deadSessionScreenshotPath) {
           if (deadSessionVideoDir) {
@@ -457,10 +447,6 @@ suite.define(() => {
             await page.screenshot({ path: deadSessionScreenshotPath, fullPage: true });
           }
         }
-        const status = page.locator("openclaw-terminal-panel .tabstrip-tab__status");
-        await expect
-          .poll(async () => await status.textContent(), { timeout: 5_000 })
-          .toBe("exited");
         expect(await gateway.getRequests("terminal.attach")).toHaveLength(0);
         expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
         expect(

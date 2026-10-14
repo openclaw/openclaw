@@ -16,7 +16,7 @@ import {
   type SessionActivitySummary,
 } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryPatchCommitted } from "../config/sessions/session-entry-patch.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -40,7 +40,10 @@ import {
 } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { subscribeActivitySummaryEntryReceipts } from "./session-activity-summary-entry-receipts.js";
+import {
+  projectActivitySummaryEntry,
+  subscribeActivitySummaryEntryReceipts,
+} from "./session-activity-summary-entry-receipts.js";
 import { readActivitySummarySource } from "./session-activity-summary-source.js";
 import {
   activitySummaryScope,
@@ -79,7 +82,7 @@ const SYSTEM_PROMPT = [
 
 type Tracked = ActivitySummaryTarget & {
   sessionId: string;
-  entry: SessionEntry;
+  entry: ReturnType<typeof projectActivitySummaryEntry>;
   lifecycleRevision?: string;
   storePath: string;
   readyAt: number;
@@ -206,7 +209,7 @@ export function createSessionActivitySummaries(deps: {
       state = undefined;
     }
     if (state) {
-      state.entry = entry;
+      state.entry = projectActivitySummaryEntry(entry);
       return state;
     }
     if (states.size >= MAX_TRACKED) {
@@ -220,7 +223,7 @@ export function createSessionActivitySummaries(deps: {
     }
     state = {
       ...target,
-      entry,
+      entry: projectActivitySummaryEntry(entry),
       sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision,
       storePath,
@@ -430,12 +433,9 @@ export function createSessionActivitySummaries(deps: {
         omittedContent: omitted,
       };
       let committedTranscript: SessionEntryPatchCommitted["transcriptPredicate"];
-      const committed = await patchSessionEntryCore(
+      const committed = await applySessionEntryOperation(
         scope(state),
-        (fresh) => {
-          assertCurrentEntry(state, fresh);
-          return { activitySummary: summary };
-        },
+        { kind: "activity-summary", summary, sessionKey: state.key },
         {
           preserveActivity: true,
           onCommitted: (_entry, transcriptPredicate) => {
@@ -455,6 +455,9 @@ export function createSessionActivitySummaries(deps: {
       if (!committed || !current(state)) {
         state.dirty = true;
         return;
+      }
+      if (!committedTranscript) {
+        throw new ActivitySummaryCancelledError();
       }
       state.entry = { ...state.entry, activitySummary: committed.activitySummary };
       assertCurrentOwner(state, ref);

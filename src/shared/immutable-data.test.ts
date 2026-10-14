@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "./immutable-data.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData } from "./immutable-data.js";
 
 describe("immutable plain data", () => {
+  it("inspects mutable plain data without freezing or memoizing it", () => {
+    const value = { child: { field: 1 } };
+    expect(isPlainData(value)).toBe(true);
+    expect(isDeeplyFrozenPlainData(value)).toBe(false);
+    Object.defineProperty(value.child, "field", { get: () => 2 });
+    expect(isPlainData(value)).toBe(false);
+    expect(Object.isFrozen(value)).toBe(false);
+  });
+
   it("freezes shared and cyclic snapshots without retaining mutable aliases", () => {
     const child = { value: 1 };
     const snapshot = { child, children: [child], self: {} };
@@ -9,12 +18,18 @@ describe("immutable plain data", () => {
     expect(isDeeplyFrozenPlainData(snapshot)).toBe(false);
     expect(freezeJsonSnapshot(snapshot)).toBe(snapshot);
     expect(isDeeplyFrozenPlainData(snapshot)).toBe(true);
+    expect(isDeeplyFrozenPlainData(child)).toBe(true);
+    expect(isPlainData(snapshot.children)).toBe(true);
     expect(Object.isFrozen(child)).toBe(true);
     expect(Object.isFrozen(snapshot.children)).toBe(true);
     expect(() => {
       child.value = 2;
     }).toThrow(TypeError);
     expect(isDeeplyFrozenPlainData({ child })).toBe(false);
+    const republished = freezeJsonSnapshot({ child, children: snapshot.children });
+    expect(republished.child).toBe(child);
+    expect(republished.children).toBe(snapshot.children);
+    expect(isDeeplyFrozenPlainData(republished)).toBe(true);
   });
 
   it("freezes deeply nested snapshots without using the call stack", () => {
@@ -35,8 +50,9 @@ describe("immutable plain data", () => {
       new Date(),
       new Map(),
       () => 1,
-      new Proxy({}, { getPrototypeOf: proxyTrap, ownKeys: proxyTrap }),
+      new Proxy({}, { getPrototypeOf: proxyTrap, ownKeys: proxyTrap, isExtensible: proxyTrap }),
     ]) {
+      expect(isDeeplyFrozenPlainData(opaque)).toBe(false);
       const snapshot = { child: { opaque }, valid: { value: 1 } };
       freezeJsonSnapshot(snapshot);
       expect(Object.isFrozen(snapshot.valid)).toBe(true);
@@ -61,5 +77,17 @@ describe("immutable plain data", () => {
     Object.freeze(mutable);
     expect(isDeeplyFrozenPlainData(root)).toBe(true);
     expect(isDeeplyFrozenPlainData(root.child)).toBe(true);
+  });
+
+  it("does not trust frozen descendants that lead back to an opaque member", () => {
+    const root = { child: {}, opaque: new Map([["key", { mutable: true }]]) };
+    root.child = { root };
+    freezeJsonSnapshot(root);
+    expect(Object.isFrozen(root.child)).toBe(true);
+    expect(isDeeplyFrozenPlainData(root)).toBe(false);
+    expect(isDeeplyFrozenPlainData(root.child)).toBe(false);
+    expect(isDeeplyFrozenPlainData(freezeJsonSnapshot({ child: root.child }))).toBe(false);
+    root.opaque.get("key")!.mutable = false;
+    expect(root.opaque.get("key")).toEqual({ mutable: false });
   });
 });

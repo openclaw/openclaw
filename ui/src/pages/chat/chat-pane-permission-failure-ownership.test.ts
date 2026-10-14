@@ -12,7 +12,8 @@ import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-suppor
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -124,7 +125,7 @@ describe("chat permission failure ownership", () => {
           ),
         );
         const container = document.createElement("div");
-        const draw = () => render(renderChatPermissionPicker(picker()), container);
+        const draw = () => render(solidTemplate(ChatPermissionPicker, picker()), container);
         draw();
         const trigger = container.querySelector<HTMLButtonElement>(
           "[data-chat-permission-select]",

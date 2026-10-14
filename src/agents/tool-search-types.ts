@@ -9,7 +9,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
 export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
-export const TOOL_CALL_RAW_TOOL_NAME = "tool_call";
+export const TOOL_CALL_RAW_TOOL_NAME = "dispatch_action";
 // One model-visible search response, including a batch, may expose at most this many candidates.
 export const MAX_TOOL_SEARCH_RESULTS = 50;
 export const MAX_TOOL_SEARCH_BATCH_QUERIES = 16;
@@ -52,7 +52,7 @@ export type ToolSearchCallOptions = CatalogVisibilityOptions &
     onUpdate?: AgentToolUpdateCallback;
     /**
      * Code Mode's MCP namespace guest expects a thrown denial for resource and
-     * prompt operations. Ordinary `tool_call` keeps the blocked result envelope.
+     * prompt operations. Ordinary `dispatch_action` keeps the blocked result envelope.
      */
     mcpNamespaceGuest?: boolean;
   };

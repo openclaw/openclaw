@@ -1,5 +1,4 @@
-import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
-import { For, Show, createEffect, untrack } from "solid-js";
+import { For, Show, onSettled, untrack } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { reclaimHubTabFocus, rememberHubTabFocus } from "../../components/hub-tabs-focus.ts";
 import {
@@ -10,7 +9,7 @@ import {
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { syncTabGroupLabel } from "../../components/web-awesome-tabs.ts";
+import { Tabs } from "../../components/solid/tabs.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -50,21 +49,14 @@ export function WorktreesView(props: { model: WorktreesModel }) {
     equality: "revision",
   });
   const view = projection.read;
-  let tabGroup: WaTabGroup | undefined;
-  createEffect(
-    () => t("sessionsPage.hubTablistLabel"),
-    (label) => syncTabGroupLabel(tabGroup, label),
+  let tabGroup!: HTMLDivElement;
+  onSettled(() =>
+    reclaimHubTabFocus(
+      "sessions",
+      "worktrees",
+      tabGroup.querySelector("#sessions-tab-worktrees") ?? undefined,
+    ),
   );
-  const navigateSessions = (event: Event, keyboard = false) => {
-    if (!(event.currentTarget instanceof HTMLElement)) {
-      return;
-    }
-    if (keyboard) {
-      event.preventDefault();
-      rememberHubTabFocus("sessions", "sessions", event.currentTarget);
-    }
-    model.context.navigate("sessions");
-  };
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -117,53 +109,40 @@ export function WorktreesView(props: { model: WorktreesModel }) {
             </div>
           </div>
           <div class="hub-page-header__tabs">
-            <wa-tab-group
+            <Tabs
               class="hub-tabs hub-tabs--primary sessions-hub-tabs"
-              prop:active="worktrees"
-              aria-label={t("sessionsPage.hubTablistLabel")}
+              active="worktrees"
+              ariaLabel={t("sessionsPage.hubTablistLabel")}
               activation="manual"
-              without-scroll-controls
               ref={(element) => {
                 tabGroup = element;
-                syncTabGroupLabel(
-                  element,
-                  untrack(() => t("sessionsPage.hubTablistLabel")),
-                );
               }}
-            >
-              <wa-tab
-                id="sessions-tab-sessions"
-                panel="sessions"
-                aria-controls="sessions-hub-panel"
-                class="hub-tab"
-                prop:tabIndex={-1}
-                aria-selected="false"
-                onClick={(event) => {
-                  if (event.detail > 0 || event.isTrusted) {
-                    navigateSessions(event);
+              items={[
+                {
+                  value: "sessions",
+                  id: "sessions-tab-sessions",
+                  panelId: "sessions-hub-panel",
+                  className: "hub-tab",
+                  label: t("tabs.sessions"),
+                },
+                {
+                  value: "worktrees",
+                  id: "sessions-tab-worktrees",
+                  panelId: "sessions-hub-panel",
+                  className: "hub-tab",
+                  label: t("tabs.worktrees"),
+                },
+              ]}
+              onSelect={(value, tab, event) => {
+                if (value === "sessions") {
+                  if (event instanceof KeyboardEvent) {
+                    rememberHubTabFocus("sessions", "sessions", tab);
                   }
-                }}
-                onKeyDown={(event) => {
-                  if (!event.repeat && (event.key === "Enter" || event.key === " ")) {
-                    navigateSessions(event, true);
-                  }
-                }}
-              >
-                {t("tabs.sessions")}
-              </wa-tab>
-              <wa-tab
-                id="sessions-tab-worktrees"
-                panel="worktrees"
-                aria-controls="sessions-hub-panel"
-                class="hub-tab"
-                prop:active={true}
-                prop:tabIndex={0}
-                aria-selected="true"
-                ref={(element) => reclaimHubTabFocus("sessions", "worktrees", element)}
-              >
-                {t("tabs.worktrees")}
-              </wa-tab>
-            </wa-tab-group>
+                  model.context.navigate("sessions");
+                }
+                return false;
+              }}
+            />
           </div>
           <div class="hub-page-header__actions" />
         </section>

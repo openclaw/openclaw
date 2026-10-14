@@ -179,6 +179,16 @@ async function resolveConfiguredProviderApiKey(params: {
   options: EmbeddingProviderCreateOptions;
   configuredProvider: ConfiguredEmbeddingProvider | undefined;
 }): Promise<string | undefined> {
+  if (params.configuredProvider?.localService) {
+    const { resolveManagedLocalProviderAuth } = await import("../agents/model-auth-runtime.js");
+    const auth = resolveManagedLocalProviderAuth({
+      cfg: params.options.config,
+      provider: params.providerId,
+    });
+    if (auth) {
+      return auth.apiKey;
+    }
+  }
   const apiKey = normalizeResolvedSecretInputString({
     value: params.configuredProvider?.apiKey,
     path: `${appendConfigPathSegment("models.providers", params.providerId)}.apiKey`,

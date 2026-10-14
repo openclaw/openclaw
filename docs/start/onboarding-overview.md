@@ -8,10 +8,9 @@ sidebarTitle: "Onboarding Overview"
 ---
 
 OpenClaw supports onboarding from the terminal, the macOS app, and the Linux
-desktop companion. Every path establishes inference first: it detects existing
-AI access, requires a live completion, and only then starts OpenClaw to
-configure the remaining setup. During macOS onboarding, selecting an already
-configured model verifies that route before opening the normal dashboard.
+desktop companion. Every path establishes inference first. On macOS, a fresh
+Gateway automatically picks available AI access and verifies a real completion
+before configuring the remaining setup. An existing configured model is kept.
 The terminal flow also offers the full classic wizard for detailed setup.
 
 ## Which path should I use?
@@ -90,6 +89,29 @@ available provider, use a different Gateway, or review device permissions. If
 sign-in is needed, choose **Sign in with ChatGPT** and follow the inline steps.
 If automatic setup is unavailable, the summary explains the failed attempts and
 offers native AI setup in the Mac app, or `openclaw onboard` in a browser.
+
+Automatic setup keeps an existing configured model. Otherwise it tries usable
+connections in this order:
+
+1. Saved OpenClaw auth profiles.
+2. Codex with stored credentials on the Gateway host.
+3. A Claude CLI login.
+4. `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`.
+5. Eligible loaded models in Ollama, LM Studio, or llama.cpp.
+
+The first connection that passes a live completion becomes the primary model.
+If none works, OpenClaw installs or enables the official Codex plugin and uses
+its existing login, or asks you to sign in with ChatGPT. Apple Foundation Models
+is a utility option and is never chosen as the primary model.
+
+When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`
+(or `~/.codex`), including the login, threads, and `config.toml`. Codex owns
+authentication and token refresh; OpenClaw does not copy the OAuth tokens into
+its auth store. Choose **Use a separate login** on the setup card, or sign in
+with ChatGPT or an OpenAI API key through **Model Setup**, to use an isolated
+OpenClaw agent home, even after reusing a native login.
+See [Codex login and isolation](/start/onboarding#codex-login-and-isolation)
+to switch between these modes.
 
 After inference works, OpenClaw continues its existing guided conversation for
 optional setup, including memory import and channels. You can dismiss the

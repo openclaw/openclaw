@@ -90,7 +90,7 @@ export type ProviderAuthProfileMetadata = {
   accountId?: string;
 };
 
-/** @deprecated Use resolveProviderAuthProfileMetadataAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use resolveProviderAuthProfileMetadataAsync. Retained until an announced stable removal window. */
 export function resolveProviderAuthProfileMetadata(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -270,10 +270,10 @@ export async function waitForLocalOAuthCallback(params: {
       contentType: "text/html; charset=utf-8",
     }),
   });
-  params.onProgress?.(
-    params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
-  );
   try {
+    params.onProgress?.(
+      params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
+    );
     const result = await callback.waitForCallback();
     if (result.type === "oauth_error") {
       throw new Error(`OAuth error: ${result.error}`);

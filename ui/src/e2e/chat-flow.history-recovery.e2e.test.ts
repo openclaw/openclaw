@@ -1,9 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
@@ -23,7 +23,6 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-type ChatFlowTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it("keeps an unrelated retained transcript after another tab deletes a session", async () => {
@@ -101,18 +100,14 @@ suite.define(() => {
           sessionKey: deletedSession,
         });
         await peer.goto(`${suite.server.baseUrl}sessions`);
-        await peer.waitForFunction(() =>
-          Boolean((document.querySelector("openclaw-app") as ChatFlowTestApp).runtime),
-        );
+        await peer.locator("openclaw-app-shell").waitFor({ state: "attached" });
         await expect(
-          peer.evaluate(async (sessionKey) => {
-            const sessions = (document.querySelector("openclaw-app") as ChatFlowTestApp).runtime
-              ?.context.sessions;
-            if (!sessions) {
-              throw new Error("session capability unavailable");
-            }
-            return sessions.delete(sessionKey, { agentId: "main" });
-          }, deletedSession),
+          evaluateControlUiContext(
+            peer,
+            (application, sessionKey) =>
+              application.sessions.delete(sessionKey, { agentId: "main" }),
+            deletedSession,
+          ),
         ).resolves.toMatchObject({ deleted: true });
         await page.waitForFunction(
           () => document.documentElement.dataset.snapshotInvalidationReceived === "true",

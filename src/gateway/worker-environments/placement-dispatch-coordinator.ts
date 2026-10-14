@@ -118,10 +118,13 @@ export function coordinateWorkerPlacementDispatch(
         if (!wait || sessionIds.length !== 1) {
           return false;
         }
-        // Result recovery may release the claim a lifecycle operation is awaiting.
-        // Its durable result owner already serializes writes; it needs no queue handoff.
-        await run("results-only");
-        return true;
+        if (operationsInFlight.has(sessionIds[0]!)) {
+          // Result recovery may release the claim a lifecycle operation is awaiting.
+          // Its durable result owner already serializes writes; it needs no queue handoff.
+          await run("results-only");
+          return true;
+        }
+        // A preceding recovery owns completion; targeted callers must await its receipt.
       }
       const admission = reserveSessions(sessionIds);
       // Only recovery units enter here. Environment reconciliation stays outside admission
@@ -217,6 +220,7 @@ export function coordinateWorkerPlacementDispatch(
         waitForInitialPlacement: coordinator.waitForInitialPlacement,
         startDispatch: async (request, onTransition, authorize, signal) => {
           const started = createDeferredCore<WorkerDispatchPlacement>();
+          const requestedHandoff = createDeferredCore();
           const releaseAuthority = params.retainDispatch?.();
           const operation = coordinator.dispatch(
             request,
@@ -226,6 +230,8 @@ export function coordinateWorkerPlacementDispatch(
             },
             authorize,
             signal,
+            (dispatchSignal) =>
+              racePromiseWithAbortSignal(requestedHandoff.promise, dispatchSignal),
           );
           // The requested acknowledgment can precede the final provider effect.
           if (releaseAuthority) {
@@ -238,7 +244,13 @@ export function coordinateWorkerPlacementDispatch(
               /* Reporting cannot replace durable setup failure. */
             }
           });
-          return await Promise.race([started.promise, operation]);
+          try {
+            await Promise.race([started.promise, operation]);
+            return { release: () => requestedHandoff.resolve() };
+          } catch (error) {
+            requestedHandoff.resolve();
+            throw error;
+          }
         },
       });
     },
@@ -330,7 +342,7 @@ export function coordinateWorkerPlacementDispatch(
         }
       }
     },
-    dispatch: async (request, onTransition, authorize, callerSignal) => {
+    dispatch: async (request, onTransition, authorize, callerSignal, awaitRequestedHandoff) => {
       callerSignal?.throwIfAborted();
       const inFlight = pendingOperations(request.sessionId).find(
         (pending) => pending.kind === "dispatch",
@@ -362,6 +374,7 @@ export function coordinateWorkerPlacementDispatch(
                 report,
                 composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
                 signal,
+                awaitRequestedHandoff,
               ),
             ),
           authorize,

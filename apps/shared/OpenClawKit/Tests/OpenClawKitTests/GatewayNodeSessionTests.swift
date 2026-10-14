@@ -3029,13 +3029,16 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `node invoke result preserves structured worker payload`() async throws {
-        let session = FakeGatewayWebSocketSession()
+    @Test(arguments: [false, true])
+    func `node invoke result preserves worker payload and negotiates permission details`(
+        permissionErrorsSupported: Bool) async throws
+    {
+        let session = FakeGatewayWebSocketSession(
+            helloCapabilities: permissionErrorsSupported ? ["node-permission-errors"] : [])
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions(
             caps: ["mcp"],
-            commands: ["mcp.tools.call.v1"],
+            commands: ["mcp.tools.call.v1", "system.run"],
             clientId: "openclaw-macos",
             clientDisplayName: "macOS Test")
 
@@ -3044,7 +3047,16 @@ struct GatewayNodeSessionTests {
             options: options,
             session: session,
             onInvoke: { request in
-                BridgeInvokeResponse(
+                if request.id == "permission-structured" {
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: .init(
+                            code: .permissionMissing,
+                            message: "PERMISSION_MISSING: screenRecording",
+                            details: .init(capabilities: ["screenRecording"], state: .restartRequired)))
+                }
+                return BridgeInvokeResponse(
                     id: request.id,
                     ok: true,
                     payload: AnyCodable(["content": [["type": "text", "text": "worker-ok"]]]))
@@ -3059,6 +3071,24 @@ struct GatewayNodeSessionTests {
         let payload = try #require(params["payload"] as? [String: Any])
         let content = try #require(payload["content"] as? [[String: Any]])
         #expect(content.first?["text"] as? String == "worker-ok")
+
+        task.emitInvokeRequest(id: "permission-structured", command: "system.run")
+        await task.waitForSentRequests(method: "node.invoke.result", count: 2)
+        let permissionResult = try #require(task.sentRequests(method: "node.invoke.result").last)
+        let permissionParams = try #require(permissionResult["params"] as? [String: Any])
+        #expect(permissionParams["ok"] as? Bool == false)
+        let error = try #require(permissionParams["error"] as? [String: Any])
+        #expect(error["code"] as? String == "PERMISSION_MISSING")
+        #expect(error["message"] as? String == "PERMISSION_MISSING: screenRecording")
+        if permissionErrorsSupported {
+            let details = try #require(error["details"] as? [String: Any])
+            #expect(Set(details.keys) == ["capabilities", "state"])
+            #expect(details["capabilities"] as? [String] == ["screenRecording"])
+            #expect(details["state"] as? String == "restart-required")
+        } else {
+            // The released v2026.10.2 node-invoke result decoder rejects extra error keys.
+            #expect(Set(error.keys) == ["code", "message"])
+        }
 
         await gateway.disconnect()
     }

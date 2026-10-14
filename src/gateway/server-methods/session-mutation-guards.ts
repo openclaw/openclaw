@@ -14,8 +14,11 @@ import {
   hasPreparedGatewayDeviceAuthority,
   readAcceptedGatewayDeviceSourceAuthority,
   readGatewayDeviceRevocationGuard,
+  readGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
+import { assertRemoteControlUiIngressCurrent } from "../ingress-attribution.js";
 import { isInternalApprovalCommitGuard } from "../internal-approval-authority.js";
 import {
   authorizeCurrentOperatorRoleScopes,
@@ -208,6 +211,7 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
   const captured = captureRequestMutationOptions(options, client);
   const { signal, hasCurrentClientAuthority } = captured;
   const assertWorkerCurrent = () => {
+    assertRemoteControlUiIngressCurrent(client.remoteControlUiIngress);
     signal?.throwIfAborted();
     const acceptedSource = readAcceptedGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
     if (!hasCurrentDeviceRevocation() || client.internal?.agentRuntimeIdentity) {
@@ -369,6 +373,43 @@ export function captureGatewayRequestOperatorGuard(options: GatewayRequestOption
   };
   bindRequestMutationAuthority(options, { ...source, assertOperatorCurrent: assertCurrent });
   return assertCurrent;
+}
+
+/** Accepted Gateway work survives transport loss while its original operator grant stays live. */
+export function retainGatewayRequestMutationAuthority(options: GatewayRequestOptions): {
+  assertCurrent: () => void;
+  release: () => void;
+} {
+  const assertOperatorCurrent = captureGatewayRequestOperatorGuard(options);
+  const authority = readGatewayRequestMutationAuthority(options);
+  authority.assertCurrent();
+  assertOperatorCurrent();
+  const sourceCurrent =
+    authority.family === "worker"
+      ? readGatewayDeviceSourceAuthority(options.hasCurrentClientAuthority)
+      : undefined;
+  const releaseDevice = retainGatewayDeviceRevocation(options.hasCurrentClientAuthority);
+  let released = false;
+  return {
+    assertCurrent: () => {
+      if (released || sourceCurrent?.() === false) {
+        throw new SessionMutationAuthorizationChangedError(
+          errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed"),
+        );
+      }
+      assertOperatorCurrent();
+      // Opaque SDK guards have no separable source grant; retain their full contract.
+      if (!sourceCurrent) {
+        authority.assertCurrent();
+      }
+    },
+    release: () => {
+      if (!released) {
+        released = true;
+        releaseDevice?.();
+      }
+    },
+  };
 }
 
 /** Forwarded chat input owns both its target and original request authority. */

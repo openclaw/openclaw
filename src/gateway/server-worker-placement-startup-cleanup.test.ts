@@ -217,6 +217,8 @@ describe("worker placement startup cleanup ownership", () => {
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({
         read: vi.fn(),
         version: vi.fn(() => 0),
+        invalidate: vi.fn(),
+        nextSweepAtMs: () => Infinity,
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       const runtime = createGatewayWorkerPlacementRuntime({
@@ -323,6 +325,8 @@ describe("worker placement startup cleanup ownership", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: vi.fn(() => 0),
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => Infinity,
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     const runtime = createGatewayWorkerPlacementRuntime({

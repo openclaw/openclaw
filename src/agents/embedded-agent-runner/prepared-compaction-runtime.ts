@@ -406,12 +406,17 @@ export async function buildPreparedCompactionRuntime(
     const promptAllowedToolNames = collectAllowedToolNames({ tools: promptTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
-    const { runtimeChannel, runtimeCapabilities, reactionGuidance, messageToolHints } =
-      resolveRuntimeChannelPromptContext({
-        cfg: params.config,
-        channel: params.messageChannel ?? params.messageProvider,
-        accountId: params.agentAccountId,
-      });
+    const {
+      runtimeChannel,
+      runtimeCapabilities,
+      reactionGuidance,
+      messageToolHints,
+      customInlineButtonHint,
+    } = resolveRuntimeChannelPromptContext({
+      cfg: params.config,
+      channel: params.messageChannel ?? params.messageProvider,
+      accountId: params.agentAccountId,
+    });
 
     const runtimeInfo = {
       agentId: sessionAgentId,
@@ -426,6 +431,7 @@ export async function buildPreparedCompactionRuntime(
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
+      customInlineButtonHint,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,

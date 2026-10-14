@@ -11,6 +11,7 @@ import type {
   OpenClawPluginService,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { registerBrowserCliMetadata } from "./cli-metadata.js";
 import { bindBrowserDashboardEvents } from "./src/browser-dashboard-events.js";
@@ -359,9 +360,10 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       handleUpgrade: async (req, socket, head) => {
         // Direct socket activity prepares teardown consumed by lazy service shutdown.
         await loadBrowserRegistrationRuntimeModule();
-        return await (
-          await loadUpgrade()
-        )(req, socket, head);
+        await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
+        const upgrade = await loadUpgrade();
+        await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
+        return await upgrade(req, socket, head);
       },
     });
   }

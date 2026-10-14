@@ -69,26 +69,25 @@ the read and must not be treated as an absent session.
 
 The synchronous `readAcpSessionEntry` and
 `getAcpSessionManager().resolveSession()` contracts shipped in `v2026.9.4`
-remain available for existing consumers of that compatibility export. They are
-deprecated for runtime use. Ordinary ACP manager and Gateway callers use
-`readAcpSessionEntryAsync` and `getAcpSessionManager().resolveSessionAsync()`.
-Discord and Telegram startup binding cleanup retain their existing synchronous
-reader until conditional deletion can validate metadata at the mutation owner.
-Their inactive incognito composition accepts a prepared session reader whose
-current-source assertion reaches the binding transaction and commit grants.
-The preparation retains the original actor revision and ACP metadata publication
-fence until cleanup releases it. The local `prepareAcpSessionEntryRead` helper captures an existing private actor
-binding and supplies that retained reader; it returns `undefined` without a binding.
-Discord and Telegram startup cleanup use it by default. Ordinary production
-acquisition stays native until atomic incognito activation; guarded durable
-cleanup remains separate work.
+remain available for durable sessions and are deprecated for runtime use.
+Incognito targets reject synchronous access with `IncognitoSessionSyncAccessError`;
+use `readAcpSessionEntryAsync` and
+`getAcpSessionManager().resolveSessionAsync()` instead. The asynchronous path
+acquires the existing memory session actor and joins global ACP metadata through
+the shared-state worker. It does not create a missing incognito session.
+
+Discord and Telegram startup cleanup use `prepareAcpSessionEntryRead` for
+incognito targets. Its prepared reader retains the selected memory owner and
+carries current caller authority through conditional binding deletion. Closing
+the session ends that authority; cleanup does not reopen the retired native
+incognito database.
+
 `IncognitoSessionEndedError` and `IncognitoSessionSyncAccessError`, exposed through
 the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
 probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
 as an absent session or an uncertain probe; it also recognizes nested refusals.
-Removing the synchronous contracts
-requires a separately announced breaking SDK release. Incognito reads retain
-their existing native in-memory owner until that owner's worker migration.
+Removing the synchronous contracts for durable sessions requires a separately
+announced breaking SDK release.
 
 ### Session and command preparation
 
@@ -135,6 +134,24 @@ database worker. The synchronous `loadCombinedSessionStoreForGateway` retains it
 return value and emits a bounded deprecation warning; it remains supported until
 the next Plugin SDK major.
 
+### Native session lineage
+
+Use `resolvePreparedNativeSessionBinding` or
+`retainNativeSessionGenerationAuthority` from
+`openclaw/plugin-sdk/agent-harness-session-runtime` to prepare lineage in the
+session worker. Both return an owned capture: call `release()` in `finally`
+after the last effect and any terminal cleanup. Repeated authority checks use
+the session owner's published facts and immediately reject revoked lineage.
+
+Use `authority.withLiveness(assertCurrent)` when cleanup needs its own lifecycle
+check. This borrows the same source; it does not extend the capture's lifetime.
+Use `createNativeSessionBindingScope` when there is no stored session lineage.
+The released `createNativeSessionBindingAuthority`,
+`combineNativeSessionBindingAuthority`, `prepareNativeSessionGenerationAuthority`,
+and `resolveNativeSessionBindingWithAuthority` contracts remain available but
+deprecated. Their synchronous readers are compatibility paths; bundled harnesses
+use the prepared API.
+
 ### Exec approval reads
 
 Await `loadExecApprovalsReadOnlyAsync` or `readExecApprovalsSnapshotAsync` from
@@ -168,14 +185,14 @@ existing reset policy and process-held incognito behavior.
 The typed public SDK is organized into focused subpaths with documented
 contracts. Not every SDK build entrypoint is a public plugin API.
 
-Legacy provider convenience seams for bundled channels are gone too -
+Legacy provider convenience interfaces for bundled channels are gone too -
 channel-branded helper shortcuts were private mono-repo conveniences, not
 stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
 bundled plugin workspace, keep provider-owned helpers in that plugin's own
 `api.ts` or `runtime-api.ts`:
 
 - Anthropic keeps Claude-specific stream helpers in its own `api.ts` /
-  `contract-api.ts` seam.
+  `contract-api.ts` interface.
 - OpenAI keeps provider builders, default-model helpers, and realtime provider
   builders in its own `api.ts`.
 - OpenRouter keeps provider builder and onboarding/config helpers in its own
@@ -282,3 +299,10 @@ The anchors from the single-page version still resolve here.
 <a id="runtime-tasks-flow" />
 
 For the removed Tasks and TaskFlow surfaces, see [Tasks and TaskFlow API removal](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed).
+
+The `agent-runtime` snapshot publisher now provides
+`replaceRuntimeAuthProfileStoreSnapshotsAsync`. Await it when publishing a default
+shared-owner snapshot; it resolves cold ownership through the database worker.
+The synchronous `replaceRuntimeAuthProfileStoreSnapshots` remains deprecated until
+a later stable release and retains native cold-owner admission for compatibility.
+Entries with explicit database paths or agent directories remain in-memory publications.

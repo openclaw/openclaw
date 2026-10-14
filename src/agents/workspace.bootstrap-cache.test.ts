@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { writeWorkspaceFile } from "../test-helpers/workspace.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import * as workspaceBootstrapRead from "./workspace-bootstrap-read.js";
@@ -163,6 +164,34 @@ describe("workspace bootstrap file caching", () => {
     const agentsFile2 = await loadSessionAgentsFile(workspaceDir, sessionKey);
     expectAgentsContent(agentsFile2, content);
     expect(agentsFile2).not.toBe(agentsFile1);
+  });
+
+  it("invalidates cached content when distinct exact file IDs have the same numeric value", async () => {
+    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+    await fs.writeFile(filePath, "# old guidance");
+    let fileId = 9_007_199_254_740_992n;
+    const openRootFile = boundaryFileRead.openRootFile;
+    const open = vi.spyOn(boundaryFileRead, "openRootFile").mockImplementation(async (params) => {
+      const opened = await openRootFile(params);
+      if (!opened.ok || params.absolutePath !== filePath) {
+        return opened;
+      }
+      return {
+        ...opened,
+        stat: Object.assign(opened.stat, { ino: Number(fileId), mtimeMs: 1, ctimeMs: 1 }),
+        exactIdentity: { ...opened.exactIdentity, ino: fileId },
+      };
+    });
+    try {
+      expectAgentsContent(await loadAgentsFile(workspaceDir), "# old guidance");
+      expectAgentsContent(await loadAgentsFile(workspaceDir), "# old guidance");
+      await fs.writeFile(filePath, "# new guidance");
+      fileId += 1n;
+      expect(Number(fileId)).toBe(Number(fileId - 1n));
+      expectAgentsContent(await loadAgentsFile(workspaceDir), "# new guidance");
+    } finally {
+      open.mockRestore();
+    }
   });
 });
 

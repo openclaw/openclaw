@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableHasColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -52,8 +53,8 @@ function createCronDatabase(retainedBinding = true) {
     .prepare(
       `INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         status, owner_pid, started_at_ms, finished_at_ms, cursor_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts))`,
     )
     .run("cron-1", "default", "job-1", "revision-1", "main", "run-1", "running", 1, 60, null);
   if (retainedBinding) {
@@ -198,9 +199,10 @@ describe("owner-native execution lifecycle receipts", () => {
     db.prepare(
       `INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         status, owner_pid, started_at_ms, finished_at_ms, cursor_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts))`,
     ).run("cron-2", "default", "job-2", "revision-1", "main", "run-1", "skipped", 1, 60, 70);
+    db.exec("UPDATE cron_run_receipts SET rowid = 100 WHERE receipt_id = 'cron-1'");
     db.prepare(
       `INSERT INTO execution_owner_lifecycle_bindings (
          owner_kind, owner_id, context_id, execution_id
@@ -227,7 +229,7 @@ describe("owner-native execution lifecycle receipts", () => {
       decision: { outcome: "not-applicable", reasonCode: "cron_run_ok" },
       provenance: { state: "verified", producer: "cron-lifecycle" },
     });
-    expect(cronPage.nextDecisionCursor).toMatch(/^c:/);
+    expect(cronPage.nextDecisionCursor).toBe("c:60:1");
     const mismatchPage = presentExecutionDecisionReceiptsInDatabase(db, {
       schema: retainedLifecycleSchema,
       context,
@@ -259,12 +261,12 @@ describe("owner-native execution lifecycle receipts", () => {
     {
       stage: "cron",
       cursor: "c:0:0",
-      addSuccessor: (db: DatabaseSync) => {
+      addSuccessor: (db: EngineConnection) => {
         db.prepare(
           `INSERT INTO cron_run_receipts (
              receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-             status, owner_pid, started_at_ms, finished_at_ms
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             status, owner_pid, started_at_ms, finished_at_ms, cursor_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts))`,
         ).run("cron-2", "default", "job-2", "revision-1", "main", "run-1", "running", 1, 63, null);
         db.prepare(
           `INSERT INTO execution_owner_lifecycle_bindings (
@@ -272,7 +274,7 @@ describe("owner-native execution lifecycle receipts", () => {
            ) VALUES ('cron', 'cron-2', 'context-1', 'execution-1')`,
         ).run();
       },
-      deleteAnchor: (db: DatabaseSync) => {
+      deleteAnchor: (db: EngineConnection) => {
         db.prepare(
           "DELETE FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'cron' AND owner_id = 'cron-1'",
         ).run();
@@ -334,21 +336,21 @@ describe("owner-native execution lifecycle receipts", () => {
     ).toThrow("decision cursor is no longer retained; restart inspection without --cursor");
   });
 
-  it("rejects a reused owner rowid whose binding belongs to another execution", async () => {
+  it("rejects a reused owner cursor whose binding belongs to another execution", async () => {
     const options = createCronDatabase();
     const db = openOpenClawStateDatabase(options).db;
     db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
     db.prepare(
       `INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         status, owner_pid, started_at_ms, finished_at_ms, cursor_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts))`,
     ).run("cron-2", "default", "job-2", "revision-1", "main", "run-1", "running", 1, 63, null);
     db.prepare(
       `INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         status, owner_pid, started_at_ms, finished_at_ms, cursor_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts))`,
     ).run("cron-1", "default", "job-1", "revision-1", "main", "run-1", "running", 1, 60, null);
     db.prepare(
       `INSERT INTO execution_owner_lifecycle_bindings (
@@ -371,8 +373,8 @@ describe("owner-native execution lifecycle receipts", () => {
     db.prepare(
       `INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         status, owner_pid, started_at_ms, finished_at_ms, cursor_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts))`,
     ).run(
       "cron-replacement",
       "default",

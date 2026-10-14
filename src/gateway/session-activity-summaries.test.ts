@@ -388,6 +388,31 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     }
   });
 
+  it("releases unrelated entry snapshots while recap preparation remains pending", async () => {
+    class SavedSkillSnapshot {
+      readonly prompt = "Synthetic saved skill instructions. ".repeat(4096);
+      readonly skills = [];
+    }
+    await messages(2);
+    const preparation = createDeferred<typeof prepared>();
+    const preparationStarted = createDeferred();
+    prepare.mockImplementationOnce(() => {
+      preparationStarted.resolve();
+      return withinTest(preparation.promise, testSignal);
+    });
+    try {
+      await service.ensure(target, { ...read()!, skillsSnapshot: new SavedSkillSnapshot() });
+      await withinTest(preparationStarted.promise, testSignal);
+      expect(queryObjects(SavedSkillSnapshot)).toBe(0);
+    } finally {
+      await awaitPublication(() => preparation.resolve(prepared));
+    }
+    expect(read()?.activitySummary).toMatchObject({
+      text: "Completed the requested work.",
+      coveredMessages: 2,
+    });
+  });
+
   it("uses committed resident facts for recap notifications and current-authority checks", async () => {
     await messages(2);
     const prompt = "Saved recap prompt marker. ".repeat(40_000);
@@ -606,48 +631,54 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       completionStarted.resolve();
       return withinTest(completion.promise, testSignal);
     });
-    await ensureRecap(target);
-    await withinTest(completionStarted.promise, testSignal);
-    expect(complete).toHaveBeenCalledTimes(2);
-
-    const materializationStarted = createDeferred();
-    const materializationReleased = createDeferred();
-    archiveMaterializationHook.beforeMaterialize = async () => {
-      materializationStarted.resolve();
-      await materializationReleased.promise;
-    };
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
-    const capturedEntry = read();
-    const deletion = runExclusiveSessionLifecycleMutation("delete", {
-      scope: storePath,
-      identities: [target.key, scope.sessionId],
-      run: () =>
-        deleteSessionEntryLifecycle({
-          agentId: target.agentId,
-          archiveTranscript: true,
-          expectedEntry: capturedEntry,
-          storePath,
-          target: { canonicalKey: target.key, storeKeys: [target.key] },
-        }),
-    });
-    let entryDuringDeletion: ReturnType<typeof read>;
     try {
-      await materializationStarted.promise;
-      await awaitPublication(
-        () => completion.resolve(result("This later recap must not interrupt deletion.")),
-        () => view()?.state !== "updating",
-      );
-      expect(view()?.state).not.toBe("updating");
-      entryDuringDeletion = read();
+      await ensureRecap(target);
+      await withinTest(completionStarted.promise, testSignal);
+      expect(complete).toHaveBeenCalledTimes(2);
+
+      const materializationStarted = createDeferred();
+      const materializationReleased = createDeferred();
+      archiveMaterializationHook.beforeMaterialize = async () => {
+        materializationStarted.resolve();
+        await materializationReleased.promise;
+      };
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: target.agentId,
+      });
+      const capturedEntry = read();
+      const deletion = runExclusiveSessionLifecycleMutation("delete", {
+        scope: storePath,
+        identities: [target.key, scope.sessionId],
+        run: () =>
+          deleteSessionEntryLifecycle({
+            agentId: target.agentId,
+            archiveTranscript: true,
+            expectedEntry: capturedEntry,
+            storePath,
+            target: { canonicalKey: target.key, storeKeys: [target.key] },
+          }),
+      });
+      let entryDuringDeletion: ReturnType<typeof read>;
+      try {
+        await materializationStarted.promise;
+        await awaitPublication(
+          () => completion.resolve(result("This later recap must not interrupt deletion.")),
+          () => view()?.state !== "updating",
+        );
+        expect(view()?.state).not.toBe("updating");
+        entryDuringDeletion = read();
+      } finally {
+        completion.resolve(result("This later recap must not interrupt deletion."));
+        materializationReleased.resolve();
+        await deletion;
+      }
+      expect(entryDuringDeletion).toEqual(capturedEntry);
+      await expect(deletion).resolves.toMatchObject({ deleted: true });
+      await service.dispose();
+      expect(read()).toBeUndefined();
     } finally {
       completion.resolve(result("This later recap must not interrupt deletion."));
-      materializationReleased.resolve();
-      await deletion;
     }
-    expect(entryDuringDeletion).toEqual(capturedEntry);
-    await expect(deletion).resolves.toMatchObject({ deleted: true });
-    await service.dispose();
-    expect(read()).toBeUndefined();
   });
 
   it("does not let timeout release a preparation slot or dispatch a late model request", async () => {
