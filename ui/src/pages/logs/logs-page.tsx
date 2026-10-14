@@ -16,7 +16,6 @@ import {
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
   parseLogLine,
@@ -24,6 +23,14 @@ import {
   type LogLevel,
 } from "./log-lines.ts";
 import { LogsView } from "./view.tsx";
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-logs-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}
 
 const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
@@ -36,7 +43,8 @@ type LogsPayload = {
   reset?: boolean;
 };
 
-function LogsPageContent(props: { host: HTMLElement }) {
+export function LogsPage() {
+  let host!: HTMLElement;
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
@@ -234,9 +242,9 @@ function LogsPageContent(props: { host: HTMLElement }) {
     document.removeEventListener("visibilitychange", visibilityChanged);
   });
   onSettled(() => {
-    stream = props.host.querySelector<HTMLElement>(".log-stream") ?? undefined;
+    stream = host.querySelector<HTMLElement>(".log-stream") ?? undefined;
     const resetContentScroll = () => {
-      const content = props.host.closest<HTMLElement>(".content");
+      const content = host.closest<HTMLElement>(".content");
       if (content) {
         content.scrollTop = 0;
         content.scrollLeft = 0;
@@ -248,51 +256,47 @@ function LogsPageContent(props: { host: HTMLElement }) {
   });
 
   return (
-    <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
-      <section class="content-header">
-        <div>
-          <div class="page-title">{t("tabs.logs")}</div>
-        </div>
-      </section>
-      <SettingsWorkspace fillHeight>
-        <LogsView
-          loading={requestState() === "visible"}
-          refreshDisabled={!gateway.connected || requestState() !== "idle"}
-          status={status()}
-          file={file()}
-          entries={entries()}
-          filterText={filterText()}
-          levelFilters={levelFilters()}
-          autoFollow={autoFollow()}
-          truncated={truncated()}
-          onFilterTextChange={setFilterText}
-          onLevelToggle={(level, enabled) =>
-            setLevelFilters((previous) => ({ ...previous, [level]: enabled }))
-          }
-          onToggleAutoFollow={setAutoFollow}
-          onRefresh={() =>
-            void loadLogs({ reset: true }).then((current) => {
-              if (current) {
-                setForceFollow((revision) => revision + 1);
-              }
-            })
-          }
-          onExport={(lines, label) => {
-            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-            downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
-          }}
-          onScroll={(event) => {
-            const target = event.currentTarget;
-            atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
-          }}
-        />
-      </SettingsWorkspace>
-    </ShellLayoutBoundary>
+    <openclaw-logs-page ref={(element) => (host = element)}>
+      <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
+        <section class="content-header">
+          <div>
+            <div class="page-title">{t("tabs.logs")}</div>
+          </div>
+        </section>
+        <SettingsWorkspace fillHeight>
+          <LogsView
+            loading={requestState() === "visible"}
+            refreshDisabled={!gateway.connected || requestState() !== "idle"}
+            status={status()}
+            file={file()}
+            entries={entries()}
+            filterText={filterText()}
+            levelFilters={levelFilters()}
+            autoFollow={autoFollow()}
+            truncated={truncated()}
+            onFilterTextChange={setFilterText}
+            onLevelToggle={(level, enabled) =>
+              setLevelFilters((previous) => ({ ...previous, [level]: enabled }))
+            }
+            onToggleAutoFollow={setAutoFollow}
+            onRefresh={() =>
+              void loadLogs({ reset: true }).then((current) => {
+                if (current) {
+                  setForceFollow((revision) => revision + 1);
+                }
+              })
+            }
+            onExport={(lines, label) => {
+              const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+              downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
+            }}
+            onScroll={(event) => {
+              const target = event.currentTarget;
+              atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
+            }}
+          />
+        </SettingsWorkspace>
+      </ShellLayoutBoundary>
+    </openclaw-logs-page>
   );
 }
-
-export const LogsPage = defineSolidBridge(
-  "openclaw-logs-page",
-  (_props, host) => <LogsPageContent host={host} />,
-  { properties: {} },
-);

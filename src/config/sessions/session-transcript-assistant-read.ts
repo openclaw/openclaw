@@ -4,7 +4,7 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 
@@ -32,28 +32,13 @@ export async function readLatestTranscriptAssistantTextAsync(
     if (!expectedIdentity) {
       return undefined;
     }
-    const result = await readRestoredSessionTranscript(
-      captured.scope,
-      () =>
-        owner.readLatestAssistant({
-          scope: captured.scope,
-          resolved: captured.resolved,
-          expectedIdentity,
-          admission,
-        }),
-      {
-        assertCurrent,
-        coldRead: {
-          target: captured.resolved,
-          readMetadata: async () =>
-            (
-              await owner.readColdMetadata({
-                sessionId: captured.resolved.sessionId,
-                env: captured.scope.env,
-              })
-            ).archive,
-        },
-      },
+    const result = await readRestoredSessionTranscriptInWorker(captured, () =>
+      owner.readLatestAssistant({
+        scope: captured.scope,
+        resolved: captured.resolved,
+        expectedIdentity,
+        admission,
+      }),
     );
     assertCurrent();
     return result;

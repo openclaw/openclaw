@@ -58,7 +58,7 @@ describe("Crabbox suggested cloud profile", () => {
           provider: "aws",
           target: "linux",
           class: "small",
-          ttl: "8h",
+          ttl: "4h",
           idleTimeout: "45m",
           warmImage: true,
         },

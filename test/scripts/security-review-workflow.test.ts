@@ -237,9 +237,12 @@ describe("security review workflow trust boundaries", () => {
             );
             continue;
           }
-          expect(step.run).toBe(
-            `node scripts/github/security-review${name === "resolve" ? "-event" : ""}.mjs`,
-          );
+          // Final enforcement is exercised with preparation outputs below.
+          if (step.env?.OPENCLAW_SECURITY_REVIEW_MODE !== "enforce") {
+            expect(step.run).toBe(
+              `node scripts/github/security-review${name === "resolve" ? "-event" : ""}.mjs`,
+            );
+          }
           expect(step.env?.GITHUB_TOKEN).toBe("${{ github.token }}");
         }
       }
@@ -503,9 +506,9 @@ describe("security review workflow trust boundaries", () => {
 
   it("limits autoscrub writes to PR events and always enforces after failures", () => {
     const steps = readWorkflow("security-review").jobs.review!.steps;
-    const commands = steps.filter((step) => step.run?.startsWith("node "));
+    const commands = steps.filter((step) => step.env?.OPENCLAW_SECURITY_REVIEW_MODE);
     expect(commands.map((step) => step.env?.OPENCLAW_SECURITY_REVIEW_MODE)).toEqual([
-      "detect",
+      "prepare",
       "autoscrub",
       "enforce",
     ]);
@@ -569,6 +572,16 @@ describe("security review workflow trust boundaries", () => {
       "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
     );
     expect(commands[2]?.env).not.toHaveProperty("OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN");
+    for (const completed of ["true", "false", ""]) {
+      const command = commands[2]!.run!.replace("${{ steps.detect.outputs.completed }}", completed);
+      const result = spawnSync("bash", ["-e", "-c", `node() { echo enforced; }\n${command}`], {
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(
+        completed === "true" ? "Security review completed during preparation." : "enforced",
+      );
+    }
   });
 
   it("uses an explicit Node runtime without shared dependency caches or bootstrap credentials", () => {

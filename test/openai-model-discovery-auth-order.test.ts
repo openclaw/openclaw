@@ -41,12 +41,13 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
+// mock-isolation: Discovery and runtime hooks share fixture providers without real plugin loading.
 vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
   const { createProviderHookRuntime } =
     await import("../src/plugins/provider-hook-runtime-core.js");
   const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
   const selectProviders = (params: {
-    onlyPluginIds?: string[];
+    onlyPluginIds?: readonly string[];
     providerRefs?: readonly string[];
   }) =>
     discovery.providers.filter(
@@ -55,7 +56,6 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
         (!params.providerRefs?.length ||
           params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
     );
-  // Discovery and runtime hooks use the same fixture providers; no plugin loading is under test.
   return createProviderHookRuntime({
     isPluginProvidersLoadInFlight: () => false,
     resolvePluginProviderRegistryCore: (params) => {
