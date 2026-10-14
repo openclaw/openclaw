@@ -19,7 +19,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 vi.mock("node:timers/promises", () => ({ setTimeout: transport.sleep }));
 
-import { createReleaseEvidenceClient, runReleaseCiGh } from "../../scripts/release-ci-summary.mjs";
+import {
+  createReleaseEvidenceClient,
+  runReleaseCiGh,
+  validateReleaseRunEvidence,
+} from "../../scripts/release-ci-summary.mjs";
+import { trustedMainNpmFixture } from "./release-ci-summary.test-support.js";
 
 function readPluginArtifactMetadata() {
   const workflow = parse(readFileSync(".github/workflows/plugin-npm-release.yml", "utf8"));
@@ -96,9 +101,10 @@ describe("release evidence API reads", () => {
 
   it.each([
     { mode: "sync", failures: 1, network: false },
-    { mode: "async", failures: 1, network: false },
+    // Job-listing 5xx responses fall back to smaller pages instead (covered below).
+    { mode: "async", failures: 1, network: true },
     { mode: "sync", failures: 4, network: false },
-    { mode: "async", failures: 4, network: false },
+    { mode: "async", failures: 4, network: true },
     { mode: "sync", failures: 1, network: true },
   ])(
     "bounds $mode retries ($failures failures, network: $network)",
@@ -138,6 +144,45 @@ describe("release evidence API reads", () => {
       ).toEqual(failures === 4 ? [2000, 4000, 8000] : [2000]);
     },
   );
+
+  it("recovers strict child verification when GitHub 5xxs 100-job attempt pages", async () => {
+    const fixture = trustedMainNpmFixture("stable");
+    const fixtureJobs = fixture.client.getRunAttemptJobs;
+    transport.read.mockImplementation((_bin: string, args: string[]) => {
+      const match =
+        /^repos\/openclaw\/openclaw\/actions\/runs\/(\d+)\/attempts\/\d+\/jobs\?page=1&per_page=(\d+)$/u.exec(
+          args[1] ?? "",
+        );
+      if (args[0] !== "api" || args.length !== 2 || !match) {
+        throw new Error(`unplanned evidence read: ${args.join(" ")}`);
+      }
+      if (match[2] === "100") {
+        throw Object.assign(new Error("gh failed"), { stderr: "gh: Server Error (HTTP 502)" });
+      }
+      const jobs = fixtureJobs(match[1]!);
+      return JSON.stringify({ total_count: jobs.length, jobs });
+    });
+    const evidenceClient = createReleaseEvidenceClient("openclaw/openclaw");
+    const evidence = await validateReleaseRunEvidence(
+      {
+        runId: fixture.runId,
+        verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+        verifierSourceSha: "c".repeat(40),
+      },
+      {
+        ...fixture.client,
+        getRunAttemptJobs: (runId: string, runAttempt: number) =>
+          evidenceClient.getRunAttemptJobs(runId, runAttempt),
+      },
+    );
+    expect(evidence.children).toHaveLength(6);
+    const pageSizes = transport.read.mock.calls.map((call) => call[1][1].split("per_page=")[1]);
+    // Children are read concurrently; each one reads 100 (502) then 50 exactly once.
+    expect(pageSizes.filter((size) => size === "100")).toHaveLength(6);
+    expect(pageSizes.filter((size) => size === "50")).toHaveLength(6);
+    expect(pageSizes).toHaveLength(12);
+    expect(transport.sleep).not.toHaveBeenCalled();
+  });
 
   it.each([
     [
