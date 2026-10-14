@@ -527,7 +527,7 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       ["zh-CN/gateway/authentication", "Authentication and secrets"],
       ["zh-CN/gateway/health", "Health and diagnostics"],
       ["zh-CN/gateway/gateway-lock", "Scaling and operations"],
-    ]) {
+    ] as const) {
       expect(findNestedGroupByPage(simplifiedChineseGateway?.pages, page)).toEqual(
         expect.objectContaining({ group }),
       );
