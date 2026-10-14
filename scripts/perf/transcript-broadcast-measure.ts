@@ -6,6 +6,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import {
@@ -600,24 +601,26 @@ try {
       return;
     }
     for (let operation = 0; operation < operations; operation++) {
-      if (scenario === "sessions.list") {
-        const result = await rpc(sender, "sessions.list", {
+      if (scenario === "sessions.list" || scenario === "subscribe") {
+        const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
+        const result = await rpc(sender, method, {
           limit,
           rowMode: "compact",
           archived: "all",
         });
+        const page =
+          scenario === "subscribe"
+            ? isRecord(result) && result.subscribed === true
+              ? result.list
+              : undefined
+            : result;
         if (
-          !result ||
-          typeof result !== "object" ||
-          !("count" in result) ||
-          result.count !==
-            Math.min(limit, Number("totalCount" in result ? result.totalCount : Number.NaN))
+          !isRecord(page) ||
+          typeof page.totalCount !== "number" ||
+          page.count !== Math.min(limit, page.totalCount)
         ) {
-          throw new Error("sessions.list did not return the requested page");
+          throw new Error(`${method} did not return the requested page`);
         }
-      } else if (scenario === "subscribe") {
-        await rpc(sender, "sessions.unsubscribe", {});
-        await rpc(sender, "sessions.subscribe", {});
       } else {
         const result = await rpc(sender, "plugins.reload", {
           plugins: [{ pluginId: reloadPluginId }],
@@ -706,7 +709,7 @@ try {
       peakStreams,
       peakPrimaryStreams,
       primaryStreamRequests,
-      utilityStreamRequests: streamRequests - primaryStreamRequests,
+      utilityStreamRequests: streamRequests - primaryStreamRequests - toolResults,
       streamRequests,
       deliveredEvents,
       deliveredSessionEvents,

@@ -180,13 +180,13 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
 
 Supported scenarios:
 
-| Scenario               | One measured operation                                                                               |
-| ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                         |
-| `subscribe`            | One `sessions.unsubscribe` / `sessions.subscribe` cycle on the sender                                |
-| `chat.send`            | One completed turn: synthetic read-tool call, then paced streaming answer; one client and one run    |
-| `transcript-broadcast` | One completed `agent` turn, streamed to `--clients` subscribers; `--runs` concurrent turns per round |
-| `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                |
+| Scenario               | One measured operation                                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                               |
+| `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list |
+| `chat.send`            | One completed turn: synthetic read-tool call, then paced streaming answer; one client and one run          |
+| `transcript-broadcast` | One completed `agent` turn, streamed to `--clients` subscribers; `--runs` concurrent turns per round       |
+| `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                      |
 
 RPC scenarios use `--operations` per round. Turn scenarios use `--runs` (forced
 to one for `chat.send`); `--chunks` controls streamed answer size. Setup, startup
