@@ -7,6 +7,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import {
   isPowerShellInlineFileCommandFlag,
+  POSIX_INLINE_COMMAND_FLAGS,
+  resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -88,15 +90,20 @@ function unscopedProcessOperation(family: string, name: string, args: readonly s
       ? "unscoped.shell-command"
       : "unscoped.shell";
   }
-  if (/^(sh|bash|zsh|cmd)$/.test(family)) {
+  if (/^(sh|bash|zsh)$/.test(family)) {
+    return resolveInlineCommandMatch([name, ...args], POSIX_INLINE_COMMAND_FLAGS, {
+      allowCombinedC: true,
+    }).command !== null
+      ? "unscoped.shell-command"
+      : "unscoped.shell";
+  }
+  if (family === "cmd") {
     return args.some((arg) => /^-[a-z]*c$/.test(arg) || /^\/(?:c|k)$/i.test(arg))
       ? "unscoped.shell-command"
       : "unscoped.shell";
   }
   if (family === "node" || family === "bun") {
-    return args.some((arg) => ["-e", "--eval", "-p", "--print"].includes(arg))
-      ? "unscoped.eval"
-      : "unscoped.runtime";
+    return "unscoped.runtime";
   }
   if (family === "other" && /^(gh|docker|podman|which|uname|sw_vers|sysctl|curl|tar)$/.test(name)) {
     return `unscoped.${name}`;
@@ -148,15 +155,14 @@ export function withGitProcessOperation<T>(
     : gitOperation.run(gitOperations.has(operation) ? operation : "unknown", run);
 }
 
-/** Count admitted local and broker launches, without recording paths or arguments. */
-export function recordChildProcessSpawn(
+/** Capture attribution before native preparation; record only after a successful launch. */
+export function prepareChildProcessSpawnRecorder(
   command: string,
-  child: ChildProcess,
-  sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
   args: readonly string[] = [],
-): void {
+  sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
+): (() => void) | undefined {
   if (!areDiagnosticsEnabledForProcess()) {
-    return;
+    return undefined;
   }
   // Like nice+git, an owner-prepared OOM shim execs the target in the same process;
   // the broker can omit that shell entirely. Report its logical command, not the shim.
@@ -174,12 +180,25 @@ export function recordChildProcessSpawn(
         childOperation.getStore() ??
         unscopedProcessOperation(family, name, commandArgs));
   const key = `${family}:${operation}`;
-  child.once("spawn", () => {
+  return () => {
     if (areDiagnosticsEnabledForProcess()) {
       const previous = spawnCounts.counts.get(key);
       spawnCounts.counts.set(key, { family, operation, count: (previous?.count ?? 0) + 1 });
     }
-  });
+  };
+}
+
+/** Count admitted local and broker launches, excluding failed spawn attempts. */
+export function recordChildProcessSpawn(
+  command: string,
+  child: ChildProcess,
+  sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
+  args: readonly string[] = [],
+): void {
+  const record = prepareChildProcessSpawnRecorder(command, args, sqliteOperation);
+  if (record) {
+    child.once("spawn", record);
+  }
 }
 
 /** The existing diagnostics heartbeat owns sampling; rates use actual elapsed time. */

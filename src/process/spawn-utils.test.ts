@@ -175,7 +175,7 @@ describe("child-process spawn diagnostics", () => {
       expect.arrayContaining([
         expect.objectContaining({
           family: process.versions.bun ? "bun" : "node",
-          operation: "unscoped.eval",
+          operation: "unscoped.runtime",
           count: 2,
           intervalMs: 90_000,
         }),
@@ -314,7 +314,16 @@ describe("child-process spawn diagnostics", () => {
   it.each([
     ["sh", ["-lc", "private command"], "sh", "unscoped.shell-command"],
     ["bash", ["/private/script"], "bash", "unscoped.shell"],
-    ["node", ["--eval", "private code"], "node", "unscoped.eval"],
+    ["bash", ["-ce", "private command"], "bash", "unscoped.shell-command"],
+    ["bash", ["-cx", "private command"], "bash", "unscoped.shell-command"],
+    ["bash", ["/private/script", "-c", "private arg"], "bash", "unscoped.shell"],
+    ["node", ["--eval", "private code"], "node", "unscoped.runtime"],
+    ["node", ["--eval=private code"], "node", "unscoped.runtime"],
+    ["bun", ["--print=private code"], "bun", "unscoped.runtime"],
+    ["bun", ["-pprivate code"], "bun", "unscoped.runtime"],
+    ["node", ["/private/script", "--eval=private arg"], "node", "unscoped.runtime"],
+    ["node", ["--import=-e", "/private/script"], "node", "unscoped.runtime"],
+    ["node", ["--", "--eval=private arg"], "node", "unscoped.runtime"],
     ["node", ["--import", "/private/hook", "/private/script"], "node", "unscoped.runtime"],
     ["/private/tool", ["--version"], "other", "unscoped.version"],
     ["/private/bin/gh", ["api", "/private/request"], "other", "unscoped.gh"],
@@ -358,7 +367,7 @@ describe("child-process spawn diagnostics", () => {
     emitChildProcessSpawnSample();
     expect(events).toEqual([
       expect.objectContaining({ family: "git", operation: "unscoped.status", count: 1 }),
-      expect.objectContaining({ family: "node", operation: "unscoped.eval", count: 1 }),
+      expect.objectContaining({ family: "node", operation: "unscoped.runtime", count: 1 }),
     ]);
     expect(JSON.stringify(events)).not.toContain("private");
   });
