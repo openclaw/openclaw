@@ -29,10 +29,7 @@ import {
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
-import {
-  callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
-} from "./in-process-gateway.js";
+import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import {
   buildTurnSendLedgerSessionKey,
   buildTurnSendTargetKey,
@@ -110,16 +107,6 @@ type ConversationToolOptions = {
   senderIsOwner?: boolean;
 };
 
-type ConversationToolDeps = {
-  callGateway: AgentToolGatewayRequestCaller;
-  readConversation: typeof readConversation;
-};
-
-const defaultDeps: ConversationToolDeps = {
-  callGateway: callAgentToolGatewayRequest,
-  readConversation,
-};
-
 function resolveToolAgentId(options: ConversationToolOptions): string {
   return options.agentId ?? resolveAgentIdFromSessionKey(options.agentSessionKey);
 }
@@ -163,10 +150,7 @@ function readConversationMessageInput(
 }
 
 /** Lists opaque, exact external addresses owned by the active agent. */
-export function createConversationsListTool(
-  options: ConversationToolOptions = {},
-  deps: ConversationToolDeps = defaultDeps,
-): AnyAgentTool {
+export function createConversationsListTool(options: ConversationToolOptions = {}): AnyAgentTool {
   return {
     label: "Conversations",
     name: "conversations_list",
@@ -181,7 +165,7 @@ export function createConversationsListTool(
       const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 50, 100);
       const channel = readToolStringParam(params, "channel");
       const query = readToolStringParam(params, "query");
-      const result = await deps.callGateway<ConversationListResult>({
+      const result = await callAgentToolGatewayRequest<ConversationListResult>({
         method: "conversations.list",
         params: {
           agentId: resolveToolAgentId(options),
@@ -198,7 +182,6 @@ export function createConversationsListTool(
 
 async function resolveConversationBudgetContext(
   options: ConversationToolOptions,
-  deps: ConversationToolDeps,
   conversationRef: string,
 ): Promise<{ sessionKey: string; runId: string; targetKey: string; channel: string } | undefined> {
   // Scope the ledger by the same agent-prefixed session slot the message tool uses
@@ -225,7 +208,7 @@ async function resolveConversationBudgetContext(
   // block a send, mirroring resolveOutboundActionRoute returning undefined on ambiguity.
   let record: ConversationRecord | undefined;
   try {
-    record = await deps.readConversation(
+    record = await readConversation(
       await prepareConversationRegistryScope({
         agentId: resolveToolAgentId(options),
         config: options.config,
@@ -253,10 +236,7 @@ async function resolveConversationBudgetContext(
 }
 
 /** Sends directly to one external conversation without invoking its backing local session. */
-export function createConversationsSendTool(
-  options: ConversationToolOptions = {},
-  deps: ConversationToolDeps = defaultDeps,
-): AnyAgentTool {
+export function createConversationsSendTool(options: ConversationToolOptions = {}): AnyAgentTool {
   return {
     label: "Conversation Send",
     name: "conversations_send",
@@ -278,7 +258,7 @@ export function createConversationsSendTool(
       // visible even though the loop detector hashes full params and can't see it.
       // The ref is resolved to its (channel, account, target) route so the ledger key
       // is identical to the message tool's for the same recipient.
-      const budgetContext = await resolveConversationBudgetContext(options, deps, conversationRef);
+      const budgetContext = await resolveConversationBudgetContext(options, conversationRef);
       // Reserve one send before the Gateway call so a concurrent same-target send cannot
       // slip past a positive cap while this one is in flight. The reserve is keyed by the
       // operationId: an idempotent replay (the same toolCallId retried) resolves to the
@@ -316,7 +296,7 @@ export function createConversationsSendTool(
       }
       let result: ConversationSendResult;
       try {
-        result = await deps.callGateway<ConversationSendResult>({
+        result = await callAgentToolGatewayRequest<ConversationSendResult>({
           method: "conversations.send",
           params: {
             agentId: resolveToolAgentId(options),
@@ -384,10 +364,7 @@ export function createConversationsSendTool(
 }
 
 /** Sends and consumes one correlated peer reply inline, preserving both sides in the transcript. */
-export function createConversationsTurnTool(
-  options: ConversationToolOptions = {},
-  deps: ConversationToolDeps = defaultDeps,
-): AnyAgentTool {
+export function createConversationsTurnTool(options: ConversationToolOptions = {}): AnyAgentTool {
   return {
     label: "Conversation Turn",
     name: "conversations_turn",
@@ -407,7 +384,7 @@ export function createConversationsTurnTool(
       const timeoutSeconds = readPositiveIntegerParam(params, "timeoutSeconds") ?? 30;
       const timeoutMs = timeoutSeconds * 1_000;
       const agentId = resolveToolAgentId(options);
-      const result = await deps.callGateway<ConversationTurnResult>({
+      const result = await callAgentToolGatewayRequest<ConversationTurnResult>({
         method: "conversations.turn",
         params: {
           agentId,

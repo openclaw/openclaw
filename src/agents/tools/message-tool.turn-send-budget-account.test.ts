@@ -8,9 +8,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import * as registry from "../../config/sessions/conversation-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createConversationsSendTool } from "./conversation-tools.js";
+import * as gateway from "./in-process-gateway.js";
 import { createMessageTool } from "./message-tool-execution.js";
 import { createChannelPlugin } from "./message-tool.test-support.js";
 import {
@@ -125,10 +127,29 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   resetTurnSendLedgerForTest();
   resetPluginRuntimeStateForTest();
 });
+
+// The registry resolves the opaque ref to the imessage peer on the "work" account. The
+// shared budget suppresses the send, so the Gateway spy rejects rather than delivering.
+function mockConversationOwners() {
+  vi.spyOn(registry, "readConversation").mockResolvedValue({
+    conversationRef: "conv_0123456789abcdef0123456789abcdef",
+    channel: "imessage",
+    accountId: "work",
+    kind: "direct",
+    peerId: PEER,
+    target: PEER,
+    firstSeenAt: 100,
+    lastSeenAt: 200,
+  });
+  return vi
+    .spyOn(gateway, "callAgentToolGatewayRequest")
+    .mockRejectedValue(new Error("conversations_send must be suppressed by the shared budget"));
+}
 
 describe("per-turn send budget effective account", () => {
   it("keys a source-less omitted-account send on the channel's named default account", async () => {
@@ -183,23 +204,13 @@ describe("per-turn send budget effective account", () => {
   it("shares the slot with a conversations_send to the same peer on the default account", async () => {
     const config = createConfig();
     const messageTool = createSourcelessMessageTool(config);
-    const callGateway = vi.fn();
-    const conversationTool = createConversationsSendTool(
-      { agentId: "test", agentSessionKey: SESSION_KEY, runId: RUN_ID, config: config as never },
-      {
-        callGateway: callGateway as never,
-        readConversation: (async () => ({
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          channel: "imessage",
-          accountId: "work",
-          kind: "direct",
-          peerId: PEER,
-          target: PEER,
-          firstSeenAt: 100,
-          lastSeenAt: 200,
-        })) as never,
-      },
-    );
+    const callGateway = mockConversationOwners();
+    const conversationTool = createConversationsSendTool({
+      agentId: "test",
+      agentSessionKey: SESSION_KEY,
+      runId: RUN_ID,
+      config: config as never,
+    });
 
     await messageTool.execute("cross-1", sendArgs("first"));
     expect(deliveries).toHaveLength(1);
@@ -217,23 +228,13 @@ describe("per-turn send budget effective account", () => {
     // same turn writes under the canonical agent:<id>:main grant scope.
     const config = createConfig();
     const canonicalLedgerKey = buildTurnSendLedgerSessionKey("test", "agent:test:main")!;
-    const callGateway = vi.fn();
-    const aliasConversationTool = createConversationsSendTool(
-      { agentId: "test", agentSessionKey: "main", runId: RUN_ID, config: config as never },
-      {
-        callGateway: callGateway as never,
-        readConversation: (async () => ({
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          channel: "imessage",
-          accountId: "work",
-          kind: "direct",
-          peerId: PEER,
-          target: PEER,
-          firstSeenAt: 100,
-          lastSeenAt: 200,
-        })) as never,
-      },
-    );
+    const callGateway = mockConversationOwners();
+    const aliasConversationTool = createConversationsSendTool({
+      agentId: "test",
+      agentSessionKey: "main",
+      runId: RUN_ID,
+      config: config as never,
+    });
 
     await createSourcelessMessageTool(config, "agent:test:main").execute(
       "alias-1",

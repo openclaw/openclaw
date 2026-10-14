@@ -2,12 +2,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import * as registry from "../config/sessions/conversation-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { resetCodeModeTestState, resultDetails, testing } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import * as gateway from "./tools/in-process-gateway.js";
 import { expectedTurnSendNotice } from "./tools/message-tool.test-support.js";
 import { resetTurnSendLedgerForTest } from "./tools/turn-send-ledger.js";
 
@@ -16,6 +18,7 @@ const conversation = {
   channel: "reef",
   accountId: "default",
   kind: "direct" as const,
+  peerId: "peer-agent",
   target: "reef:peer-agent",
   sessionId: "shared-main-session",
   sessionKey: "agent:main:main",
@@ -46,19 +49,15 @@ function registerReefTestPlugin() {
   setActivePluginRegistry(createTestRegistry([{ pluginId: "reef", source: "test", plugin }]));
 }
 
-function createSendDeps() {
-  const callGatewayMock = vi.fn(async () => ({
-    status: "sent" as const,
+function mockConversationOwners() {
+  vi.spyOn(registry, "readConversation").mockResolvedValue(conversation);
+  return vi.spyOn(gateway, "callAgentToolGatewayRequest").mockResolvedValue({
+    status: "sent",
     conversationRef: conversation.conversationRef,
     channel: "reef",
     messageId: "reef-outbound-1",
     queueId: "queue-1",
-  }));
-  return {
-    callGateway: callGatewayMock as never,
-    readConversation: (async () => conversation) as never,
-    callGatewayMock,
-  };
+  });
 }
 
 describe("Code Mode guest receives the conversations_send budget notice", () => {
@@ -68,6 +67,7 @@ describe("Code Mode guest receives the conversations_send budget notice", () => 
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     await resetCodeModeTestState();
     resetTurnSendLedgerForTest();
@@ -86,16 +86,13 @@ describe("Code Mode guest receives the conversations_send budget notice", () => 
       catalogRef,
     };
     const codeModeTools = createCodeModeTools(ctx);
-    const deps = createSendDeps();
-    const sendTool = createConversationsSendTool(
-      {
-        agentId: "main",
-        agentSessionKey: "agent:main:reef:direct:operator",
-        runId: "run-code-mode",
-        config: {},
-      },
-      deps,
-    );
+    const callGateway = mockConversationOwners();
+    const sendTool = createConversationsSendTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:reef:direct:operator",
+      runId: "run-code-mode",
+      config: {},
+    });
     applyCodeModeCatalog({
       tools: [...codeModeTools, sendTool],
       config,
@@ -129,7 +126,7 @@ describe("Code Mode guest receives the conversations_send budget notice", () => 
     });
     // The presentation content never crosses into the guest value.
     expect(value.second).not.toHaveProperty("content");
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(2);
     expect(testing.activeRuns.size).toBe(0);
   });
 });

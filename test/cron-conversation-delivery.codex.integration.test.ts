@@ -30,22 +30,19 @@ describe("Codex conversation delivery and cron retry", () => {
       const { createCodexDynamicToolBridge } = await import("../extensions/codex/test-api.js");
       const { createConversationsSendTool } =
         await import("../src/agents/tools/conversation-tools.js");
-      const { callAgentToolGatewayRequest } =
-        await import("../src/agents/tools/in-process-gateway.js");
-      const { readConversation } = await import("../src/config/sessions/conversation-registry.js");
+      const gateway = await import("../src/agents/tools/in-process-gateway.js");
       pickLastNonEmptyTextFromPayloadsMock.mockImplementation(
         (payloads?: Array<{ text?: string }>) => payloads?.at(-1)?.text ?? "",
       );
       const conversationRef = "conv_0123456789abcdef0123456789abcdef";
-      const deps = { callGateway: callAgentToolGatewayRequest, readConversation };
-      const callGateway = vi.spyOn(deps, "callGateway").mockResolvedValue({
+      const callGateway = vi.spyOn(gateway, "callAgentToolGatewayRequest").mockResolvedValue({
         status,
         conversationRef,
         channel: "qa-channel",
         messageId: "prepared-id",
       });
       runEmbeddedAgentMock.mockImplementationOnce(async () => {
-        const tool = createConversationsSendTool({ agentId: "main" }, deps);
+        const tool = createConversationsSendTool({ agentId: "main" });
         const bridge = createCodexDynamicToolBridge({
           tools: [tool],
           signal: new AbortController().signal,

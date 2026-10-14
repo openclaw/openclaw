@@ -10,6 +10,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import * as registry from "../../config/sessions/conversation-registry.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -37,6 +38,7 @@ import {
   createConversationsSendTool,
   createConversationsTurnTool,
 } from "./conversation-tools.js";
+import * as gateway from "./in-process-gateway.js";
 import { createMessageTool } from "./message-tool-execution.js";
 import { expectedTurnSendNotice } from "./message-tool.test-support.js";
 import { resetTurnSendLedgerForTest } from "./turn-send-ledger.js";
@@ -47,6 +49,7 @@ import { resetTurnSendLedgerForTest } from "./turn-send-ledger.js";
 const conversationSendToolResultSchema = createConversationsSendTool().outputSchema!;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   resetTurnSendLedgerForTest();
   resetPluginRuntimeStateForTest();
@@ -84,6 +87,7 @@ const conversation = {
   channel: "reef",
   accountId: "default",
   kind: "direct" as const,
+  peerId: "peer-agent",
   target: "reef:peer-agent",
   firstSeenAt: 100,
   lastSeenAt: 200,
@@ -95,53 +99,41 @@ const sent = {
   messageId: "reef-outbound-1",
 };
 
-type MockGatewayCall = {
-  method: string;
-  params: Record<string, unknown>;
-  config?: unknown;
-  onSignalAbort?: (
-    request: (method: string, params: unknown, options: unknown) => Promise<unknown>,
-  ) => Promise<void>;
-};
-
-function createDeps() {
-  const callGatewayMock = vi.fn(async ({ method }: MockGatewayCall) => {
-    if (method === "conversations.list") {
-      return { conversations: [conversation] };
-    }
-    if (method === "conversations.send") {
-      return { status: "sent" as const, ...sent, queueId: "queue-1" };
-    }
-    return {
-      status: "replied" as const,
-      ...sent,
-      correlationPersisted: true,
-      reply: {
-        conversationRef: conversation.conversationRef,
-        messageId: "reef-inbound-1",
-        replyToId: "reef-outbound-1",
-        text: "peer acknowledged",
-        timestamp: 300,
-      },
-    };
-  });
+function mockConversationOwners() {
+  const callGateway = vi
+    .spyOn(gateway, "callAgentToolGatewayRequest")
+    .mockImplementation(async ({ method }) => {
+      if (method === "conversations.list") {
+        return { conversations: [conversation] };
+      }
+      if (method === "conversations.send") {
+        return { status: "sent" as const, ...sent, queueId: "queue-1" };
+      }
+      return {
+        status: "replied" as const,
+        ...sent,
+        correlationPersisted: true,
+        reply: {
+          conversationRef: conversation.conversationRef,
+          messageId: "reef-inbound-1",
+          replyToId: "reef-outbound-1",
+          text: "peer acknowledged",
+          timestamp: 300,
+        },
+      };
+    });
   // The registry resolves the opaque ref to its real (channel, account, target)
   // route; the budget ledger keys on that route, not the raw conversationRef.
-  const readConversationMock = vi.fn(async () => conversation);
-  return {
-    callGateway: callGatewayMock as never,
-    readConversation: readConversationMock as never,
-    callGatewayMock,
-    readConversationMock,
-  };
+  vi.spyOn(registry, "readConversation").mockResolvedValue(conversation);
+  return callGateway;
 }
 
 describe("conversation tools", () => {
   it("declares exact Gateway output contracts and promotes only bounded complete hints", async () => {
-    const deps = createDeps();
-    const list = createConversationsListTool({ agentId: "main" }, deps);
-    const send = createConversationsSendTool({ agentId: "main" }, deps);
-    const turn = createConversationsTurnTool({ agentId: "main" }, deps);
+    mockConversationOwners();
+    const list = createConversationsListTool({ agentId: "main" });
+    const send = createConversationsSendTool({ agentId: "main" });
+    const turn = createConversationsTurnTool({ agentId: "main" });
     // conversations_send declares a tool-local superset of the Gateway send result
     // (adds the optional turnSendNotice) so Code Mode can project the send-budget
     // guidance; the Gateway protocol schema itself is unchanged.
@@ -201,12 +193,12 @@ describe("conversation tools", () => {
   });
 
   it("lists opaque external addresses independently from sessions", async () => {
-    const deps = createDeps();
-    const result = await createConversationsListTool({ agentId: "main" }, deps).execute("list", {
+    const callGateway = mockConversationOwners();
+    const result = await createConversationsListTool({ agentId: "main" }).execute("list", {
       channel: "reef",
       query: "@peer-agent",
     });
-    expect(deps.callGatewayMock).toHaveBeenCalledWith({
+    expect(callGateway).toHaveBeenCalledWith({
       method: "conversations.list",
       params: { agentId: "main", channel: "reef", query: "@peer-agent", limit: 50 },
     });
@@ -214,16 +206,13 @@ describe("conversation tools", () => {
   });
 
   it("routes sends through the Gateway with a stable operation id", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      {
-        agentId: "main",
-        agentSessionId: "operator-session",
-        agentSessionKey: "agent:main:telegram:direct:operator",
-        config: {},
-      },
-      deps,
-    );
+    const callGateway = mockConversationOwners();
+    const tool = createConversationsSendTool({
+      agentId: "main",
+      agentSessionId: "operator-session",
+      agentSessionKey: "agent:main:telegram:direct:operator",
+      config: {},
+    });
     const args = {
       conversationRef: conversation.conversationRef,
       message: "hello peer",
@@ -231,8 +220,8 @@ describe("conversation tools", () => {
 
     const firstResult = await tool.execute("tool-call-1", args);
     const secondResult = await tool.execute("tool-call-1", args);
-    const first = deps.callGatewayMock.mock.calls[0]![0];
-    const second = deps.callGatewayMock.mock.calls[1]![0];
+    const first = callGateway.mock.calls[0]![0];
+    const second = callGateway.mock.calls[1]![0];
 
     expect(first).toMatchObject({
       method: "conversations.send",
@@ -244,8 +233,10 @@ describe("conversation tools", () => {
       },
       config: {},
     });
-    expect(first.params.operationId).toMatch(/^convop_[a-f0-9]{32}$/u);
-    expect(second.params.operationId).toBe(first.params.operationId);
+    expect(first.params).toMatchObject({
+      operationId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u),
+    });
+    expect(second.params).toEqual(first.params);
     expect(firstResult.details).toEqual(secondResult.details);
     expect(firstResult.details).toMatchObject({
       status: "sent",
@@ -255,15 +246,15 @@ describe("conversation tools", () => {
   });
 
   it("reports Gateway suppression without claiming delivery", async () => {
-    const deps = createDeps();
-    deps.callGatewayMock.mockResolvedValueOnce({
+    const callGateway = mockConversationOwners();
+    callGateway.mockResolvedValueOnce({
       status: "suppressed",
       conversationRef: conversation.conversationRef,
       channel: "reef",
       queueId: "queue-suppressed",
     } as never);
 
-    const result = await createConversationsSendTool({ agentId: "main", config: {} }, deps).execute(
+    const result = await createConversationsSendTool({ agentId: "main", config: {} }).execute(
       "suppressed-call",
       {
         conversationRef: conversation.conversationRef,
@@ -280,9 +271,9 @@ describe("conversation tools", () => {
   });
 
   it("keeps a transient Gateway send failure retryable under the stable tool call id", async () => {
-    const deps = createDeps();
-    deps.callGatewayMock.mockRejectedValueOnce(new Error("gateway unavailable"));
-    const tool = createConversationsSendTool({ agentId: "main", config: {} }, deps);
+    const callGateway = mockConversationOwners();
+    callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+    const tool = createConversationsSendTool({ agentId: "main", config: {} });
     const args = {
       conversationRef: conversation.conversationRef,
       message: "retry me",
@@ -292,41 +283,39 @@ describe("conversation tools", () => {
     await expect(tool.execute("retryable-call", args)).resolves.toMatchObject({
       details: { status: "sent", messageId: "reef-outbound-1" },
     });
-    const first = deps.callGatewayMock.mock.calls[0]![0];
-    const second = deps.callGatewayMock.mock.calls[1]![0];
-    expect(second.params.operationId).toBe(first.params.operationId);
+    const first = callGateway.mock.calls[0]![0];
+    const second = callGateway.mock.calls[1]![0];
+    expect(second.params).toEqual(first.params);
   });
 
   it("uses a stable operation id for correlated turns and cancels on abort", async () => {
-    const deps = createDeps();
-    const tool = createConversationsTurnTool(
-      {
-        agentId: "main",
-        agentSessionId: "operator-session",
-        agentSessionKey: "agent:main:telegram:direct:operator",
-        config: {},
-      },
-      deps,
-    );
+    const callGateway = mockConversationOwners();
+    const tool = createConversationsTurnTool({
+      agentId: "main",
+      agentSessionId: "operator-session",
+      agentSessionKey: "agent:main:telegram:direct:operator",
+      config: {},
+    });
     await tool.execute("turn-call", { ...message, timeoutSeconds: 12 });
     await tool.execute("turn-call", { ...message, timeoutSeconds: 12 });
-    const first = deps.callGatewayMock.mock.calls[0]![0];
-    const second = deps.callGatewayMock.mock.calls[1]![0];
-    expect(first.params.turnId).toMatch(/^convop_[a-f0-9]{32}$/u);
-    expect(second.params.turnId).toBe(first.params.turnId);
-    const request = vi.fn(async () => ({ cancelled: true }));
+    const first = callGateway.mock.calls[0]![0];
+    const second = callGateway.mock.calls[1]![0];
+    expect(first.params).toMatchObject({ turnId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u) });
+    expect(second.params).toEqual(first.params);
+    const request = vi.fn().mockResolvedValue({ cancelled: true });
     await first.onSignalAbort?.(request);
     expect(request).toHaveBeenCalledWith(
       "conversations.turn.cancel",
-      { agentId: "main", turnId: first.params.turnId },
+      { agentId: "main", turnId: expect.any(String) },
       { timeoutMs: 5_000 },
     );
+    expect(first.params).toMatchObject(request.mock.calls[0]?.[1]);
   });
 
   it("validates references and owner access before Gateway delivery", async () => {
-    const deps = createDeps();
+    const callGateway = mockConversationOwners();
     await expect(
-      createConversationsSendTool({ agentId: "main", config: {} }, deps).execute("send", {
+      createConversationsSendTool({ agentId: "main", config: {} }).execute("send", {
         conversationRef: "not-a-conversation",
         message: "hello",
       }),
@@ -336,10 +325,10 @@ describe("conversation tools", () => {
       createConversationsSendTool,
       createConversationsTurnTool,
     ]) {
-      const tool = createTool({ agentId: "main", senderIsOwner: false, config: {} } as never, deps);
+      const tool = createTool({ agentId: "main", senderIsOwner: false, config: {} } as never);
       await expect(tool.execute("blocked", message)).rejects.toThrow("require owner access");
     }
-    expect(deps.callGatewayMock).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
     for (const name of ["conversations_list", "conversations_send", "conversations_turn"]) {
       expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain(name);
       expect(DEFAULT_GATEWAY_HTTP_TOOL_DENY).toContain(name);
@@ -393,11 +382,11 @@ describe("conversations_send per-turn send budget", () => {
   }
 
   it("returns a schema-valid capped result with the block reason in text, not details", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      { ...budgetOptions, config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } },
-      deps,
-    );
+    const callGateway = mockConversationOwners();
+    const tool = createConversationsSendTool({
+      ...budgetOptions,
+      config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } },
+    });
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
     await tool.execute("c1", args);
     const blocked = await tool.execute("c2", args);
@@ -405,37 +394,34 @@ describe("conversations_send per-turn send budget", () => {
     // No extra fields leaked into details that would fail the closed output schema.
     expect(blocked.details).not.toHaveProperty("reason");
     expect(blocked.details).not.toHaveProperty("message");
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("applies a per-agent cap over the global cap", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      {
-        ...budgetOptions,
-        config: {
-          tools: { message: { maxMessagesPerTurnPerTarget: 5 } },
-          agents: { entries: { main: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } } },
-        } as never,
-      },
-      deps,
-    );
+    const callGateway = mockConversationOwners();
+    const tool = createConversationsSendTool({
+      ...budgetOptions,
+      config: {
+        tools: { message: { maxMessagesPerTurnPerTarget: 5 } },
+        agents: { entries: { main: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } } },
+      } as never,
+    });
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
     await tool.execute("c1", args);
     const blocked = await tool.execute("c2", args);
     expectSchemaValidCappedResult(blocked);
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("passes the Code Mode output-schema check on the capped path", async () => {
     // In Code Mode the runtime validates the returned details against the tool's
     // declared outputSchema (assertCatalogOutputMatchesSchema). A capped result with
     // extra details fields would throw there; the schema-valid shape must not.
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      { ...budgetOptions, config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } },
-      deps,
-    );
+    mockConversationOwners();
+    const tool = createConversationsSendTool({
+      ...budgetOptions,
+      config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } },
+    });
     const catalogRef = createToolSearchCatalogRef();
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool] });
     const runtime = new ToolSearchRuntime(
@@ -452,8 +438,8 @@ describe("conversations_send per-turn send budget", () => {
   });
 
   it("appends a soft reminder from the second send to the same conversation this turn", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(budgetOptions, deps);
+    mockConversationOwners();
+    const tool = createConversationsSendTool(budgetOptions);
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
     const first = await tool.execute("c1", args);
     const second = await tool.execute("c2", args);
@@ -470,13 +456,13 @@ describe("conversations_send per-turn send budget", () => {
   });
 
   it("does not count a suppressed Gateway result", async () => {
-    const deps = createDeps();
-    deps.callGatewayMock.mockResolvedValueOnce({
+    const callGateway = mockConversationOwners();
+    callGateway.mockResolvedValueOnce({
       status: "suppressed",
       conversationRef: conversation.conversationRef,
       channel: "reef",
     } as never);
-    const tool = createConversationsSendTool(budgetOptions, deps);
+    const tool = createConversationsSendTool(budgetOptions);
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
     await tool.execute("c1", args);
     const second = await tool.execute("c2", args);
@@ -488,41 +474,41 @@ describe("conversations_send per-turn send budget", () => {
   it.each(["queued", "unknown"] as const)(
     "charges a %s Gateway result against the hard cap",
     async (status) => {
-      const deps = createDeps();
+      const callGateway = mockConversationOwners();
       // queued: the delivery queue holds custody and recovery still delivers it.
       // unknown: the send may already have reached the peer.
-      deps.callGatewayMock.mockResolvedValueOnce({
+      callGateway.mockResolvedValueOnce({
         status,
         conversationRef: conversation.conversationRef,
         channel: "reef",
       } as never);
-      const tool = createConversationsSendTool(
-        { ...budgetOptions, config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } },
-        deps,
-      );
+      const tool = createConversationsSendTool({
+        ...budgetOptions,
+        config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } },
+      });
       const args = { conversationRef: conversation.conversationRef, message: "hi" };
       const first = await tool.execute("c1", args);
       expect(first.details).toMatchObject({ status });
       expect(softNotice(first)).toBeUndefined();
-      expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledTimes(1);
       // A distinct follow-up operation is blocked before the Gateway call, so repeated
       // sends during an outage cannot all queue and later deliver past the cap.
       const blocked = await tool.execute("c2", args);
       expectSchemaValidCappedResult(blocked);
-      expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledTimes(1);
     },
   );
 
   it("words the reminder as submitted, not delivered, when earlier sends are only queued", async () => {
-    const deps = createDeps();
+    const callGateway = mockConversationOwners();
     const queued = {
       status: "queued" as const,
       conversationRef: conversation.conversationRef,
       channel: "reef",
     };
-    deps.callGatewayMock.mockResolvedValueOnce(queued as never);
-    deps.callGatewayMock.mockResolvedValueOnce(queued as never);
-    const tool = createConversationsSendTool(budgetOptions, deps);
+    callGateway.mockResolvedValueOnce(queued as never);
+    callGateway.mockResolvedValueOnce(queued as never);
+    const tool = createConversationsSendTool(budgetOptions);
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
     await tool.execute("c1", args);
     const second = await tool.execute("c2", args);
@@ -537,17 +523,17 @@ describe("conversations_send per-turn send budget", () => {
   });
 
   it("lets an idempotent replay through the cap without double-counting or a fresh nudge", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      { ...budgetOptions, config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } },
-      deps,
-    );
+    const callGateway = mockConversationOwners();
+    const tool = createConversationsSendTool({
+      ...budgetOptions,
+      config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } },
+    });
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
     // 1st send consumes the single-send budget.
     const first = await tool.execute("call-1", args);
     expect(first.details).toMatchObject({ status: "sent" });
     expect(softNotice(first)).toBeUndefined();
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(1);
 
     // Same toolCallId again -> same operationId. The Gateway resolves it to the
     // completed operation and returns "sent" without re-delivering, so it must not be
@@ -555,69 +541,66 @@ describe("conversations_send per-turn send budget", () => {
     const replay = await tool.execute("call-1", args);
     expect(replay.details).toMatchObject({ status: "sent" });
     expect(softNotice(replay)).toBeUndefined();
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(2);
 
     // A THIRD, distinct toolCallId is a genuinely new send and is blocked by the cap
     // that the single counted delivery already reached.
     const blocked = await tool.execute("call-2", args);
     expectSchemaValidCappedResult(blocked);
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(2);
   });
 
   it("resets the count for a new turn (new runId)", async () => {
-    const deps = createDeps();
+    mockConversationOwners();
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
-    await createConversationsSendTool(budgetOptions, deps).execute("c1", args);
-    const nextTurn = createConversationsSendTool({ ...budgetOptions, runId: "run-conv-2" }, deps);
+    await createConversationsSendTool(budgetOptions).execute("c1", args);
+    const nextTurn = createConversationsSendTool({ ...budgetOptions, runId: "run-conv-2" });
     const result = await nextTurn.execute("c1", args);
     expect(softNotice(result)).toBeUndefined();
   });
 
   it("blocks before the Gateway call once the opt-in hard cap is reached", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      { ...budgetOptions, config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } },
-      deps,
-    );
+    const callGateway = mockConversationOwners();
+    const tool = createConversationsSendTool({
+      ...budgetOptions,
+      config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } },
+    });
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
     await tool.execute("c1", args);
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(1);
     const blocked = await tool.execute("c2", args);
     expectSchemaValidCappedResult(blocked);
     // The blocked send never reached the Gateway.
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses the soft reminder when turnSendNudge is disabled", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      { ...budgetOptions, config: { tools: { message: { turnSendNudge: false } } } },
-      deps,
-    );
+    const callGateway = mockConversationOwners();
+    const tool = createConversationsSendTool({
+      ...budgetOptions,
+      config: { tools: { message: { turnSendNudge: false } } },
+    });
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
     await tool.execute("c1", args);
     const second = await tool.execute("c2", args);
     // The nudge is gated off, but both sends still reached the Gateway.
     expect(softNotice(second)).toBeUndefined();
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(2);
   });
 
   it("still enforces the hard cap when turnSendNudge is disabled", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      {
-        ...budgetOptions,
-        config: { tools: { message: { maxMessagesPerTurnPerTarget: 1, turnSendNudge: false } } },
-      },
-      deps,
-    );
+    const callGateway = mockConversationOwners();
+    const tool = createConversationsSendTool({
+      ...budgetOptions,
+      config: { tools: { message: { maxMessagesPerTurnPerTarget: 1, turnSendNudge: false } } },
+    });
     const args = { conversationRef: conversation.conversationRef, message: "hi" };
     await tool.execute("c1", args);
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(1);
     const blocked = await tool.execute("c2", args);
     // Counting still ran past the first send, so the cap blocks the second.
     expectSchemaValidCappedResult(blocked);
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -677,12 +660,14 @@ describe("message and conversations_send share the per-turn budget", () => {
 
   it("nudges on the second cross-tool send and blocks the third at the cap", async () => {
     const config = { tools: { message: { maxMessagesPerTurnPerTarget: 2 } } };
-    const deps = createDeps();
+    const callGateway = mockConversationOwners();
     const messageTool = createMixedMessageTool(config);
-    const conversationTool = createConversationsSendTool(
-      { agentId: "main", agentSessionKey: sessionKey, runId, config: config as never },
-      deps,
-    );
+    const conversationTool = createConversationsSendTool({
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId,
+      config: config as never,
+    });
 
     // 1st send (message tool): silent.
     const first = await sendViaMessageTool(messageTool, "hello");
@@ -702,7 +687,7 @@ describe("message and conversations_send share the per-turn budget", () => {
       reason: "turn_send_budget_exhausted",
     });
     // The blocked send never reached the runner-backed gateway path.
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
   // A no-target source reply must resolve to the concrete current target, not a
@@ -742,12 +727,14 @@ describe("message and conversations_send share the per-turn budget", () => {
 
   it("caps a conversations_send that follows a no-target source reply to the same peer", async () => {
     const config = { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } };
-    const deps = createDeps();
+    const callGateway = mockConversationOwners();
     const messageTool = createSourceReplyMessageTool(config);
-    const conversationTool = createConversationsSendTool(
-      { agentId: "main", agentSessionKey: sessionKey, runId, config: config as never },
-      deps,
-    );
+    const conversationTool = createConversationsSendTool({
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId,
+      config: config as never,
+    });
 
     // 1st send (message tool, NO explicit target): resolves to the current source's
     // concrete target and consumes the single-send budget for that peer.
@@ -769,7 +756,7 @@ describe("message and conversations_send share the per-turn budget", () => {
       turnSendNotice: expect.stringContaining("configured limit of 1 message(s)"),
     });
     // The blocked send never reached the Gateway.
-    expect(deps.callGatewayMock).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 });
 
@@ -887,11 +874,13 @@ describe("Code Mode bridge projects the send-budget notice into the guest value"
   }
 
   it("projects the conversations_send nudge into the guest value on the second send", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      { agentId: "main", agentSessionKey: sessionKey, runId, config: {} },
-      deps,
-    );
+    mockConversationOwners();
+    const tool = createConversationsSendTool({
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId,
+      config: {},
+    });
     const { catalogRef, runtime } = buildRuntime([tool]);
     const input = { conversationRef: conversation.conversationRef, message: "hi" };
 
@@ -910,16 +899,13 @@ describe("Code Mode bridge projects the send-budget notice into the guest value"
   });
 
   it("projects the conversations_send cap block into the guest value", async () => {
-    const deps = createDeps();
-    const tool = createConversationsSendTool(
-      {
-        agentId: "main",
-        agentSessionKey: sessionKey,
-        runId,
-        config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } },
-      },
-      deps,
-    );
+    mockConversationOwners();
+    const tool = createConversationsSendTool({
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId,
+      config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } },
+    });
     const { catalogRef, runtime } = buildRuntime([tool]);
     const input = { conversationRef: conversation.conversationRef, message: "hi" };
 

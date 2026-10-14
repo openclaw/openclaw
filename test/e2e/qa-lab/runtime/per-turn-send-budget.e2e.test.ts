@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 // Boots a real ephemeral Gateway child (mock-openai provider + qa-channel synthetic
 // transport) and exercises the shared per-turn send ledger at the real delivery
 // boundary — the Gateway plus the qa-channel outbound bus — rather than by stubbing
-// callGateway.
+// the Gateway caller.
 //
 // Two seams are used, each the tightest one that exposes the behavior:
 //   * A real scripted agent turn (inbound -> mock model emits several `message`
@@ -16,18 +16,19 @@ import { randomUUID } from "node:crypto";
 //     structured `details` object that is not serialized to the model, bus, or
 //     chat.history. To assert its schema-valid suppressed shape and idempotent
 //     replay we run the real conversations_send tool in-process with a controlled
-//     runId, while its callGateway is forwarded to the running Gateway child so the
+//     runId, while its Gateway caller is forwarded to the running Gateway child so the
 //     delivery itself is real (Gateway conversations.send -> qa-channel bus). This
 //     is not a stub: the result and the delivery come from the real Gateway.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Value } from "typebox/value";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../../../extensions/qa-lab/api.js";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import { ConversationSendResultSchema } from "../../../../packages/gateway-protocol/src/schema/agent.js";
 import { createConversationsSendTool } from "../../../../src/agents/tools/conversation-tools.js";
+import * as gateway from "../../../../src/agents/tools/in-process-gateway.js";
 import { expectedTurnSendNotice } from "../../../../src/agents/tools/message-tool.test-support.js";
 import {
   buildTurnSendLedgerSessionKey,
@@ -35,6 +36,7 @@ import {
   peekTurnSendCount,
   resetTurnSendLedgerForTest,
 } from "../../../../src/agents/tools/turn-send-ledger.js";
+import * as registry from "../../../../src/config/sessions/conversation-registry.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   aggregateTurnSendProof,
@@ -351,8 +353,8 @@ async function waitForTurnToolOutputs(
 }
 
 // One registry row read back from the running Gateway (conversations.list). Its
-// (channel, account, target) route is fed to the tool's in-process readConversation
-// so the per-turn ledger keys on the exact route the Gateway itself delivers to.
+// (channel, account, target) route is served by the in-process registry reader so
+// the per-turn ledger keys on the exact route the Gateway itself delivers to.
 type LiveConversation = {
   conversationRef: string;
   channel: string;
@@ -363,15 +365,35 @@ type LiveConversation = {
   lastSeenAt: number;
 };
 
-// Forwards the tool's callGateway dependency to the running Gateway child so
-// conversations.send performs a real Gateway delivery (Gateway -> qa-channel bus). The
-// tool only reads opts.method/params/timeoutMs, so this narrow forward is faithful and
-// NOT a stub: both the result and the delivery come from the real Gateway.
-function createLiveCallGateway(live: LiveHarness) {
-  return (async (opts: { method: string; params?: unknown; timeoutMs?: number | null }) =>
-    await live.gateway.call(opts.method, opts.params, {
-      timeoutMs: typeof opts.timeoutMs === "number" ? opts.timeoutMs : 20_000,
-    })) as never;
+// Pinned registry scope for the in-process tool. The tool fails open on a registry miss,
+// so a failed scope read against this test process's own state would silently disable
+// the budget; a fixed scope keeps accounting deterministic in every scenario.
+const LIVE_REGISTRY_SCOPE: registry.PreparedConversationRegistryScope = {
+  agentId: "qa",
+  databaseAgentId: "qa",
+  env: {},
+  storePath: "per-turn-send-budget-e2e",
+};
+
+// Routes the in-process conversations_send owners at the running Gateway child for one
+// scenario (afterEach restores them). The Gateway caller forwards to the child so
+// conversations.send performs a real Gateway delivery (Gateway -> qa-channel bus); the
+// tool only reads method/params/timeoutMs, so this narrow forward is faithful and NOT a
+// stub: both the result and the delivery come from the real Gateway. The registry reader
+// serves the route the Gateway registered; conversations.list omits peerId, which the
+// send budget never reads.
+function routeConversationTools(live: LiveHarness, conversation: LiveConversation): void {
+  vi.spyOn(gateway, "callAgentToolGatewayRequest").mockImplementation(
+    async (request) =>
+      await live.gateway.call(request.method, request.params, {
+        timeoutMs: typeof request.timeoutMs === "number" ? request.timeoutMs : 20_000,
+      }),
+  );
+  vi.spyOn(registry, "prepareConversationRegistryScope").mockResolvedValue(LIVE_REGISTRY_SCOPE);
+  vi.spyOn(registry, "readConversation").mockResolvedValue({
+    ...conversation,
+    peerId: conversation.target,
+  });
 }
 
 function toolResultText(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -435,23 +457,16 @@ async function registerQaConversation(
 // scenarios deliver on). The no-delivery fences drive one of these to prove the lane is
 // live and has flushed past the point of interest.
 function deliverConversationMarker(
-  live: LiveHarness,
   conversation: LiveConversation,
   markerText: string,
 ): () => Promise<unknown> {
   return async () => {
-    const tool = createConversationsSendTool(
-      {
-        agentId: "qa",
-        agentSessionKey: `qa-fence-${randomUUID()}`,
-        runId: `run-fence-${randomUUID()}`,
-        config: {} as never,
-      },
-      {
-        callGateway: createLiveCallGateway(live),
-        readConversation: (async () => conversation) as never,
-      },
-    );
+    const tool = createConversationsSendTool({
+      agentId: "qa",
+      agentSessionKey: `qa-fence-${randomUUID()}`,
+      runId: `run-fence-${randomUUID()}`,
+      config: {} as never,
+    });
     return await tool.execute(
       `fence-${randomUUID()}`,
       { conversationRef: conversation.conversationRef, message: markerText },
@@ -485,6 +500,8 @@ async function settleOutboundPastFence(
 }
 
 describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   // These scenarios share the default Gateway config. Each one drives fresh session and run
   // identities and unique bus markers, so one Gateway serves them all; a new handshake is not
   // the contract under test.
@@ -539,20 +556,14 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
       async () => {
         const { state: busState, harness: live } = sharedHarness();
         const conversation = await registerQaConversation(live, busState, "REG-OK-2");
+        routeConversationTools(live, conversation);
 
         const agentSessionKey = `qa-per-turn-budget-2-${randomUUID()}`;
         const ledgerSessionKey = buildTurnSendLedgerSessionKey("qa", agentSessionKey)!;
         const runId = `run-scenario-2-${randomUUID()}`;
         // Opt in to the per-turn hard cap for the message toolset (shared by conversations_send).
         const config = { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never;
-        const deps = {
-          callGateway: createLiveCallGateway(live),
-          readConversation: (async () => conversation) as never,
-        };
-        const tool = createConversationsSendTool(
-          { agentId: "qa", agentSessionKey, runId, config },
-          deps,
-        );
+        const tool = createConversationsSendTool({ agentId: "qa", agentSessionKey, runId, config });
 
         // First send: below the cap -> real Gateway delivery to the qa-channel bus, status "sent".
         const firstResult = await tool.execute(
@@ -602,7 +613,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         // Fence the bus with a positive-control marker on the same conversation so the
         // absence of S2-CAP-BETA is proven over a provably-complete window, not sampled.
         await settleOutboundPastFence(busState, {
-          deliver: deliverConversationMarker(live, conversation, "S2-FENCE-OK"),
+          deliver: deliverConversationMarker(conversation, "S2-FENCE-OK"),
           matches: (message) => message.text.includes("S2-FENCE-OK"),
         });
         const capDeliveries = outboundMessages(busState).filter(
@@ -652,6 +663,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
       async () => {
         const { state: busState, harness: live } = sharedHarness();
         const conversation = await registerQaConversation(live, busState, "REG-OK-4");
+        routeConversationTools(live, conversation);
 
         const agentSessionKey = `qa-per-turn-budget-4-${randomUUID()}`;
         const ledgerSessionKey = buildTurnSendLedgerSessionKey("qa", agentSessionKey)!;
@@ -659,14 +671,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         const runId = `run-scenario-4-${randomUUID()}`;
         // Cap of 1 proves the replay is admitted despite the hard cap being reached.
         const config = { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never;
-        const deps = {
-          callGateway: createLiveCallGateway(live),
-          readConversation: (async () => conversation) as never,
-        };
-        const tool = createConversationsSendTool(
-          { agentId: "qa", agentSessionKey, runId, config },
-          deps,
-        );
+        const tool = createConversationsSendTool({ agentId: "qa", agentSessionKey, runId, config });
         const targetKey = buildTurnSendTargetKey({
           channel: conversation.channel,
           accountId: conversation.accountId,
@@ -706,7 +711,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         // No re-delivery: fence the bus past a positive-control marker, then confirm the bus
         // still shows exactly one S4-REPLAY over that provably-complete window.
         await settleOutboundPastFence(busState, {
-          deliver: deliverConversationMarker(live, conversation, "S4-FENCE-OK"),
+          deliver: deliverConversationMarker(conversation, "S4-FENCE-OK"),
           matches: (message) => message.text.includes("S4-FENCE-OK"),
         });
         const replayDeliveries = outboundMessages(busState).filter((message) =>
@@ -757,19 +762,13 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         // exactly one delivery lands and the ledger commits exactly one send.
         const { state: busState, harness: live } = sharedHarness();
         const conversation = await registerQaConversation(live, busState, "REG-OK-5");
+        routeConversationTools(live, conversation);
 
         const agentSessionKey = `qa-per-turn-budget-5-${randomUUID()}`;
         const ledgerSessionKey = buildTurnSendLedgerSessionKey("qa", agentSessionKey)!;
         const runId = `run-scenario-5-${randomUUID()}`;
         const config = { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never;
-        const deps = {
-          callGateway: createLiveCallGateway(live),
-          readConversation: (async () => conversation) as never,
-        };
-        const tool = createConversationsSendTool(
-          { agentId: "qa", agentSessionKey, runId, config },
-          deps,
-        );
+        const tool = createConversationsSendTool({ agentId: "qa", agentSessionKey, runId, config });
 
         // Distinct toolCallIds so the two calls derive distinct operationIds — a genuine
         // race, not a replay. Promise.all evaluates the array left-to-right, so the first
@@ -828,7 +827,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
             message.text.includes("S5-CONC-ALPHA") || message.text.includes("S5-CONC-BETA"),
         );
         await settleOutboundPastFence(busState, {
-          deliver: deliverConversationMarker(live, conversation, "S5-FENCE-OK"),
+          deliver: deliverConversationMarker(conversation, "S5-FENCE-OK"),
           matches: (message) => message.text.includes("S5-FENCE-OK"),
         });
         const concurrentDeliveries = outboundMessages(busState).filter(
@@ -874,13 +873,12 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         const sameOpSessionKey = `qa-per-turn-budget-5b-${randomUUID()}`;
         const sameOpLedgerSessionKey = buildTurnSendLedgerSessionKey("qa", sameOpSessionKey)!;
         const sameOpRunId = `run-scenario-5b-${randomUUID()}`;
-        const sameOpTool = createConversationsSendTool(
-          { agentId: "qa", agentSessionKey: sameOpSessionKey, runId: sameOpRunId, config },
-          {
-            callGateway: createLiveCallGateway(live),
-            readConversation: (async () => conversation) as never,
-          },
-        );
+        const sameOpTool = createConversationsSendTool({
+          agentId: "qa",
+          agentSessionKey: sameOpSessionKey,
+          runId: sameOpRunId,
+          config,
+        });
         const sameOpArgs = {
           conversationRef: conversation.conversationRef,
           message: "S5B-SAME-OP",
@@ -901,7 +899,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
 
         await waitForOutboundText(busState, (message) => message.text.includes("S5B-SAME-OP"));
         await settleOutboundPastFence(busState, {
-          deliver: deliverConversationMarker(live, conversation, "S5B-FENCE-OK"),
+          deliver: deliverConversationMarker(conversation, "S5B-FENCE-OK"),
           matches: (message) => message.text.includes("S5B-FENCE-OK"),
         });
         const sameOpDeliveries = outboundMessages(busState).filter((message) =>
@@ -957,24 +955,19 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         // provably-complete bus window, not sampled. Verdict entries carry no tokens.
         const { state: busState, harness: live } = sharedHarness();
         const conversation = await registerQaConversation(live, busState, "REG-OK-7");
+        routeConversationTools(live, conversation);
 
         // (A) Positive control FIRST: an authority-bound owner send to the legitimate routable
         // target delivers exactly once. Fence past a distinct marker so "exactly once" holds over
         // a complete window — a re-delivered duplicate would surface before the marker lands.
         const positiveSessionKey = `qa-per-turn-budget-7-${randomUUID()}`;
         const positiveRunId = `run-scenario-7-${randomUUID()}`;
-        const positiveTool = createConversationsSendTool(
-          {
-            agentId: "qa",
-            agentSessionKey: positiveSessionKey,
-            runId: positiveRunId,
-            config: {} as never,
-          },
-          {
-            callGateway: createLiveCallGateway(live),
-            readConversation: (async () => conversation) as never,
-          },
-        );
+        const positiveTool = createConversationsSendTool({
+          agentId: "qa",
+          agentSessionKey: positiveSessionKey,
+          runId: positiveRunId,
+          config: {} as never,
+        });
         const positiveResult = await positiveTool.execute(
           "s7-pos",
           { conversationRef: conversation.conversationRef, message: "S7-POS-OK" },
@@ -984,7 +977,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         expect(positiveStatus).toBe("sent");
         await waitForOutboundText(busState, (message) => message.text.includes("S7-POS-OK"));
         await settleOutboundPastFence(busState, {
-          deliver: deliverConversationMarker(live, conversation, "S7-LIVE-OK"),
+          deliver: deliverConversationMarker(conversation, "S7-LIVE-OK"),
           matches: (message) => message.text.includes("S7-LIVE-OK"),
         });
         const positiveDeliveries = outboundMessages(busState).filter((message) =>
@@ -1060,7 +1053,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         // proving the lane processed everything through the refusal, so S7-SPOOF is absent over
         // a complete window rather than a 500ms sample. (A) already proved this lane delivers.
         await settleOutboundPastFence(busState, {
-          deliver: deliverConversationMarker(live, conversation, "S7-SETTLED-OK"),
+          deliver: deliverConversationMarker(conversation, "S7-SETTLED-OK"),
           matches: (message) => message.text.includes("S7-SETTLED-OK"),
         });
         const spoofedDeliveries = outboundMessages(busState).filter((message) =>
@@ -1303,8 +1296,9 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         // exactly-one assertion holds over a provably-complete window rather than a fixed
         // sample. A second admitted send would surface a second SBR6 before the marker lands.
         const conversation = await readQaOperatorConversation(live);
+        routeConversationTools(live, conversation);
         await settleOutboundPastFence(busState, {
-          deliver: deliverConversationMarker(live, conversation, "SBR6-FENCE-OK"),
+          deliver: deliverConversationMarker(conversation, "SBR6-FENCE-OK"),
           matches: (message) => message.text.includes("SBR6-FENCE-OK"),
         });
         const repeatDeliveries = outboundMessages(busState).filter(

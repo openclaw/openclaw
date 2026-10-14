@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "../extensions/codex/test-api.js";
 import type {
   ConversationSendResult,
@@ -9,8 +9,7 @@ import {
   createConversationsSendTool,
   createConversationsTurnTool,
 } from "../src/agents/tools/conversation-tools.js";
-import { callAgentToolGatewayRequest } from "../src/agents/tools/in-process-gateway.js";
-import { readConversation } from "../src/config/sessions/conversation-registry.js";
+import * as gateway from "../src/agents/tools/in-process-gateway.js";
 
 const conversationRef = "conv_0123456789abcdef0123456789abcdef";
 const destination = { conversationRef, channel: "qa-channel" };
@@ -29,6 +28,7 @@ function delivery(
 }
 
 describe("Codex core conversation delivery", () => {
+  afterEach(() => vi.restoreAllMocks());
   it.each([
     delivery("send", { ...destination, status: "sent" }, true),
     ...(["sent", "queued", "suppressed", "unknown"] as const).map((status) =>
@@ -50,11 +50,12 @@ describe("Codex core conversation delivery", () => {
       ),
     ),
   ])("records $name without changing the Gateway result", async (testCase) => {
-    const deps = { callGateway: callAgentToolGatewayRequest, readConversation };
-    const callGateway = vi.spyOn(deps, "callGateway").mockResolvedValue(testCase.receipt);
+    const callGateway = vi
+      .spyOn(gateway, "callAgentToolGatewayRequest")
+      .mockResolvedValue(testCase.receipt);
     const createTool =
       testCase.kind === "send" ? createConversationsSendTool : createConversationsTurnTool;
-    const tool = createTool({ agentId: "main" }, deps);
+    const tool = createTool({ agentId: "main" });
     const bridge = createCodexDynamicToolBridge({
       tools: [tool],
       signal: new AbortController().signal,
