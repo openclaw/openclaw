@@ -260,7 +260,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
   const connectionStatus = () => host.connectionStatus;
   const selfUser = createMemo(() => {
     profileGateway.read();
-    return gatewayPresentationScope(context.gateway).displayUser;
+    const gateway = host.sessionDataContext?.gateway;
+    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
   });
   const displayUser = () => selfUser() ?? host.sidebarSnapshot?.footer;
   const selfLabel = () => displayUser()?.name ?? displayUser()?.email ?? t("nav.owner");
