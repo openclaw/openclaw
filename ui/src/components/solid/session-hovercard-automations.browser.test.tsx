@@ -84,10 +84,39 @@ it("tabs into a nested inspection, dismisses only the flyout with Escape, and re
   await userEvent.click(anchor);
   await opened;
   expect(tooltip.hasAttribute("open")).toBe(true);
-  anchor.focus();
-  await userEvent.tab();
+  const navigation: Event[] = [];
+  const recordNavigation = (event: Event) => navigation.push(event);
+  for (const type of ["keydown", "focusin", "focusout"]) {
+    card.addEventListener(type, recordNavigation);
+  }
+  try {
+    anchor.focus();
+    await userEvent.tab();
+  } finally {
+    for (const type of ["keydown", "focusin", "focusout"]) {
+      card.removeEventListener(type, recordNavigation);
+    }
+  }
   const summary = card.querySelector("summary")!;
-  expect(document.activeElement).toBe(summary);
+  const surface = tooltip.shadowRoot!.querySelector<HTMLElement>(".tooltip-surface")!;
+  expect(
+    document.activeElement,
+    JSON.stringify({
+      navigation: navigation.map((event) => ({
+        type: event.type,
+        target: event.target instanceof Element ? event.target.tagName : null,
+        key: event instanceof KeyboardEvent ? event.key : undefined,
+        shift: event instanceof KeyboardEvent ? event.shiftKey : undefined,
+        prevented: event.defaultPrevented,
+      })),
+      documentFocused: document.hasFocus(),
+      tooltipOpen: tooltip.hasAttribute("open"),
+      surfacePhase: surface.dataset.phase,
+      surfaceInert: surface.inert,
+      richInert: surface.querySelector<HTMLElement>(".tooltip-rich-content")!.inert,
+      summaryTabIndex: summary.tabIndex,
+    }),
+  ).toBe(summary);
   await userEvent.keyboard("{Enter}");
   expect(card.querySelector("details")!.open).toBe(true);
   await userEvent.keyboard("{Escape}");
