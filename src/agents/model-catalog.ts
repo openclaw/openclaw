@@ -67,9 +67,9 @@ export function resetModelCatalogBuilderCacheForTest() {
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelCatalogTestApi")] = {
+  Reflect.set(globalThis, Symbol.for("openclaw.modelCatalogTestApi"), {
     resetModelCatalogBuilderCacheForTest,
-  };
+  });
 }
 
 function normalizeCatalogEntryContract(entry: ModelCatalogEntry): ModelCatalogEntry {
