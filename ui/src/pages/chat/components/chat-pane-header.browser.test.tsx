@@ -1,6 +1,7 @@
 import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
+import "../../../components/web-awesome.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import {
@@ -157,9 +158,20 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     it.each([320, 693])(
       "keeps a running batch and all controls inside a %ipx header",
       async (width) => {
+        await page.viewport(width, 800);
+        const onTerminal = vi.fn();
         const { container } = mountChatPaneHeader(containers, {
           narrow: true,
           runningSubagentCount: 12,
+          panelMenuActions: [
+            {
+              id: "terminal",
+              label: "Toggle terminal",
+              icon: html``,
+              shortcut: KEYBOARD_SHORTCUT_COMBOS.terminalPanel,
+              onActivate: onTerminal,
+            },
+          ],
           detailsControl: html`<openclaw-chat-details .presented=${true}></openclaw-chat-details>`,
           sidebarLayout: { columns: [] },
           onLayoutChange: vi.fn(),
@@ -196,6 +208,17 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         expect(container.querySelector(".chat-pane__subagents-running")?.textContent).toContain(
           "Subagents · 12 running",
         );
+        const scope = {
+          container,
+          click: (element: HTMLElement) => page.elementLocator(element).click(),
+        };
+        const menu = await openChatLayoutMenu(scope);
+        const shortcut = menu.querySelector<HTMLElement>("kbd")!;
+        expect(shortcut.checkVisibility()).toBe(false);
+        const surface = menu.shadowRoot!.querySelector<HTMLElement>("[role=menu]")!;
+        expect(surface.getBoundingClientRect().width).toBeLessThanOrEqual(264);
+        await selectChatLayoutAction(scope, "Toggle terminal");
+        expect(onTerminal).toHaveBeenCalledOnce();
       },
     );
 

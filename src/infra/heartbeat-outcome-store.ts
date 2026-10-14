@@ -12,8 +12,8 @@ import {
   withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import { withOpenClawAgentDatabaseRuntime } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
@@ -180,10 +180,7 @@ async function runHeartbeatOutcomeOperation(
                 { type: "session.heartbeat.claim", input: command.input },
                 selectedAuthority,
               );
-        if (result.kind === "rolled-back") {
-          throw new Error(result.error.message);
-        }
-        return result.value;
+        return readSessionActorStorageResult(result);
       },
     );
   }
@@ -200,30 +197,22 @@ async function runHeartbeatOutcomeOperation(
   try {
     return await runOpenClawAgentWriteAdmission(
       options,
-      () =>
-        withOpenClawAgentDatabaseRuntime(
+      async () => {
+        const worker = await openOpenClawAgentSqliteWorkerStore<HeartbeatOutcomeWorkerOperations>(
           options,
-          async ({ db }) => {
-            assertQueuedCurrent();
-            const worker =
-              await openOpenClawAgentSqliteWorkerStore<HeartbeatOutcomeWorkerOperations>(
-                options,
-                db,
-                {
-                  moduleUrl: resolveRuntimeWorkerUrl(
-                    runtimeProcessEntrypoints.heartbeatOutcomeStore,
-                  ),
-                  input: undefined,
-                },
-              );
-            try {
-              return await worker.execute(command, assertQueuedCurrent);
-            } finally {
-              await worker.close();
-            }
+          { execution },
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.heartbeatOutcomeStore),
+            input: undefined,
           },
-          assertQueuedCurrent,
-        ),
+        );
+        try {
+          // An absent database has no durable base session or outcome to claim.
+          return (await worker.executeExisting(command, assertQueuedCurrent))?.value;
+        } finally {
+          await worker.close();
+        }
+      },
       true,
     );
   } finally {

@@ -93,6 +93,53 @@ expensive. Matching database size alone does not prove production equivalence.
 Compare a small fixture and the default fixture on the same checkout and host;
 record counts, database bytes, exact revision and request shape with the timings.
 
+## Measure transcript broadcast fanout
+
+With runtime artifacts built on the authorized benchmark host, seed a fixture
+without `--launch`, then run:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --clients 60 --runs 20 --rounds 5 --chunks 500
+```
+
+The driver starts its own loopback Gateway and a credential-free SSE model
+fixture on ports 41033 and 41034. It creates one shared parent and 20 shared child
+sessions through `sessions.create`, then resets their histories through
+`sessions.reset` before each comparison. The full seeded inventory remains;
+these small sessions avoid large-history compaction and retained-run announcement
+work obscuring broadcast costs. Standard memory search is disabled and both main
+and child run concurrency match `--runs`. Every client subscribes to session-list
+events and messages for the same 20 children. Actual `agent` and `agent.wait` RPCs
+exercise the full turn and transcript publication paths;
+each synthetic model answer streams deltas paced 10 ms apart (100 by default;
+the example uses 500 to sustain overlap). Each warmup/measured cohort holds its
+primary model responses until all requested, uniquely marked turns arrive, with
+a 45-second admission timeout, then streams their answers together. Parent
+announcements and utility requests receive one short acknowledgement and are
+counted separately. A fixed 10-second post-readiness delay allows retained-run
+startup recovery to settle before setup. One concurrent round
+warms the Gateway before five measured rounds. `--port`, `--mock-port`,
+`--chunks`, `--clients`, `--runs`, and `--rounds` adjust the workload.
+Warmup and each measured round drain until no model streams remain and all
+subscriber events have been quiet for one second, with a 15-second timeout.
+
+Results under the fixture's `broadcast-measure-*` directory include Gateway
+logs, event counts, peak concurrent model streams, and CPU snapshots from the
+Gateway's private benchmark IPC preload. Main-thread CPU excludes the driver
+and model fixture. Port conflicts reject before RPCs; readiness requires the
+owned Gateway's bind-success log and live IPC. Lost clients, event-sequence gaps,
+incomplete per-client transcript/list fanout, or an incorrect primary request or
+overlap count fail the measurement. `mainThreadMsPerSessionEvent` divides by
+the validated `session.message` plus `sessions.changed` copies per client;
+other event counts remain in the report. It includes all Gateway work during the
+round, including the drain interval, so it does not isolate broadcast CPU and
+CPU per second includes that quiet interval. Compare the same event counts and
+concurrency on both revisions, and report the actual database size. For a roughly 5 GiB fixture, seed with
+`--transcript-mib 1500` rather than the 64 MiB logical-text default. The driver
+stops its Gateway and model fixture on completion or interruption and retains
+synthetic state for inspection. Never target a running Gateway's state.
+
 To start an existing fixture without regenerating it, set `HOME` and
 `OPENCLAW_HOME` to `<state-dir>/home`, `OPENCLAW_STATE_DIR` to `<state-dir>`,
 `OPENCLAW_CONFIG_PATH` to `<state-dir>/openclaw.json`, and `TMPDIR` to

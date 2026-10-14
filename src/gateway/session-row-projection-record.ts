@@ -175,10 +175,9 @@ export type Query = {
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
-export type SnapshotOptions = Pick<
-  Inputs,
-  "now" | "includeDerivedTitles" | "includeLastMessage" | "excludedChildKeys"
-> & {
+export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
   active?: boolean;
   subagentRuns?: SessionListRowContext["subagentRuns"];
   preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;

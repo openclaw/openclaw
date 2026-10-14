@@ -47,8 +47,7 @@ import {
 import { resolveSessionPatchTargetError } from "./sessions-patch-expectations.js";
 import {
   resolveProtectedSessionVisibilityError,
-  resolveSessionWorkerPlacementPatchError,
-  prepareSessionWorkerPlacementPatchError,
+  prepareSessionWorkerPlacementPatchValidation,
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -254,19 +253,6 @@ async function prepareSessionPatchArchiveFromSource(
     if (protectedError) {
       return err(protectedError);
     }
-    const placementError = resolveSessionWorkerPlacementPatchError({
-      agentId: selected.agentId,
-      cfg,
-      context: params.context,
-      entry,
-      key: target.key,
-      patch: target.fullPatch,
-      sessionKey: canonicalKey,
-      validateModelRuntime: false,
-    });
-    if (placementError) {
-      return err(errorShape(ErrorCodes.INVALID_REQUEST, placementError));
-    }
     return ok(entry);
   };
   const resolved = resolveCurrent();
@@ -275,17 +261,6 @@ async function prepareSessionPatchArchiveFromSource(
   }
   const entry = resolved.value;
   const planningEntry = selected.store[canonicalKey];
-  const assertCurrent = () => {
-    params.personalModelSelection?.assertCurrent();
-    const authorizationError = params.commitGuard();
-    if (authorizationError) {
-      throw new SessionMutationAuthorizationChangedError(authorizationError);
-    }
-    const current = resolveCurrent();
-    if (!current.ok) {
-      throw new SessionMutationAuthorizationChangedError(current.error);
-    }
-  };
   const candidateKeys = new Set(selected.storeKeys);
   const preview = await projectSessionsPatchEntry({
     cfg,
@@ -304,7 +279,7 @@ async function prepareSessionPatchArchiveFromSource(
   if (!preview.ok) {
     return err(preview.error);
   }
-  const previewPlacementError = await prepareSessionWorkerPlacementPatchError({
+  const placementValidation = await prepareSessionWorkerPlacementPatchValidation({
     agentId: selected.agentId,
     cfg,
     context: params.context,
@@ -314,9 +289,24 @@ async function prepareSessionPatchArchiveFromSource(
     sessionKey: canonicalKey,
     validateModelRuntime: true,
   });
-  if (previewPlacementError) {
-    return err(errorShape(ErrorCodes.INVALID_REQUEST, previewPlacementError));
-  }
+  const assertCurrent = () => {
+    params.personalModelSelection?.assertCurrent();
+    const authorizationError = params.commitGuard();
+    if (authorizationError) {
+      throw new SessionMutationAuthorizationChangedError(authorizationError);
+    }
+    const placementError = placementValidation.validate();
+    if (placementError) {
+      throw new SessionMutationAuthorizationChangedError(
+        errorShape(ErrorCodes.INVALID_REQUEST, placementError),
+      );
+    }
+    const current = resolveCurrent();
+    if (!current.ok) {
+      throw new SessionMutationAuthorizationChangedError(current.error);
+    }
+  };
+  let transferred = false;
   try {
     const drain = await prepareSessionLifecycleDrain({
       action: "archive",
@@ -350,9 +340,19 @@ async function prepareSessionPatchArchiveFromSource(
         Boolean(identity),
       ),
     });
+    transferred = true;
     return ok({
       canonicalKey,
-      drain,
+      drain: {
+        ...drain,
+        release: () => {
+          try {
+            drain.release();
+          } finally {
+            placementValidation.release();
+          }
+        },
+      },
       ...(planningEntry ? { entry: planningEntry } : {}),
     });
   } catch (error) {
@@ -381,6 +381,10 @@ async function prepareSessionPatchArchiveFromSource(
       `sessions.patch: archive drain failed for ${target.canonicalKey}: ${formatErrorMessage(error)}`,
     );
     return err(archiveUnavailableError(target.key, "stopping"));
+  } finally {
+    if (!transferred) {
+      placementValidation.release();
+    }
   }
 }
 

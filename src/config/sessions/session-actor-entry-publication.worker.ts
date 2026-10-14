@@ -31,6 +31,7 @@ type ParticipantOwner = {
   prepare: (
     database: ParticipantDatabase,
     sessionKey: string,
+    singleStatement?: boolean,
   ) => ((participants: SessionParticipantRecord[]) => void) | undefined;
 };
 const participantOwners = new WeakMap<DatabaseSync, ParticipantOwner>();
@@ -58,8 +59,9 @@ export function readSessionActorParticipants(
 export function prepareSessionActorParticipantUpdate(
   database: ParticipantDatabase,
   sessionKey: string,
+  singleStatement = false,
 ) {
-  return participantOwners.get(database.db)?.prepare(database, sessionKey);
+  return participantOwners.get(database.db)?.prepare(database, sessionKey, singleStatement);
 }
 
 export function registerSessionActorEntryPatchOwner(

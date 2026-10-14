@@ -13,6 +13,8 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { publishAgentDeletionWorkAdmission } from "../sessions/session-agent-work-admission.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import {
   captureAgentDatabasePreparationDeletionForIdentity,
   readAgentDatabaseAdmissionRefusal,
@@ -67,6 +69,7 @@ import {
   captureOpenClawStateReadWorkerContext,
   captureOpenClawStateWorkerContext,
 } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -84,6 +87,10 @@ export {
 export { claimCompletedAgentDeletion } from "./agent-deletion-claim.js";
 
 const log = createSubsystemLogger("agents/lifecycle");
+const deletionQueues = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentDeletionQueues"),
+  () => new Map<string, StoreWriterQueue>(),
+);
 
 export type AgentLifecycleBinding = Readonly<{
   agentId: string;
@@ -114,19 +121,20 @@ export type AgentDeletionOperation = AgentDeletionWorkerAuthority & {
   rollback(): Promise<void>;
 };
 
+type AgentDeletionCallback<T> = (
+  begin: (
+    entry: AgentDeletionInput,
+    options?: AgentDeletionBeginOptions,
+  ) => Promise<AgentDeletionOperation>,
+) => Promise<T>;
+
 /** Acquire before the config lock and retain ownership through cleanup and recovery. */
 export function withAgentDeletion<T>(
   agentId: string,
-  run: (
-    begin: (
-      entry: AgentDeletionInput,
-      options?: AgentDeletionBeginOptions,
-    ) => Promise<AgentDeletionOperation>,
-  ) => Promise<T>,
+  run: AgentDeletionCallback<T>,
   options: OpenClawStateDatabaseOptions & { journalTransport?: AgentDeletionJournalTransport } = {},
 ): Promise<T> {
   const id = normalizeAgentId(agentId);
-  const journalTransport = options.journalTransport;
   if (isReservedSystemAgentId(id)) {
     throw new Error(
       `System agent ${id} cannot be deleted; run openclaw doctor --fix to quarantine invalid deletion history.`,
@@ -142,6 +150,23 @@ export function withAgentDeletion<T>(
     path: statePath,
     env: { ...(options.env ?? process.env) },
   });
+  // Same-process duplicates wait for complete cleanup without polling their own lease.
+  return runQueuedStoreWrite({
+    queues: deletionQueues,
+    storePath: context.admission.identity.key,
+    keys: [id],
+    label: "agent deletion",
+    fn: () => runAgentDeletionWithLease(id, run, options.journalTransport, statePath, context),
+  });
+}
+
+function runAgentDeletionWithLease<T>(
+  id: string,
+  run: AgentDeletionCallback<T>,
+  journalTransport: AgentDeletionJournalTransport | undefined,
+  statePath: string,
+  context: OpenClawStateWorkerContext,
+): Promise<T> {
   return withOpenClawStateLeaseAsync(
     {
       scope: "core:agent-deletion",

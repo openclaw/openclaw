@@ -205,7 +205,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
   target: GatewaySessionStoreTarget;
   entry: InternalSessionEntry;
   authorizedPluginId?: string;
-  commitGuard?: () => void;
+  commitGuard?: (current?: InternalSessionEntry) => void;
   workerPlacementContext: SessionWorkerPlacementContext;
 }): Promise<InternalSessionEntry | undefined> {
   const { entry: initialSource, target } = params;
@@ -230,9 +230,9 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
         sessionId: initialSource.sessionId,
       });
       const assertCurrent = () => {
-        params.commitGuard?.();
         assertPlacementCurrent();
         const current = source.current();
+        params.commitGuard?.(current);
         const ownershipError = resolvePluginSessionOwnershipError({
           action: "recover",
           entry: current,

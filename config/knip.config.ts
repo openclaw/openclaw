@@ -126,6 +126,10 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
+  // Muse Docker shells invoke auth directly and select deterministic/live by mode.
+  "scripts/e2e/lib/muse-runtime/auth.mjs!",
+  "scripts/e2e/lib/muse-runtime/deterministic.mjs!",
+  "scripts/e2e/lib/muse-runtime/live.mjs!",
   // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
   "scripts/e2e/lib/node-auto-update/scenario.mjs!",
   // Installed-package authority proof runs by path and injects its worker preload via NODE_OPTIONS.
@@ -879,6 +883,8 @@ const config = {
       ignoreBinaries: [
         "lsattr",
         "mint",
+        // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).
+        "muse",
         "ngrok",
         "open",
         "openclaw",

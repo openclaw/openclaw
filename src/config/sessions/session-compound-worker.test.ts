@@ -4,7 +4,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { createChatSendGoalCommitGuard } from "../../gateway/server-methods/chat-send-work-admission.js";
-import { loadSessionEntry as loadGatewaySessionEntry } from "../../gateway/session-utils.js";
+import { loadSessionEntryAsync as loadGatewaySessionEntryAsync } from "../../gateway/session-entry-load.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -855,7 +855,7 @@ it.each(["commit", "captured-root", "native-replay"])(
         setRuntimeConfigSnapshot(config);
       }
       const key = "agent:main:compound-goal-guard";
-      const target = loadGatewaySessionEntry(key, { agentId: "main" });
+      const target = await loadGatewaySessionEntryAsync(key, { agentId: "main" });
       const initialSessionEntry = { sessionId: "guarded-first-goal", updatedAt: Date.now() };
       const guard = createChatSendGoalCommitGuard({
         client: null,
@@ -935,9 +935,9 @@ it.each(["commit", "captured-root", "native-replay"])(
             },
             { ...initialSessionEntry, sessionId: "competing-goal-session" },
           );
-          expect(() => loadGatewaySessionEntry(key, { agentId: "main" }, target.cfg)).toThrow(
-            /duplicate/i,
-          );
+          await expect(
+            loadGatewaySessionEntryAsync(key, { agentId: "main" }, target.cfg),
+          ).rejects.toThrow(/duplicate/i);
           await expect(
             appendExpectedSessionTranscriptTurn(scope, {
               ...options,

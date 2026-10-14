@@ -16,7 +16,7 @@ import { identifiedClient } from "./server-methods/sessions-read-cache.test-supp
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 
 afterEach(() => memorySessionActorOwners.reset());
 
@@ -54,7 +54,7 @@ it("reads a private parent once despite multiple durable store candidates", asyn
       { agentId: "work", sessionKey: key },
       { sessionId: "private-child", updatedAt: 2, incognito: true, parentSessionKey: parent },
     );
-    const selected = resolveGatewaySessionStoreTargetWithStore({
+    const selected = await resolveGatewaySessionStoreTargetWithStoreAsync({
       cfg,
       key,
       agentId: "work",

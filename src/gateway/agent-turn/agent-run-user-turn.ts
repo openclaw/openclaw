@@ -287,6 +287,7 @@ export async function prepareAgentRunUserTurn(params: {
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: async () => {
+          params.assertCurrent();
           const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
             cfg: params.cfgForAgent ?? params.cfg,
             key: params.resolvedSessionKey!,
@@ -294,6 +295,7 @@ export async function prepareAgentRunUserTurn(params: {
             assertActive: params.assertCurrent,
             excludeInternalEffects: true,
           });
+          params.assertCurrent();
           const latestEntry = loaded.entry;
           const loadedSessionId = latestEntry?.sessionId?.trim();
           // Session creation is persisted before this phase. No matching entry

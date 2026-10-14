@@ -60,15 +60,12 @@ function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
     !value.subagent.childSessionKey ||
     typeof value.subagent.requesterSessionKey !== "string" ||
     !value.subagent.requesterSessionKey ||
-    typeof value.version !== "string" ||
-    !value.version ||
     (value.cleanupHandled !== undefined && typeof value.cleanupHandled !== "boolean")
   ) {
     throw new Error("Subagent completion acknowledgment has an invalid native record");
   }
   return {
     subagent: value.subagent,
-    version: value.version,
     cleanupHandled: value.cleanupHandled,
   };
 }
@@ -236,7 +233,6 @@ export async function admitSubagentCompletionDelivery(params: {
             subagent,
           },
           postimages: new Map([[params.runId, subagent]]),
-          versions: new Map([[params.runId, receipt.record.version]]),
         };
       },
     },
@@ -371,10 +367,6 @@ async function mutateCompletion(
             receiptRetentionFailure,
           },
           postimages,
-          versions: new Map([
-            ...receipt.records.map(({ subagent, version }) => [subagent.runId, version] as const),
-            ...receipt.retiredRunIds.map((runId) => [runId, null] as const),
-          ]),
         };
       },
     },

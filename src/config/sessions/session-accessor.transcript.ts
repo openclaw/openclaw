@@ -62,7 +62,6 @@ export {
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,
   withTranscriptWriteSequence,
-  withTranscriptWriteTransaction,
 } from "./session-accessor.sqlite-transcript-write.js";
 
 export { emitSessionTranscriptUpdate as emitTranscriptUpdate } from "../../sessions/transcript-events.js";

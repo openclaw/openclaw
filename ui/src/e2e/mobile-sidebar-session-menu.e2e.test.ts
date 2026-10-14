@@ -187,6 +187,14 @@ suite.define(() => {
               sessionBox!.x + sessionBox!.width,
             );
             expect(menuBox!.width).toBe(44);
+            const sessionTitle = await session
+              .locator(".sidebar-recent-session__name")
+              .boundingBox();
+            expect(sessionTitle).not.toBeNull();
+            expect(sessionTitle!.x + sessionTitle!.width).toBeLessThanOrEqual(menuBox!.x);
+            expect(menuBox!.y).toBeLessThanOrEqual(sessionTitle!.y + sessionTitle!.height);
+            expect(menuBox!.y + menuBox!.height).toBeGreaterThanOrEqual(sessionTitle!.y);
+            expect(sessionBox!.height).toBeCloseTo(44, 1);
             for (const colored of [session, group.locator(".sidebar-recent-session")]) {
               const clearance = await colored.evaluate((row) => {
                 const stripe = getComputedStyle(row, "::before");
@@ -242,8 +250,14 @@ suite.define(() => {
               category: "Research",
               lastMessagePreview: "Keep this second line visible during navigation",
             }),
-            sessionRow(plainKey, "Investigate mobile sidebar title readability", 1),
-            sessionRow(privateKey, "Private planning and follow-up tasks", 0, { incognito: true }),
+            sessionRow(plainKey, "Investigate mobile sidebar title readability", 1, {
+              category: "Research",
+              color: "blue",
+            }),
+            sessionRow(privateKey, "Private planning and follow-up tasks", 0, {
+              category: "Research",
+              incognito: true,
+            }),
           ]),
         },
         sessionGroups: [
@@ -273,6 +287,7 @@ suite.define(() => {
         const title = row.locator(".sidebar-recent-session__name");
         const titleWidth = () => title.evaluate((element) => element.getBoundingClientRect().width);
         const restingWidth = await titleWidth();
+        await page.mouse.move(389, 649);
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const frame = await takeControlUiScreenshotFrame(
             page,
@@ -293,8 +308,8 @@ suite.define(() => {
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
         expect(drawerBox?.width).toBeLessThanOrEqual(336);
-        // Desktop-sized glyph spacing keeps the color stripe clear without losing the menu.
-        expect(restingWidth).toBeGreaterThanOrEqual(230);
+        // Reserve one 44px menu target without starving the title beside the rail.
+        expect(restingWidth).toBeGreaterThanOrEqual(180);
         const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
         const plainTitle = plainRow.locator(".sidebar-recent-session__name");
         await plainTitle.waitFor({ state: "visible" });
@@ -325,8 +340,18 @@ suite.define(() => {
         expect(buttonBox.width).toBeCloseTo(44, 4);
         expect(buttonBox.height).toBeCloseTo(44, 4);
         expect(titleBox.x).toBeGreaterThanOrEqual(rowBox.x);
-        expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
-        expect(titleBox.y + titleBox.height).toBeLessThanOrEqual(buttonBox.y);
+        expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(buttonBox.x);
+        expect(buttonBox.y).toBeLessThanOrEqual(titleBox.y + titleBox.height);
+        expect(buttonBox.y + buttonBox.height).toBeGreaterThanOrEqual(titleBox.y);
+        // Empty metadata must not reserve a second row just for the menu.
+        expect((await plainRow.boundingBox())!.height).toBeCloseTo(44, 1);
+        expect(
+          await plainTitle.evaluate((element) => ({
+            clipped: element.scrollWidth > element.clientWidth,
+            overflow: getComputedStyle(element).textOverflow,
+            mask: getComputedStyle(element).maskImage,
+          })),
+        ).toEqual({ clipped: true, overflow: "ellipsis", mask: "none" });
         expect(buttonBox.y).toBeGreaterThanOrEqual(rowBox.y);
         expect(buttonBox.y + buttonBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
         if (pointer === "coarse") {

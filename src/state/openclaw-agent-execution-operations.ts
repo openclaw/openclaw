@@ -204,12 +204,13 @@ export async function loadAgentTranscriptReadOperations() {
 }
 
 export async function loadAgentReplacementOperations() {
-  const [kernel, { sealSessionEntryPublicationSource }, nativeBindings, transfers] =
+  const [kernel, { sealSessionEntryPublicationSource }, nativeBindings, transfers, predicates] =
     await Promise.all([
       import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
       import("../config/sessions/session-entry-publication-source.js"),
       import("../config/sessions/session-native-binding.worker.js"),
       import("../config/sessions/session-entry-patch.worker.js"),
+      import("../config/sessions/session-source-predicate.worker.js"),
     ]);
   return {
     "session.entries.replace": (
@@ -221,8 +222,22 @@ export async function loadAgentReplacementOperations() {
         const result = kernel.commitSessionEntryReplacementsInDatabase(
           current,
           input,
-          () =>
-            initializeReplacementTranscript(current, context.options, input.initializeTranscript),
+          () => {
+            if (input.sources?.length) {
+              const sourceValidation = predicates.readSessionSourceValidation(
+                current,
+                input.sources,
+              );
+              context.admit("transaction", {
+                kind: "session-entry-replacements-validated",
+                sourceValidation,
+              });
+              if (sourceValidation.refusedSource) {
+                throw new Error("Session source refusal was not rejected");
+              }
+            }
+            initializeReplacementTranscript(current, context.options, input.initializeTranscript);
+          },
           undefined,
           undefined,
           postimages,

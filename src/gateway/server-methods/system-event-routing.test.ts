@@ -26,7 +26,7 @@ vi.mock("../../infra/heartbeat-wake.js", async (importOriginal) => ({
 
 vi.mock("../session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils.js")>()),
-  loadGatewaySessionEntryReadOnly: mocks.loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnlyAsync: mocks.loadGatewaySessionEntryReadOnly,
 }));
 
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({

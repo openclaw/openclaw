@@ -54,6 +54,54 @@ describe("memory manager agent database lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it("joins the admitted publication worker when manager construction fails", async () => {
+    const failure = new Error("background context unavailable");
+    const workerEntered = createDeferred<void>();
+    const workerGate = createDeferred<void>();
+    let admitted: MemoryIndexDatabase | undefined;
+    const openPublished = MemoryIndexDatabase.openPublished.bind(MemoryIndexDatabase);
+    vi.spyOn(MemoryIndexDatabase, "openPublished").mockImplementation(async (...args) => {
+      admitted = await openPublished(...args);
+      const closeWorker = admitted.closePublicationWorker.bind(admitted);
+      vi.spyOn(admitted, "closePublicationWorker").mockImplementation(async () => {
+        workerEntered.resolve();
+        await workerGate.promise;
+        await closeWorker();
+      });
+      return admitted;
+    });
+    let settled = false;
+    const outcome = MemoryIndexManager.get({
+      cfg: createConfig(),
+      agentId: "main",
+      runInBackgroundContext: () => {
+        throw failure;
+      },
+    }).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await Promise.race([workerEntered.promise, outcome]);
+      expect(settled).toBe(false);
+      expect(admitted?.isOpen).toBe(true);
+    } finally {
+      workerGate.resolve();
+      await outcome;
+    }
+    expect(await outcome).toBe(failure);
+    expect(admitted?.isOpen).toBe(false);
+    const replacement = await fixture.getFreshManager(createConfig());
+    await replacement.sync({ reason: "test", force: true });
+    expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
+  });
+
   it("isolates manager readers across settings replacement and keeps the shared writer alive", async () => {
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
     const first = await fixture.getFreshManager(createConfig());

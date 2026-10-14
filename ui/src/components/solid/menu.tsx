@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { For, Show, createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
@@ -12,6 +12,7 @@ export type MenuItem = {
   kind?: "item";
   id: string;
   label: string;
+  href?: string;
   attributes?: JSX.ButtonHTMLAttributes<HTMLButtonElement> & {
     [name: `data-${string}`]: string | number | boolean | undefined;
   };
@@ -311,64 +312,70 @@ export function Menu(props: BranchProps): JSX.Element {
             };
             return (
               <Show when={actionable()} fallback={content()}>
-                {(item) => (
-                  <Show
-                    when={item().children}
-                    fallback={
-                      <button
-                        {...item().attributes}
-                        {...binding.item(
-                          item().id,
-                          item().disabled,
-                          item().type,
-                          item().checked,
-                          item().label,
-                        )}
-                        type="button"
-                        class={["oc-menu-item", item().class]}
-                        data-value={item().id}
-                        data-variant={item().variant}
-                        role={itemRole(item().type)}
-                        aria-label={item().label}
-                        aria-checked={item().type ? (item().checked ? "true" : "false") : undefined}
-                        aria-disabled={item().disabled ? "true" : undefined}
-                        disabled={item().disabled}
-                      >
-                        <Show when={item().type}>
-                          <span class="oc-menu-item__check" aria-hidden="true">
-                            {item().checked ? "✓" : ""}
-                          </span>
-                        </Show>
-                        <Show when={item().icon}>
-                          <span class="oc-menu-item__icon">{item().icon}</span>
-                        </Show>
-                        <span class="oc-menu-item__label">{item().content ?? item().label}</span>
-                        <Show when={item().details}>
-                          <span class="oc-menu-item__details">{item().details}</span>
-                        </Show>
-                      </button>
-                    }
-                  >
-                    {(children) => (
-                      <Menu
-                        id={`${identity.id}-${item().id}`}
-                        label={item().label}
-                        items={children()}
-                        trigger={item().label}
-                        parent={overlay}
-                        root={menuRoot}
-                        parentBinding={binding}
-                        tabFocusTarget={props.tabFocusTarget}
-                        dir={direction()}
-                        disabled={item().disabled}
-                        triggerClass={item().class}
-                        onSelect={props.onSelect}
-                      >
-                        {item().content}
-                      </Menu>
-                    )}
-                  </Show>
-                )}
+                {(item) => {
+                  const Item = dynamic(() => (item().href === undefined ? "button" : "a"));
+                  return (
+                    <Show
+                      when={item().children}
+                      fallback={
+                        <Item
+                          {...item().attributes}
+                          {...binding.item(
+                            item().id,
+                            item().disabled,
+                            item().type,
+                            item().checked,
+                            item().label,
+                          )}
+                          type={item().href === undefined ? "button" : undefined}
+                          href={item().disabled ? undefined : item().href}
+                          class={["oc-menu-item", item().class]}
+                          data-value={item().id}
+                          data-variant={item().variant}
+                          role={itemRole(item().type)}
+                          aria-label={item().label}
+                          aria-checked={
+                            item().type ? (item().checked ? "true" : "false") : undefined
+                          }
+                          aria-disabled={item().disabled ? "true" : undefined}
+                          disabled={item().href === undefined ? item().disabled : undefined}
+                        >
+                          <Show when={item().type}>
+                            <span class="oc-menu-item__check" aria-hidden="true">
+                              {item().checked ? "✓" : ""}
+                            </span>
+                          </Show>
+                          <Show when={item().icon}>
+                            <span class="oc-menu-item__icon">{item().icon}</span>
+                          </Show>
+                          <span class="oc-menu-item__label">{item().content ?? item().label}</span>
+                          <Show when={item().details}>
+                            <span class="oc-menu-item__details">{item().details}</span>
+                          </Show>
+                        </Item>
+                      }
+                    >
+                      {(children) => (
+                        <Menu
+                          id={`${identity.id}-${item().id}`}
+                          label={item().label}
+                          items={children()}
+                          trigger={item().label}
+                          parent={overlay}
+                          root={menuRoot}
+                          parentBinding={binding}
+                          tabFocusTarget={props.tabFocusTarget}
+                          dir={direction()}
+                          disabled={item().disabled}
+                          triggerClass={item().class}
+                          onSelect={props.onSelect}
+                        >
+                          {item().content}
+                        </Menu>
+                      )}
+                    </Show>
+                  );
+                }}
               </Show>
             );
           }}

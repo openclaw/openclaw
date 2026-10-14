@@ -11,7 +11,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
-import { resolveSessionSharingTarget } from "./session-sharing-policy.js";
+import { resolveSessionSharingTargetAsync } from "./session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
@@ -101,12 +101,12 @@ it("prepares unbound sharing facts and observes committed creation and membershi
     );
     expect(prepared.facts.readCurrent(cfg).membership).toEqual(new Set());
     expect(prepared.source.members).toEqual([]);
-    runWithSessionActorStorage(binding, () => {
-      expect(resolveSessionSharingTarget({ cfg, sessionKey })?.entry.sessionId).toBe(
+    await runWithSessionActorStorage(binding, async () => {
+      expect((await resolveSessionSharingTargetAsync({ cfg, sessionKey }))?.entry.sessionId).toBe(
         "memory-sharing",
       );
-      expect(() =>
-        resolveSessionSharingTarget({
+      await expect(
+        resolveSessionSharingTargetAsync({
           cfg: {
             ...cfg,
             session: {
@@ -115,7 +115,7 @@ it("prepares unbound sharing facts and observes committed creation and membershi
           },
           sessionKey,
         }),
-      ).toThrow("another state root");
+      ).rejects.toThrow("another state root");
     });
     owner.closeSession(sessionKey);
     expect(prepared.facts.readCurrent(cfg).target).toBeNull();

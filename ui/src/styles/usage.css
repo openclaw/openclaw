@@ -550,7 +550,7 @@
   background: var(--bg-elevated);
 }
 
-.usage-export-menu::part(menu) {
+.usage-export-menu > .oc-menu {
   min-width: 220px;
   max-width: min(320px, calc(100vw - 48px));
   padding: var(--menu-padding);

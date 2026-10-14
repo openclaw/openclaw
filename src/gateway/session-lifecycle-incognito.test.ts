@@ -20,7 +20,7 @@ import { createGatewaySession } from "./session-create-service.js";
 import { performGatewaySessionReset } from "./session-reset-service.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 const cfg = { agents: { entries: { main: {} } } };
 
@@ -51,7 +51,7 @@ it.each(["reset", "delete"] as const)(
         }
         expect(getSessionActorStorageBinding({})).toBeUndefined();
         expect(
-          loadGatewaySessionEntryReadOnly(created.key, { agentId: "main" }, cfg).entry,
+          (await loadGatewaySessionEntryReadOnlyAsync(created.key, { agentId: "main" }, cfg)).entry,
         ).toMatchObject({
           incognito: true,
           sessionId: created.entry.sessionId,
@@ -82,7 +82,7 @@ it.each(["reset", "delete"] as const)(
         }
         expect(getSessionActorStorageBinding({})).toBeUndefined();
         expect(
-          loadGatewaySessionEntryReadOnly(created.key, { agentId: "main" }, cfg).entry,
+          (await loadGatewaySessionEntryReadOnlyAsync(created.key, { agentId: "main" }, cfg)).entry,
         ).toBeUndefined();
         expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       } finally {
@@ -147,7 +147,8 @@ it("creates a fresh explicit incognito key under authorization captured before i
         }),
       );
       retained.assertCurrent();
-      const created = loadGatewaySessionEntryReadOnly(key, { agentId: "main" }, cfg).entry;
+      const created = (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }, cfg))
+        .entry;
       expect(created).toMatchObject({
         incognito: true,
         displayName: params.displayName,

@@ -579,9 +579,10 @@ describe("applySessionModelSelection", () => {
           return metadata.promise;
         });
       } else {
-        placementMocks.getMany.mockImplementationOnce(() => {
+        placementMocks.prepareRuntimeRefresh.mockImplementationOnce(async () => {
           entered.resolve();
-          return new Map();
+          await metadata.promise;
+          return { placement: undefined, assertCurrent: () => {}, release: () => {} };
         });
       }
       const params = createParams({ thinkingCatalog: [] });

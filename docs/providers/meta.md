@@ -175,6 +175,13 @@ interactive shell will not help a managed service unless the env is imported
 separately.
 </Note>
 
+## Muse Code runtime
+
+By default, `meta/*` models run on the built-in OpenClaw runtime through the
+Responses API. To run them through Meta's Muse Code CLI instead, install the
+`@openclaw/muse` plugin and set `agentRuntime: { id: "muse" }` on the model or
+provider. See [Muse Code agent runtime](/plugins/muse).
+
 ## Smoke test
 
 ```bash

@@ -2,27 +2,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { normalizeSchemaSql, quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 
-type SqliteTempGenerationSchema = {
-  kind: "generation";
-  functionName: string;
-  triggers: readonly {
-    name: string;
-    table: string;
-    operation: "INSERT" | "UPDATE" | "DELETE";
-    enabled: boolean;
-  }[];
-};
-
-type SqliteTempTranscriptIndexSchema = {
+export type SqliteTempTrackingSchema = {
   kind: "transcript-index";
   statusTable: string;
   pendingTable: string;
   pendingIndex: string;
   observedTables: readonly string[];
 };
-
-/** Fixed connection-local mutation callbacks or transcript queues. */
-export type SqliteTempTrackingSchema = SqliteTempGenerationSchema | SqliteTempTranscriptIndexSchema;
 
 type SqliteTempObject = {
   name: string;
@@ -35,10 +21,7 @@ export function prepareSqliteTempTrackingSchema(
   database: DatabaseSync,
   schema: SqliteTempTrackingSchema,
 ): { sql: string; unexpected: boolean } {
-  const { sql, objects } =
-    schema.kind === "generation"
-      ? prepareGenerationSchema(schema)
-      : prepareTranscriptIndexSchema(schema);
+  const { sql, objects } = prepareTranscriptIndexSchema(schema);
   const definitions = new Map(objects.map((object) => [object.name.toLowerCase(), object]));
   const names = objects.map((object) => object.name);
   const tableNames = objects
@@ -68,35 +51,7 @@ export function prepareSqliteTempTrackingSchema(
   return { sql, unexpected };
 }
 
-function prepareGenerationSchema(schema: SqliteTempGenerationSchema): {
-  sql: string;
-  objects: SqliteTempObject[];
-} {
-  const increment = `SELECT ${quoteSqliteIdentifier(schema.functionName)}();`;
-  const triggers = schema.triggers.map((trigger) => ({
-    ...trigger,
-    definition: `TRIGGER ${quoteSqliteIdentifier(trigger.name)} AFTER ${trigger.operation} ON main.${quoteSqliteIdentifier(trigger.table)} BEGIN ${increment} END`,
-  }));
-  const sql = `
-    ${triggers
-      .map(({ name, definition, enabled }) => {
-        const trigger = quoteSqliteIdentifier(name);
-        return `DROP TRIGGER IF EXISTS temp.${trigger};${enabled ? `CREATE TEMP ${definition};` : ""}`;
-      })
-      .join("\n")}
-  `;
-  return {
-    sql,
-    objects: triggers.map((trigger): SqliteTempObject => ({
-      name: trigger.name,
-      type: "trigger",
-      table: trigger.table,
-      sql: `CREATE ${trigger.definition}`,
-    })),
-  };
-}
-
-function prepareTranscriptIndexSchema(schema: SqliteTempTranscriptIndexSchema): {
+function prepareTranscriptIndexSchema(schema: SqliteTempTrackingSchema): {
   sql: string;
   objects: SqliteTempObject[];
 } {

@@ -263,7 +263,7 @@ export async function prepareGatewayClose(
       typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
         ? Math.max(0, Math.floor(opts.drainTimeoutMs))
         : 0;
-    await measureCloseStep("reply-drain", () =>
+    const admissions = await measureCloseStep("reply-drain", () =>
       prepareGatewayRunShutdown({
         ...params,
         restart,
@@ -271,6 +271,13 @@ export async function prepareGatewayClose(
         warnings,
       }),
     );
+    const admissionSettlement = cleanupWork.track(() =>
+      measureCloseStep("session-admissions", () => admissions.released),
+    );
+    void admissionSettlement.catch((error: unknown) => {
+      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
+      recordShutdownWarning(warnings, "session-admissions");
+    });
     // Cancel code cells before received work joins their pending bridge calls.
     await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
     // ACPX owns agent-process cleanup; memory retirement must not overtake its drain.

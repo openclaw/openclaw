@@ -33,13 +33,12 @@ import { authenticatedProfileUnavailableError } from "./server-methods/gateway-c
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
 import {
   createProfileSessionEntryFilter,
   isSessionVisibilityAllowed,
   prepareSessionSharing,
-  resolveSessionSharingTargetAsync,
-  resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "./session-sharing.js";
 
@@ -73,6 +72,7 @@ export function humanMentionDisplayLabel(label: string | undefined, profileId: s
 export function createHumanMentionPolicy(params: {
   getRuntimeConfig: () => OpenClawConfig;
   getClients: () => Iterable<GatewayClient>;
+  readSessionTarget: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
 }) {
   let active = true;
   let profileVersion = -1;
@@ -200,7 +200,7 @@ export function createHumanMentionPolicy(params: {
     client: GatewayClient | null,
     input: UsersMentionableParams,
     cfg: OpenClawConfig,
-    prepared?: { readTarget: () => Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
+    prepared?: { readTarget: () => SessionSharingTarget | null },
   ): Result<{ target: MentionTarget; profile: MentionProfile }, ErrorShape> {
     const identified = identify(client, cfg);
     if (!identified.ok) {
@@ -214,11 +214,7 @@ export function createHumanMentionPolicy(params: {
       }
       const resolved = prepared
         ? prepared.readTarget()
-        : resolveSessionSharingTarget({
-            cfg,
-            sessionKey: input.sessionKey,
-            agentId: agent.agentId,
-          });
+        : params.readSessionTarget(input.sessionKey, agent.agentId);
       const target = resolved && {
         agentId: resolved.agentId,
         sessionKey: resolved.canonicalKey,
@@ -370,7 +366,7 @@ export function createHumanMentionPolicy(params: {
     mentionable(
       client: GatewayClient | null,
       input: UsersMentionableParams,
-      prepared?: { readTarget: () => Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
+      prepared?: { readTarget: () => SessionSharingTarget | null },
     ): Result<UsersMentionableResult, ErrorShape> {
       const cfg = params.getRuntimeConfig();
       const context = resolveContext(client, input, cfg, prepared);
@@ -446,7 +442,7 @@ export function createHumanMentionPolicy(params: {
       client: GatewayClient | null,
       input: UsersMentionableParams,
       profileIds: readonly string[],
-      prepared?: { readTarget: () => Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
+      prepared?: { readTarget: () => SessionSharingTarget | null },
     ): Result<readonly string[], ErrorShape> {
       if (profileIds.length === 0) {
         return ok([]);

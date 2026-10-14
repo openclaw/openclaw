@@ -2040,6 +2040,28 @@ describe("gateway hot reload model state", () => {
 
   registerGatewayCronReloadTests({ createGatewayReloadHandlers, autoCleanupTempDirs });
 
+  it("requests restart when heartbeat monitor reconciliation cannot schedule recovery", async () => {
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const handlers = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    handlers.reconcileSystemJobs.mockRejectedValueOnce(new Error("cron retry scheduling failed"));
+    try {
+      await expect(
+        handlers.applyHotReload(buildGatewayReloadPlan(["agents.defaults.heartbeat.every"]), {
+          agents: { defaults: { heartbeat: { every: "2h" } } },
+        }),
+      ).resolves.toBe("applied-restart-required");
+      expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+    } finally {
+      handlers.stopRestartRetries();
+    }
+  });
+
   it("rejects an ownerless heartbeat update failure before runtime commit", async () => {
     const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
     const { applyHotReload, heartbeatRunner, setState } = createReloadHandlersForTest(

@@ -11,6 +11,7 @@ import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../../infra/sqlite-schema-facts.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -187,7 +188,9 @@ export function readAuthProfileRowsReadOnly(
     closeAuthProfileReadDatabase(databasePath);
     return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
   } finally {
-    if (!keepReader) {
+    if (isArtifactPreservingStateRead("agent", databasePath)) {
+      acquired.db.close();
+    } else if (!keepReader) {
       closeAuthProfileReadDatabase(databasePath);
     }
   }

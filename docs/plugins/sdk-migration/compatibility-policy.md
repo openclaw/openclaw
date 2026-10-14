@@ -552,10 +552,12 @@ contracts consumed by official harness packages released with OpenClaw 2026.9.8.
 callbacks. Their supplied assertion continues to check durable session lineage
 after an awaited operation.
 
-Current harness code awaits `prepareNativeSessionGenerationAuthority`,
-`resolveNativeSessionBindingWithAuthorityV2`, or
+Current harness code awaits `retainNativeSessionGenerationAuthority`,
+`resolvePreparedNativeSessionBinding`, or
 `reclaimNativeSessionGenerationWithAuthority`. The resolver returns
-`{ binding, authority }` and awaits its `readBinding` callback.
+`{ binding, authority, release }` and awaits its `readBinding` callback. Release
+the capture after final effects and terminal cleanup; borrowed authorities do
+not extend its lifetime.
 `NativeSessionGenerationOperationsV2` requires each
 mutation callback to accept `(expectedPreviousSessionId, authority)` and carry
 that authority into binding storage. Use `authority.withCurrent` for synchronous
@@ -563,14 +565,12 @@ native action admission; its ordinary `assertCurrent` checks lifecycle only.
 Durable lineage reads use the session worker.
 
 `resolveNativeSessionBindingWithAuthority` is also deprecated: it retains the
-synchronous `readBinding` callback for released harnesses. Use the V2 resolver
-when binding reads use worker-owned plugin state. Its removal shares the next
-Plugin SDK major gate.
+synchronous `readBinding` callback for released harnesses. Use the prepared
+resolver when binding reads use worker-owned plugin state.
 
 These legacy methods share the bounded `native-session-binding` deprecation
-warning. They remain until the
-next Plugin SDK major, migration of supported published official harness readers,
-and explicit breaking-release approval. This preserves installed harnesses
+warning. Remove deprecated methods only after supported published official
+harness readers have migrated and the deprecation window has elapsed. This preserves installed harnesses
 across host upgrades without extending the private subpath into a public SDK.
 
 ### Model-provider result compatibility
