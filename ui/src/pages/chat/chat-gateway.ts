@@ -20,7 +20,7 @@ import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/session
 import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
 import type { ChatEventPayload } from "./chat-history.ts";
 import { withChatReasoning } from "./chat-reasoning.ts";
-import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
@@ -453,6 +453,12 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         phase: "answer",
         runId: payload.runId,
       });
+    } else if (
+      payload.runId &&
+      payload.runId === state.chatRunId &&
+      isChatRunRecoveryStatus(state.chatRunStartup)
+    ) {
+      reconcileChatRunStartup(state, { state: "activity", runId: payload.runId });
     }
     if (typeof next === "string") {
       const hidden =

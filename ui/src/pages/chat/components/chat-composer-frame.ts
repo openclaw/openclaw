@@ -84,10 +84,12 @@ export function createChatComposerContext(
   const sendingForCurrentSession =
     props.sending && (!hasSubmittedProgress || submittedProgress !== undefined);
   const runWorking = isChatRunWorking(props);
-  const composerRunStatus =
-    isSessionRunVisuallyActive(sendingForCurrentSession || runWorking, props.startupStatus?.phase)
-      ? { phase: "in-progress" as const }
-      : props.runStatus;
+  const composerRunStatus = isSessionRunVisuallyActive(
+    sendingForCurrentSession || runWorking,
+    props.startupStatus?.phase,
+  )
+    ? { phase: "in-progress" as const }
+    : props.runStatus;
   const draftKey = composerDraftKey(props);
   if (state.composerDraftScope !== null && state.composerDraftScope.key !== draftKey) {
     // A new draft owns a new input; late IME events from the retired node cannot commit into it.

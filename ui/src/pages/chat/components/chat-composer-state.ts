@@ -77,7 +77,10 @@ export function isCurrentSessionSubmittedProgress(
 
 // Shared by the thread, composer, pane activity, and header presentation.
 export function isChatRunWorking(
-  props: Pick<ChatComposerProps, "runActive" | "runStatus" | "queue" | "sessionKey" | "startupStatus">,
+  props: Pick<
+    ChatComposerProps,
+    "runActive" | "runStatus" | "queue" | "sessionKey" | "startupStatus"
+  >,
 ): boolean {
   return isSessionRunVisuallyActive(
     (props.runActive === true && !hasTerminalRunStatus(props.runStatus)) ||

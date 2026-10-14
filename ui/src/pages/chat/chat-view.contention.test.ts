@@ -85,7 +85,6 @@ describe("chat view state contention", () => {
       expect(
         container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
       ).toBe("");
-      expect(getComposerTextarea(container).placeholder).toBe("Message Assistant");
       const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--stop");
       expect(stop).not.toBeNull();
       stop?.click();

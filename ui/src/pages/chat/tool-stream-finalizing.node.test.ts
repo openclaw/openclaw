@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { activeChatRunStartupStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { agentEvent, createHost } from "./tool-stream.test-helpers.ts";
-import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
 describe("runtime-owned answer finalization", () => {

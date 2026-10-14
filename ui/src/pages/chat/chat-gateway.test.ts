@@ -478,10 +478,14 @@ describe("handleChatGatewayEvent", () => {
 
   it("keeps preparation, model wait, and answer status monotonic through an empty replacement", () => {
     const state = createState({ chatRunId: "run-1", chatStream: "" });
-    const label = () => chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
+    const label = () =>
+      chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
     receive(state, "status", { phase: "preparing_context", seq: 1 });
     expect(label()).toBe("Preparing this turn…");
-    receive(state, "delta", { runId: "run-other", message: { role: "assistant", content: "Other" } });
+    receive(state, "delta", {
+      runId: "run-other",
+      message: { role: "assistant", content: "Other" },
+    });
     expect(label()).toBe("Preparing this turn…");
     receive(state, "status", { phase: "starting_model", seq: 2 });
     expect(label()).toBe("Waiting for a response…");
