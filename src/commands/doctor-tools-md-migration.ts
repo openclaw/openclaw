@@ -1,4 +1,5 @@
 /** Doctor-owned migration from workspace TOOLS.md into the AGENTS.md Tools section. */
+import { isUtf8 } from "node:buffer";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -126,6 +127,15 @@ async function readMigrationFileSnapshot(
     !sameFileIdentity(currentStat, file.stat)
   ) {
     throw new Error(`${path.basename(filePath)} changed while opening it for migration`);
+  }
+  // This reader feeds content that is merged into AGENTS.md, re-encoded into the archive, and
+  // then unlinked from the workspace. Replacement decoding would persist U+FFFD over bytes the
+  // migration never intended to change, so refuse before any write. Same rule as the workspace
+  // memory migration and the file-editing tools (src/agents/utf8-file.ts).
+  if (!isUtf8(file.buffer)) {
+    throw new Error(
+      `File is not valid UTF-8: ${filePath}; preserve its bytes and convert a copy to UTF-8 before retrying`,
+    );
   }
   return { content: file.buffer.toString("utf8"), stat: currentStat };
 }
