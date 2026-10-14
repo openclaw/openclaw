@@ -212,6 +212,7 @@ async function fixture({
       return verification;
     },
     withOwnedManagedUpdateEnv: async (_env, action) => action(),
+    acquireWithWait: ({ acquire }) => acquire(),
     readConfigFileSnapshot: async () => ({}),
     prepareUpdateRestart: async () => restartContext,
     convergeUpdatePlugins: async (params) => ({ resultWithPostUpdate: params.result }),
@@ -267,6 +268,7 @@ async function fixture({
     "update-command-mutable-signals",
     "update-command-execution-guards",
     "update-command-result",
+    "../../infra/acquire-with-wait",
     "../../infra/update-failure-result",
     "../../infra/package-update-refusal",
     "../../infra/update-failure-public-codes",
