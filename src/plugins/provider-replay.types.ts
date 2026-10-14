@@ -64,10 +64,10 @@ export type ProviderReplaySessionEntry = {
   data?: unknown;
 };
 
-/** @deprecated Use ProviderReplaySessionStateV2; removal follows a stable deprecation period. */
+/** @deprecated Use ProviderReplaySessionStateV2; final compatibility day: 2026-12-31. */
 export type ProviderReplaySessionState = {
   getCustomEntries(): ProviderReplaySessionEntry[];
-  /** @deprecated Use ProviderReplaySessionStateV2.appendCustomEntryAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use ProviderReplaySessionStateV2.appendCustomEntryAsync; final compatibility day: 2026-12-31. */
   appendCustomEntry(customType: string, data: unknown): void;
 };
 
@@ -81,7 +81,7 @@ export type ProviderReplaySessionStateV2 = ProviderReplaySessionState & {
  *
  * Runs after core applies generic transcript cleanup so plugins can make
  * provider-specific replay rewrites without owning the whole compaction flow.
- * @deprecated Use ProviderSanitizeReplayHistoryContextV2; removal follows a stable deprecation period.
+ * @deprecated Use ProviderSanitizeReplayHistoryContextV2; final compatibility day: 2026-12-31.
  */
 export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext & {
   sessionId: string;

@@ -7,9 +7,9 @@ export const WATCHED_SESSIONS_COMPAT_RECORD = {
   introduced: "2026-07-29",
   deprecated: "2026-10-03",
   warningStarts: "2026-10-03",
-  removalGate: "stable-deprecation-period",
+  removeAfter: "2026-12-31",
   replacement:
-    "Await prepareWatchedSessionsHarnessContext with an assertCurrent callback bound to the current host capability. The released buildWatchedSessionsHarnessContext retains its synchronous string-or-undefined result until an announced later stable release and explicit breaking-release approval.",
+    "Await prepareWatchedSessionsHarnessContext with an assertCurrent callback bound to the current host capability. The released buildWatchedSessionsHarnessContext retains its synchronous string-or-undefined result through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
   docsPath: "/plugins/sdk-migration/compatibility-policy#watched-session-harness-context",
   surfaces: ["openclaw/plugin-sdk/agent-harness-runtime.buildWatchedSessionsHarnessContext"],
   diagnostics: [

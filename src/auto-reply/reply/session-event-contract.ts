@@ -21,6 +21,8 @@ export type SessionEventOutcome = {
   delivered: boolean;
   summary?: string;
   error?: string;
+  /** Admission policy decides whether a durable producer may retry this refusal. */
+  retryable?: boolean;
   deliveryAttempted?: boolean;
   deliveryAmbiguous?: boolean;
   deliverySuppressionReason?: NormalizeReplySkipReason;

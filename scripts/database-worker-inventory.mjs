@@ -928,12 +928,6 @@ const reviewedOperations = new Map([
     "src/config/sessions/session-accessor.sqlite-maintenance-transaction.ts",
     [
       {
-        tier: "W",
-        operations: ["readSessionMaintenanceInWorker"],
-        evidence:
-          "Only session-transcript.worker.ts:276 and openclaw-agent-execution-maintenance.ts:61 call this read-only planner; the latter owner is constructed only in openclaw-agent-execution.worker.ts:372. Metadata transactions have separate reviewed worker/maintenance ownership.",
-      },
-      {
         tier: "T3",
         operations: ["runSessionMaintenanceMetadataInTransaction"],
         evidence:

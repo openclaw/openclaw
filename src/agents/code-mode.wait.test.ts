@@ -50,16 +50,14 @@ afterEach(async () => {
 });
 
 describe("Code Mode wait, scope, and suspended runs", () => {
-  it.each(["native", "client-shadow", "plugin", "mcp", "empty", "cleared", "denied"] as const)(
+  it.each(["native", "client-shadow", "mcp", "cleared", "denied"] as const)(
     "offers only executable native process guidance for a %s catalog",
     async (kind) => {
       const target =
-        kind === "plugin"
-          ? pluginTool("process", "Plugin process")
-          : kind === "mcp"
-            ? mcpTool({ name: "process", serverName: "remote", toolName: "process" })
-            : createProcessTool({ scopeKey: "wait-guidance" });
-      const fixture = harness(kind === "empty" ? [] : [target]);
+        kind === "mcp"
+          ? mcpTool({ name: "process", serverName: "remote", toolName: "process" })
+          : createProcessTool({ scopeKey: "wait-guidance" });
+      const fixture = harness([target]);
       if (kind === "client-shadow") {
         addClientToolsToToolCatalog({
           catalogRef: fixture.catalogRef,

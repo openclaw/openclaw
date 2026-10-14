@@ -65,6 +65,7 @@ describe("Google transport thinking config", () => {
       { id: "gemini-flash-lite-latest", thinkingLevel: "MINIMAL" },
       { id: "gemini-3.6-flash", thinkingLevel: "MINIMAL" },
       { id: "gemini-3.7-flash", thinkingLevel: "LOW" },
+      { id: "gemini-3.8-flash", thinkingLevel: "LOW" },
       { id: "gemini-4-argon", thinkingLevel: "LOW" },
     ].map(({ id, thinkingLevel }) => ({
       name: `${id} disabled thinking floor`,
@@ -72,6 +73,12 @@ describe("Google transport thinking config", () => {
       options: { maxTokens: 128 },
       expected: { thinkingLevel },
     })),
+    {
+      name: "Gemini 3.8 Flash floors minimal thinking at LOW",
+      model: { id: "gemini-3.8-flash" },
+      options: { reasoning: "minimal" },
+      expected: { includeThoughts: true, thinkingLevel: "LOW" },
+    },
     {
       name: "explicit Gemini 3 budget becomes a level",
       model: { id: "gemini-3-flash-preview" },
@@ -188,6 +195,8 @@ describe("google thinking policy", () => {
     ["gemini-3.6-flash", "minimal", "MINIMAL"],
     ["gemini-3.7-flash", "off", "LOW"],
     ["gemini-3.7-flash", "minimal", "LOW"],
+    ["gemini-3.8-flash", "off", "LOW"],
+    ["gemini-3.8-flash", "minimal", "LOW"],
   ] as const)("maps %s thinking level %s to %s", (modelId, thinkingLevel, expected) => {
     expect(
       resolveGoogleGemini3ThinkingLevel({
@@ -205,6 +214,7 @@ describe("google thinking policy", () => {
     ["gemini-3.1-flash-lite", 8193, "HIGH"],
     ["gemini-3.6-flash", 0, "MINIMAL"],
     ["gemini-3.7-flash", 0, "LOW"],
+    ["gemini-3.8-flash", 0, "LOW"],
   ] as const)("maps %s budget %s to %s", (modelId, thinkingBudget, expected) => {
     expect(
       resolveGoogleGemini3ThinkingLevel({

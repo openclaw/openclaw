@@ -25,6 +25,10 @@ import {
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -259,6 +263,57 @@ describe("executeAgentTurn: terminal failures", () => {
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("command_lane_cleared");
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
+  });
+
+  it("retains automatic recovery when restart admission refuses an active turn", async () => {
+    const { emitAgentEvent } = await import("../../infra/agent-events.js");
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:restart-refusal",
+      sessionId: "restart-refusal",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+      params.onExecutionPhase?.({
+        phase: "model_call_started",
+        provider: "openai",
+        model: "fixture",
+      });
+      // The admission fence closes before the shutdown owner aborts the turn.
+      markGatewayRestartDraining();
+      throw new GatewayDrainingError();
+    });
+    try {
+      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
+      expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
+      expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+      const terminals = vi
+        .mocked(emitAgentEvent)
+        .mock.calls.map(([event]) => event)
+        .filter(
+          (event) =>
+            event.runId === result.runId &&
+            event.stream === "lifecycle" &&
+            (event.data.phase === "end" || event.data.phase === "error"),
+        );
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0]?.data).toMatchObject({
+        phase: "end",
+        aborted: true,
+        stopReason: "restart",
+      });
+      expect(
+        deriveGatewaySessionLifecycleProjectionPatch({
+          entry: { updatedAt: 1, startedAt: 1 },
+          event: { ...terminals[0]!, ts: 2 },
+        }),
+      ).toMatchObject({ status: "interrupted", abortedLastRun: true });
+    } finally {
+      resetGatewayWorkAdmission();
+      replyOperation.complete();
+    }
   });
 
   it.each([

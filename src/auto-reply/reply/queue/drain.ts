@@ -55,6 +55,7 @@ import {
   completeFollowupRunLifecycle,
   completeFollowupRuns,
   retireFollowupRunCancellation,
+  updateFollowupRetryHeartbeats,
 } from "./lifecycle.js";
 import {
   clearFollowupQueue,
@@ -542,12 +543,11 @@ async function runQueueSummaryDelivery(
         if (admitted) {
           return;
         }
+        admitted = true;
+        // Durable aggregate acceptance consumes every source even if one ingress ack fails.
+        consumeQueueSummaryDelivery(queue, delivery, false);
         await Promise.all(delivery.sources.map((source) => admitFollowupRunLifecycle(source)));
         cancellation.admit();
-        admitted = true;
-        // A multi-source summary is atomic once it owns the reply lane.
-        // Retire sibling ids while the latest source owns aggregate cancel.
-        consumeQueueSummaryDelivery(queue, delivery, false);
         const aggregateOwner = resolveAggregateOwner(delivery.sources);
         for (const source of delivery.sources) {
           if (source !== aggregateOwner) {
@@ -560,6 +560,7 @@ async function runQueueSummaryDelivery(
     try {
       await run({ abortSignal: cancellation.signal, onAdmitted });
     } catch (err) {
+      updateFollowupRetryHeartbeats(err, delivery.sources);
       if (!admitted) {
         if (!(err instanceof FollowupRunDeferredError)) {
           releaseQueueSummaryDeliveryForRetry(queue, delivery);
@@ -762,8 +763,8 @@ async function runSyntheticOverflowSummary(params: {
           turnAdoptionLifecycle: createAggregateLifecycle(
             params.sources,
             async () => {
-              await params.onAdmitted?.();
               admitted = true;
+              await params.onAdmitted?.();
             },
             () => {
               if (admitted) {
@@ -868,6 +869,14 @@ export function scheduleFollowupDrain(
     }
   };
   const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
+  const runIndividualFollowup = async (item: FollowupRun) => {
+    try {
+      await effectiveRunFollowup(item);
+    } catch (error) {
+      updateFollowupRetryHeartbeats(error, [item]);
+      throw error;
+    }
+  };
   const reserveOptions = {
     inFlight: queue.inFlight,
     shouldRestoreOnError: () =>
@@ -902,7 +911,7 @@ export function scheduleFollowupDrain(
           waitingForSteer = true;
           break;
         }
-        if (await drainProtectedPriorityFollowup(queue, effectiveRunFollowup)) {
+        if (await drainProtectedPriorityFollowup(queue, runIndividualFollowup)) {
           continue;
         }
         if (
@@ -929,7 +938,7 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: effectiveRunFollowup,
+            run: runIndividualFollowup,
             reserveOptions,
           });
           if (collectDrainResult === "empty") {
@@ -987,10 +996,10 @@ export function scheduleFollowupDrain(
             activeGroupItems.length > 1 ||
             activeGroupItems.some((item) => hasExclusiveTurnAdmission(item.turnAdoptionLifecycle));
           const admitGroupSources = async () => {
-            await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
-            cancellation.admit();
             admitted = true;
             removeQueuedItemsByRef(queue.items, activeGroupItems);
+            await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
+            cancellation.admit();
             for (const item of activeGroupItems) {
               if (item !== aggregateOwner) {
                 retireFollowupRunCancellation(item);
@@ -1032,6 +1041,7 @@ export function scheduleFollowupDrain(
               ...collectQueuedPromptMedia(activeGroupItems),
             });
           } catch (err) {
+            updateFollowupRetryHeartbeats(err, activeGroupItems);
             if (admitted) {
               completeGroup();
             } else if (reserveOptions.shouldRestoreOnError()) {
@@ -1064,7 +1074,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, reserveOptions))) {
+        if (!(await drainNextQueueItem(queue.items, runIndividualFollowup, reserveOptions))) {
           break;
         }
       }

@@ -17,6 +17,7 @@ const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   // Voice catalogs authorize participation in the call's chat.
   "talk.voice.get",
   "ui.command",
+  "ui.command.result",
   "users.linkAuthProfile",
   "users.linkEmail",
   "users.merge",
@@ -26,6 +27,8 @@ const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "users.listAuthLinks",
   "users.listModelAccounts",
   "users.selectModelAccount",
+  // Resolve the initial identity before the router captures the caller's profile guard.
+  "users.self",
   "users.mentionable",
   "users.setAvatar",
   "users.setDisplayName",
