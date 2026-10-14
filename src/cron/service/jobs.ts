@@ -1,9 +1,6 @@
 /** Cron job scheduling, validation, creation, and patch helpers. */
 import crypto from "node:crypto";
-import {
-  normalizeOptionalString,
-  normalizeOptionalThreadValue,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryMode } from "../delivery-defaults.js";
@@ -18,10 +15,6 @@ import {
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import { applyDefaultCronToolsAllow, cronJobUsesToolRuntime } from "../tools-allow.js";
 import type {
-  CronDelivery,
-  CronDeliveryPatch,
-  CronFailureAlert,
-  CronFailureAlertPatch,
   CronJobCreate,
   CronJobPatch,
   CronJobState,
@@ -32,6 +25,7 @@ import type {
 } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 import { normalizeDeclarativeLabel } from "./jobs-declarative.js";
+import { mergeCronDelivery, mergeCronFailureAlert } from "./jobs-merge.js";
 import {
   computeJobNextRunAtMs,
   normalizeStreamScheduleBounds,
@@ -49,6 +43,7 @@ import {
   assertStreamScheduleSupport,
   assertSupportedJobSpec,
   assertTriggerSupport,
+  assertPrecheckSupport,
 } from "./jobs-validation.js";
 import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
 import { mergeCronPayload } from "./payload-merge.js";
@@ -143,6 +138,12 @@ function validateFullJob(
       : context.kind === "patch"
         ? context.patch.trigger != null
         : context.input.trigger !== undefined;
+  const precheckTouched =
+    context.kind === "create"
+      ? job.precheck !== undefined
+      : context.kind === "patch"
+        ? context.patch.precheck != null
+        : context.input.precheck !== undefined;
   const scriptTouched =
     context.kind === "create"
       ? job.payload.kind === "script"
@@ -158,6 +159,7 @@ function validateFullJob(
       cronConfig,
       validateAuthoredTrigger: triggerTouched,
     });
+    assertPrecheckSupport(job, { cronConfig, requireEnabled: precheckTouched });
     assertScriptPayloadSupport(job, {
       cronConfig,
       requireEnabled: scriptTouched,
@@ -254,6 +256,7 @@ export function createJob(
       input.payload.kind === "script"
         ? normalizeCronScriptPayload(structuredClone(input.payload))
         : structuredClone(input.payload),
+    ...(input.precheck ? { precheck: structuredClone(input.precheck) } : {}),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
@@ -370,9 +373,31 @@ export function applyJobPatch(
       job.payload = normalizeCronScriptPayload(job.payload);
     }
   }
-  if (cronJobUsesToolRuntime(job) && (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow)) {
+  if ("precheck" in patch) {
+    if (patch.precheck === null || patch.precheck === undefined) {
+      delete job.precheck;
+    } else {
+      job.precheck = structuredClone(patch.precheck);
+    }
+  }
+  // Introducing host-shell precheck is a new executable surface. Capless legacy
+  // agentTurn jobs already report previouslyUsedToolRuntime=true, so without this
+  // branch a documented --precheck-command edit would skip default stamping and
+  // fail closed at precheck authz (absent toolsAllow). applyDefaultCronToolsAllow
+  // only fills undefined — it does not widen explicit restrictions.
+  const introducedPrecheckCommand =
+    "precheck" in patch &&
+    patch.precheck !== null &&
+    patch.precheck !== undefined &&
+    typeof patch.precheck.command === "string" &&
+    patch.precheck.command.trim().length > 0;
+  if (
+    cronJobUsesToolRuntime(job) &&
+    (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow || introducedPrecheckCommand)
+  ) {
     // `null` means unrestricted, not a return to ambiguous legacy semantics.
-    // Ordinary edits to an existing capless job intentionally remain legacy.
+    // Ordinary edits to an existing capless job intentionally remain legacy
+    // unless precheck is newly introduced (above).
     applyDefaultCronToolsAllow(job);
   }
   reconcileToolsAllowAuthority({
@@ -505,6 +530,22 @@ export function applyDeclarativeJobSpec(
   } else {
     delete job.trigger;
   }
+  const hadPrecheckCommand =
+    typeof job.precheck?.command === "string" && job.precheck.command.trim().length > 0;
+  if (input.precheck) {
+    job.precheck = structuredClone(input.precheck);
+  } else {
+    delete job.precheck;
+  }
+  const introducedPrecheckCommand =
+    !hadPrecheckCommand &&
+    typeof job.precheck?.command === "string" &&
+    job.precheck.command.trim().length > 0;
+  // Introducing host-shell precheck is a new executable surface. Capless legacy
+  // agentTurn jobs already report previouslyUsedToolRuntime=true, so without an
+  // introduced-precheck branch, declaration-key convergence that first adds
+  // precheck leaves toolsAllow absent and fails closed at precheck authz.
+  // applyDefaultCronToolsAllow only fills undefined — it does not widen explicit caps.
   if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow === undefined) {
     if (previousToolsAllow !== undefined) {
       // Omitted declaration fields preserve explicit authority already stored
@@ -513,8 +554,8 @@ export function applyDeclarativeJobSpec(
       if (previousToolsAllowIsDefault === true) {
         job.payload.toolsAllowIsDefault = true;
       }
-    } else if (!previouslyUsedToolRuntime) {
-      // A declaration that newly becomes tool-bearing adopts current explicit semantics.
+    } else if (!previouslyUsedToolRuntime || introducedPrecheckCommand) {
+      // Newly tool-bearing, or first host-shell precheck on a legacy capless job.
       applyDefaultCronToolsAllow(job);
     }
   }
@@ -555,167 +596,4 @@ export function applyDeclarativeJobSpec(
     },
     opts.configuredChannels,
   );
-}
-
-function mergeCronDelivery(
-  existing: CronDelivery | undefined,
-  patch: CronDeliveryPatch,
-  implicitMode: CronDelivery["mode"],
-): CronDelivery | undefined {
-  const hasCompletionDestinationPatch = "completionDestination" in patch;
-  const next: CronDelivery = {
-    mode: existing ? existing.mode : implicitMode,
-    channel: existing?.channel,
-    to: existing?.to,
-    threadId: existing?.threadId,
-    accountId: existing?.accountId,
-    bestEffort: existing?.bestEffort,
-    completionDestination: existing?.completionDestination,
-    failureDestination: existing?.failureDestination,
-  };
-
-  if (typeof patch.mode === "string") {
-    const previousMode = next.mode;
-    next.mode = patch.mode;
-    if (previousMode !== next.mode && (previousMode === "webhook" || next.mode === "webhook")) {
-      // `to` has different meaning for channel targets and webhook URLs; clear
-      // it when crossing that boundary so stale destinations do not leak.
-      next.to = undefined;
-    }
-    if (next.mode === "webhook") {
-      next.channel = undefined;
-      next.threadId = undefined;
-      next.accountId = undefined;
-    }
-    if (!hasCompletionDestinationPatch && (next.mode === "none" || next.mode === "webhook")) {
-      next.completionDestination = undefined;
-    }
-  }
-  if ("channel" in patch) {
-    next.channel = normalizeOptionalString(patch.channel);
-  }
-  if ("to" in patch) {
-    next.to = normalizeOptionalString(patch.to);
-  }
-  if ("threadId" in patch) {
-    next.threadId = normalizeOptionalThreadValue(patch.threadId);
-  }
-  if ("accountId" in patch) {
-    next.accountId = normalizeOptionalString(patch.accountId);
-  }
-  if (typeof patch.bestEffort === "boolean") {
-    next.bestEffort = patch.bestEffort;
-  }
-  if (hasCompletionDestinationPatch) {
-    if (patch.completionDestination == null) {
-      next.completionDestination = undefined;
-    } else {
-      const to = normalizeOptionalString(patch.completionDestination.to);
-      next.completionDestination = {
-        mode: "webhook",
-        ...(to ? { to } : {}),
-      };
-    }
-  }
-  if ("failureDestination" in patch) {
-    if (patch.failureDestination == null) {
-      next.failureDestination = undefined;
-    } else {
-      const existingFd = next.failureDestination;
-      const patchFd = patch.failureDestination;
-      const nextFd: typeof next.failureDestination = {};
-      if (existingFd) {
-        for (const field of ["channel", "to", "accountId"] as const) {
-          if (Object.hasOwn(existingFd, field)) {
-            nextFd[field] = existingFd[field];
-          }
-        }
-        if (Object.hasOwn(existingFd, "mode")) {
-          nextFd.mode = existingFd.mode;
-        }
-      }
-      if (patchFd) {
-        for (const field of ["channel", "to", "accountId"] as const) {
-          if (field in patchFd) {
-            nextFd[field] = normalizeOptionalString(patchFd[field]);
-          }
-        }
-        if ("mode" in patchFd) {
-          const mode = normalizeOptionalString(patchFd.mode);
-          nextFd.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
-        }
-      }
-      const hasFailureDestination =
-        Object.hasOwn(nextFd, "channel") ||
-        Object.hasOwn(nextFd, "to") ||
-        Object.hasOwn(nextFd, "accountId") ||
-        Object.hasOwn(nextFd, "mode");
-      next.failureDestination = hasFailureDestination ? nextFd : undefined;
-    }
-  }
-
-  if (
-    existing === undefined &&
-    !("mode" in patch) &&
-    next.channel === undefined &&
-    next.to === undefined &&
-    next.threadId === undefined &&
-    next.accountId === undefined &&
-    next.bestEffort === undefined &&
-    next.completionDestination === undefined &&
-    next.failureDestination === undefined
-  ) {
-    // Clearing an absent override must preserve implicit detached-job delivery.
-    return undefined;
-  }
-
-  return next;
-}
-
-function mergeCronFailureAlert(
-  existing: CronFailureAlert | false | undefined,
-  patch: CronFailureAlertPatch | false | null | undefined,
-): CronFailureAlert | false | undefined {
-  if (patch === false) {
-    return false;
-  }
-  if (patch === null) {
-    return undefined;
-  }
-  if (patch === undefined) {
-    return existing;
-  }
-  const base = existing === false || existing === undefined ? {} : existing;
-  const next: CronFailureAlert = { ...base };
-
-  if ("after" in patch) {
-    const after = typeof patch.after === "number" && Number.isFinite(patch.after) ? patch.after : 0;
-    next.after = after > 0 ? Math.floor(after) : undefined;
-  }
-  if ("channel" in patch) {
-    next.channel = normalizeOptionalString(patch.channel);
-  }
-  if ("to" in patch) {
-    next.to = normalizeOptionalString(patch.to);
-  }
-  if ("cooldownMs" in patch) {
-    const cooldownMs =
-      typeof patch.cooldownMs === "number" && Number.isFinite(patch.cooldownMs)
-        ? patch.cooldownMs
-        : -1;
-    next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
-  }
-  if ("includeSkipped" in patch) {
-    next.includeSkipped =
-      typeof patch.includeSkipped === "boolean" ? patch.includeSkipped : undefined;
-  }
-  if ("mode" in patch) {
-    const mode = normalizeOptionalString(patch.mode);
-    next.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
-  }
-  if ("accountId" in patch) {
-    next.accountId = normalizeOptionalString(patch.accountId);
-  }
-
-  return next;
 }

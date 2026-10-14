@@ -96,6 +96,17 @@ export function registerCronAddCommand(cron: Command) {
     )
       .option("--declaration-key <key>", "Key to avoid duplicate declarations")
       .option("--disabled", "Create job disabled", false)
+
+      .option(
+        "--precheck-command <shell>",
+        "Zero-token shell gate before the payload (exit 0=work, 2=skip; see #112371)",
+      )
+      .option(
+        "--precheck-timeout-ms <n>",
+        "Timeout for --precheck-command in milliseconds (default 30000)",
+      )
+      .option("--precheck-cwd <path>", "Working directory for --precheck-command")
+>>>>>>> ae8ca5d5b15 (feat(cron): shell precheck gate to skip LLM when no work)
       .action(
         async (
           nameArg: string | undefined,
@@ -363,6 +374,26 @@ export function registerCronAddCommand(cron: Command) {
               sessionTarget,
               wakeMode,
               payload: resolvedPayload,
+              ...(() => {
+                const precheckCommand = normalizeOptionalString(opts.precheckCommand);
+                if (!precheckCommand) {
+                  return {};
+                }
+                const timeoutMs = parseStrictPositiveInteger(opts.precheckTimeoutMs);
+                if (opts.precheckTimeoutMs !== undefined && timeoutMs === undefined) {
+                  throw new Error("Invalid --precheck-timeout-ms (must be a positive integer).");
+                }
+                return {
+                  precheck: {
+                    kind: "exec" as const,
+                    command: precheckCommand,
+                    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+                    ...(normalizeOptionalString(opts.precheckCwd)
+                      ? { cwd: normalizeOptionalString(opts.precheckCwd) }
+                      : {}),
+                  },
+                };
+              })(),
               delivery: deliveryMode
                 ? {
                     mode: deliveryMode,

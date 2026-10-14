@@ -14,6 +14,7 @@ import {
 import { normalizeSqliteNumber as normalizeNumber } from "../../infra/sqlite-number.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { hashCronJobDefinition } from "../definition-hash.js";
+import { normalizeCronJobPrecheck } from "../job-precheck.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
@@ -144,8 +145,10 @@ function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStor
     ...normalized,
     createdAtMs,
     updatedAtMs,
-    state: isRecord(normalized.state) ? (normalized.state as CronJobState) : {},
-  } as CronStoredJob;
+    state: isRecord(normalized.state)
+      ? (normalized.state as CronJobState) // SAFETY: state bag is record-shaped CronJobState.
+      : {},
+  } as CronStoredJob; // SAFETY: reconstructed store fields form CronStoredJob.
 }
 
 /** Fails before replacing SQLite rows when any config job cannot round-trip. */
@@ -159,6 +162,7 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   }
 }
 
+<<<<<<< HEAD
 export function rowToCronJob(
   row: Pick<CronJobReadRow, "job_id" | "state_json" | "runtime_updated_at_ms" | "updated_at">,
   jobJson: Record<string, unknown>,
@@ -166,6 +170,80 @@ export function rowToCronJob(
 ): CronStoredJob | null {
   const state = safeParseJsonRecord(row.state_json);
   if (!state || getInvalidPersistedCronJobReason(jobJson)) {
+=======
+function scheduleFromRow(row: CronJobRow, jobJson: Record<string, unknown>): CronSchedule | null {
+  if (row.schedule_kind === "at" && row.at) {
+    return { kind: "at", at: row.at };
+  }
+  if (row.schedule_kind === "every" && row.every_ms != null) {
+    return {
+      kind: "every",
+      everyMs: normalizeNumber(row.every_ms) ?? 0,
+      ...(row.anchor_ms != null ? { anchorMs: normalizeNumber(row.anchor_ms) } : {}),
+    };
+  }
+  if (row.schedule_kind === "cron" && row.schedule_expr) {
+    return {
+      kind: "cron",
+      expr: row.schedule_expr,
+      ...(row.schedule_tz ? { tz: row.schedule_tz } : {}),
+      ...(row.stagger_ms != null ? { staggerMs: normalizeNumber(row.stagger_ms) } : {}),
+    };
+  }
+  if (row.schedule_kind === "on-exit" && row.schedule_expr) {
+    return {
+      kind: "on-exit",
+      command: row.schedule_expr,
+      ...(row.schedule_tz ? { cwd: row.schedule_tz } : {}),
+    };
+  }
+  if (row.schedule_kind === "stream") {
+    const schedule = jobJson.schedule;
+    if (!isRecord(schedule) || schedule.kind !== "stream" || !Array.isArray(schedule.command)) {
+      return null;
+    }
+    return structuredClone(schedule) as CronSchedule; // SAFETY: schedule already CronSchedule-shaped.
+  }
+  return null;
+}
+
+function pacingFromJobJson(jobJson: Record<string, unknown>): CronPacing | undefined {
+  const pacing = jobJson.pacing;
+  if (!isRecord(pacing)) {
+    return undefined;
+  }
+  return {
+    ...(typeof pacing.min === "string" ? { min: pacing.min } : {}),
+    ...(typeof pacing.max === "string" ? { max: pacing.max } : {}),
+  };
+}
+
+function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronStoredJob | null {
+  const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
+  const ownerAccountId = normalizeOptionalAccountId(
+    typeof jsonOwner?.accountId === "string" ? jsonOwner.accountId : undefined,
+  );
+  const schedule = scheduleFromRow(row, jobJson);
+  const payload = payloadFromRow(row);
+  const delivery = deliveryFromRow(row);
+  const failureAlert = failureAlertFromRow(row);
+  const trigger = triggerFromRow(row);
+  const pacing = pacingFromJobJson(jobJson);
+  const scheduledToolPolicy = normalizeCronScheduledToolPolicy(jobJson.scheduledToolPolicy);
+  const toolsAllowProvenance =
+    isRecord(jobJson.toolsAllowProvenance) &&
+    jobJson.toolsAllowProvenance.version === 1 &&
+    jobJson.toolsAllowProvenance.source === "final-executable-surface"
+      ? ({
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: normalizeCronScheduledToolCallerOrigin(
+            jobJson.toolsAllowProvenance.callerOrigin,
+          ),
+        } as const)
+      : undefined;
+  if (!schedule || !payload) {
+>>>>>>> f55edd1d42c (fix(cron): CI wake — SAFETY on as-lines, split timer max-lines)
     return null;
   }
   const toolsAllowExecTarget = normalizeCronToolsAllowExecTarget(jobJson.toolsAllowExecTarget);
@@ -203,6 +281,26 @@ export function rowToCronJob(
     createdAtMs,
     updatedAtMs:
       normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at) ?? createdAtMs,
+<<<<<<< HEAD
+=======
+    ...(row.agent_id ? { agentId: row.agent_id } : {}),
+    ...(row.session_key ? { sessionKey: row.session_key } : {}),
+    schedule,
+    ...(pacing !== undefined ? { pacing } : {}),
+    sessionTarget: row.session_target as CronStoredJob["sessionTarget"], // SAFETY: schema union column.
+    wakeMode: row.wake_mode as CronStoredJob["wakeMode"], // SAFETY: schema union column.
+    ...(trigger ? { trigger } : {}),
+    payload,
+    ...(delivery ? { delivery } : {}),
+    ...(failureAlert !== undefined ? { failureAlert } : {}),
+>>>>>>> f55edd1d42c (fix(cron): CI wake — SAFETY on as-lines, split timer max-lines)
+    ...(() => {
+      const cfg = tryParseJsonObject(row.job_json) ?? {};
+      const precheck = normalizeCronJobPrecheck(
+        (cfg as Record<string, unknown>).precheck, // SAFETY: JSON object bag from tryParseJsonObject.
+      );
+      return precheck ? { precheck } : {};
+    })(),
     state,
   } as CronStoredJob;
 }
@@ -213,6 +311,7 @@ export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStore
   if (!normalized) {
     throw new Error(`cannot project invalid cron job ${job.id}`);
   }
+<<<<<<< HEAD
   const jobJson = JSON.stringify(stripJobRuntimeFields(normalized));
   const row = {
     job_id: normalized.id,
@@ -221,6 +320,10 @@ export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStore
     runtime_updated_at_ms: normalized.updatedAtMs,
   };
   const projected = rowToCronJob(row, safeParseJsonRecord(jobJson) ?? {});
+=======
+  const row = bindCronJobRow("config-revision", normalized, 0) as CronJobRow; // SAFETY: SQLite row binding.
+  const projected = rowToCronJob(row, asOptionalObjectRecord(safeParseJson(row.job_json)) ?? {});
+>>>>>>> f55edd1d42c (fix(cron): CI wake — SAFETY on as-lines, split timer max-lines)
   if (!projected) {
     throw new Error(`cannot project cron job ${job.id} through storage codecs`);
   }
@@ -730,7 +833,11 @@ export function loadedCronStoreFromRows(
     const runtimeEntry = {
       updatedAtMs: normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at),
       scheduleIdentity: row.schedule_identity ?? undefined,
+<<<<<<< HEAD
       state: parsedStateJson,
+=======
+      state: stateFromRow(row) as Record<string, unknown>, // SAFETY: plain object bag projection.
+>>>>>>> f55edd1d42c (fix(cron): CI wake — SAFETY on as-lines, split timer max-lines)
     };
 
     if (!job) {

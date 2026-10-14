@@ -1802,11 +1802,95 @@ describe("cron method validation", () => {
       owner: { agentId: "ops", sessionKey },
       payload: { kind: "agentTurn", message: "legacy" },
     });
+<<<<<<< HEAD
     await saveCronStore(storePath, { version: 1, jobs: [legacy] });
     const cfg: OpenClawConfig = { agents: { entries: { ops: {} } } };
     const state = expectDefined(
       await loadLegacyCronRepairState({ cfg, storePath }),
       "legacy cron repair state",
+=======
+    expectCronSuccess(respond);
+  });
+
+  it("treats precheck-only cron.update as a tool-runtime authority mutation", async () => {
+    getRuntimeConfig.mockReturnValue({
+      cron: { triggers: { enabled: true } },
+    } as OpenClawConfig);
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          precheck: { command: "echo NO_WORK; exit 2", timeoutMs: 5_000 },
+        },
+      },
+      createCronJob({
+        agentId: "ops",
+        owner: {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          accountId: "default",
+        },
+        // Capless legacy agent job: applyJobPatch may stamp default toolsAllow
+        // when precheck is introduced, but Gateway must still classify the
+        // patch as tool-runtime and bind caller scheduled authority.
+        payload: { kind: "agentTurn", message: "legacy" },
+      }),
+      { client: callerClient("ops") },
+    );
+
+    expect(context.cron.updateWithPrecondition.mock.calls[0]?.[3]).toEqual({
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:ops:main",
+        ownerAccountId: "default",
+      },
+    });
+    expectCronSuccess(respond);
+  });
+
+  it("passes scheduled authority for an explicit-cap precheck-only cron.update", async () => {
+    getRuntimeConfig.mockReturnValue({
+      cron: { triggers: { enabled: true } },
+    } as OpenClawConfig);
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          precheck: { command: "echo NO_WORK; exit 2", timeoutMs: 5_000 },
+        },
+      },
+      createCronJob({
+        agentId: "ops",
+        owner: {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          accountId: "default",
+        },
+        payload: { kind: "agentTurn", message: "legacy", toolsAllow: ["exec", "read"] },
+      }),
+      { client: callerClient("ops") },
+    );
+
+    expect(context.cron.updateWithPrecondition.mock.calls[0]?.[3]).toEqual({
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:ops:main",
+        ownerAccountId: "default",
+      },
+    });
+    expectCronSuccess(respond);
+  });
+
+  it("trims whitespace around legacy cron.update job ids before lookup", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        jobId: " cron-1 ",
+        patch: { enabled: false },
+      },
+      createCronJob(),
+>>>>>>> e45bee97e4d (fix(cron): classify precheck patches as tool-runtime authority)
     );
     const repair = await applyLegacyCronStoreRepair({ cfg, state });
     const cron = new CronService({

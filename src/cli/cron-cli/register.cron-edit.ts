@@ -73,6 +73,11 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-session-key", "Unset session key", false)
       .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
       .option("--clear-trigger", "Remove the condition trigger", false)
+      .option("--precheck-command <shell>", "Set zero-token shell precheck gate (see #112371)")
+      .option("--precheck-timeout-ms <n>", "Set precheck timeout in milliseconds")
+      .option("--precheck-cwd <path>", "Set precheck working directory")
+      .option("--clear-precheck", "Remove the precheck gate", false)
+>>>>>>> ae8ca5d5b15 (feat(cron): shell precheck gate to skip LLM when no work)
       .option(
         "--clear-thinking",
         "Remove the per-job thinking override (restore normal cron thinking precedence)",
@@ -253,6 +258,40 @@ export function registerCronEditCommand(cron: Command) {
               ...existing.pacing,
               ...(pacingMin ? { min: pacingMin } : {}),
               ...(pacingMax ? { max: pacingMax } : {}),
+            };
+          }
+
+          const precheckCommand = normalizeOptionalString(opts.precheckCommand);
+          const precheckTimeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
+          const precheckCwd = normalizeOptionalString(opts.precheckCwd);
+          const hasPrecheckAncillary =
+            precheckTimeoutRaw !== undefined || precheckCwd !== undefined;
+          if (opts.clearPrecheck && (precheckCommand || hasPrecheckAncillary)) {
+            throw new Error("Use --clear-precheck alone, not with other --precheck-* flags");
+          }
+          if (opts.clearPrecheck) {
+            patch.precheck = null;
+          } else if (precheckCommand || hasPrecheckAncillary) {
+            const existing = await readExistingCronJob();
+            const prev =
+              existing.precheck && typeof existing.precheck === "object"
+                ? existing.precheck
+                : undefined;
+            if (!precheckCommand && !prev) {
+              throw new Error(
+                "--precheck-timeout-ms/--precheck-cwd require an existing precheck or --precheck-command",
+              );
+            }
+            const timeoutMs = parseStrictPositiveInteger(opts.precheckTimeoutMs);
+            if (opts.precheckTimeoutMs !== undefined && timeoutMs === undefined) {
+              throw new Error("Invalid --precheck-timeout-ms (must be a positive integer).");
+            }
+            patch.precheck = {
+              kind: "exec",
+              ...prev,
+              command: precheckCommand ?? prev?.command ?? "",
+              ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+              ...(precheckCwd ? { cwd: precheckCwd } : {}),
             };
           }
           if (opts.clearTrigger) {

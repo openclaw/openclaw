@@ -8,6 +8,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
+import { resolveCronJobExecutionRevision } from "../config-revision.js";
 import type { CronJob } from "../types.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
@@ -88,6 +89,15 @@ function validateCurrentReceiptJob<Job>(
   }
   if (params.resolveAgentId(job) !== params.handle.agentId) {
     throw new CronRunReceiptRevisionError(params.handle.receiptId);
+  }
+  // Fence admitted execution snapshot (payload/precheck/session/...) while
+  // allowing mid-run delivery writeback and operator disable (excluded from
+  // resolveCronJobExecutionRevision). ClawSweeper P1 on #112375.
+  if (resolveCronJobExecutionRevision(job) !== params.handle.configRevision) {
+    throw new CronRunReceiptRevisionError(
+      params.handle.receiptId,
+      "cron job configuration changed",
+    );
   }
   return job;
 }

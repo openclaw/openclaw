@@ -1,14 +1,20 @@
+/** Executes a cron job without mutating persisted job state. */
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
+import { getRuntimeConfig } from "../../config/io.runtime.js";
+import type { ExecAsk, ExecMode, ExecSecurity } from "../../infra/exec-approvals-core.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   type HeartbeatRunResult,
 } from "../../infra/heartbeat-wake.js";
+import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import {
   type CronActiveJobMarker,
   isCronActiveJobMarkerCurrent,
   markCronJobWaitingForHeartbeat,
 } from "../active-jobs.js";
-import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronJobEffectiveAgentId, tryResolveCronDefaultAgentId } from "../agent-id.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
+import { cronRunOutcomeFromPrecheck, runCronJobPrecheck } from "../job-precheck.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
@@ -34,7 +40,6 @@ import {
   removeQueuedSystemEventHandle,
 } from "./timer-trigger.js";
 
-/** Executes a cron job without mutating persisted job state. */
 export async function executeJobCore(
   state: CronServiceState,
   job: CronStoredJob,
@@ -63,10 +68,9 @@ export async function executeJobCore(
       }),
     };
   }
+  // Stream identity fence first: never run host-shell precheck (or triggers/payload)
+  // for a stale queued stream snapshot whose source was replaced/disabled.
   if (options?.streamScheduleKey !== undefined || options?.streamSourceIdentity !== undefined) {
-    // Defense in depth over the locked admission checks: stream-origin work must
-    // carry both the source definition and logical identity, and both must still
-    // match the execution snapshot.
     const currentKey =
       job.schedule.kind === "stream" ? cronStreamScheduleKey(job.schedule) : undefined;
     if (
@@ -76,6 +80,82 @@ export async function executeJobCore(
       job.state.streamSourceIdentity !== options.streamSourceIdentity
     ) {
       return { status: "skipped", error: "stream batch source no longer current" };
+    }
+  }
+  // Durable run-receipt fence before host-shell precheck: a replaced/stale run
+  // must not execute a host command before rejection (ClawSweeper P1).
+  options?.assertRunCurrent?.();
+  // Optional shell precheck after stream admission: cheapest gate, no model call when no work.
+  if (job.precheck?.command) {
+    // Resolve effective tools.exec (global + per-agent) the same way system.run does.
+    // Approvals alone default to security=full; without this layer, tools.exec.security=deny
+    // would be bypassed for unattended prechecks (ClawSweeper P1 on #112375).
+    //
+    // Canonical cron owner (job.agentId → sessionKey agent → configured default) must
+    // drive BOTH per-agent tools.exec lookup AND exec-approval resolution. Passing only
+    // job.agentId lets agent-less / session-key-owned jobs fall through to the generic
+    // approvals "default" entry (ClawSweeper P1 on #112375).
+    type PrecheckExecLayer = {
+      mode?: ExecMode;
+      security?: ExecSecurity;
+      ask?: ExecAsk;
+      strictInlineEval?: boolean;
+      safeBins?: string[] | null;
+      safeBinProfiles?: import("../../infra/exec-safe-bin-policy.js").SafeBinProfileFixtures | null;
+      safeBinTrustedDirs?: string[] | null;
+    };
+    let toolsExec: PrecheckExecLayer | undefined;
+    let agentToolsExec: PrecheckExecLayer | undefined;
+    let effectiveAgentId: string | undefined;
+    try {
+      const cfg = getRuntimeConfig();
+      toolsExec = cfg.tools?.exec;
+      const configuredDefault =
+        tryResolveCronDefaultAgentId(cfg) ??
+        state.deps.resolveDefaultAgentId?.() ??
+        state.deps.defaultAgentId;
+      try {
+        effectiveAgentId = resolveCronJobEffectiveAgentId(job, configuredDefault);
+      } catch {
+        // Agent-less job with no resolvable owner: keep agentId undefined so approvals
+        // fail closed via whatever default path remains; do not invent an owner.
+        effectiveAgentId = undefined;
+      }
+      if (effectiveAgentId) {
+        agentToolsExec = resolveAgentConfig(cfg, effectiveAgentId)?.tools?.exec;
+      }
+    } catch {
+      // Fail closed on config read errors: deny host-shell precheck rather than
+      // falling through to approval-file defaults (security=full).
+      toolsExec = { security: "deny" };
+    }
+    const precheckResult = await runCronJobPrecheck(job.precheck, {
+      abortSignal,
+      assertRunCurrent: options?.assertRunCurrent,
+      authz: {
+        triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
+        agentId: effectiveAgentId,
+        toolsExec,
+        agentToolsExec,
+        // Honor job-scoped payload tool cap (ClawSweeper: no precheck when exec denied).
+        toolsAllow: job.payload?.toolsAllow,
+      },
+    });
+    if (precheckResult.decision !== "run") {
+      state.deps.log.debug(
+        {
+          jobId: job.id,
+          decision: precheckResult.decision,
+          exitCode: precheckResult.exitCode,
+        },
+        `cron: precheck ${precheckResult.decision} — skipping payload without a model call`,
+      );
+      return cronRunOutcomeFromPrecheck(precheckResult, () => state.deps.nowMs());
+    }
+    // Revalidate currency after awaited precheck before triggers/payload.
+    options?.assertRunCurrent?.();
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
     }
   }
   let effectiveJob = job;

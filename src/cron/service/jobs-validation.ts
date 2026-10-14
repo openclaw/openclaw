@@ -8,6 +8,7 @@ import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { resolveCronDeliveryMode } from "../delivery-defaults.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
+import { normalizeCronJobPrecheck } from "../job-precheck.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
@@ -141,6 +142,32 @@ export function assertTriggerSupport(
   }
   if (opts?.validateAuthoredTrigger) {
     assertCronScriptSyntax(job.trigger.script, "trigger script");
+  }
+}
+
+export function assertPrecheckSupport(
+  job: Pick<CronJob, "precheck">,
+  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+) {
+  if (!job.precheck) {
+    return;
+  }
+  // Reject the full precheck contract before persistence (overlap, empty
+  // prefixes, blank command). normalizeCronJobPrecheck throws on invalid shapes.
+  let normalized;
+  try {
+    normalized = normalizeCronJobPrecheck(job.precheck);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`cron precheck is invalid: ${message}`, { cause: err });
+  }
+  if (!normalized) {
+    throw new Error("cron precheck requires a non-empty command");
+  }
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
+    throw new Error(
+      "cron precheck is a host-shell command and is disabled because the operator set cron.triggers.enabled: false; remove it or set it to true to allow unattended precheck scripts",
+    );
   }
 }
 

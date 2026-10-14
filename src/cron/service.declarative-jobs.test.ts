@@ -550,4 +550,58 @@ describe("CronService declarative jobs", () => {
       owner: { agentId: "ops", sessionKey: "agent:ops:main" },
     } satisfies Partial<CronJob>);
   });
+
+  it("converges precheck add/change/remove on declarative upsert", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      cronConfig: { triggers: { enabled: true } },
+    });
+    await cron.start();
+    try {
+      const created = declarativeResult(
+        await cron.add(
+          declaration({
+            declarationKey: "agent:ops:precheck-gate",
+            precheck: { kind: "exec", command: "echo NO_WORK; exit 2" },
+          }),
+        ),
+      );
+      expect(created.created).toBe(true);
+      expect(created.job.precheck).toMatchObject({
+        kind: "exec",
+        command: "echo NO_WORK; exit 2",
+      });
+
+      const changed = declarativeResult(
+        await cron.add(
+          declaration({
+            declarationKey: "agent:ops:precheck-gate",
+            precheck: { kind: "exec", command: "echo WORK_NEEDED; exit 0" },
+          }),
+        ),
+      );
+      expect(changed).toMatchObject({ created: false, updated: true });
+      expect(changed.job.precheck).toMatchObject({
+        command: "echo WORK_NEEDED; exit 0",
+      });
+
+      const removed = declarativeResult(
+        await cron.add(
+          declaration({
+            declarationKey: "agent:ops:precheck-gate",
+          }),
+        ),
+      );
+      expect(removed).toMatchObject({ created: false, updated: true });
+      expect(removed.job.precheck).toBeUndefined();
+    } finally {
+      cron.stop();
+    }
+  });
 });

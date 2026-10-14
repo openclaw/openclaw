@@ -1640,8 +1640,7 @@ src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/cron-cli/shared.ts	7
 src/cli/devices-cli.runtime.ts	9
-src/cli/directory-cli.ts	2
-src/cli/dns-cli.ts	3
+src/cli/directory-cli.ts	2src/cli/dns-cli.ts	3
 src/cli/exec-approvals-cli.ts	9
 src/cli/exec-policy-cli.ts	1
 src/cli/gateway-cli/dev.ts	1
@@ -1871,14 +1870,12 @@ src/cron/run-diagnostics.ts	3
 src/cron/runtime-authority.ts	2
 src/cron/schedule-identity.ts	2
 src/cron/service/active-run-cancellation.ts	1
-src/cron/service/jobs.ts	3
-src/cron/service/list-page-validation.ts	2
+src/cron/service/jobs.ts	3src/cron/service/list-page-validation.ts	2
 src/cron/service/store.ts	1
 src/cron/session-reaper.ts	1
 src/cron/stagger.ts	1
 src/cron/store/delivery-codec.ts	2
-src/cron/store/row-codec.ts	3
-src/daemon/arg-split.ts	2
+src/cron/store/row-codec.ts	3src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	4
 src/daemon/launchd-lifecycle.ts	3
 src/daemon/launchd-service-files.ts	1

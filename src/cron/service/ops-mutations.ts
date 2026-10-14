@@ -78,6 +78,7 @@ export async function quiesceJobs(
       requestActiveCronJobCancellation(job.id, "Claw agent removal.");
     }
   });
+>>>>>>> 47d40c6420a (fix(cron): precheck safe-bin parity + declarative lifecycle)
 }
 
 /** Adds or converges a declaration-keyed cron job inside one store lock and write transaction. */

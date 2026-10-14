@@ -551,4 +551,107 @@ describe("cron run receipt store", () => {
       },
     ]);
   });
+
+  it("rejects a live run after precheck config changes (revision fence)", async () => {
+    const { storePath } = await makeStorePath();
+    const admitted = {
+      ...makeJob("precheck-change", "alpha"),
+      precheck: { command: "echo OLD; exit 2" },
+    };
+    await saveCronStore(storePath, { version: 1, jobs: [admitted] });
+    const receipt = claim(storePath, admitted, 400);
+    const mutated = {
+      ...admitted,
+      precheck: { command: "echo NEW; exit 0" },
+      updatedAtMs: 2,
+    };
+    await saveCronStore(storePath, { version: 1, jobs: [mutated] });
+
+    expect(() =>
+      assertCronRunReceiptCurrent({
+        handle: receipt,
+        resolveAgentId: (job) => job.agentId!,
+      }),
+    ).toThrow(CronRunReceiptRevisionError);
+
+    finishCronRunReceipt({
+      handle: receipt,
+      status: "superseded",
+      finishedAtMs: 405,
+      error: "configuration changed",
+    });
+
+    // Clear-race: admit with precheck, then remove it before currency check.
+    await saveCronStore(storePath, { version: 1, jobs: [admitted] });
+    const receipt2 = claim(storePath, admitted, 410);
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [{ ...admitted, precheck: undefined, updatedAtMs: 4 }],
+    });
+    expect(() =>
+      assertCronRunReceiptCurrent({
+        handle: receipt2,
+        resolveAgentId: (job) => job.agentId!,
+      }),
+    ).toThrow(CronRunReceiptRevisionError);
+
+    finishCronRunReceipt({
+      handle: receipt2,
+      status: "superseded",
+      finishedAtMs: 421,
+      error: "configuration changed",
+    });
+
+    // Delivery writeback / operator disable must not fence (mid-run allowed drift).
+    await saveCronStore(storePath, { version: 1, jobs: [admitted] });
+    const receipt3 = claim(storePath, admitted, 430);
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        {
+          ...admitted,
+          enabled: false,
+          delivery: { mode: "announce", channel: "telegram", to: "-100/1" },
+          updatedAtMs: 5,
+        },
+      ],
+    });
+    expect(() =>
+      assertCronRunReceiptCurrent({
+        handle: receipt3,
+        resolveAgentId: (job) => job.agentId!,
+      }),
+    ).not.toThrow();
+    finishCronRunReceipt({
+      handle: receipt3,
+      status: "ok",
+      finishedAtMs: 431,
+    });
+
+    // Payload mutation after admission MUST fence (execution revision includes payload).
+    await saveCronStore(storePath, { version: 1, jobs: [admitted] });
+    const receipt4 = claim(storePath, admitted, 440);
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        {
+          ...admitted,
+          payload: { kind: "agentTurn", message: "mutated-after-admit" },
+          updatedAtMs: 6,
+        },
+      ],
+    });
+    expect(() =>
+      assertCronRunReceiptCurrent({
+        handle: receipt4,
+        resolveAgentId: (job) => job.agentId!,
+      }),
+    ).toThrow(CronRunReceiptRevisionError);
+    finishCronRunReceipt({
+      handle: receipt4,
+      status: "superseded",
+      finishedAtMs: 441,
+      error: "configuration changed",
+    });
+  });
 });

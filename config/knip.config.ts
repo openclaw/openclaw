@@ -851,6 +851,8 @@ const config = {
     "src/agents/model-auth-runtime.ts": ["nsExports"],
     "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
     "src/agents/prepared-model-runtime.ts": ["nsExports"],
+    // Test-facing helpers on job-precheck; production uses runCronJobPrecheck.
+    "src/cron/job-precheck.ts": ["exports"],
   },
   workspaces: {
     ".": {

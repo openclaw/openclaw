@@ -86,6 +86,275 @@ class CronJobConfigRevisionConflictError extends Error {
   }
 }
 
+<<<<<<< HEAD
+=======
+// Migration provenance (sourceSha256) stays internal; the closed result schema
+// exposes only content/revision/updatedAtMs.
+function publicCronScratch(
+  scratch: { content: string; revision: number; updatedAtMs: number } | undefined,
+) {
+  if (!scratch) {
+    return null;
+  }
+  return {
+    content: scratch.content,
+    revision: scratch.revision,
+    updatedAtMs: scratch.updatedAtMs,
+  };
+}
+
+function cronJobReadView(job: CronJob) {
+  const publicJob = toPublicCronJob(job);
+  return {
+    ...publicJob,
+    configRevision: resolveCronJobConfigRevision(job),
+    nextRunAtMs: job.state.nextRunAtMs,
+    lastRunAtMs: job.state.lastRunAtMs,
+    lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus,
+    lastRunError: job.state.lastError,
+    lastDelivered: job.state.lastDelivered,
+    lastDeliveryStatus: job.state.lastDeliveryStatus,
+    lastDeliveryError: job.state.lastDeliveryError,
+    lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
+    lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
+    lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
+  };
+}
+
+function compactCronListJob(job: CronJob) {
+  // Optional declaration/delivery fields are omitted when unset so compact
+  // rows stay lean for the common undeclared job.
+  return {
+    id: job.id,
+    name: job.name,
+    ...(job.declarationKey ? { declarationKey: job.declarationKey } : {}),
+    ...(job.displayName ? { displayName: job.displayName } : {}),
+    ...(job.owner ? { owner: job.owner } : {}),
+    enabled: job.enabled,
+    nextRunAtMs: job.state.nextRunAtMs ?? null,
+    scheduleKind: job.schedule.kind,
+    ...(job.trigger ? { trigger: true } : {}),
+    lastRunAtMs: job.state.lastRunAtMs ?? null,
+    lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
+    lastRunError: job.state.lastError ?? null,
+    ...(job.state.lastDelivered !== undefined ? { lastDelivered: job.state.lastDelivered } : {}),
+    ...(job.state.lastDeliveryStatus !== undefined
+      ? { lastDeliveryStatus: job.state.lastDeliveryStatus }
+      : {}),
+    ...(job.state.lastDeliveryError !== undefined
+      ? { lastDeliveryError: job.state.lastDeliveryError }
+      : {}),
+    ...(job.state.lastFailureNotificationDelivered !== undefined
+      ? { lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered }
+      : {}),
+    ...(job.state.lastFailureNotificationDeliveryStatus !== undefined
+      ? { lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus }
+      : {}),
+    ...(job.state.lastFailureNotificationDeliveryError !== undefined
+      ? { lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError }
+      : {}),
+  };
+}
+
+async function assertValidCronUpdatePatch(params: {
+  cfg: OpenClawConfig;
+  defaultAgentId?: string;
+  currentJob: CronJob;
+  patch: CronJobPatch;
+}) {
+  // Apply the full patch so service-owned payload/session constraints are
+  // checked before mutation; configured-channel checks stay delivery-scoped so
+  // stale existing delivery does not block unrelated updates like disabling.
+  const nextJob = structuredClone(params.currentJob);
+  applyJobPatch(nextJob, params.patch, {
+    defaultAgentId: params.defaultAgentId,
+    cronConfig: params.cfg.cron,
+  });
+  if (
+    "agentId" in params.patch ||
+    "sessionTarget" in params.patch ||
+    "sessionKey" in params.patch
+  ) {
+    assertCronDoesNotTargetAgentHarness(nextJob);
+  }
+  // Clearing a concrete channel (channel: null) while keeping a bare announce `to`
+  // intentionally falls back to "last" in multi-channel configs. Use the same
+  // adjusted delivery for both the delivery check and the inherited-alert check so
+  // an alert that inherits the route is judged identically to the delivery itself.
+  const effectiveDelivery =
+    params.patch.delivery?.channel === null &&
+    nextJob.delivery &&
+    (nextJob.delivery.mode ?? "announce") === "announce" &&
+    nextJob.delivery.channel === undefined &&
+    resolveTargetPrefixedChannel(nextJob.delivery.to) === undefined
+      ? { ...nextJob.delivery, channel: "last" as const }
+      : nextJob.delivery;
+  if ("delivery" in params.patch) {
+    await assertValidCronAnnounceDelivery({
+      cfg: params.cfg,
+      delivery: effectiveDelivery,
+    });
+  }
+  // failureAlert is a separate field from delivery, so a failureAlert-only patch
+  // skips the delivery check above. Validate when this edit touches a field that
+  // can change the announce channel routing: the alert's own channel/target/mode,
+  // or delivery itself (an alert without its own channel/target inherits the job
+  // delivery channel, so a delivery change can invalidate it). Editing unrelated
+  // alert fields (after/cooldown/includeSkipped) must not be blocked by a channel
+  // stored before this validation existed. The merged value carries the effective
+  // mode, and the validator no-ops for alerts that only inherit delivery.
+  const failureAlertPatch = params.patch.failureAlert;
+  const failureAlertRoutingPatched =
+    failureAlertPatch &&
+    ("channel" in failureAlertPatch || "to" in failureAlertPatch || "mode" in failureAlertPatch);
+  // Enabling a previously OFF alert makes it start inheriting the job delivery
+  // route, so validate even when the enabling patch (`--failure-alert`,
+  // `--failure-alert-after`) carries no routing key of its own. An alert is
+  // already ON - so an object-only edit only changes threshold/cooldown - when it
+  // has per-job config or when global `cron.failureAlert.enabled` is true;
+  // resolveFailureAlert() treats those as active, so re-validating their inherited
+  // route would block unrelated edits on a legacy channel that already delivers.
+  const globalAlertsEnabled = params.cfg.cron?.failureAlert?.enabled === true;
+  const currentAlertActive =
+    params.currentJob.failureAlert !== false &&
+    (params.currentJob.failureAlert !== undefined || globalAlertsEnabled);
+  const nextAlertActive =
+    nextJob.failureAlert !== false && (nextJob.failureAlert !== undefined || globalAlertsEnabled);
+  const alertNewlyEnabled = !currentAlertActive && nextAlertActive;
+  // A delivery change only affects the alert when the alert inherits the changed
+  // delivery field (its own channel/to is unset). Gating on that avoids blocking
+  // unrelated delivery edits (bestEffort, failureDestination) on jobs that carry
+  // a stale explicit alert channel. A delivery `mode` change is included because
+  // switching to/from webhook clears the inherited channel/target in
+  // mergeCronDelivery, which can make an inheriting alert ambiguous.
+  const deliveryPatch = params.patch.delivery;
+  const mergedAlert = nextJob.failureAlert;
+  const alertUsesInheritedChannel = !mergedAlert || mergedAlert.channel === undefined;
+  const alertUsesInheritedTarget = !mergedAlert || mergedAlert.to === undefined;
+  const deliveryAffectsInheritedAlert =
+    deliveryPatch &&
+    nextAlertActive &&
+    (("channel" in deliveryPatch && alertUsesInheritedChannel) ||
+      ("to" in deliveryPatch && alertUsesInheritedTarget) ||
+      ("mode" in deliveryPatch && alertUsesInheritedChannel));
+  const currentAlertRoutingOverride =
+    params.currentJob.failureAlert &&
+    (params.currentJob.failureAlert.channel !== undefined ||
+      params.currentJob.failureAlert.to !== undefined ||
+      params.currentJob.failureAlert.mode !== undefined);
+  const alertResetToGlobal =
+    failureAlertPatch === null && nextAlertActive && currentAlertRoutingOverride;
+  if (
+    failureAlertRoutingPatched ||
+    alertNewlyEnabled ||
+    deliveryAffectsInheritedAlert ||
+    alertResetToGlobal
+  ) {
+    await assertValidCronFailureAlert({
+      cfg: params.cfg,
+      failureAlert: nextJob.failureAlert,
+      delivery: effectiveDelivery,
+    });
+  }
+  return nextJob;
+}
+
+function requiresExplicitAgentRuntimeToolsAllow(params: {
+  job: Pick<CronJob, "payload" | "trigger">;
+  callerScope: CronCallerScope | undefined;
+}): boolean {
+  return (
+    params.callerScope !== undefined &&
+    cronJobUsesToolRuntime(params.job) &&
+    params.job.payload.toolsAllow === undefined
+  );
+}
+
+function cronPatchTouchesToolRuntime(patch: CronJobPatch): boolean {
+  // Host-shell precheck is an unattended executable surface. Precheck-only
+  // updates must take the same explicit-cap + caller-bound scheduled authority
+  // path as payload/trigger tool-runtime mutations.
+  return (
+    patch.payload !== undefined ||
+    Object.hasOwn(patch, "trigger") ||
+    Object.hasOwn(patch, "precheck")
+  );
+}
+
+function assertCronDoesNotTargetAgentHarness(input: {
+  agentId?: string | null;
+  sessionTarget?: string | null;
+  sessionKey?: string | null;
+}): void {
+  const targetSessionKey =
+    resolveCronSessionTargetSessionKey(input.sessionTarget) ??
+    (input.sessionTarget === "current" ? input.sessionKey?.trim() : undefined);
+  if (!targetSessionKey) {
+    return;
+  }
+
+  const loaded = loadGatewaySessionEntryReadOnly(
+    targetSessionKey,
+    input.agentId?.trim() ? { agentId: input.agentId.trim() } : {},
+  );
+  const reservedKey =
+    isAgentHarnessSessionKey(targetSessionKey) || isAgentHarnessSessionKey(loaded.canonicalKey);
+  if (loaded.entry?.modelSelectionLocked === true) {
+    // Detached cron execution is a generic model path and cannot preserve a
+    // harness-owned runtime lock, even when the durable row uses an ordinary key.
+    throw new Error(
+      reservedKey
+        ? AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE
+        : AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
+    );
+  }
+  if (!reservedKey || loaded.entry) {
+    // `harness:*` was historically a valid public key. Preserve an existing
+    // unlocked row while reserving missing keys for trusted harness creation.
+    return;
+  }
+
+  // Cron's detached runner does not carry the owning harness lock. Harness
+  // execution targets must enter through ordinary session dispatch instead.
+  throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+}
+
+function resolveCronJobId(params: CronJobIdParams): string | undefined {
+  // Exact store lookups; clipboard/UI padding must not fake "id not found".
+  return normalizeOptionalString(params.id ?? params.jobId);
+}
+
+function respondInvalidCronParams(respond: RespondFn, method: string, reason: string): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params: ${reason}`),
+  );
+}
+
+function respondMissingCronJobId(respond: RespondFn, method: string): void {
+  respondInvalidCronParams(respond, method, "missing id");
+}
+
+function respondCronJobNotFound(
+  respond: RespondFn,
+  jobId: string,
+  options: { preserveCronGetWireMessage?: boolean } = {},
+): void {
+  const message = options.preserveCronGetWireMessage
+    ? `cron job not found: ${jobId}. List automations and retry with a current job id.`
+    : `Automation not found: ${jobId}. List automations and retry with a current job id.`;
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, message, {
+      details: { code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND, jobId },
+    }),
+  );
+}
+
+/** Gateway request handlers for cron jobs and cron run-log access. */
+>>>>>>> e45bee97e4d (fix(cron): classify precheck patches as tool-runtime authority)
 export const cronHandlers: GatewayRequestHandlers = {
   wake: cronWakeHandler,
   "cron.list": cronListHandler,

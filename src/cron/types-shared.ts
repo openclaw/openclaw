@@ -6,6 +6,20 @@ export type CronAgentScope = {
   sessionKey?: string | null;
 };
 
+/** Optional zero-token shell gate before cron payload execution (#112371). */
+export type CronJobPrecheck = {
+  kind?: "exec";
+  command: string;
+  cwd?: string;
+  timeoutMs?: number;
+  contract?: "exit-code" | "stdout-prefix" | "dual";
+  workExitCodes?: number[];
+  noWorkExitCodes?: number[];
+  workStdoutPrefix?: string;
+  noWorkStdoutPrefix?: string;
+  onError?: "fail" | "skip";
+};
+
 /** Invalid config-backed cron job captured for quarantine instead of runtime load. */
 export type QuarantinedCronConfigJob = {
   sourceIndex: number;
@@ -40,6 +54,8 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     sessionTarget: TSessionTarget;
     wakeMode: TWakeMode;
     payload: TPayload;
+    /** Optional shell gate before payload execution (skip LLM when no work). */
+    precheck?: CronJobPrecheck;
     delivery?: TDelivery;
     failureAlert?: TFailureAlert;
   };
