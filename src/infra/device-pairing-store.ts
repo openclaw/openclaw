@@ -190,7 +190,8 @@ function bumpDevicePairingStoreRevision(db: EngineConnection): string {
       .onConflict((conflict) =>
         conflict.column("state_key").doUpdateSet((eb) => ({
           value_json: eb.cast<string>(
-            eb(eb.cast<number>("config_machine_state.value_json", "bigint"), "+", 1),
+            // A bound JavaScript number uses SQLite REAL arithmetic; keep integer text.
+            eb(eb.cast<number>("config_machine_state.value_json", "bigint"), "+", eb.lit(1)),
             "text",
           ),
           updated_at_ms: eb.ref("excluded.updated_at_ms"),
