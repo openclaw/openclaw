@@ -162,14 +162,17 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 
 ### Plugin remote Control UI ingress
 
-A trusted plugin can expose the [remote Control UI ingress](/plugins/sdk-gateway-ingress)
-on a Gateway using token or password auth without `gateway.roles`. The plugin
-must authenticate the browser as its locally approved grant holder before
+A trusted plugin such as [MCP Relay](/plugins/mcp-relay) can expose the
+[remote Control UI ingress](/plugins/sdk-gateway-ingress). Each grant is bound to
+the shared owner on a token or password Gateway without `gateway.roles`, or to a
+verified person on a Cloudflare Access trusted-proxy Gateway with roles. The
+plugin must authenticate the browser as its locally approved grant holder before
 forwarding any request or socket. Core treats the live handle like a trusted
-proxy: a fresh browser with a signed device identity is automatically paired as
-an operator, with `operator.read` or read/write scopes bounded by the handle's
-ceiling. Shared Gateway secrets, bootstrap credentials, device-less connections,
-non-operator roles, and scopes above the ceiling are refused.
+proxy: a browser with a signed device identity connects as an operator, with
+scopes limited to the grant's ceiling intersected with the principal's current
+authority. No reusable device token is issued. Shared Gateway secrets, bootstrap
+credentials, device-less connections, non-operator roles, and scopes above the
+ceiling are refused.
 
 The browser receives an ordinary device token and appears in **Devices** and
 `openclaw devices list`. The token also works on the Gateway's direct listener,
