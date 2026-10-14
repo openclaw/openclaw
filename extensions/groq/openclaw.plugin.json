@@ -161,7 +161,7 @@
             "id": "qwen/qwen3.6-27b",
             "name": "Qwen 3.6 27B",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text"],
             "contextWindow": 131072,
             "maxTokens": 16384,
             "cost": {
@@ -169,6 +169,20 @@
               "output": 3,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "supportedReasoningEfforts": ["none", "default"],
+              "reasoningEffortMap": {
+                "off": "none",
+                "none": "none",
+                "minimal": "default",
+                "low": "default",
+                "medium": "default",
+                "high": "default",
+                "xhigh": "default",
+                "adaptive": "default",
+                "max": "default"
+              }
             }
           }
         ]
