@@ -30,6 +30,7 @@ import {
   runWithOperatorToolGatewayContinuationContext,
 } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { TrustedSessionCreation } from "../../gateway/session-creation-provenance.js";
+import { bindSessionSendDeliveryContext } from "../../gateway/session-send-delivery.js";
 import { isGatewayWorkerApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -388,15 +389,19 @@ export function bindAgentToolGatewayRequest(options?: {
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const runInCallerContext = AsyncLocalStorage.snapshot();
   return async <T>(request: AgentToolGatewayRequest): Promise<T> =>
-    await runInCallerContext(() =>
-      callAgentToolGatewayRequestBound<T>(
-        request,
-        resolveGatewayContext,
-        agentToolGatewayRuntimeIdentities.get(request),
-        assertCallerCurrent,
-        (!resolver && !admitted) ||
-          (options?.hostedOnly === true && admitted?.localEmbedded === true),
-        options?.revalidateOnCompletion,
+    // Caller authority was captured when the tool was bound; durable delivery
+    // facts are created later for this exact invocation, not that earlier scope.
+    await runInCallerContext(
+      bindSessionSendDeliveryContext(() =>
+        callAgentToolGatewayRequestBound<T>(
+          request,
+          resolveGatewayContext,
+          agentToolGatewayRuntimeIdentities.get(request),
+          assertCallerCurrent,
+          (!resolver && !admitted) ||
+            (options?.hostedOnly === true && admitted?.localEmbedded === true),
+          options?.revalidateOnCompletion,
+        ),
       ),
     );
 }

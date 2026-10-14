@@ -47,7 +47,11 @@ type TransactionDatabase = DatabaseSync & {
   [abortedTransactionSymbol]?: { error: unknown };
 };
 
-export function assertTransactionUsable(db: TransactionDatabase): void {
+export function assertTransactionUsable(db: TransactionDatabase | PostgresSqlConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    assertPostgresTransactionUsable(db);
+    return;
+  }
   const aborted = db[abortedTransactionSymbol];
   if (aborted) {
     throw aborted.error;

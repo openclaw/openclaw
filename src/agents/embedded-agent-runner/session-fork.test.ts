@@ -212,6 +212,115 @@ describe("prepared session fork provider boundary", () => {
     };
   }
 
+  it.each(["bigint", "cycle"])(
+    "keeps the parent request working when optional replay cannot encode %s tool metadata",
+    async (kind) => {
+      const { parent, physicalFetch } = guardedTransport();
+      const completed = await (
+        await parent(model, context, { apiKey: "synthetic-key", transport: "sse" })
+      ).result();
+      const cyclic: { self?: unknown } = {};
+      cyclic.self = cyclic;
+      const parentContext: Context = {
+        ...context,
+        messages: [
+          ...context.messages,
+          {
+            ...completed,
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "completed", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "completed",
+            toolName: "lookup",
+            content: [{ type: "text", text: "Tool answer" }],
+            isError: false,
+            timestamp: 2,
+            details: kind === "bigint" ? { value: 1n } : cyclic,
+          },
+        ],
+      };
+      const onPayload = vi.fn();
+      const forkSent = createDeferredCore();
+      const releaseFork = createDeferredCore();
+      physicalFetch.mockImplementationOnce(async () => {
+        forkSent.resolve();
+        await releaseFork.promise;
+        return new Response(responsesBody(), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      });
+      const runningFork = expect(fork()).resolves.toBe("Answer");
+      try {
+        await forkSent.promise;
+        const assistant = await (
+          await parent(model, parentContext, {
+            apiKey: "synthetic-key",
+            transport: "sse",
+            onPayload,
+          })
+        ).result();
+        expect(assistant.stopReason).toBe("stop");
+        expect(onPayload).toHaveBeenCalledOnce();
+        expect(physicalFetch).toHaveBeenCalledTimes(3);
+        await expect(fork()).rejects.toThrow("requires a parent turn");
+      } finally {
+        releaseFork.resolve();
+        await runningFork;
+      }
+    },
+  );
+
+  it.each(["openai-responses", "anthropic-messages"] as const)(
+    "replays frozen %s history and keeps later publications isolated",
+    async (api) => {
+      const { parent, physicalFetch } = guardedTransport(undefined, api);
+      const requestModel = {
+        ...model,
+        api,
+        provider: api === "anthropic-messages" ? "anthropic" : "openai",
+        baseUrl: api === "anthropic-messages" ? "https://api.anthropic.com" : model.baseUrl,
+      };
+      const parentContext: Context = {
+        systemPrompt: "Frozen instructions 🦞",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Frozen question" }], timestamp: 1 },
+        ],
+      };
+      const message = parentContext.messages[0]!;
+      if (Array.isArray(message.content)) {
+        message.content.forEach((block) => Object.freeze(block));
+      }
+      Object.freeze(message.content);
+      Object.freeze(message);
+      Object.freeze(parentContext.messages);
+      Object.freeze(parentContext);
+      const assistant = await (
+        await parent(requestModel, parentContext, { apiKey: "synthetic-key", transport: "sse" })
+      ).result();
+      const publication = {
+        ...assistant,
+        content: [{ type: "text" as const, text: "Published answer" }],
+      };
+      recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, publication);
+      publication.content[0]!.text = "Changed after publication";
+
+      for (let index = 0; index < 2; index++) {
+        await expect(fork(requestModel)).resolves.toBe("Answer");
+        const [url, init] = physicalFetch.mock.calls[index + 1]!;
+        const body = await new Request(url, init).text();
+        expect(body).toContain("Frozen question");
+        expect(body).toContain("Published answer");
+        expect(body).not.toContain("Changed after publication");
+      }
+      expect(parentContext.messages).toHaveLength(1);
+      expect(parentContext.messages[0]!.content).toEqual([
+        { type: "text", text: "Frozen question" },
+      ]);
+    },
+  );
+
   it.each([
     ["openai-responses", false],
     ["openai-responses", true],

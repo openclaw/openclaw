@@ -89,6 +89,9 @@ export function inspectAgentDatabaseSchema(
         assertSqliteIntegrity(database, input.pathname);
         inspection.integrityGateOutcome = "healthy";
       }
+      if (migrationPending && version === input.supportedVersion) {
+        inspection.preparationPending = true;
+      }
       assertCanonicalAgentPersistenceVersion(database, input.pathname, version);
     }
     const agentId =
