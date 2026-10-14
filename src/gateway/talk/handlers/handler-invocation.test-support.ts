@@ -46,12 +46,16 @@ export function createTalkHandlerCaller(talkHandlers: GatewayRequestHandlers) {
       respond(false, undefined, admission.error);
       return;
     }
+    const ownsTimers = method === "talk.catalog" && !vi.isFakeTimers();
+    if (ownsTimers) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     try {
       const handler = expectDefined(
         talkHandlers[method],
         `talkHandlers["${method}"] test invariant`,
       );
-      for (let attempt = 0; attempt < 100; attempt++) {
+      for (let attempt = 0; attempt < 2; attempt++) {
         let warming = false;
         await handler({
           req: { type: "req", id, method },
@@ -62,7 +66,7 @@ export function createTalkHandlerCaller(talkHandlers: GatewayRequestHandlers) {
             warming =
               method === "talk.catalog" &&
               asOptionalRecord(args[2]?.details)?.reason === "talk-catalog-warming";
-            if (!warming || attempt === 99) {
+            if (!warming || attempt === 1) {
               respond(...args);
             }
           },
@@ -77,14 +81,15 @@ export function createTalkHandlerCaller(talkHandlers: GatewayRequestHandlers) {
               }
             : {}),
         });
-        if (!warming) {
+        if (!warming || attempt === 1) {
           break;
         }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 5);
-        });
+        await vi.advanceTimersByTimeAsync(0);
       }
     } finally {
+      if (ownsTimers) {
+        vi.useRealTimers();
+      }
       admission?.authorization?.release?.();
     }
   };

@@ -44,18 +44,23 @@ vi.mock("../../../realtime-transcription/provider-registry.js", async (importOri
 
 // Existing catalog contract cases consume the documented warming retry before inspecting rows.
 async function callGatewayHandler(...args: Parameters<typeof callGatewayHandlerOnce>) {
-  for (let attempt = 0; ; attempt++) {
+  const ownsTimers = !vi.isFakeTimers();
+  if (ownsTimers) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  }
+  try {
     const result = await callGatewayHandlerOnce(...args);
     if (
-      asOptionalRecord(asOptionalRecord(result.error)?.details)?.reason !==
-        "talk-catalog-warming" ||
-      attempt === 99
+      asOptionalRecord(asOptionalRecord(result.error)?.details)?.reason !== "talk-catalog-warming"
     ) {
       return result;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 5);
-    });
+    await vi.advanceTimersByTimeAsync(0);
+    return await callGatewayHandlerOnce(...args);
+  } finally {
+    if (ownsTimers) {
+      vi.useRealTimers();
+    }
   }
 }
 
