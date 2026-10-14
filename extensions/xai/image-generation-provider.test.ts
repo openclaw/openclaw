@@ -209,6 +209,45 @@ describe("xai image generation provider", () => {
     );
   });
 
+  it.each([
+    { optIn: undefined, expected: false },
+    { optIn: false, expected: false },
+    { optIn: true, expected: true },
+  ])(
+    "allows a private endpoint only when the operator opts in (request.allowPrivateNetwork: $optIn)",
+    async ({ optIn, expected }) => {
+      postJsonRequestMock.mockResolvedValue({
+        response: jsonResponse({
+          data: [{ b64_json: Buffer.from("testpng").toString("base64") }],
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+      await buildXaiImageGenerationProvider().generateImage({
+        provider: "xai",
+        model: "grok-imagine-image",
+        prompt: "test prompt",
+        cfg: {
+          models: {
+            providers: {
+              xai: {
+                baseUrl: "http://10.0.0.5:8443/v1",
+                ...(optIn === undefined ? {} : { request: { allowPrivateNetwork: optIn } }),
+                models: [],
+              },
+            },
+          },
+        },
+      } as GenerateImageParams);
+
+      const httpParams = (
+        resolveProviderHttpRequestConfigMock.mock.calls as unknown as Array<[unknown]>
+      )[0]?.[0] as { baseUrl?: string; allowPrivateNetwork?: boolean } | undefined;
+      expect(httpParams?.baseUrl).toBe("http://10.0.0.5:8443/v1");
+      expect(httpParams?.allowPrivateNetwork).toBe(expected);
+    },
+  );
+
   it("supports edit with exact user-provided payload format including image object with type image_url", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: jsonResponse({
