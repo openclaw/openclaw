@@ -590,7 +590,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 .session-hovercard__automation-instructions summary {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-  cursor: pointer;
 }
 
 .session-hovercard__automation-instructions pre {
@@ -612,7 +611,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   border-top: 1px solid var(--border);
   color: var(--text);
   text-decoration: none;
-  cursor: pointer;
 }
 
 .session-hovercard__automation-open svg {
