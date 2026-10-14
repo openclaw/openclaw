@@ -44,7 +44,7 @@ export type SessionActorAuthority = {
   ): void;
 };
 
-/** Complete hot facts. Cold/off-path payloads stay with the bounded history reader. */
+/** Actor facts; durable history indexes and payloads stay with the bounded history reader. */
 export type SessionActorHotState = {
   target: SessionActorTarget;
   version: SessionActorVersion;
@@ -58,7 +58,7 @@ export type SessionActorHotState = {
   participants: SessionParticipantRecord[];
   members: SessionMember[];
   pendingInputs: Array<Omit<SessionPendingInputRow, "message_json">>;
-  /** Complete retry-key membership; outcome bodies stay in the worker. */
+  /** Retry-key membership is complete only with resident modelContext. */
   completionKeys: string[];
   transcript: {
     /** Durable projection postimage; omitted by adapters without SQLite projections. */
@@ -68,6 +68,7 @@ export type SessionActorHotState = {
     /** Empty anchors prove absence only when this exact projection is resident. */
     anchorsState: "resident" | "unavailable";
     anchors: TranscriptEntryAnchor[];
+    /** Durable postimages omit this index and mark modelContext unavailable. */
     idempotency: Array<{ key: string; eventId: string; rawSeq: number }>;
     /** Exact ordered active context membership, including an explicitly empty context. */
     modelContext:

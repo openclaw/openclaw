@@ -439,7 +439,7 @@ the migration inventory records remaining synchronous compatibility paths.
 
 | Owner                           | SQL execution                                        | Retained facts and writers                                                                                                                                                                                                                                  |
 | ------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session actor and entry readers | Agent execution writer; session history/read workers | Actor and entry receipts publish entry, participant, membership, anchor, and watermark facts. Native compatibility writers publish through the same session-change owner. Missing or unknown coverage invalidates the affected facts.                       |
+| Session actor and entry readers | Agent execution writer; session history/read workers | Actor and entry receipts publish entry, participant, membership, and watermark facts. Native compatibility writers publish through the same session-change owner. Missing or unknown coverage invalidates the affected facts.                               |
 | Session list projection         | Worker hydration and bounded history reads           | The host retains list rows and display metadata. Entry, sharing, transcript, profile, and topology publications update or invalidate their owned fields; incognito rows stay outside the durable roster.                                                    |
 | User profiles                   | Shared-state readers and profile writer              | The resident catalog retains display rows, roles, merge aliases, and email bindings. Profile and binding writers install committed changes before notifications; physical replacement or unknown changes invalidate the catalog.                            |
 | Agent deletion journal          | Shared-state reader and lifecycle writer             | Admission retains `absent`, `pending`, or `complete` per physical database and agent. Journal begin, completion, and removal publish the new status after commit; offline repair invalidates it. Final deletion effects retain their live-authority guards. |
@@ -563,8 +563,10 @@ and eviction return to the canonical readers.
 
 Bounded transcript hydration retains its result in the existing session actor
 replica. Complete active paths advance from committed append receipts, including
-the stored payload byte lengths; repeated reads and recent reply anchors can then
-use that replica without another history-worker request. Incomplete windows,
+the stored payload byte lengths; repeated bounded-context reads can then use that
+replica without another history-worker request. Durable append receipts omit full
+transcript indexes and per-event byte tables; selected anchors and retry history
+stay with their canonical readers. Incomplete windows,
 capacity overflow, content rewrites, rewinds, compaction, archive changes, and deletion
 return to the canonical reader. The projection shares the actor's eviction and
 write-receipt invalidation lifecycle and does not change schemas, stored formats,

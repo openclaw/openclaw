@@ -1608,6 +1608,7 @@ src/process/spawn-broker/context.ts
 src/process/spawn-broker/execa-client.ts
 src/process/spawn-broker/execa-message.ts
 src/process/spawn-broker/execa-protocol.ts
+src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts

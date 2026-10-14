@@ -9,7 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const QWEN_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
+export const QWEN_BASE_URL = manifest.modelCatalog.providers.qwen.baseUrl;
 export const QWEN_GLOBAL_BASE_URL = QWEN_BASE_URL;
 export const QWEN_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
 export const QWEN_STANDARD_CN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
@@ -84,8 +84,7 @@ export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig>
 export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> =
   buildManifestModelProviderConfig({
     providerId: "qwen",
-    // Shared seeds span plans; only runtime config selects the Coding Plan default.
-    catalog: { ...manifest.modelCatalog.providers.qwen, baseUrl: QWEN_BASE_URL },
+    catalog: manifest.modelCatalog.providers.qwen,
   }).models;
 
 export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
