@@ -821,7 +821,9 @@ package installs and existing Git checkouts. Package
 installs reject the `--tag main` shorthand because the workspace checkout is
 not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
-keep their package-manager behavior.
+keep their package-manager behavior. Dev target inspection fetches only the selected
+upstream source, respecting the repository's ref mappings and exclusions. It does
+not download unrelated branches or change the repository's shallow boundary.
 
 On source installs, Doctor and plugin updates keep plugins built with the host.
 A registry plugin with the same version string can target a different SDK, so
