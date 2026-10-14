@@ -56,7 +56,8 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   "session.tool",
 ]);
 
-type FramePayload = string | Buffer | Buffer[];
+type EncodedMessagePayload = { prefix: string; message: Buffer; suffix: string };
+type FramePayload = string | Buffer | EncodedMessagePayload;
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string;
 function serializeFrameField(
@@ -64,13 +65,13 @@ function serializeFrameField(
   value: unknown,
   serializeSession: (() => string) | undefined,
   serializeMessage?: () => Buffer,
-): string | Buffer[];
+): string | EncodedMessagePayload;
 function serializeFrameField(
   name: "payload" | "stateVersion",
   value: unknown,
   serializeSession?: () => string,
   serializeMessage?: () => Buffer,
-): string | Buffer[] {
+): string | EncodedMessagePayload {
   // The projection owns a fresh envelope; encode its large fields separately.
   // SAFETY: serializeSession certifies a fresh, mutable record envelope.
   const shareSession =
@@ -104,9 +105,7 @@ function serializeFrameField(
     const separator = fieldJSON.endsWith("{}}") ? "" : ",";
     const prefix = `,${fieldJSON.slice(1, -2)}${separator}`;
     const suffix = `"session":${sessionJSON}}`;
-    return messageBytes
-      ? [Buffer.from(prefix), messageBytes, Buffer.from(suffix)]
-      : `${prefix}${suffix}`;
+    return messageBytes ? { prefix, message: messageBytes, suffix } : `${prefix}${suffix}`;
   }
   return fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
 }
@@ -170,15 +169,23 @@ function frameWithSequence(
     recipientProfileId === undefined
       ? ""
       : `,"recipientProfileId":${JSON.stringify(recipientProfileId)}`;
-  const prefix = `{"type":"event","event":${base.eventJSON}`;
-  const suffix = `,"seq":${seq}${base.stateVersionFragment}${recipient}}`;
-  return typeof payload === "string"
-    ? `${prefix}${payload}${suffix}`
-    : Buffer.concat([
-        Buffer.from(prefix),
-        ...(Array.isArray(payload) ? payload : [payload]),
-        Buffer.from(suffix),
-      ]);
+  let prefix = `{"type":"event","event":${base.eventJSON}`;
+  let suffix = `,"seq":${seq}${base.stateVersionFragment}${recipient}}`;
+  if (typeof payload === "string") {
+    return `${prefix}${payload}${suffix}`;
+  }
+  const bytes = Buffer.isBuffer(payload) ? payload : payload.message;
+  if (!Buffer.isBuffer(payload)) {
+    prefix += payload.prefix;
+    suffix = payload.suffix + suffix;
+  }
+  const frame = Buffer.allocUnsafe(
+    Buffer.byteLength(prefix) + bytes.length + Buffer.byteLength(suffix),
+  );
+  const offset = frame.write(prefix);
+  bytes.copy(frame, offset);
+  frame.write(suffix, offset + bytes.length);
+  return frame;
 }
 
 export function createGatewayBroadcaster(params: {
