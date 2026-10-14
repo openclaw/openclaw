@@ -183,6 +183,108 @@ describe("OpenAI completions output budgets", () => {
 
 describe("OpenAI completions reasoning", () => {
   it.each(["direct", "managed"] as const)(
+    "honors declared off efforts for inferred custom Z.AI (%s)",
+    (mode) => {
+      const cases: [NonNullable<CompletionsModel["compat"]>, string][] = [
+        [{ supportedReasoningEfforts: ["none", "low"] }, "none"],
+        [{ supportedReasoningEfforts: ["off", "low"] }, "off"],
+        [{ supportedReasoningEfforts: [" none ", "low"] }, "none"],
+        [{ reasoningEffortMap: { off: "none" } }, "none"],
+        [{ reasoningEffortMap: { OFF: "low" } }, "low"],
+      ];
+      for (const [compat, expected] of cases) {
+        const model = makeCompletionsModel({
+          provider: "custom",
+          id: "declared-off",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          compat: { ...compat, supportsReasoningEffort: true },
+        });
+        const params = buildOpenAICompletionsRequest(
+          model,
+          emptyContext(),
+          { reasoningEffort: "off" },
+          mode === "direct"
+            ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+            : { mode },
+        );
+        if (mode === "direct") {
+          expect(params.thinking).toEqual(
+            expected === "low" ? { type: "enabled", clear_thinking: false } : { type: "disabled" },
+          );
+          expect(params).not.toHaveProperty("reasoning_effort");
+        } else {
+          expect(params.reasoning_effort).toBe(expected);
+          expect(params).not.toHaveProperty("thinking");
+        }
+      }
+    },
+  );
+
+  it.each(["direct", "managed"] as const)(
+    "omits inferred Z.AI off controls but preserves other custom contracts (%s)",
+    (mode) => {
+      for (const [baseUrl, thinkingFormat] of [
+        ["https://api.z.ai/api/paas/v4", "zai"],
+        ["https://api.deepseek.com", "deepseek"],
+        ["https://api.together.ai/v1", "together"],
+      ] as const) {
+        for (const explicit of [false, true]) {
+          const model = makeCompletionsModel({
+            provider: "custom",
+            id: "always-thinking",
+            baseUrl,
+            ...(explicit ? { compat: { thinkingFormat, supportsReasoningEffort: true } } : {}),
+          });
+          const params = buildOpenAICompletionsRequest(
+            model,
+            emptyContext(),
+            { reasoningEffort: "off" },
+            mode === "direct"
+              ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+              : { mode },
+          );
+          const hasOffContract = explicit || thinkingFormat !== "zai";
+          if (hasOffContract && (mode === "direct" || thinkingFormat === "together")) {
+            expect(params).toMatchObject(
+              thinkingFormat === "together"
+                ? { reasoning: { enabled: false } }
+                : { thinking: { type: "disabled" } },
+            );
+          } else {
+            expect(params).not.toHaveProperty("thinking");
+            expect(params).not.toHaveProperty("reasoning");
+          }
+          if (
+            mode === "managed" &&
+            (thinkingFormat === "deepseek" || (explicit && thinkingFormat === "zai"))
+          ) {
+            expect(params.reasoning_effort).toBe("none");
+          } else {
+            expect(params).not.toHaveProperty("reasoning_effort");
+          }
+        }
+      }
+    },
+  );
+
+  it("preserves explicit Z.AI binary off when scalar effort is unavailable", () => {
+    const model = makeCompletionsModel({
+      provider: "custom",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: { thinkingFormat: "zai" },
+      thinkingLevelMap: { off: null },
+    });
+    const params = buildOpenAICompletionsRequest(
+      model,
+      emptyContext(),
+      { reasoningEffort: "off" },
+      { mode: "direct", compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" },
+    );
+    expect(params.thinking).toEqual({ type: "disabled" });
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
+  it.each(["direct", "managed"] as const)(
     "sends custom reasoning controls with conservative off defaults (%s)",
     (mode) => {
       const cases: [

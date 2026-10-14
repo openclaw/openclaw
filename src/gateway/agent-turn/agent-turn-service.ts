@@ -6,6 +6,7 @@ import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import {
   acquireSessionActorStorage,
@@ -46,6 +47,8 @@ import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 type AgentTurnStartRequest = {
   privateCompletion?: true;
+  /** Trusted input-owner policy; not accepted from the wire request. */
+  replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   assertAdmissionCurrent?: () => void;
   assertInputCommitAllowed?: () => void;
@@ -62,6 +65,7 @@ export function createAgentTurnService(
 ) {
   const startTurn = async ({
     privateCompletion,
+    replyExpectation,
     settleWakeReplay,
     assertAdmissionCurrent,
     assertInputCommitAllowed,
@@ -524,6 +528,7 @@ export function createAgentTurnService(
             preparedOffloadedRefs = [];
           },
           privateCompletion,
+          replyExpectation,
           settleWakeReplay,
           abortForLifecycleRotation: dedupeLifecycle.abortForLifecycleRotation,
           acquireGatewayWorkAdmission: admissionController.acquire,

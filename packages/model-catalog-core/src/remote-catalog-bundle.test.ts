@@ -24,6 +24,7 @@ const validBundle = {
       models: [
         {
           id: "claude-test",
+          input: ["text", "image", "video"],
           ...transport,
           contextWindows,
           contextWindowDefault: "1m",
@@ -38,7 +39,7 @@ const knownPrice = { status: "known", currency: "USD", unit: "million_tokens" };
 const firstModel = {
   id: "vendor/model",
   provider: "first",
-  input: ["text"],
+  input: ["text", "video"],
   pricing: { ...knownPrice, source: "native-feed", input: 0, output: 0 },
 };
 const validBundleV2 = {
@@ -146,6 +147,7 @@ it("accepts v1 metadata while deeply stripping transport overrides", () => {
   expect(anthropic?.models[0]).not.toHaveProperty("baseUrl");
   expect(anthropic?.models[0]).not.toHaveProperty("headers");
   expect(anthropic?.models[0]).toMatchObject({
+    input: ["text", "image", "video"],
     contextWindows,
     contextWindowDefault: "1m",
     compat: { nested: {} },
