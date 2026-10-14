@@ -26,6 +26,7 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { recoverGatewaySession } from "./session-recovery-service.js";
@@ -60,8 +61,10 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", async (importOrig
 afterEach(() => drainGlobalSingletonLifecycleState());
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const prepareProfiles = useUserProfileCatalogForTest();
 
-beforeEach(() => {
+beforeEach(async () => {
+  await prepareProfiles();
   titleGeneration.mockReset().mockResolvedValue("Recovered session");
 });
 
@@ -511,6 +514,29 @@ test.each(["session-id", "lifecycle-revision"] as const)(
     expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
   },
 );
+
+test("sessions.recover preserves device-folder affinity before launching its successor", async () => {
+  const deviceFolder = { deviceId: "recovery-device", path: "/existing/project" };
+  const fixture = await recoveryFixture("device-folder-recovery", { deviceFolder });
+  const launchContinuation = vi.fn(async (target: { sessionKey: string; storePath: string }) => {
+    expect(loadSessionEntry(target)?.deviceFolder).toEqual(deviceFolder);
+    return { status: "started" as const, runId: "device-folder-recovery-run" };
+  });
+  const result = await recoverGatewaySession({
+    cfg: getRuntimeConfig(),
+    key: fixture.sourceKey,
+    agentId: "main",
+    workerPlacementContext: {},
+    launchContinuation,
+  });
+  expect(result).toMatchObject({
+    ok: true,
+    created: true,
+    successorEntry: { deviceFolder },
+  });
+  expect(launchContinuation).toHaveBeenCalledOnce();
+  expect(fixture.source()?.deviceFolder).toEqual(deviceFolder);
+});
 
 test("sessions.recover rolls over one tombstone and returns its continuation outcome", async () => {
   const { storePath } = await createSessionStoreDir();

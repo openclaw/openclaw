@@ -27,6 +27,7 @@ import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcr
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import {
   buildRunUserTurnIdempotencyKey,
+  buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
@@ -43,6 +44,7 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
+import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -282,11 +284,28 @@ export async function prepareAgentRunUserTurn(params: {
         ...(media.length > 0 ? { media } : {}),
         ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
       };
+      const peerDelivery = readSessionSendDeliveryAdmission({
+        runId: params.runId,
+        sessionKey: params.resolvedSessionKey,
+        sessionId: params.admittedSessionId,
+        agentId: params.activeSessionAgentId,
+      });
+      let peerMessage = peerDelivery?.acceptedMessage;
+      if (peerDelivery && !peerMessage) {
+        const original = buildPersistedUserTurnMessage(input);
+        peerMessage = {
+          ...original,
+          __openclaw: { ...original["__openclaw"], sessionSendDelivery: peerDelivery.delivery },
+        };
+      }
       recorder = createUserTurnTranscriptRecorder({
-        trackInputCompletion: params.privateCompletion || settleWakeReplay !== undefined,
+        trackInputCompletion:
+          params.privateCompletion || settleWakeReplay !== undefined || peerDelivery !== undefined,
+        ...(peerMessage ? { message: peerMessage } : {}),
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: async () => {
+          params.assertCurrent();
           const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
             cfg: params.cfgForAgent ?? params.cfg,
             key: params.resolvedSessionKey!,
@@ -294,6 +313,7 @@ export async function prepareAgentRunUserTurn(params: {
             assertActive: params.assertCurrent,
             excludeInternalEffects: true,
           });
+          params.assertCurrent();
           const latestEntry = loaded.entry;
           const loadedSessionId = latestEntry?.sessionId?.trim();
           // Session creation is persisted before this phase. No matching entry

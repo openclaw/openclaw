@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type {
   ClawPackageRefStatus,
@@ -7,7 +7,7 @@ import type {
 } from "./package-extension-provenance.js";
 
 export function updateClawPackageRefStatusInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   ref: PersistedClawPackageRef,
   status: ClawPackageRefStatus,
   nowMs: number,

@@ -6,6 +6,7 @@ import {
   finalizeInboundContextForSdk,
   isFinalizedInboundContext,
 } from "../auto-reply/reply/inbound-context.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
@@ -78,6 +79,13 @@ export async function tryDispatchAcpReplyHook(
     return;
   }
 
+  if (!event.shouldSendToolSummariesAsync || !event.shouldSendFullToolDetailsAsync) {
+    warnPluginSdkDeprecation({
+      family: "reply-visibility",
+      method: "tryDispatchAcpReplyHook boolean visibility inputs",
+      replacement: "shouldSendToolSummariesAsync and shouldSendFullToolDetailsAsync predicates",
+    });
+  }
   const legacyFullToolDetails = event.shouldSendFullToolDetailsAsync
     ? undefined
     : event.shouldSendFullToolDetails;

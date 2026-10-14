@@ -256,7 +256,7 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
 async function readGitAuthor(env: NodeJS.ProcessEnv, cwd: string) {
   const result = await runIdentityCommand(
     ["git", "config", "--null", "--get-regexp", "^user\\.(name|email)$"],
-    env,
+    { ...env, GIT_NO_LAZY_FETCH: "1" },
     cwd,
   );
   const author: { name: string | null; email: string | null } = { name: null, email: null };

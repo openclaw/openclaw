@@ -4,6 +4,7 @@ import { serialize } from "node:v8";
 import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { sqlPublicationAnchor, type PostgresSqlConnection } from "./sql-connection.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
@@ -82,7 +83,7 @@ export type RetainedWorkerTransactionAdmission = {
 
 export function deferSqliteWorkerNativeCommitReceipt(
   owner: SqliteWorkerOperationContext,
-  database: DatabaseSync,
+  database: DatabaseSync | PostgresSqlConnection,
   facts: unknown,
   delivery: "commit" | "settlement",
 ): void {
@@ -93,20 +94,21 @@ export function deferSqliteWorkerNativeCommitReceipt(
     );
   }
   const captured = structuredClone(facts);
+  const anchor = sqlPublicationAnchor(database);
   const counts = owner.sourceReservations ? (owner.pendingReceipts ??= new Map()) : undefined;
   const pending = (delta: number) => {
     if (!counts) {
       return;
     }
-    const count = (counts.get(database) ?? 0) + delta;
+    const count = (counts.get(anchor) ?? 0) + delta;
     if (count === 0) {
-      counts.delete(database);
+      counts.delete(anchor);
     } else {
-      counts.set(database, count);
+      counts.set(anchor, count);
     }
   };
   if (
-    !stageSqliteTransactionState(database, {
+    !stageSqliteTransactionState(anchor, {
       stage: () => pending(1),
       rollback: () => pending(-1),
       commit() {

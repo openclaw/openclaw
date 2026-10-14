@@ -10,7 +10,7 @@ import { captureRuntimeConfigAsyncReader, readConfigFileSnapshotForWrite } from 
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -50,7 +50,7 @@ export async function resolveAgentRuntimeConfig(
           } catch {
             // Fall back to runtime-loaded config when source snapshot is unavailable.
           }
-          pluginMetadataSnapshot = resolvePluginMetadataSnapshot({ config: loadedRaw });
+          pluginMetadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: loadedRaw });
           return loadedRaw;
         },
         { config: loadedRaw },

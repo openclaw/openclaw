@@ -269,6 +269,8 @@ it.each(cases)(
         },
       },
       plugins: {
+        // Keep unrelated memory retries off the fixture's held transport clock.
+        slots: { memory: "none" },
         allow: ["codex", "openai", "recovery-instructions"],
         load: { paths: [plugin] },
         entries: {

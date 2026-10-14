@@ -1,6 +1,4 @@
 // Control UI config module wires vitest behavior.
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
@@ -36,6 +34,7 @@ import {
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
+import { resolvePlaywrightChromiumExecutablePath } from "./src/test-helpers/playwright-chromium.ts";
 import { overlayEmulateMedia } from "./test/overlay-browser-commands.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
 
@@ -81,35 +80,11 @@ const nodeSetupFiles = ["./src/test-helpers/lit-warnings.setup.ts"];
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
-const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
-const systemChromiumExecutableCandidates = [
-  "/snap/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/usr/bin/chromium",
-  "/usr/bin/google-chrome",
-  "/usr/bin/google-chrome-stable",
-] as const;
-
-function canRunChromiumExecutable(executablePath: string): boolean {
-  const result = spawnSync(executablePath, ["--version"], { stdio: "ignore" });
-  return result.status === 0;
-}
-
 function resolveChromiumLaunchOptions(): { executablePath: string } | undefined {
-  const override = process.env[chromiumExecutableOverrideEnvKey]?.trim();
-  if (override && existsSync(override) && canRunChromiumExecutable(override)) {
-    return { executablePath: override };
-  }
-
   const defaultExecutablePath = chromium.executablePath();
-  if (existsSync(defaultExecutablePath) && canRunChromiumExecutable(defaultExecutablePath)) {
-    return undefined;
-  }
-
-  const systemExecutablePath = systemChromiumExecutableCandidates.find(
-    (candidate) => existsSync(candidate) && canRunChromiumExecutable(candidate),
-  );
-  return systemExecutablePath ? { executablePath: systemExecutablePath } : undefined;
+  const executablePath = resolvePlaywrightChromiumExecutablePath(defaultExecutablePath);
+  // Playwright picks its own headless shell for the pinned default; pin only alternatives.
+  return executablePath === defaultExecutablePath ? undefined : { executablePath };
 }
 
 let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | null = null;
@@ -121,6 +96,7 @@ const webkitTestFiles = [
   "src/components/model-picker.browser.test.ts",
   "src/components/decision-model-picker.browser.test.tsx",
   "src/components/agent-select-opening.browser.test.ts",
+  "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
@@ -144,6 +120,7 @@ const webkitTestFiles = [
   "src/pages/chat/chat-composer-context.browser.test.ts",
   "src/pages/chat/chat-composer-context.palette.browser.test.ts",
   "src/pages/chat/chat-composer-overflow.browser.test.tsx",
+  "src/pages/chat/chat-queue-images.browser.test.ts",
   "src/pages/chat/components/chat-effort-picker.browser.test.tsx",
   "src/pages/chat/components/chat-details.browser.test.ts",
   "src/pages/chat/components/chat-message-reactions.browser.test.tsx",

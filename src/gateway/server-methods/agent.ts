@@ -78,9 +78,6 @@ const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
       },
     );
   };
-  if (!(await authorizeWait(prepared.session))) {
-    return;
-  }
   const observation = await prepared.wait();
   await authorizeWait(observation.session, () => respond(true, observation.result));
 };

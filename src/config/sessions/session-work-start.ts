@@ -55,6 +55,8 @@ type SessionWorkStartBlockReason =
   | "workspace_pending";
 
 export class SessionWorkStartError extends Error {
+  override name = "SessionWorkStartError";
+
   constructor(
     readonly reason: SessionWorkStartBlockReason,
     message: string,

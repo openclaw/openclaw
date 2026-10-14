@@ -42,7 +42,7 @@ export function assertBoundIncognitoMemorySyncAccess(
   }
 }
 
-/** @deprecated Use readTranscriptStatsBatchReadOnlyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Retained during stable deprecation. */
 export function readTranscriptStatsBatchReadOnlySync(
   scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
 ) {

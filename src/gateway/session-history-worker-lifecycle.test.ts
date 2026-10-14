@@ -325,7 +325,7 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
   };
 }
 
-it("settles cancelled message reads before reuse and closes their database handles", async () => {
+it("settles cancelled message reads before later reads and closes their database handles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     const fixture = await seed(state, "main", "cancel-message-read");

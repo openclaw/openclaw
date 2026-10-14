@@ -111,13 +111,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     onInvalidated: () => mark({ all: true, scope: "catalog" }),
     onRefreshed(changedAgents) {
       if (!changedAgents || changedAgents.size > 0) {
-        // Rows served during renewal need new materializations only when their model facts changed.
         epoch++;
         revisions.invalidate();
         revisions.publishFacts();
         metadata.invalidate({ all: true, scope: "catalog" });
         archive.invalidateRows(
-          { all: true, scope: "catalog" },
+          { all: true, scope: "catalog", runtimeOwnershipChanged: true },
           changedAgents
             ? [...changedAgents].flatMap((agentId) => matching({ agentId }))
             : rows.values(),
@@ -130,7 +129,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
-    current: (row) => !topologyDirty && records.ready(row) && isCurrent(row),
+    current: isCurrent,
     publish: (row, fields) => revisions.publishTranscript(row, fields, cfg, metadata.current),
   });
   const archive = createSessionRowProjectionArchive({
@@ -346,10 +345,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       cfg = inOwnerContext(() => params.getConfig?.() ?? cfg);
     }
     epoch++;
+    const identityRevision = metadata.current.identityProjection?.revision;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
     const catalogOnly = "all" in change && change.scope === "catalog" && !change.factsInvalidated;
     revisions.publishRuntimeChange(change);
-    if (!presentationOnly) {
+    if (!presentationOnly || metadata.current.identityProjection?.revision !== identityRevision) {
       revisions.invalidate(!catalogOnly);
     }
     placementFacts.invalidateChange(change);

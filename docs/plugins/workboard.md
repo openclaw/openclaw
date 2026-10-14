@@ -113,11 +113,22 @@ a replacement value for them. Other fields retain their ordinary update behavior
 array changes nothing. Clients using this argument need a Gateway version that
 supports explicit appearance clearing; older Gateways do not implement this reset.
 
-Card lists share one prepared, claim-token-redacted snapshot per board scope and
-card revision. `workboard.cards.list` returns `revision`; repeat the same query
+Full card lists share one prepared, claim-token-redacted snapshot per board scope
+and card revision. `workboard.cards.list` returns `revision`; repeat the same query
 with `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
 The revision includes the store epoch and, for scoped queries, the normalized
-`boardId`. Reconnects request a full snapshot. `plugin.workboard.changed` includes
+`boardId` and requested `sessionKey`. The optional `sessionKey` filter takes a
+nonempty canonical session key and selects cards linked directly, through their
+execution, or through a recorded attempt or event. It can be combined with
+`boardId`; omitting it keeps the full-list behavior. Selection happens in the
+database before card notes, comments, events, and other details are loaded.
+Ordinary keys and Matrix/Signal structural segments compare without case;
+opaque peer IDs and catalog source identifiers retain their exact identity. The
+Control UI and server filter share `normalizeSessionKeyForComparison` from
+`@openclaw/normalization-core`, exposed to the plugin through
+`openclaw/plugin-sdk/session-key-runtime`. Candidate matching reads only session-link
+fields before loading matching cards. Reconnects request a fresh snapshot of the
+same scope. `plugin.workboard.changed` includes
 an event `revision` and a separate `cardsRevision`: session-fact notifications
 advance the event sequence without invalidating unchanged cards.
 
@@ -307,9 +318,15 @@ edited, or written, then resumes after the local interaction finishes. A
 reconnect always performs a reload from the store. There is no routine full-card
 poll, and **Refresh** remains available as manual recovery.
 
-The Gateway shares one immutable `workboard.cards.list` payload per normalized
-board filter at each store revision, including concurrent reads. Card and board
-writes invalidate it before the next read; the existing change service also
+The sidebar catalog reads names and summaries from `workboard.boards.list`.
+The session-header chip reads only cards linked to its session through the
+`workboard.cards.list` session filter; neither downloads unrelated card history.
+These narrower reads preserve the existing rendering.
+
+The Gateway shares one immutable full `workboard.cards.list` payload per board
+filter at each store revision, including concurrent reads. Session-filtered reads
+do not retain a payload cache. Card and board writes invalidate cached payloads
+before the next read; the existing change service also
 invalidates it when it observes a commit from another SQLite connection.
 Each response still includes all board summaries, so a change to another board
 invalidates the payload too. Claim tokens remain redacted, and the RPC response
@@ -389,7 +406,7 @@ do not need it: each worker run is granted `workboard_heartbeat`,
 | Tool                                                                                                                                             | Purpose                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `workboard_list`                                                                                                                                 | List compact cards with claim/diagnostic state; optional board filter.                                                                                                                    |
-| `workboard_read`                                                                                                                                 | Return one card plus bounded worker context (notes, attempts, comments, links, proof, artifacts, parent results, recent assignee work, active diagnostics).                               |
+| `workboard_read`                                                                                                                                 | Return one card plus bounded worker context from the same card read (notes, attempts, comments, links, proof, artifacts, parent results, recent assignee work, active diagnostics).       |
 | `workboard_create`                                                                                                                               | Create a card with optional parents, tenant, skills, board, workspace metadata, idempotency key, runtime limit, retry budget.                                                             |
 | `workboard_link`                                                                                                                                 | Link a parent to a child card. Children stay `todo` until every parent reaches `done`, then dispatch promotion moves them to `ready`.                                                     |
 | `workboard_claim`                                                                                                                                | Claim a card for the calling agent; moves `backlog`/`todo`/`ready` into `running`.                                                                                                        |
@@ -430,9 +447,10 @@ seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
 
-Promotion rejects completed (`done`) cards, including when `force` is set, and
-preserves their completion timestamp. It remains available for recovering
-blocked work; `force` only bypasses dependency or schedule holds.
+Promotion only moves `todo` cards to `ready`; every other status returns an
+error without changing the card, including when `force` is set. To recover
+blocked work, use `workboard_unblock` first to move it to `todo`.
+`force` only bypasses dependency or schedule holds.
 
 ## Dispatch
 

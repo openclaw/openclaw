@@ -112,7 +112,9 @@ stop at the deadline with a warning naming active root requests and cron runs;
 unknown custody is not a refusal. An owned service confirmed offline can receive
 the policy refresh without being started.
 
-During [automatic triage](/cli/triage#automatic-failure-handoff), repair can run
+Unattended update and Gateway startup failures collect
+[diagnostics only](/cli/triage#automatic-failure-handoff). An older, already admitted
+managed repair handoff can remain active across an upgrade. In that subtree, repair can run
 against an offline target when schema and maintenance locks permit it. If repair
 needs to stop the managed Gateway, Doctor refuses inside its automatic fixing
 subtree because that stop would cancel recovery. Use read-only diagnosis or safe

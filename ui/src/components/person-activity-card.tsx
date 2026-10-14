@@ -1,8 +1,7 @@
 import { render } from "@solidjs/web";
-import { createMemo, createSignal, For, onCleanup, onSettled, runWithOwner, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, runWithOwner, Show } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
-import { HoverMarqueeController } from "../lib/hover-marquee-controller.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
@@ -23,6 +22,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
+import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -90,25 +90,6 @@ function Elapsed(props: {
   );
 }
 
-function RecentName(props: { name: string }) {
-  const controller = new HoverMarqueeController();
-  let element!: HTMLSpanElement;
-  onSettled(() => {
-    controller.update(element, { delay: 250, speed: 80 }, "person-activity-card__session-name");
-    return () => controller.disconnect();
-  });
-  return (
-    <span
-      ref={(node) => {
-        element = node;
-      }}
-      class="person-activity-card__session-name hover-marquee"
-    >
-      <span class="hover-marquee__text">{props.name}</span>
-    </span>
-  );
-}
-
 function Sessions(props: {
   sessions: readonly ScopedSession[];
   input: PersonCardInput;
@@ -164,9 +145,11 @@ function Sessions(props: {
                           </span>
                         }
                       >
-                        <Show when={name()} keyed>
-                          {(value) => <RecentName name={value} />}
-                        </Show>
+                        <HoverMarquee
+                          content={name()}
+                          class="person-activity-card__session-name"
+                          options={{ delay: 250, speed: 80 }}
+                        />
                       </Show>
                       <Show when={session().row.updatedAt != null}>
                         <span class="person-activity-card__session-age">

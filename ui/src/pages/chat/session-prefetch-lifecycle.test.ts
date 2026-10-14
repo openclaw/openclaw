@@ -35,6 +35,41 @@ describe("session prefetch pane and navigation ownership", () => {
     target.dispatchEvent(new Event("pointerover", { bubbles: true }));
   }
 
+  it.each(["pointerover", "focusin"] as const)(
+    "observes sidebar %s intent after a detached host joins the shell",
+    async (eventType) => {
+      const intended = "agent:main:warm-after-attachment";
+      fixture.controller.hostDisconnected();
+      fixture.host.remove();
+      fixture.controller.hostConnected();
+      shell.append(fixture.host);
+      const request = vi.fn(async (_method: string, params: unknown) =>
+        historyResult((params as { sessionKey: string }).sessionKey),
+      );
+      updatePrefetch({
+        client: createTestGatewayClient(request),
+        listRevision: 1,
+        openSessionKeys: ["agent:main:selected"],
+        rows: [row(intended, NOW - 1)],
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      await settlePromises();
+      expect(request).not.toHaveBeenCalled();
+
+      const sidebar = document.createElement("openclaw-app-sidebar");
+      const target = document.createElement("a");
+      target.dataset.sessionKey = intended;
+      sidebar.append(target);
+      shell.append(sidebar);
+      target.dispatchEvent(new Event(eventType, { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(300);
+      await settlePromises();
+
+      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended]);
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+    },
+  );
+
   it.each(["stored read", "cursor reset"])(
     "rechecks dashboard intent after %s before another history request",
     async (phase) => {

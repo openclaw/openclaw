@@ -46,6 +46,24 @@ export type TelegramSpooledReplaySettlementHold = {
 const telegramUpdateProcessingFrames = new AsyncLocalStorage<TelegramUpdateProcessingFrame>();
 const telegramSpooledReplayFrames = new AsyncLocalStorage<TelegramSpooledReplayFrame>();
 const telegramSpooledReplayUpdates = new WeakSet<object>();
+const telegramUpdateReceivedAtMs = new WeakMap<object, number>();
+
+/** Records the durable spool receipt time so replayed updates keep their original arrival time. */
+export function recordTelegramUpdateReceivedAt(update: object, receivedAtMs: number): void {
+  telegramUpdateReceivedAtMs.set(update, receivedAtMs);
+}
+
+/**
+ * Unix seconds when OpenClaw received the update. Telegram callback queries carry no
+ * timestamp of their own, so this approximates the tap time for callback-built messages.
+ */
+export function resolveTelegramUpdateReceivedAtSeconds(update: unknown): number {
+  const receivedAtMs =
+    typeof update === "object" && update !== null
+      ? telegramUpdateReceivedAtMs.get(update)
+      : undefined;
+  return Math.floor((receivedAtMs ?? Date.now()) / 1000);
+}
 
 export class TelegramSpooledReplayProcessingError extends Error {
   override readonly cause: unknown;

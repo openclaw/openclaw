@@ -94,6 +94,9 @@ type InternalReplySessionOptions = {
   /** Follow the admitted turn's own first-store registration in its retained request facts. */
   onDatabaseRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   onSessionCreated?: (created: SessionEntryCreationCommit) => void;
+
+  /** Receives the LLM's own final response text — pre-delivery-normalization, sentinels included. */
+  onRawLlmResponse?: (response: string) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Observes one transcript-start reader preparation; completion cannot control the run. */
   onTranscriptStartPreparation?: () => (() => void) | undefined;

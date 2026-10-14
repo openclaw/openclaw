@@ -28,7 +28,7 @@ import {
   selectedRowKeys,
   sessionMenu,
 } from "./multi-select-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar multi-select", () => {
   it("restores the thread link when Tab exits its keyboard context menu", async () => {
@@ -248,10 +248,10 @@ describe("AppSidebar catalog session rows", () => {
 
       expect(contextMenu.defaultPrevented).toBe(true);
       const menu = sidebar.querySelector<HTMLElement>(".sidebar-catalog-view-menu");
-      const hide = menu?.querySelector<HTMLElement>('wa-dropdown-item[value="hide-catalog"]');
+      const hide = menu?.querySelector<HTMLElement>('[data-value="hide-catalog"]');
       expect(menu).not.toBeNull();
       expect(hide).not.toBeNull();
-      menu?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item: hide } }));
+      hide?.click();
       await sidebar.updateComplete;
 
       expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);

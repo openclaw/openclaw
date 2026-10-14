@@ -20,7 +20,14 @@ function writeClaudeEntries(filePath: string, entries: readonly Record<string, u
 }
 
 describe("routed CLI prompts in chat history", () => {
-  it.each([{ shape: "text block", description: "earlier messages in this chat" }])(
+  it.each([
+    { shape: "text block", description: "earlier messages in this chat" },
+    {
+      shape: "text block",
+      description:
+        "messages recorded in this chat since your last reply here (possibly already in this session)",
+    },
+  ])(
     "preserves unmatched routed $shape provenance beneath $description context",
     async ({ shape, description }) => {
       await withClaudeProjectsDir(async ({ filePath, readMessages }) => {

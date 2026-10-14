@@ -31,8 +31,6 @@ import {
 } from "./session-sharing-read.js";
 import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { resolveRequestedSessionStoreTarget } from "./session-store-key.js";
-import { withGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
-import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
 
 function resolveCompanionTarget(
@@ -63,7 +61,8 @@ function companionTargetIsVisible(
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
   prepared: {
     target: Pick<SessionSharingTarget, "storeKey" | "entry"> | null;
-    profiles: PreparedSessionSharingProfiles;
+    membership: ReadonlySet<string>;
+    profiles?: PreparedSessionSharingProfiles;
   },
 ): boolean {
   if (client?.connId && context.isConnectionActive?.(client.connId) === false) {
@@ -78,7 +77,7 @@ function companionTargetIsVisible(
     client,
     cfg,
     profiles: prepared.profiles,
-    isMember: () => false,
+    isMember: (_target, id) => prepared.membership.has(id),
   });
   return sharing.entryFilter?.(sharingTarget.storeKey, sharingTarget.entry) !== false;
 }
@@ -321,31 +320,29 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         return;
       }
       const profiles = await prepareSessionSharingProfiles(client);
-      await withGatewaySessionStoreTarget(
-        {
-          cfg: context.getRuntimeConfig(),
-          key: target.sessionKey,
-          agentId: target.agentId,
-          projection: "list",
-        },
-        (selected, _members, assertCurrent) => {
-          assertCurrent();
-          const match = findCanonicalStoreMatch(selected.store, selected.storeKeys);
-          if (
-            !companionTargetIsVisible(client, context, {
-              target: match ? { storeKey: match.key, entry: match.entry } : null,
-              profiles,
-            })
-          ) {
-            respond(false, undefined, hiddenSessionNotFound(target.sessionKey));
-            return;
-          }
-          respond(
-            true,
-            target.companion.state({ agentId: target.agentId, sessionKey: target.sessionKey }),
-          );
-        },
-      );
+      const facts = await prepareSessionMutationFacts({
+        cfg: context.getRuntimeConfig(),
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        allowMissing: true,
+      });
+      try {
+        if (
+          !companionTargetIsVisible(client, context, {
+            ...facts.readCurrent(context.getRuntimeConfig()),
+            profiles,
+          })
+        ) {
+          respond(false, undefined, hiddenSessionNotFound(target.sessionKey));
+          return;
+        }
+        respond(
+          true,
+          target.companion.state({ agentId: target.agentId, sessionKey: target.sessionKey }),
+        );
+      } finally {
+        facts.release();
+      }
     },
   ),
   "sessions.companion.reset": defineValidatedGatewayHandler(

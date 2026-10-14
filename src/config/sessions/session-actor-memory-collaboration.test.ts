@@ -3,6 +3,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { failSessionActorMemoryPublication } from "./session-actor-memory-publication.test-support.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
@@ -335,7 +336,14 @@ describe("memory collaboration through the public adapters", () => {
       emoji: "👍",
       identityId: "viewer",
     };
-    expect((await setSessionReactionAsync(scope, reaction)).changed).toBe(true);
+    const stop = failSessionActorMemoryPublication(scope.sessionKey);
+    try {
+      await expect(setSessionReactionAsync(scope, reaction)).rejects.toMatchObject({
+        name: "SessionActorStorageCommittedError",
+      });
+    } finally {
+      stop();
+    }
     expect((await setSessionReactionAsync(scope, reaction)).changed).toBe(false);
     const history = await storage.read({ type: "session.history.hydrate", input: {} }, authority);
     if (history.kind !== "full") {

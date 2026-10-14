@@ -20,7 +20,6 @@ import type { GatewayClient } from "./server-methods/types.js";
 import * as projectionWork from "./session-projection-work.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import * as titleReader from "./session-transcript-title-reader.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { projectSessionPatchResult } from "./session-utils-model.js";
 import * as rowProjection from "./session-utils-row.js";
@@ -481,7 +480,9 @@ describe("session list resolver cache", () => {
       const storePath = path.join(stateDir, "sessions.json");
       const store: Record<string, SessionEntry> = {};
       const ownerId = scenario.owned ? ensureProfileForEmail("owner@example.com").id : undefined;
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      using _ = {
+        [Symbol.dispose]: (await prepareUserProfileCatalog()).release,
+      };
       for (let index = 0; index < scenario.count; index += 1) {
         const sessionId = `title-batch-${index}`;
         const sessionKey = `agent:main:${sessionId}`;
@@ -498,12 +499,16 @@ describe("session list resolver cache", () => {
         store[sessionKey] = entry;
       }
 
-      const titleSpy = vi
-        .spyOn(titleReader, "readSessionTitleFieldsFromTranscript")
-        .mockImplementation((scope) => ({
-          firstUserMessage: `title ${scope.sessionId.slice("title-batch-".length)}`,
-          lastMessagePreview: `last ${scope.sessionId.slice("title-batch-".length)}`,
-        }));
+      const titleFieldsBySessionKey = new Map(
+        Array.from(
+          { length: scenario.count },
+          (_value, index) =>
+            [
+              `agent:main:title-batch-${index}`,
+              { firstUserMessage: `title ${index}`, lastMessagePreview: `last ${index}` },
+            ] as const,
+        ),
+      );
       let projection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
       const client: GatewayClient | undefined = ownerId
         ? {
@@ -531,8 +536,12 @@ describe("session list resolver cache", () => {
         prepareGatewayRecipientProfile(client);
       }
       try {
-        projection = createSessionRowProjectionFixture({ cfg, storePath, store });
-        titleSpy.mockClear();
+        projection = createSessionRowProjectionFixture({
+          cfg,
+          storePath,
+          store,
+          titleFieldsBySessionKey,
+        });
         const result = await listProjectedSessions({
           projection,
           client,
@@ -545,7 +554,6 @@ describe("session list resolver cache", () => {
         });
 
         expect(result.sessions).toHaveLength(scenario.rows);
-        expect(titleSpy).not.toHaveBeenCalled();
         expect(result.sessions.filter((row) => row.derivedTitle !== undefined)).toHaveLength(
           scenario.enriched,
         );
@@ -572,7 +580,6 @@ describe("session list resolver cache", () => {
             limit: scenario.limit,
           },
         });
-        expect(titleSpy).not.toHaveBeenCalled();
         expect(withoutTranscriptFields.sessions).toHaveLength(scenario.rows);
         for (const row of withoutTranscriptFields.sessions) {
           expect(row.derivedTitle).toBeUndefined();
@@ -580,7 +587,6 @@ describe("session list resolver cache", () => {
         }
       } finally {
         projection?.dispose();
-        titleSpy.mockRestore();
       }
     });
   });

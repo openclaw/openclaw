@@ -679,7 +679,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   });
 
   it("closes an open navigation drawer before moving its sidebar into desktop layout", async () => {
-    await import("../components/app-sidebar.ts");
+    await import("../components/app-sidebar.tsx");
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
     const shell = createShellOwner() as ShellNavDrawerCloseState;
     const updateNavigation = vi.fn();

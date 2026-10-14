@@ -218,6 +218,19 @@ set this capability on a harness that only sometimes owns authentication.
 This static bootstrap capability is distinct from ownership of an already-bound
 native session's model and connection.
 
+### Native setup verification
+
+For profileless Model Setup activation, a harness with `authBootstrap: "harness"`
+can implement `verifySetup(ctx): Promise<void>`. The context provides `config`,
+`provider`, `modelId`, `workspaceDir`, `signal`, and `assertCurrent()`.
+Import its type from `openclaw/plugin-sdk/agent-harness`.
+
+Confirm live access to the selected model without a turn; cached or bundled
+catalogs are insufficient. Recheck `assertCurrent()` before native I/O and
+after awaits, and close connections in `finally`. Core rechecks the hook and
+plugin artifacts before commit. Credential-backed routes and harnesses without
+the hook retain the normal inference probe.
+
 ### Bound native session ownership
 
 The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,

@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
+import { ConfigStructuredDraft } from "../../components/config-form-structured-draft.tsx";
 import { ConfigMapField } from "../../components/config-form.node.collection-map.tsx";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import {
@@ -485,7 +486,7 @@ function PluginSettingsDraft(props: GroupsProps) {
       sourceIdentity: props.params.value,
       initialValue,
       params: props.params,
-      renderSolidNode: (params: () => ConfigNodeRenderParams) => (
+      renderNode: (params: () => ConfigNodeRenderParams) => (
         <openclaw-plugin-settings-groups>
           <PluginSettingsGroups {...groups} params={params()} />
         </openclaw-plugin-settings-groups>
@@ -493,8 +494,8 @@ function PluginSettingsDraft(props: GroupsProps) {
     };
   });
   return (
-    <Show when={Boolean(draft())} fallback={<PluginSettingsGroups {...props} />}>
-      <openclaw-config-form-structured-draft prop:props={draft()} />
+    <Show when={draft()} fallback={<PluginSettingsGroups {...props} />}>
+      {(value) => <ConfigStructuredDraft {...value()} />}
     </Show>
   );
 }

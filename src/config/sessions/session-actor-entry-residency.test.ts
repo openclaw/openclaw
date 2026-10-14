@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import * as participantCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   participantRecordsBySessionKey,
@@ -89,6 +90,67 @@ it("reads committed participant counts and ordering in the same and next turn wi
     } finally {
       reads.restore();
     }
+  });
+});
+
+it("autocommits resident contributions and keeps consecutive actor counts current", async () => {
+  await withActor((f) => {
+    f.read();
+    const input = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
+    f.participant(input);
+    const sql = trackSqliteStatementExecutions(f.database.db, ["contribution", "read"], (text) =>
+      /^insert into "session_participants"/iu.test(text)
+        ? "contribution"
+        : /^select\b/iu.test(text)
+          ? "read"
+          : null,
+    );
+    const exec = vi.spyOn(f.database.db, "exec");
+    try {
+      f.participant({ ...input, promptedAt: 20 });
+      f.participant({ ...input, promptedAt: 30 });
+      expect(f.read().participants).toMatchObject([
+        { identity: { id: "peer" }, contributionCount: 3, firstPromptedAt: 10, lastPromptedAt: 30 },
+      ]);
+      expect(sql.counts).toEqual({ contribution: 2, read: 0 });
+      expect(exec.mock.calls.some(([text]) => /BEGIN|COMMIT/iu.test(text))).toBe(false);
+    } finally {
+      exec.mockRestore();
+      sql.restore();
+    }
+    f.restartActor();
+    expect(f.read().participants).toMatchObject([{ contributionCount: 3, lastPromptedAt: 30 }]);
+  });
+});
+
+it("refuses a prepared contribution before its statement and retains it after publication failure", async () => {
+  await withActor((f) => {
+    f.read();
+    const input = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
+    f.participant(input);
+    for (const refused of ["transaction", "commit"] as const) {
+      f.hooks.admit = (stage) => {
+        if (stage === refused) {
+          throw new Error("participant admission refused");
+        }
+      };
+      expect(() => f.participant(input)).toThrow("participant admission refused");
+    }
+    f.hooks.admit = undefined;
+    expect(f.read().participants).toMatchObject([{ contributionCount: 1 }]);
+    const publish = vi
+      .spyOn(participantCache, "publishSessionEntryCacheParticipantUpdate")
+      .mockImplementation(() => {
+        throw new Error("participant publication failed");
+      });
+    try {
+      expect(f.participant({ ...input, promptedAt: 20 })).toMatchObject({ value: "updated" });
+      expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
+    } finally {
+      publish.mockRestore();
+    }
+    f.restartActor();
+    expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
   });
 });
 
@@ -225,6 +287,7 @@ it("keeps transcript residency across entry patches without losing either owner'
     try {
       entryPatch({ label: "entry owner committed", model: "updated-model" });
       expect(reads.counts.watermark).toBe(0);
+      expect(reads.counts.select).toBe(0);
       runSqliteImmediateTransactionSync(f.database.db, () =>
         recordSessionParticipantFromWorker(f.database, f.scope, {
           identity: { type: "agent", id: "peer" },

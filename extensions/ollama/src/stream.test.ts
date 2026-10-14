@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -490,6 +491,34 @@ describe("createOllamaStreamFn thinking events", () => {
       type: "toolCall",
       name: "mempalace_mempalace_search",
       arguments: { query: "codename", wing: "personal", room: "identities" },
+    });
+  });
+
+  it("preserves a fenced Ollama text tool call as visible text", async () => {
+    const text = [
+      "```powershell",
+      'exec(command="echo hello", title="Echo command", workdir="C:\\workspace")',
+      "```",
+    ].join("\n");
+    const events = await streamOllamaEvents(
+      [makeOllamaResponse({ content: text })],
+      {},
+      {
+        messages: [{ role: "user", content: "Use exec to run echo hello", timestamp: 0 }],
+        tools: [{ name: "exec", description: "Run a command", parameters: Type.Object({}) }],
+      },
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events.find((event) => event.type === "done")).toMatchObject({
+      reason: "stop",
+      message: { stopReason: "stop", content: [{ type: "text", text }] },
     });
   });
 

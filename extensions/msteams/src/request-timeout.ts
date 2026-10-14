@@ -45,9 +45,8 @@ export async function withMSTeamsRequestDeadline<T>(params: {
 }
 
 export function resolveMSTeamsSharePointUploadTimeoutMs(sizeInBytes: number): number {
-  const bytes = Number.isFinite(sizeInBytes) && sizeInBytes > 0 ? Math.ceil(sizeInBytes) : 0;
   const transferBudgetMs = Math.ceil(
-    (bytes / MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND) * 1000,
+    (sizeInBytes / MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND) * 1000,
   );
   return resolveTimerTimeoutMs(
     MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + transferBudgetMs,

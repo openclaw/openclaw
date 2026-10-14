@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   bindDeliveryQueueEntry,
@@ -14,6 +13,7 @@ import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue.records.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -42,7 +42,7 @@ import type {
   SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
 
 function commitCompletionWrite<T extends object>(
   input: { writeId: string },

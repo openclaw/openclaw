@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -8,6 +7,8 @@ import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/crede
 import { coerceProfileUsageStats } from "../agents/auth-profiles/profile-usage-stats.js";
 import type { AuthProfileCredential, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "../secrets/store/secret-store-validation-error.js";
 import {
@@ -32,7 +33,10 @@ import {
   userModelAccountRecordValue as accountRecordValue,
   type UserModelAccountRecordName as AccountRecordName,
 } from "./user-model-account-records.kernel.js";
-import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
+import {
+  captureUserProfileModelAccountLinksAuthority,
+  publishUserProfileModelAccountLinksChange,
+} from "./user-profile-events.js";
 import {
   selectResolvedUserProfile,
   selectResolvedUserProfileMetadataById,
@@ -78,7 +82,7 @@ function parseRecord<T>(value: string, schema: z.ZodType<T>): T {
   return result.data;
 }
 
-function resolveOwner(db: DatabaseSync, profileId: string): string | undefined {
+function resolveOwner(db: EngineConnection, profileId: string): string | undefined {
   if (!tableExists(db, "user_profiles")) {
     return undefined;
   }
@@ -91,7 +95,7 @@ function resolveOwner(db: DatabaseSync, profileId: string): string | undefined {
   return profile && !profile.merged_into ? profile.id : undefined;
 }
 
-function requireOwner(db: DatabaseSync, profileId: string): string {
+function requireOwner(db: EngineConnection, profileId: string): string {
   const owner = resolveOwner(db, profileId);
   if (!owner) {
     throw new Error("Personal model account owner is unavailable; refresh Profile and try again.");
@@ -100,7 +104,7 @@ function requireOwner(db: DatabaseSync, profileId: string): string {
 }
 
 function writeRecord(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
   name: AccountRecordName,
   value: string,
@@ -135,18 +139,18 @@ function writeRecord(
   );
 }
 
-function readLinks(db: DatabaseSync, owner: string): UserModelLinks {
+function readLinks(db: EngineConnection, owner: string): UserModelLinks {
   const raw = readRecord(db, owner, "model-accounts");
   return raw === undefined ? { version: 1, links: {} } : parseRecord(raw, linksSchema);
 }
 
-function writeLinks(db: DatabaseSync, owner: string, links: UserModelLinks): void {
+function writeLinks(db: EngineConnection, owner: string, links: UserModelLinks): void {
   writeRecord(db, owner, "model-accounts", JSON.stringify(linksSchema.parse(links)));
   publishUserProfileModelAccountLinksChange(db, owner);
 }
 
 function readProfile(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
   authProfileId: string,
 ): UserModelAuthProfile | undefined {
@@ -182,7 +186,7 @@ export function registerUserModelAuthProfileSecrets(credential: AuthProfileCrede
   }
 }
 
-function encodeUserModelAuthProfile(profile: UserModelAuthProfile): string {
+export function encodeUserModelAuthProfile(profile: UserModelAuthProfile): string {
   return JSON.stringify(profileSchema.parse({ version: 1, ...profile }));
 }
 
@@ -195,16 +199,18 @@ export function normalizeUserModelAuthProfile(profile: UserModelAuthProfile): Us
 }
 
 function writeProfile(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
   authProfileId: string,
   profile: UserModelAuthProfile,
   replacement = false,
-): void {
-  writeRecord(db, owner, `model-account:${authProfileId}`, encodeUserModelAuthProfile(profile));
+): UserModelAuthProfile {
+  const record = profileSchema.parse({ version: 1, ...profile });
+  writeRecord(db, owner, `model-account:${authProfileId}`, JSON.stringify(record));
   personalCredentialPublication.stagePostimages(db, [
-    { id: authProfileId, credential: profile.credential, replacement },
+    { id: authProfileId, credential: record.credential, replacement },
   ]);
+  return { credential: record.credential, usageStats: record.usageStats };
 }
 
 function accountLinks(record: UserModelLinks): UserProfileAuthLink[] {
@@ -213,7 +219,7 @@ function accountLinks(record: UserModelLinks): UserProfileAuthLink[] {
     .flatMap(([provider, link]) => (link ? [{ provider, ...link }] : []));
 }
 
-function credentialOwner(db: DatabaseSync, authProfileId: string): string | undefined {
+function credentialOwner(db: EngineConnection, authProfileId: string): string | undefined {
   const locator = parseUserModelAuthProfileId(authProfileId);
   return locator ? resolveOwner(db, locator.ownerProfileId) : undefined;
 }
@@ -286,7 +292,7 @@ export function readUserModelAccountSummary(
 }
 
 export function readUserModelAccountSummaryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { profileId: string; authProfileId: string },
 ): UserModelAccount | undefined {
   const owner = resolveOwner(db, params.profileId);
@@ -301,7 +307,7 @@ export function readUserModelAccountSummaryInDatabase(
 
 /** Prepare the private summary and the optional public owner label in one read operation. */
 export function readUserModelAccountSelectionInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { profileId?: string; authProfileId: string },
 ) {
   const locator = parseUserModelAuthProfileId(params.authProfileId);
@@ -341,7 +347,7 @@ export function readUserModelAuthProfile(
 }
 
 export function readUserModelAuthProfileInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   authProfileId: string,
 ): UserModelAuthProfile | undefined {
   return readPersonalCatalogProfilesInDatabase(db, { profileId: authProfileId }).profiles[
@@ -351,7 +357,7 @@ export function readUserModelAuthProfileInDatabase(
 
 /** The catalog reads only explicit pins or linked credentials from its admitted reader. */
 export function readPersonalCatalogProfilesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   selection: PersonalCatalogSelection,
 ): PersonalCatalogProfiles {
   const links =
@@ -375,11 +381,13 @@ export function updateUserModelAuthProfile(
   authProfileId: string,
   update: (profile: UserModelAuthProfile) => boolean,
   options: OpenClawStateDatabaseOptions = {},
-  admit?: (stage: "transaction" | "commit") => void,
+  admit?: (
+    operation: { stage: "transaction" } | { stage: "commit"; profile: UserModelAuthProfile },
+  ) => void,
 ): boolean {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      admit?.("transaction");
+      admit?.({ stage: "transaction" });
       const owner = credentialOwner(db, authProfileId);
       const current = owner ? readProfile(db, owner, authProfileId) : undefined;
       if (!owner || !current) {
@@ -392,8 +400,8 @@ export function updateUserModelAuthProfile(
       if (current.credential.provider !== provider) {
         throw new Error("A personal model account refresh cannot change its provider.");
       }
-      writeProfile(db, owner, authProfileId, current);
-      admit?.("commit");
+      const profile = writeProfile(db, owner, authProfileId, current);
+      admit?.({ stage: "commit", profile });
       return true;
     },
     options,
@@ -468,14 +476,19 @@ export function listUserProfileAuthLinks(
 }
 
 export function listUserProfileAuthLinksInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileId: string,
 ): UserProfileAuthLink[] {
   const owner = resolveOwner(db, profileId);
   return owner ? accountLinks(readLinks(db, owner)) : [];
 }
 
-/** Fresh private account selections are read on the shared-state reader, never the Gateway thread. */
+const userProfileAuthLinks = new Map<
+  string,
+  { links: UserProfileAuthLink[]; isCurrent: () => boolean }
+>();
+
+/** The profile writer's receipts invalidate links shared by Gateway readers. */
 export async function listUserProfileAuthLinksAsync(
   profileId: string,
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
@@ -483,13 +496,22 @@ export async function listUserProfileAuthLinksAsync(
   } = {},
 ): Promise<UserProfileAuthLink[]> {
   const context = options.context ?? captureOpenClawStateReadWorkerContext(options);
+  const key = JSON.stringify([context.admission.databasePath, profileId]);
+  const cached = userProfileAuthLinks.get(key);
+  if (cached?.isCurrent()) {
+    return cached.links.map((link) => Object.assign({}, link));
+  }
+  const isCurrent = captureUserProfileModelAccountLinksAuthority(context.admission, profileId);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "userModelAccounts.links", profileId },
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
-  return reply?.links ?? [];
+  const links = reply?.links ?? [];
+  userProfileAuthLinks.set(key, { links, isCurrent });
+  pruneMapToMaxSize(userProfileAuthLinks, 512);
+  return links.map((link) => Object.assign({}, link));
 }
 
 /** Apply Doctor's verified credential renames without changing account selections or ownership. */
@@ -618,7 +640,7 @@ export function clearUserProfileAuthLink(
 }
 
 /** Transfer only the current live source; never adopt secrets stranded on old aliases. */
-export function mergeUserModelAccounts(db: DatabaseSync, source: string, target: string): void {
+export function mergeUserModelAccounts(db: EngineConnection, source: string, target: string): void {
   if (!tableExists(db, "secret_store_entries")) {
     return;
   }

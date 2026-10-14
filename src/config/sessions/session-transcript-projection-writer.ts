@@ -127,12 +127,11 @@ export async function claimPreparedSessionTranscriptProjection(
     return undefined;
   }
 
-  let deleteResult = { hasMore: true, owned: true };
-  while (deleteResult.hasMore && deleteResult.owned) {
+  let deleteResult = { hasMore: true };
+  while (deleteResult.hasMore) {
     const input = {
       maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
       sessionId: plan.sessionId,
-      claimId,
     };
     deleteResult = publication
       ? await publication.execute({ type: "deleteChunk", input })
@@ -143,9 +142,6 @@ export async function claimPreparedSessionTranscriptProjection(
             deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
         );
     await yieldToGateway();
-  }
-  if (!deleteResult.owned) {
-    return undefined;
   }
   return { claimId, plan };
 }
@@ -167,24 +163,23 @@ export async function appendPreparedProjectionChunk(
   active: ActivePreparedProjection,
   rows: { activeRows: ProjectionRows["activeRows"] } | { ftsChunk: EncodedTranscriptFtsChunk },
   publication?: ProjectionPublisher,
-): Promise<boolean> {
+): Promise<void> {
   const input = {
     ...("activeRows" in rows ? rows : { ftsRows: decodeFtsChunk(rows.ftsChunk) }),
-    claimId: active.claimId,
     sessionId: active.plan.sessionId,
   };
-  const owned = publication
-    ? await publication.execute({ type: "appendChunk", input })
-    : await runProjectionWrite(
-        databaseOptions,
-        "activeRows" in rows
-          ? "sessions.transcript-index.active-chunk"
-          : "sessions.transcript-index.fts-chunk",
-        (database) =>
-          appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
-      );
+  if (publication) {
+    await publication.execute({ type: "appendChunk", input });
+  } else {
+    await runProjectionWrite(
+      databaseOptions,
+      "activeRows" in rows
+        ? "sessions.transcript-index.active-chunk"
+        : "sessions.transcript-index.fts-chunk",
+      (database) => appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
+    );
+  }
   await yieldToGateway();
-  return owned;
 }
 
 export async function finalizePreparedProjection(

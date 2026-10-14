@@ -1,6 +1,10 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
-import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import {
+  createPluginCache,
+  withPluginCache,
+  type PluginCache,
+} from "../../plugins/plugin-cache.js";
 import { pinConfigDir } from "../../utils.js";
 import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import {
@@ -35,9 +39,8 @@ function applyEnvironment(environment: SkillsDiscoveryEnvironment) {
   pinConfigDir();
 }
 
-function resolveInputPlan(input: SkillsSourcePlanInput) {
-  // Each pass observes new/replaced plugin roots instead of reusing old filesystem facts.
-  return withPluginCache(createPluginCache(), () => {
+function resolveInputPlan(input: SkillsSourcePlanInput, cache: PluginCache = createPluginCache()) {
+  return withPluginCache(cache, () => {
     const options = input.options;
     const pluginSkillRoots = options?.workspaceOnly
       ? []
@@ -80,10 +83,12 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
   } else {
     process.env.PATH = request.path;
   }
+  // Share physical inventory facts across workspaces, then discard them for the next pass.
+  const pluginCache = createPluginCache();
   const plans = new Map<string, ReturnType<typeof resolveInputPlan>>();
   const selectPlan = (sourceInput: SkillsSourcePlanInput) => {
     const key = JSON.stringify(sourceInput);
-    const plan = plans.get(key) ?? resolveInputPlan(sourceInput);
+    const plan = plans.get(key) ?? resolveInputPlan(sourceInput, pluginCache);
     plans.set(key, plan);
     return plan;
   };

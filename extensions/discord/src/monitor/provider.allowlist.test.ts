@@ -1,10 +1,18 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getDiscordChannelPolicyBinding,
+  setDiscordChannelPolicyBindings,
+} from "../channel-policy-state.js";
 import * as channels from "../resolve-channels.js";
 import * as users from "../resolve-users.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 
 describe("resolveDiscordAllowlistConfig", () => {
+  afterEach(() => {
+    setDiscordChannelPolicyBindings("default", []);
+    setDiscordChannelPolicyBindings("work", []);
+  });
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(channels, "resolveDiscordChannelAllowlist").mockResolvedValue([]);
@@ -28,6 +36,7 @@ describe("resolveDiscordAllowlistConfig", () => {
 
   function resolve(overrides: Partial<Parameters<typeof resolveDiscordAllowlistConfig>[0]>) {
     return resolveDiscordAllowlistConfig({
+      accountId: "default",
       token: "synthetic-token",
       allowFrom: [],
       guildEntries: {},
@@ -96,25 +105,55 @@ describe("resolveDiscordAllowlistConfig", () => {
     expect(logs).not.toContain("(id:387)");
   });
 
-  it("resolves guild and channel names without enabling user name matching", async () => {
-    vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
-      {
-        input: "ops/general",
-        resolved: true,
-        guildId: "145",
-        guildName: "Ops",
-        channelId: "246",
-        channelName: "general",
-      },
-    ]);
-    const result = await resolve({
-      allowFrom: ["Alice"],
-      guildEntries: { ops: { users: ["Bob"], channels: { general: { users: ["Carol"] } } } },
-    });
-    expect(result.allowFrom).toEqual(["Alice"]);
-    expect(result.guildEntries?.["145"]?.channels?.["246"]?.users).toEqual(["Carol"]);
-    expect(result.guildEntries?.ops?.users).toEqual(["Bob"]);
-    expect(channels.resolveDiscordChannelAllowlist).toHaveBeenCalledTimes(1);
-    expect(users.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
-  });
+  it.each(["general", "2026"])(
+    "resolves channel name %s without user name matching",
+    async (channelKey) => {
+      vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
+        {
+          input: `ops/${channelKey}`,
+          resolved: true,
+          guildId: "145",
+          guildName: "Ops",
+          channelId: "246",
+          channelName: channelKey,
+        },
+      ]);
+      const result = await resolve({
+        allowFrom: ["Alice"],
+        guildEntries: { ops: { users: ["Bob"], channels: { [channelKey]: { users: ["Carol"] } } } },
+      });
+      expect(result.allowFrom).toEqual(["Alice"]);
+      expect(result.guildEntries?.["145"]?.channels?.["246"]?.users).toEqual(["Carol"]);
+      expect(result.guildEntries?.ops?.users).toEqual(["Bob"]);
+      expect(channels.resolveDiscordChannelAllowlist).toHaveBeenCalledTimes(1);
+      expect(users.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
+      expect(getDiscordChannelPolicyBinding("default", "ops", channelKey)).toBe("246");
+      expect(getDiscordChannelPolicyBinding("work", "ops", channelKey)).toBeUndefined();
+    },
+  );
+
+  it.each(["unresolved", "failed", "removed"])(
+    "replaces previous channel bindings when a policy resolution is %s",
+    async (outcome) => {
+      setDiscordChannelPolicyBindings("work", [
+        { guildKey: "145", channelKey: "ops", channelId: "246" },
+      ]);
+      if (outcome === "failed") {
+        vi.mocked(channels.resolveDiscordChannelAllowlist).mockRejectedValueOnce(
+          new Error("synthetic lookup failure"),
+        );
+      } else {
+        vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
+          { input: "145/ops", resolved: false, guildId: "145" },
+        ]);
+      }
+
+      await resolve({
+        accountId: "work",
+        guildEntries: outcome === "removed" ? {} : { "145": { channels: { ops: {} } } },
+      });
+
+      expect(getDiscordChannelPolicyBinding("work", "145", "ops")).toBeUndefined();
+    },
+  );
 });

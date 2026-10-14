@@ -7,7 +7,7 @@ import {
   createSessions,
   mountSidebar,
 } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 type SidebarNativeGatewayTestSnapshot = {
   gateways: Array<{

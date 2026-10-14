@@ -275,7 +275,7 @@ describe("personal publication definitive outcomes", () => {
         idempotencyKey: "fresh-reviewed-outcome",
       });
       expect(fresh[0], JSON.stringify(fresh[2])).toBe(true);
-      expect(fresh[1].status).toBe("published");
+      expect(fresh[1].status, JSON.stringify(fresh[1])).toBe("published");
       expect(fresh[1].requestId).not.toBe(initial.requestId);
     },
   );

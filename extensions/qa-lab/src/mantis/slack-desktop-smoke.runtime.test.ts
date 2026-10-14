@@ -156,6 +156,8 @@ describe("mantis Slack desktop smoke runtime", () => {
     });
 
     expect(result.status).toBe("pass");
+    const warmupArgs = commands.find((entry) => entry.args[0] === "warmup")?.args ?? [];
+    expect(warmupArgs[warmupArgs.indexOf("--class") + 1]).toBe("beast");
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([
       ["/tmp/crabbox", "warmup"],
       ["/tmp/crabbox", "inspect"],

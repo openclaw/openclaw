@@ -11,25 +11,24 @@ import {
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
-export function registerExternalHandoffShutdownTests(
-  {
-    consumeGatewaySuspendHandoff,
-    acquireGatewayLock,
-    peekGatewayRestartReason,
-    createSignaledLoopHarness,
-    waitForGatewayActiveWork,
-    restartGatewayProcessWithFreshPid,
-    respawnGatewayProcessForUpdate,
-    writeGatewayRestartHandoff,
-    cancelShutdownHardExitWatchdog,
-    gatewayLog,
-    isGatewayWorkAdmissionClosed,
-  }: UpdateRespawnFixtures,
-  restartDeferralTimeoutMs: number,
-): void {
+export function registerExternalHandoffShutdownTests({
+  consumeGatewaySuspendHandoff,
+  consumeGatewayRestartIntentPayload,
+  acquireGatewayLock,
+  peekGatewayRestartReason,
+  createSignaledLoopHarness,
+  waitForGatewayActiveWork,
+  restartGatewayProcessWithFreshPid,
+  respawnGatewayProcessForUpdate,
+  writeGatewayRestartHandoff,
+  cancelShutdownHardExitWatchdog,
+  gatewayLog,
+  isGatewayWorkAdmissionClosed,
+}: UpdateRespawnFixtures): void {
   it.each([
     { fails: true, trigger: "signal" },
     { fails: false, trigger: "commit" },
+    { fails: false, trigger: "persisted-intent" },
   ])(
     "joins external restart cleanup without a successor ($trigger, close failure: $fails)",
     async ({ fails, trigger }) => {
@@ -51,6 +50,13 @@ export function registerExternalHandoffShutdownTests(
         });
         try {
           const sigterm = captureSignal("SIGTERM");
+          if (trigger === "persisted-intent") {
+            consumeGatewayRestartIntentPayload.mockResolvedValueOnce({
+              reason: "gateway.restart",
+              force: true,
+              waitMs: 30_000,
+            });
+          }
           if (trigger === "commit") {
             if (!host?.externalRestart?.commitStop) {
               throw new Error("Missing committed stop capability");
@@ -66,8 +72,8 @@ export function registerExternalHandoffShutdownTests(
           );
           sigterm();
           expect(host?.externalRestart?.isCurrent()).toBe(false);
-          expectRestartCloseCall(close, restartDeferralTimeoutMs);
-          expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
+          expectRestartCloseCall(close, 0);
+          expect(waitForGatewayActiveWork).not.toHaveBeenCalled();
           expect(runtime.exit).not.toHaveBeenCalled();
           expect(cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
         } finally {

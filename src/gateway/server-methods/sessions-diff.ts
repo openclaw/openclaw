@@ -143,7 +143,7 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
     }
     const read =
       requestedAgent.agentId && isIncognitoSessionKey(params.sessionKey)
-        ? retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
+        ? await retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
             requireMaterialized: true,
           })
         : undefined;

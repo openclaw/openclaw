@@ -1957,12 +1957,17 @@ describe("previous release update compatibility", () => {
   it.each([
     { latest: "2026.9.3", beta: "2026.9.4-beta.1", missing: "2026.9.4-beta.1" },
     { latest: "2026.9.4", beta: "2026.9.4", missing: "2026.9.4" },
+    { latest: "2026.9.3", beta: "2026.9.3", extendedStable: "2026.9.33", missing: "2026.9.33" },
   ])(
     "prints a complete refresh command when $missing leaves the window",
-    ({ latest, beta, missing }) => {
+    ({ latest, beta, extendedStable, missing }) => {
       const output = writeWindowInventory(createTempDir("update-compat-tag-refresh-"));
       const newIntegrity = `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
-      const tags = { latest, beta };
+      const tags = {
+        latest,
+        beta,
+        ...(extendedStable ? { "extended-stable": extendedStable } : {}),
+      };
       const expectedCalls = [
         ["view", "openclaw", "dist-tags", "--json"],
         ["view", `openclaw@${missing}`, "openclaw.schemaVersions", "--json"],
@@ -2016,6 +2021,10 @@ describe("previous release update compatibility", () => {
   it.each([
     { tags: { beta: "2026.9.3" }, invalid: "latest" },
     { tags: { latest: "2026.9.3", beta: "not-a-release" }, invalid: "beta" },
+    {
+      tags: { latest: "2026.9.3", beta: "2026.9.3", "extended-stable": "not-a-release" },
+      invalid: "extended-stable",
+    },
   ])("refuses an absent or invalid $invalid dist-tag", ({ tags, invalid }) => {
     const output = writeWindowInventory(createTempDir("update-compat-invalid-tags-"));
     const npmArgs = ["view", "openclaw", "dist-tags", "--json"];
@@ -2184,6 +2193,12 @@ describe("previous release update compatibility", () => {
     ["config-doctor", "missing"],
     ["native-hook-relay", "present"],
     ["native-hook-relay", "missing"],
+    ["control-ui", "present"],
+    ["control-ui", "missing"],
+    ["control-ui.build-123-fixture", "present"],
+    ["control-ui.build-123-fixture", "missing"],
+    ["control-ui.build-123-fixture.retired", "present"],
+    ["control-ui.build-123-fixture.retired", "missing"],
   ])(
     "excludes the isolated %s graph when the runtime binding is %s",
     async (directory, runtime) => {

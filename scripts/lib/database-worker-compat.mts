@@ -45,7 +45,18 @@ const reviewed = new Map<string, readonly string[]>([
       "withCodexSessionTranscriptMirrorWriteLock",
     ],
   ],
-  ["src/plugin-sdk/session-transcript-runtime.ts", ["withSessionTranscriptWriteLock"]],
+  [
+    "src/plugin-sdk/session-transcript-runtime.ts",
+    ["withSessionTranscriptWriteLock", "readSessionTranscriptCatalogTitle"],
+  ],
+  [
+    "src/plugin-sdk/session-store-runtime.ts",
+    [
+      "getConversationSession",
+      "readSessionStoreTranscriptStatsSync",
+      "readAmbientTranscriptWatermark",
+    ],
+  ],
   ["src/plugin-sdk/session-transcript-hit.ts", ["loadCombinedSessionStoreForGateway"]],
   ["src/plugin-sdk/provider-selection-runtime.ts", ["resolveConfiguredCapabilityProvider"]],
   ["src/pairing/pairing-store.ts", ["readChannelAllowFromStoreSync"]],
@@ -89,13 +100,25 @@ const reviewed = new Map<string, readonly string[]>([
     ],
   ],
   [
+    "src/agents/harness/native-session/binding-authority.ts",
+    ["createNativeSessionBindingAuthority", "combineNativeSessionBindingAuthority"],
+  ],
+  [
     "src/agents/harness/native-session/binding-generation-authority.ts",
-    ["resolveNativeSessionBindingWithAuthority"],
+    ["prepareNativeSessionGenerationAuthority", "resolveNativeSessionBindingWithAuthority"],
   ],
 ]);
 
 // Mixed SDK receivers retain only these deprecated members, never their live factories.
 const reviewedMembers = new Map<string, readonly string[]>([
+  [
+    "src/agents/sessions/session-manager.ts",
+    ["open", "openBounded", "openDetachedBounded", "openModelContext", "readSessionContext"],
+  ],
+  [
+    "src/agents/sessions/session-manager-core.ts",
+    ["setSessionTarget", "reloadPersistedTranscript"],
+  ],
   [
     "src/agents/harness/native-session/initialization.ts",
     ["createNativeSessionInitializationOwner.prepare.link"],

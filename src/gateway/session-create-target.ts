@@ -28,7 +28,7 @@ import { invalidSessionRequest, unavailableSessionRequest } from "./session-requ
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadIncognitoGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
 /** Select and retain the agent's admission through creation, finalization, and rollback. */
@@ -206,8 +206,11 @@ export async function readSessionCreateTarget(
   assertCurrent();
   if (isIncognitoSessionKey(target.canonicalKey)) {
     return validate(
-      loadGatewaySessionEntryReadOnly(target.canonicalKey, { agentId: target.agentId }, params.cfg)
-        .entry,
+      loadIncognitoGatewaySessionEntryReadOnly(
+        target.canonicalKey,
+        { agentId: target.agentId },
+        params.cfg,
+      ).entry,
     );
   }
   const read = await readSessionEntriesFromStoreInWorker({

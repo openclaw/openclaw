@@ -209,12 +209,10 @@ it("keeps a prepared projection unpublished after a same-sequence rewrite", asyn
       expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, claimId)).toBe(true);
       deletePreparedSessionTranscriptProjectionChunkInTransaction(db, {
         sessionId,
-        claimId,
         maxRowsPerTable: 512,
       });
       appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
         sessionId,
-        claimId,
         activeRows: plan.activeRows,
         ftsRows: plan.ftsRows,
       });
@@ -255,17 +253,13 @@ it.each(["interrupted", "rewrite", "delete"])(
         expect(
           deletePreparedSessionTranscriptProjectionChunkInTransaction(db, {
             sessionId,
-            claimId,
             maxRowsPerTable: 512,
           }),
-        ).toEqual({ owned: true, hasMore: false });
-        expect(
-          appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
-            sessionId,
-            claimId,
-            activeRows: plan.activeRows.slice(0, 1),
-          }),
-        ).toBe(true);
+        ).toEqual({ hasMore: false });
+        appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
+          sessionId,
+          activeRows: plan.activeRows.slice(0, 1),
+        });
       }, scope);
       // Removing the last NULL is not publication: only finalization publishes the projection.
       expect(hasUnclassifiedSessionTranscriptEvents(db, sessionId)).toBe(false);

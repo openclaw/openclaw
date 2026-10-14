@@ -11,7 +11,6 @@ import {
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -122,10 +121,6 @@ function installPolicyWorkerStub(fallbackOwner?: FixtureOwner) {
               options?.assertCurrent?.();
               return {
                 writeId: write.writeId,
-                versions: new Map([
-                  ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
-                  ...write.deleteRunIds.map((id) => [id, null] as const),
-                ]),
                 notices: [],
               };
             },

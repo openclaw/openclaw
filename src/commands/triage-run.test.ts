@@ -483,7 +483,7 @@ describe("triage --run", () => {
     },
   );
 
-  it("confirms an interactive owned update continuation before embedded execution", async () => {
+  it("keeps an older owned update continuation diagnostics-only even on a terminal", async () => {
     await fs.writeFile(
       path.join(stateDir, "openclaw.json"),
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
@@ -501,10 +501,10 @@ describe("triage --run", () => {
         },
       ),
     );
-    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(mocks.confirm).not.toHaveBeenCalled();
     expect(mocks.prepareUpdateRepairInference).not.toHaveBeenCalled();
     expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
-    expect(runtime.log.mock.calls.flat().join("\n")).toContain(
+    expect(runtime.log.mock.calls.flat().join("\n")).not.toContain(
       "the embedded OpenClaw agent using your configured model",
     );
     expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("gpt-5.6-luna");

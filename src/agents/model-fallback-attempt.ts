@@ -118,6 +118,7 @@ export type ModelFallbackResultClassification =
       status?: number;
       code?: string;
       rawError?: string;
+      rateLimitRetriesExhausted?: number;
       preserveResultOnExhaustion?: boolean;
       preserveResultPriority?: number;
     }
@@ -399,6 +400,7 @@ function resolveResultClassificationError(
         status: classification.status,
         code: classification.code,
         rawError: classification.rawError,
+        rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
       })
     : null;
 }
@@ -559,6 +561,7 @@ function buildFailedCandidateAttempt(
         ? described.rawError
         : described.message,
     reason: described.reason ?? "unknown",
+    rateLimitRetriesExhausted: described.rateLimitRetriesExhausted,
     authMode: described.authMode,
     status: described.status,
     code: described.code,
@@ -677,6 +680,7 @@ export function throwFallbackFailureSummary(params: {
     // Recovery must not infer OAuth from the provider after candidate errors collapse here.
     authMode: lastAttempt?.authMode,
     status: lastAttempt?.status,
+    rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
     code: lastAttempt?.code,
     cause: params.lastError instanceof Error ? params.lastError : undefined,
     sessionId: params.attribution?.sessionId,

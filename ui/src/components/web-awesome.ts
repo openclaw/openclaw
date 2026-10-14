@@ -4,10 +4,6 @@ import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts";
 
-const keyboardDismissedDropdowns = new WeakSet<EventTarget>();
-
-/** Transient menus use hidden triggers. Keep Escape intent on the host so Lit
- * re-renders cannot lose it before Web Awesome finishes hiding the popup. */
 export function trackDropdownKeyboardDismissal(
   event: KeyboardEvent,
   focusDurableTrigger?: () => void,
@@ -16,16 +12,7 @@ export function trackDropdownKeyboardDismissal(
   // use a hidden trigger, so move focus first and let native Tab continue.
   if (event.key === "Tab") {
     focusDurableTrigger?.();
-    return;
   }
-  if (event.key === "Escape" && event.currentTarget) {
-    keyboardDismissedDropdowns.add(event.currentTarget);
-  }
-}
-
-export function consumeDropdownKeyboardDismissal(event: Event): boolean {
-  const dropdown = event.currentTarget;
-  return dropdown !== null && keyboardDismissedDropdowns.delete(dropdown);
 }
 
 /** Web Awesome exposes checkbox items only. Preserve its roving-focus item

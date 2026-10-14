@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import {
   asSafeIntegerInRange,
   parseDateStringTimestampMs,
@@ -23,6 +22,8 @@ import {
   jsonRemoveKey,
 } from "../infra/database-engine/json-values.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { projectTranscriptSession } from "./read.js";
 import {
@@ -154,7 +155,7 @@ function boundedText<T extends string | null>(
 }
 
 function readQuery(
-  database: DatabaseSync,
+  database: EngineConnection,
   query: ReturnType<typeof meetingTranscriptSessionQuery>,
   purpose: TranscriptReadPurpose = "page",
 ) {
@@ -290,14 +291,17 @@ export type TranscriptReadOptions = Omit<TranscriptsListParams, "cursor"> & {
   session?: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 };
 
-const dateReaders = new WeakSet<DatabaseSync>();
+const dateReaders = new WeakSet<EngineConnection>();
 const dateParser = new AsyncLocalStorage<typeof parseDateStringTimestampMs>();
 
 function parseTranscriptDate(value: unknown): number | undefined {
   return (dateParser.getStore() ?? parseDateStringTimestampMs)(value);
 }
 
-function registerTranscriptDateReader(database: DatabaseSync): void {
+function registerTranscriptDateReader(database: EngineConnection): void {
+  if (isPostgresSqlConnection(database)) {
+    throw new Error("PostgreSQL transcript date filtering is not supported yet");
+  }
   if (dateReaders.has(database)) {
     return;
   }
@@ -319,7 +323,7 @@ function transcriptStartTime(startedAt: Expression<string>) {
 
 /** Chronological key selection scans candidates; filters never turn into ownership. */
 function readTranscriptPage<Entry>(
-  database: DatabaseSync,
+  database: EngineConnection,
   options: TranscriptReadOptions,
   project: (entry: TranscriptReadEntry) => Entry,
 ): TranscriptReadPage<Entry> {
@@ -463,7 +467,7 @@ function readTranscriptPage<Entry>(
 
 /** Selectors are unique; identity and payload bounds remain in the same SQLite statement. */
 export function readTranscriptEntry(
-  database: DatabaseSync,
+  database: EngineConnection,
   selector: string,
   purpose: TranscriptReadPurpose = "page",
 ) {
@@ -484,7 +488,7 @@ export function readTranscriptEntry(
   return row.selector === selector ? transcriptReadEntryFromRow(row, purpose) : undefined;
 }
 
-export function readLatestTranscriptEntry(database: DatabaseSync) {
+export function readLatestTranscriptEntry(database: EngineConnection) {
   const row = executeSqliteQueryTakeFirstSync(
     database,
     readQuery(
@@ -505,7 +509,7 @@ export type TranscriptReadPage<Entry> = { entries: Entry[]; hasMore: boolean };
 export type TranscriptLibraryPage = TranscriptReadPage<ReturnType<typeof projectTranscriptSession>>;
 
 export function queryTranscriptReadEntries(
-  database: DatabaseSync,
+  database: EngineConnection,
   options: TranscriptReadOptions & { projection?: "public" },
   parseDate = parseDateStringTimestampMs,
 ) {
@@ -522,7 +526,7 @@ export function queryTranscriptReadEntries(
 }
 
 function utteranceQuery(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: TranscriptSessionDescriptor,
   purpose: TranscriptReadPurpose,
 ) {
@@ -567,7 +571,7 @@ function transcriptReadUtteranceFromRow(
 }
 
 function readTranscriptUtterancePage(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: TranscriptSessionDescriptor,
   options: { limit?: number; after?: number; query?: string },
   purpose: "page" | "legacy" = "page",
@@ -610,7 +614,7 @@ function readTranscriptUtterancePage(
 
 /** Omit the duplicated transcript in SQL before materializing the stored summary. */
 export function readStoredTranscriptNotes(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   purpose: TranscriptReadPurpose = "page",
 ): TranscriptReadNotes {
@@ -646,7 +650,7 @@ export function readStoredTranscriptNotes(
 }
 
 function requireTranscriptReadEntry(
-  database: DatabaseSync,
+  database: EngineConnection,
   selector: string,
   purpose: TranscriptReadPurpose,
 ) {
@@ -660,7 +664,10 @@ function requireTranscriptReadEntry(
   return entry;
 }
 
-export function readTranscriptLibraryEntry(database: DatabaseSync, params: TranscriptsGetParams) {
+export function readTranscriptLibraryEntry(
+  database: EngineConnection,
+  params: TranscriptsGetParams,
+) {
   const purpose: "legacy" | "page" =
     params.limit === undefined && params.cursor === undefined && params.query === undefined
       ? "legacy"
@@ -694,7 +701,7 @@ export type TranscriptExportRead = {
 
 /** Stream canonical rows and notes in the caller's read snapshot without materializing files. */
 export function* iterateTranscriptExport(
-  database: DatabaseSync,
+  database: EngineConnection,
   selector: string,
   includeNotes: boolean,
 ): Generator<TranscriptUtterance, TranscriptExportRead> {

@@ -14,6 +14,5 @@ export type SubagentRegistryWrite = {
 
 export type SubagentRegistryWriteReceipt = {
   writeId: string;
-  versions: Map<string, string | null>;
   notices: SessionStateNotice[];
 };

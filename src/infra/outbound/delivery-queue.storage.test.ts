@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   updateDeliveryQueueEntryInDatabase,
   upsertDeliveryQueueEntryInDatabase,
@@ -259,10 +260,13 @@ describe("delivery-queue storage", () => {
         retryCount.run(pending.retryCount, OUTBOUND_DELIVERY_QUEUE_NAME, id);
       }
       const entryTextBytes = Buffer.byteLength(JSON.stringify(readQueuedEntry(stateDir, id)));
-      const reads = trackSqliteStatementExecutions(db, ["queue"], (sql) =>
-        /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
-          ? "queue"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["queue"],
+        (sql) =>
+          /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
+            ? "queue"
+            : null,
       );
       try {
         // Count the native kernel's reads; the public ACK now runs in a separate worker.

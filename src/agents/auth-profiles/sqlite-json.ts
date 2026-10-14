@@ -1,16 +1,18 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
 import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../../infra/sqlite-schema-facts.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -62,7 +64,7 @@ function authProfileSchemaObjectType(schema: SqliteSchemaFacts, name: string): s
 }
 
 function inspectAuthProfileTable(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
@@ -82,7 +84,7 @@ function inspectAuthProfileTable(
 
 /** Read admitted auth cells without discarding malformed JSON needed for migration backups. */
 export function readAuthProfileJsonCellText(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): string | undefined {
@@ -106,7 +108,7 @@ export function readAuthProfileJsonCellText(
 }
 
 export function inspectAuthProfileJsonCell(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
@@ -118,7 +120,7 @@ export function inspectAuthProfileJsonCell(
 }
 
 function inspectAuthProfileJsonCellContents(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
@@ -187,7 +189,9 @@ export function readAuthProfileRowsReadOnly(
     closeAuthProfileReadDatabase(databasePath);
     return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
   } finally {
-    if (!keepReader) {
+    if (isArtifactPreservingStateRead("agent", databasePath)) {
+      acquired.db.close();
+    } else if (!keepReader) {
       closeAuthProfileReadDatabase(databasePath);
     }
   }
@@ -195,12 +199,14 @@ export function readAuthProfileRowsReadOnly(
 
 /** Worker reads acquire both cells in one SQLite snapshot. */
 export function readAuthProfileRows(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   databaseKind: "agent" | "shared-state",
   authSchema?: SqliteAuthSchema,
 ): AuthProfileRowRead {
-  const canCache = prepareSqliteReadCache(database, databasePath);
+  const canCache = isPostgresSqlConnection(database)
+    ? () => false
+    : prepareSqliteReadCache(database, databasePath);
   const storeTable = authProfileTableName("store", databaseKind);
   const stateTable = authProfileTableName("state", databaseKind);
   let schemaObjects: Array<Record<string, unknown>>;
@@ -311,7 +317,7 @@ export function readAuthProfileRows(
 }
 
 function inspectAuthProfileRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
@@ -328,7 +334,7 @@ function inspectAuthProfileRow(
 }
 
 /** The selected worker returns source presence without transferring credential rows. */
-export function hasAgentAuthProfileSourceInDatabase(database: DatabaseSync): boolean {
+export function hasAgentAuthProfileSourceInDatabase(database: EngineConnection): boolean {
   const store = inspectAuthProfileRow(database, "store", "agent");
   if (store.status !== "missing") {
     return true;

@@ -138,6 +138,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertAgent();
     return identity;
   };
+  await assertAgentPrepared();
   assertAdmission();
   let identity = await prepareIdentity(assertCaller);
   assertAdmission();
@@ -379,7 +380,12 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     // project. Its reuse never substitutes for the surrounding access checks.
     setupRecipe = knownRecipe.setupRecipe;
     recipe = parsedRecipe?.success ? parsedRecipe.data : undefined;
-  } else {
+  }
+  // Older devcontainer parsing did not record secret requests, including an empty selection.
+  if (
+    knownRecipe === undefined ||
+    (recipe?.source === "devcontainer" && recipe.secretNames === undefined)
+  ) {
     recipe = await resolveEnvironmentRecipe(
       async (file): Promise<EnvironmentRecipeEntry | undefined> => {
         const segments = file.split("/");

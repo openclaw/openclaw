@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
@@ -42,22 +43,14 @@ export async function appendMemoryWikiLog(
 export async function loadMemoryWikiVaultIdentity(
   vaultRoot: string,
 ): Promise<MemoryWikiVaultIdentity> {
-  const identity: MemoryWikiVaultIdentity = {
+  const emptyIdentity: MemoryWikiVaultIdentity = {
     vaultGeneration: null,
     compiledCacheReservationId: null,
     compiledCachePublicationId: null,
     compiledCacheSourceGeneration: null,
   };
-  let raw: string;
-  try {
-    raw = await fs.readFile(path.join(vaultRoot, ".openclaw-wiki", "log.jsonl"), "utf8");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return identity;
-    }
-    throw error;
-  }
-  for (const line of raw.split(/\r?\n/)) {
+  const identity = { ...emptyIdentity };
+  const consumeLine = (line: string) => {
     try {
       const { details } = JSON.parse(line) as MemoryWikiLogEntry;
       identity.vaultGeneration ??= normalizeOptionalString(details?.vaultGeneration) ?? null;
@@ -88,6 +81,71 @@ export async function loadMemoryWikiVaultIdentity(
     } catch {
       // Audit logs may contain a partial final line after an interrupted append.
     }
+  };
+  try {
+    const handle = await fs.open(path.join(vaultRoot, ".openclaw-wiki", "log.jsonl"), "r");
+    try {
+      const stat = await handle.stat();
+      // Read one finite prefix of the opened journal, not a live tail. Later
+      // publication checks still replay independently to detect concurrent writers.
+      let remaining = stat.isFile() && stat.size > 0 ? stat.size : Infinity;
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      const decoder = new StringDecoder("utf8");
+      let fragments: string[] = [];
+      const consume = (text: string) => {
+        let start = 0;
+        for (let end = text.indexOf("\n"); end !== -1; end = text.indexOf("\n", start)) {
+          const part = text.slice(start, end);
+          if (fragments.length > 0) {
+            fragments.push(part);
+            consumeLine(fragments.join(""));
+            fragments = [];
+          } else {
+            consumeLine(part);
+          }
+          start = end + 1;
+        }
+        if (start < text.length) {
+          fragments.push(text.slice(start));
+        }
+      };
+      while (remaining > 0) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          Math.min(buffer.length, remaining),
+          null,
+        );
+        if (bytesRead === 0) {
+          break;
+        }
+        remaining -= bytesRead;
+        consume(decoder.write(buffer.subarray(0, bytesRead)));
+      }
+      consume(decoder.end());
+      if (fragments.length > 0) {
+        consumeLine(fragments.join(""));
+      }
+    } catch (error) {
+      try {
+        await handle.close();
+      } catch (closeError) {
+        throw new AggregateError(
+          [error, closeError],
+          "Memory Wiki journal read and close failed.",
+          {
+            cause: closeError,
+          },
+        );
+      }
+      throw error;
+    }
+    await handle.close();
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return emptyIdentity;
+    }
+    throw error;
   }
   return identity;
 }

@@ -144,6 +144,9 @@ describe("project checkout preparation", () => {
       `#!/bin/sh
 set -eu
 test -z "\${PREPARATION_UNRELATED_ENV:-}"
+test "$TOKEN" = sentinel_fixture
+test "$HTTPS_PROXY" = http://127.0.0.1:3131
+test "$NODE_EXTRA_CA_CERTS" = /tmp/owned/ca.pem
 test "$PWD" = "$OPENCLAW_SOURCE_TREE_PATH"
 test "$PWD" = "$OPENCLAW_WORKTREE_PATH"
 mkdir build
@@ -157,7 +160,17 @@ printf 'setup\\n' >> "$HOME/count"
     const first = await f.preparedOperation();
     // Mutable local script bytes are never admitted into the pristine generation.
     await fs.writeFile(path.join(f.repository, ".openclaw", "worktree-setup.sh"), "exit 99\n");
-    const result = await first.project.prepare(f);
+    const result = await first.project.prepare({
+      ...f,
+      runScriptWithBudget: (createScript) =>
+        f.runScript(
+          createScript(30_000, {
+            TOKEN: "sentinel_fixture",
+            HTTPS_PROXY: "http://127.0.0.1:3131",
+            NODE_EXTRA_CA_CERTS: "/tmp/owned/ca.pem",
+          }),
+        ),
+    });
     first.close();
     const prepared = result.preparedWorkspace!;
     expect(first.getPreparedWorkspace()).toEqual(prepared);

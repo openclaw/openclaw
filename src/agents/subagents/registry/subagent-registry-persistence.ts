@@ -340,7 +340,6 @@ function commitRows<T>(
       return {
         value: planned.value,
         postimages,
-        versions: receipt.versions,
         notices: receipt.notices,
       };
     };

@@ -45,11 +45,6 @@ export const ensureSessionInputCompletionsSchema = createSqliteSchemaEnsurer(
   { tables: [SESSION_INPUT_COMPLETIONS_TABLE] },
 );
 
-/** Existing same-version stores converge through Doctor/open; absent tables stay feature-local. */
-export function hasPendingInputConsumptionColumnMigration(db: DatabaseSync): boolean {
-  return hasSessionPendingInputsSchema(db) && !hasPendingInputConsumptionColumn(db);
-}
-
 export function ensurePendingInputConsumptionColumn(db: DatabaseSync): void {
   ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id TEXT");
 }

@@ -209,7 +209,7 @@ export async function replaceSessionEntry(
   );
 }
 
-/** Replaces one entry synchronously for sync session runtimes. */
+/** Worker transcript commits use this synchronous replacement; other callers are fixtures. */
 export function replaceSessionEntrySync(scope: SessionAccessScope, entry: SessionEntry): void {
   const resolved = resolveSqliteScope(scope);
   assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);

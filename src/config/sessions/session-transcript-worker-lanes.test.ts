@@ -29,7 +29,7 @@ import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.t
 
 it("keeps native close conservative until an unqualified reader is retired", async () => {
   const pool = createSessionTranscriptHistoryPool();
-  const request = { kind: "prewarm" as const, database: input().database, env: {} };
+  const request = { kind: "prewarm" as const, database: input().database, env: {}, history: false };
   const read = () => pool.run(() => request, {});
   observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
   try {
@@ -269,9 +269,7 @@ it("retains branch reads across four-minute gaps and retires after five idle min
   const { database, scope } = input();
   const request = {
     database,
-    databaseIdentity: "synthetic-branch-owner",
     sessionKey: scope.sessionKey,
-    sessionId: "branch-session",
   };
   const result = {
     status: "ok" as const,
@@ -318,6 +316,10 @@ it.each([historyLane, maintenanceLane])(
     const first = prewarmSessionHistoryWorker(request.database, lane);
     const second = prewarmSessionHistoryWorker(request.database, lane);
     expect(observed.run).toHaveBeenCalledOnce();
+    expect(observed.run.mock.calls[0]?.[0]).toMatchObject({
+      kind: "prewarm",
+      history: lane === historyLane,
+    });
     expect(lane.pending).toBe(1);
     expect(isSessionHistoryWorkerCold(lane)).toBe(false);
     reply.resolve({ ok: true, value: { kind: "prewarm" } });

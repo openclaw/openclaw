@@ -596,6 +596,31 @@ test("sessions.compact rejects stale terminal persistence after the session chan
   }
 });
 
+test("sessions.compact accounts from the latest entry without overwriting concurrent metadata", async () => {
+  const scope = await createCompactionSession("sess-compact-metadata");
+  const compaction = holdCompaction();
+  const { ws } = await openClient();
+  const compactResult = rpcReq(ws, "sessions.compact", { key: "main" });
+  try {
+    await compaction.waitForEntry(compactResult);
+    await upsertSessionEntryCore(scope, {
+      ...loadSessionEntry(scope),
+      sessionId: scope.sessionId,
+      compactionCount: 3,
+      label: "changed during compaction",
+    });
+    compaction.release();
+    expectMainCompactionResult(await compactResult, true);
+    const entry = loadSessionEntry(scope);
+    expect(entry?.label).toBe("changed during compaction");
+    expect(entry?.compactionCount).toBe(4);
+  } finally {
+    compaction.release();
+    await Promise.allSettled([compactResult]);
+    await closeGatewayTestWebSocket(ws);
+  }
+});
+
 test("sessions.reset waits for terminal compaction before replacing the session", async () => {
   const { storePath } = await createCompactionSession("sess-compact-reset");
   const compaction = holdCompaction();

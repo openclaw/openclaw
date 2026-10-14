@@ -63,7 +63,6 @@ export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProje
 
 type ProjectionDeleteChunkResult = {
   hasMore: boolean;
-  owned: boolean;
 };
 
 type SessionTranscriptProjectionRow = {
@@ -176,7 +175,7 @@ function readProjectionSource(
         (navigationOnly
           ? query
               .clearSelect()
-              .select([transcriptEventNavigationSql().as("event_json"), "seq", "created_at"])
+              .select([transcriptEventNavigationSql(db).as("event_json"), "seq", "created_at"])
           : query
         ).orderBy("seq", "asc"),
       ),
@@ -346,17 +345,6 @@ function projectionTailFitsCatchUpBounds(
   );
 }
 
-function projectionClaimIsOwned(db: DatabaseSync, sessionId: string, claimId: number): boolean {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getProjectionKysely(db)
-      .selectFrom("session_transcript_index_state")
-      .select(["needs_rebuild", "updated_at"])
-      .where("session_id", "=", sessionId),
-  );
-  return row?.needs_rebuild !== 0 && row?.updated_at === claimId;
-}
-
 /** Claims projection work; finalization validates its source before publishing. */
 export function claimPreparedSessionTranscriptProjectionInTransaction(
   db: DatabaseSync,
@@ -404,14 +392,11 @@ export function claimPreparedSessionTranscriptProjectionInTransaction(
   return Number(result.numAffectedRows ?? 0n) > 0;
 }
 
-/** Deletes old rows in bounded rowid batches while the prepared claim is current. */
+/** Deletes old rows in bounded rowid batches for the active rebuild. */
 export function deletePreparedSessionTranscriptProjectionChunkInTransaction(
   db: DatabaseSync,
-  params: { claimId: number; maxRowsPerTable: number; sessionId: string },
+  params: { maxRowsPerTable: number; sessionId: string },
 ): ProjectionDeleteChunkResult {
-  if (!projectionClaimIsOwned(db, params.sessionId, params.claimId)) {
-    return { hasMore: false, owned: false };
-  }
   // Active rows use their session index; FTS deletion uses its indexed identity owner.
   const kysely = getProjectionKysely(db);
   const active = Number(
@@ -435,25 +420,19 @@ export function deletePreparedSessionTranscriptProjectionChunkInTransaction(
   });
   return {
     hasMore: active === params.maxRowsPerTable || fts === params.maxRowsPerTable,
-    owned: true,
   };
 }
 
-/** Appends one bounded projection chunk while its claim remains current. */
+/** Appends one bounded projection chunk for the active rebuild. */
 export function appendPreparedSessionTranscriptProjectionChunkInTransaction(
   db: DatabaseSync,
   params: {
     activeRows?: PreparedSessionTranscriptProjection["activeRows"];
-    claimId: number;
     ftsRows?: PreparedSessionTranscriptProjection["ftsRows"];
     sessionId: string;
   },
-): boolean {
-  if (!projectionClaimIsOwned(db, params.sessionId, params.claimId)) {
-    return false;
-  }
+): void {
   insertPreparedSessionTranscriptProjectionRows(db, params);
-  return true;
 }
 
 function insertPreparedSessionTranscriptProjectionRows(
@@ -559,9 +538,6 @@ export function finalizePreparedSessionTranscriptProjectionInTransaction(
   plan: PreparedSessionTranscriptProjectionMetadata,
   claimId: number,
 ): boolean {
-  if (!projectionClaimIsOwned(db, plan.sessionId, claimId)) {
-    return false;
-  }
   const snapshot = readProjectionSourceSnapshot(db, plan.sessionId);
   const exactSnapshot = sourceSnapshotMatches(snapshot, plan);
   const catchUpPlan = exactSnapshot ? undefined : prepareProjectionTailCatchUp(db, plan, snapshot);
@@ -576,7 +552,7 @@ export function finalizePreparedSessionTranscriptProjectionInTransaction(
       sessionId: catchUpPlan.sessionId,
     });
   }
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     db,
     getProjectionKysely(db)
       .updateTable("session_transcript_index_state")
@@ -592,5 +568,5 @@ export function finalizePreparedSessionTranscriptProjectionInTransaction(
       .where("needs_rebuild", "!=", 0)
       .where("updated_at", "=", claimId),
   );
-  return true;
+  return Number(result.numAffectedRows ?? 0n) > 0;
 }

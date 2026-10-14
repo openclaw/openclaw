@@ -205,7 +205,7 @@ export function mergeProviderConfigWithPersona(params: {
 function resolveLazyProviderConfig(
   config: ResolvedTtsConfig,
   providerId: string,
-  cfg?: OpenClawConfig,
+  effectiveCfg: OpenClawConfig | undefined,
   voiceModel?: VoiceModelRef,
   provider?: SpeechProviderPlugin,
   registry: TtsProviderRegistry = defaultProviderRegistry,
@@ -213,7 +213,6 @@ function resolveLazyProviderConfig(
   const canonical =
     normalizeConfiguredSpeechProviderId(providerId) ?? normalizeLowercaseStringOrEmpty(providerId);
   const existing = voiceModel ? undefined : config.providerConfigs[canonical];
-  const effectiveCfg = cfg ? resolveProviderRuntimeConfig(cfg, registry) : config.sourceConfig;
   if (existing && !effectiveCfg) {
     return existing;
   }
@@ -575,6 +574,13 @@ async function isSpeechProviderConfiguredAsync(
     const configured = resolveSpeechProviderConfiguration(config, provider, cfg, registry);
     if (!configured) {
       return false;
+    }
+    if (!configured.provider.isConfiguredAsync) {
+      warnPluginSdkDeprecation({
+        family: "provider-sync-configuration",
+        method: "SpeechProviderPlugin.isConfigured",
+        replacement: "isConfiguredAsync",
+      });
     }
     return (
       (await (configured.provider.isConfiguredAsync

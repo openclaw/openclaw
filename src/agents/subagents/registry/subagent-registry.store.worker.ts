@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { readAcpSessionControlInWorker } from "../../../acp/runtime/session-meta-source.worker.js";
 import { requestSessionEntryCurrentAdmission } from "../../../config/sessions/session-entry-current-admission.worker.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../../../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../../../infra/sqlite-lifecycle-errors.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
@@ -34,11 +34,10 @@ import type {
 } from "../../../state/openclaw-state-read.types.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
-import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
-  loadVersionedSubagentRunsInDatabase,
+  loadSubagentRunsByIdsInDatabase,
   loadSubagentRunsForSessionFromSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import type {
@@ -49,7 +48,7 @@ import type {
 const log = createSubsystemLogger("state/worker");
 
 export function readSubagentRunsInWorker(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>,
 ): Extract<OpenClawStateReadResult, { type: "subagents.runs" }> {
   if (command.scope.kind === "maintenance") {
@@ -77,7 +76,7 @@ export function readSubagentRunsInWorker(
   if (command.scope.kind === "ids") {
     return {
       type: command.type,
-      ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
+      runs: loadSubagentRunsByIdsInDatabase({ db }, command.scope.runIds),
     };
   }
   const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db });
@@ -122,7 +121,7 @@ export async function streamSubagentRegistryInWorker(
       if (!entry) {
         throw new Error("Canonical subagent restore found an unreadable durable row");
       }
-      batch.push({ entry, version: subagentRunRowVersion(row), createdAt: row.created_at });
+      batch.push({ entry, createdAt: row.created_at });
       bytes += size;
       count += 1;
     }
@@ -182,10 +181,6 @@ export function persistSubagentRunChangesInWorker(
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
       const receipt: SubagentRegistryWriteReceipt = {
         writeId,
-        versions: new Map([
-          ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
-          ...deleteRunIds.map((runId) => [runId, null] as const),
-        ]),
         notices,
       };
       deferSqliteWorkerCommitReceipt(writer.db, receipt);

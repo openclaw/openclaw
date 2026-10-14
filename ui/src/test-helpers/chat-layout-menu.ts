@@ -42,7 +42,7 @@ export async function openChatLayoutMenu(
 ): Promise<Locator | HTMLElement> {
   if ("container" in scope) {
     const menu = scope.container.querySelector<HTMLElement>(".chat-pane__layout-menu");
-    const trigger = menu?.querySelector<HTMLElement>('button[aria-label="Layout"]');
+    const trigger = menu?.querySelector<HTMLElement>("button.chat-pane__layout-trigger");
     if (!menu || !trigger) {
       throw new Error("Expected a chat Layout menu");
     }
@@ -53,7 +53,7 @@ export async function openChatLayoutMenu(
     }
     return menu;
   }
-  const trigger = scope.getByRole("button", { name: "Layout", exact: true }).first();
+  const trigger = scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first();
   const menu = trigger.locator("..");
   if ((await menu.getAttribute("open")) === null) {
     const element = await menu.elementHandle();
@@ -74,7 +74,7 @@ export async function closeChatLayoutMenu(
 ): Promise<void> {
   if ("container" in scope) {
     const menu = scope.container.querySelector<HTMLElement>(".chat-pane__layout-menu");
-    const trigger = menu?.querySelector<HTMLElement>('button[aria-label="Layout"]');
+    const trigger = menu?.querySelector<HTMLElement>("button.chat-pane__layout-trigger");
     if (!menu || !trigger) {
       throw new Error("Expected a chat Layout menu");
     }
@@ -84,7 +84,7 @@ export async function closeChatLayoutMenu(
     await waitForMenuClose(menu);
     return;
   }
-  const trigger = scope.getByRole("button", { name: "Layout", exact: true }).first();
+  const trigger = scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first();
   const menu = trigger.locator("..");
   if ((await menu.getAttribute("open")) !== null) {
     await trigger.click();

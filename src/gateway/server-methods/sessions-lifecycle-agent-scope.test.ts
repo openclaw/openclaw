@@ -26,7 +26,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
-import { resolveGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -133,7 +133,14 @@ it.each([
   };
   setRuntimeConfigSnapshot(cfg);
   const foreignAgentId = agentId === "main" ? "research" : "main";
-  const target = resolveGatewaySessionStoreTarget({ cfg, key, agentId });
+  const target = await resolveGatewaySessionStoreTargetInWorker({
+    cfg,
+    key,
+    agentId,
+    projection: "list",
+    exactRead: true,
+    readOnly: false,
+  });
   const targetId = `${agentId}-session`;
   const foreignId = `${foreignAgentId}-session`;
   await upsertSessionEntryCore(

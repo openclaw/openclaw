@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -13,10 +13,14 @@ import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../src/state/openclaw-agent-schema.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
+import { sqliteDatabaseSealSchemaFor } from "../src/state/openclaw-database-seal-schema.js";
 import { resolveVersionFromModuleUrl } from "../src/version.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import {
+  GATEWAY_RESTART_TEST_KILL_MS,
+  GATEWAY_RESTART_TEST_SHUTDOWN_MS as APPLICATION_STOP_MS,
+  GATEWAY_RESTART_TEST_STOP_MS as NATIVE_STOP_MS,
+} from "./helpers/gateway-restart-budget.js";
 import { startGatewayRestartProvider } from "./helpers/gateway-restart-provider.js";
 import {
   createOpenClawTestInstance,
@@ -26,8 +30,6 @@ import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./helpers
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
-const NATIVE_STOP_MS = 46_000;
-const APPLICATION_STOP_MS = 41_000;
 const SERVICE_ID = "restart-handoff-pending-service";
 const SERVICE_STOP = "RESTART_HANDOFF_SERVICE_STOP_ENTERED";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -86,6 +88,7 @@ it.skipIf(process.platform !== "linux")(
           name: "restart-handoff",
           signal,
           startTimeoutMs: 120_000,
+          gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
           gatewayCommandPrefix: [
             process.execPath,
             "--import",
@@ -329,12 +332,8 @@ it.skipIf(process.platform !== "linux")(
         if (!version) {
           throw new Error("Restart proof cannot identify its Gateway artifact version");
         }
-        // Seal policy revision 1 binds version and schema, independently of commit identity.
-        const artifactSchema = createHash("sha256")
-          .update(JSON.stringify([1, version]))
-          .update(OPENCLAW_AGENT_SCHEMA_SQL)
-          .update(OPENCLAW_STATE_SCHEMA_SQL)
-          .digest("hex");
+        // The seal binds the running artifact's version to the production seal policy.
+        const artifactSchema = sqliteDatabaseSealSchemaFor(version);
         const seal = readSqliteCleanCloseSeal(
           agentPath,
           artifactSchema,

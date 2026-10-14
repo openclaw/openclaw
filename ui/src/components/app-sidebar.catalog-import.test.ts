@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogImportResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -13,8 +14,7 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const result: SessionsCatalogImportResult = {
   sessionKey: "agent:main:imported-transcript",

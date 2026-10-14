@@ -2,7 +2,6 @@ import {
   normalizeOpenAIResponsesFunctionCallId,
   replaceCompactionReplayOwnerContent,
   shouldNormalizeOpenAIResponsesToolCallId,
-  splitOpenAIFunctionCallPairing,
 } from "@openclaw/ai/transports";
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../runtime/index.js";
@@ -138,78 +137,6 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         resolveId,
       });
     }
-    return msg;
-  });
-}
-
-/**
- * OpenAI can reject replayed `function_call` items with an `fc_*` id if the
- * matching `reasoning` item is absent in the same assistant turn.
- *
- * When that pairing is missing, strip the `|fc_*` suffix from tool call ids so
- * shared model runtime omits `function_call.id` on replay.
- */
-export function downgradeOpenAIFunctionCallReasoningPairs(
-  messages: AgentMessage[],
-): AgentMessage[] {
-  let pendingRewrittenIds: Map<string, string> | null = null;
-  return rewriteReplayMessages(messages, (msg) => {
-    if (!msg || typeof msg !== "object") {
-      pendingRewrittenIds = null;
-      return msg;
-    }
-
-    const role = (msg as { role?: unknown }).role;
-    if (role === "assistant") {
-      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      const localRewrittenIds = new Map<string, string>();
-      let seenReplayableReasoning = false;
-      const next = rewriteAssistantContent(assistantMsg, (block) => {
-        const thinkingBlock = block as OpenAIThinkingBlock;
-        if (
-          thinkingBlock.type === "thinking" &&
-          hasOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
-        ) {
-          seenReplayableReasoning = true;
-          return block;
-        }
-
-        const toolCallBlock = block as OpenAIToolCallBlock;
-        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
-          return block;
-        }
-
-        const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
-        if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
-          return block;
-        }
-
-        localRewrittenIds.set(toolCallBlock.id, pairing.callId);
-        return {
-          ...block,
-          id: pairing.callId,
-        } as typeof block;
-      });
-      pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
-      return next;
-    }
-
-    if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
-      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
-        toolUseId?: unknown;
-      };
-      const updates: Record<string, string> = {};
-      for (const field of ["toolCallId", "toolUseId"] as const) {
-        const id = toolResult[field];
-        const nextId = typeof id === "string" ? pendingRewrittenIds.get(id) : undefined;
-        if (nextId && nextId !== id) {
-          updates[field] = nextId;
-        }
-      }
-      return Object.keys(updates).length > 0 ? { ...toolResult, ...updates } : msg;
-    }
-
-    pendingRewrittenIds = null;
     return msg;
   });
 }

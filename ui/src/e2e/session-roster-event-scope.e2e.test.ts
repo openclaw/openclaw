@@ -47,7 +47,7 @@ suite.define(() => {
       const selectedRow = sidebar.locator(`[data-session-key="${key}"]`);
       await expect.poll(() => selectedRow.textContent()).toContain("Weekly report");
       await sidebar.locator(".sidebar-agent-card__main").click();
-      await sidebar.locator('wa-dropdown-item[value="scope:all"]').click();
+      await sidebar.locator('[data-value="scope:all"]').click();
       await expect.poll(() => sidebar.locator(".sidebar-agent-roster__row").count()).toBe(2);
 
       const activityQuery = {

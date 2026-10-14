@@ -3,9 +3,9 @@ import type { TemplateResult } from "lit";
 export type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
 export type ToastOptions = {
-  /** A template lets a message name a destination the operator can actually open,
+  /** Rich content lets a message name a destination the operator can actually open,
    * instead of spelling out a settings path the toast then makes them find. */
-  message: string | TemplateResult;
+  message: string | TemplateResult | Node;
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   /** Bottom placement suits settings feedback without covering the page heading. */
@@ -231,12 +231,12 @@ export function showToast(options: ToastOptions): boolean {
       if (event.target !== modal.owner) {
         return;
       }
-      modal.owner.removeEventListener("wa-after-hide", handoff);
+      modal.owner.removeEventListener("overlay-after-hide", handoff);
       queueMicrotask(() =>
         (activeModalToastLayer()?.container ?? restingToastLayer())?.append(host),
       );
     };
-    modal.owner.addEventListener("wa-after-hide", handoff);
+    modal.owner.addEventListener("overlay-after-hide", handoff);
   }
   host.show(options);
   return true;

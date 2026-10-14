@@ -40,8 +40,8 @@ import * as gatewayDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { loadSessionEntry } from "./session-utils.js";
 import { withPreparedSessionResolve } from "./sessions-resolve.js";
 import {
   agentCommandMock,
@@ -347,7 +347,7 @@ describe("spawn input ownership transfer", () => {
           }),
         ]);
         const revokedKey = revoked === "requester" ? parentKey : childKey;
-        const entry = loadSessionEntry(revokedKey, { agentId: "main" }).entry;
+        const entry = (await loadSessionEntryAsync(revokedKey, { agentId: "main" })).entry;
         if (!entry) {
           throw new Error("Expected prepared session");
         }
@@ -373,7 +373,7 @@ describe("spawn input ownership transfer", () => {
               agentId: "main",
               sessionKey: childKey,
               sessionId: childKey,
-              storePath: loadSessionEntry(childKey, { agentId: "main" }).storePath,
+              storePath: (await loadSessionEntryAsync(childKey, { agentId: "main" })).storePath,
             })
           ).total,
         ).toBe(0);
@@ -455,7 +455,7 @@ describe("spawn input ownership transfer", () => {
           agentId: "worker",
           sessionKey: targetKey,
           sessionId,
-          storePath: loadSessionEntry(targetKey, { agentId: "worker" }).storePath,
+          storePath: (await loadSessionEntryAsync(targetKey, { agentId: "worker" })).storePath,
         };
         const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
         admission = prepareAgentRunAdmission({
@@ -602,7 +602,7 @@ describe("spawn input ownership transfer", () => {
       { agentId: "main", sessionKey: childKey },
       { sessionId, updatedAt: Date.now() },
     );
-    const loaded = loadSessionEntry(childKey, { agentId: "main" });
+    const loaded = await loadSessionEntryAsync(childKey, { agentId: "main" });
     const admission = prepareAgentRunAdmission({
       cfg,
       operationalRunInstance: createOperationalRunInstanceRef(`parent-${runId}`),
@@ -622,7 +622,7 @@ describe("spawn input ownership transfer", () => {
       () => captureAgentToolSourceExecutionGuard(),
     );
     if (boundary === "before reset" || boundary === "live reset") {
-      const before = loadSessionEntry(childKey, { agentId: "main" }).entry;
+      const before = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
       let hookCalls = 0;
       const onReset = (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
         if (event.sessionKey !== childKey) {
@@ -647,10 +647,12 @@ describe("spawn input ownership transfer", () => {
         );
         if (boundary === "before reset") {
           await expect(reset).rejects.toThrow("tool invocation authority is no longer active");
-          expect(loadSessionEntry(childKey, { agentId: "main" }).entry).toEqual(before);
+          expect((await loadSessionEntryAsync(childKey, { agentId: "main" })).entry).toEqual(
+            before,
+          );
         } else {
           await expect(reset).resolves.toMatchObject({ status: "ok", summary: "completed" });
-          const after = loadSessionEntry(childKey, { agentId: "main" }).entry;
+          const after = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
           expect(after?.sessionId).toBe(sessionId);
           expect(after?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
         }
@@ -825,7 +827,7 @@ describe("accepted input Gateway instance retirement", () => {
       agentId: "main",
       sessionKey: childKey,
       sessionId,
-      storePath: loadSessionEntry(childKey, { agentId: "main" }).storePath,
+      storePath: (await loadSessionEntryAsync(childKey, { agentId: "main" })).storePath,
     };
     const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
     const admission = prepareAgentRunAdmission({

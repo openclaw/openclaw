@@ -48,9 +48,9 @@ export async function readResolvedSessionEntryInWorker(
 }
 
 /** One selected metadata read per store, shared by every requested logical owner. */
-async function readResolvedSessionEntriesInWorker(
+export async function readResolvedSessionEntriesInWorker(
   input: Omit<LogicalSessionAccessScope, "sessionKey"> & { sessionKeys: readonly string[] },
-  projection: "exact" | "worktree" = "exact",
+  projection: "exact" | "worktree" | "list" = "exact",
 ): Promise<Map<string, ResolvedSessionEntryAccessTarget>> {
   const targets = await readResolvedSessionStoreTargetsInWorker(input, projection);
   return new Map([...targets].map(([key, { storePath: _storePath, ...target }]) => [key, target]));
@@ -58,7 +58,7 @@ async function readResolvedSessionEntriesInWorker(
 
 export async function readResolvedSessionStoreTargetsInWorker(
   input: Omit<LogicalSessionAccessScope, "sessionKey"> & { sessionKeys: readonly string[] },
-  projection: "exact" | "worktree" = "exact",
+  projection: "exact" | "worktree" | "list" = "exact",
 ): Promise<Map<string, ResolvedSessionEntryStoreTarget>> {
   const scope = { ...input, env: cloneEnvWithPlatformSemantics(input.env ?? process.env) };
   const actorEnv = input.env === undefined ? undefined : scope.env;

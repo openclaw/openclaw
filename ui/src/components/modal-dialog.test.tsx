@@ -11,6 +11,7 @@ import {
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import "./modal-dialog.ts";
 
 let container: HTMLDivElement;
@@ -18,10 +19,10 @@ let restoreDialogPolyfill: () => void;
 
 type Modal = HTMLElementTagNameMap["openclaw-modal-dialog"];
 const modalTransitionEvents = {
-  opening: "wa-show",
-  opened: "wa-after-show",
-  closing: "wa-hide",
-  closed: "wa-after-hide",
+  opening: "overlay-show",
+  opened: "overlay-after-show",
+  closing: "overlay-hide",
+  closed: "overlay-after-hide",
 } as const;
 
 function commitRender(element: { updateComplete: Promise<unknown> }) {
@@ -304,6 +305,9 @@ describe("openclaw-modal-dialog", () => {
         const { modal } = await renderModal();
 
         showToast({ message: "Saved" });
+        await commitRender(appHost);
+        await vi.dynamicImportSettled();
+        flush();
         expect(appHost.parentElement).toBe(modal.getOverlayContainer());
         const hidden = action === "hide" ? afterModalHidden(modal) : undefined;
         modal[action]();
@@ -316,6 +320,8 @@ describe("openclaw-modal-dialog", () => {
         await commitRender(appHost);
 
         expect(appHost.parentElement).toBe(shell);
+        await vi.dynamicImportSettled();
+        flush();
         expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
         expect(modal.querySelector(".app-toast")).toBeNull();
       } finally {

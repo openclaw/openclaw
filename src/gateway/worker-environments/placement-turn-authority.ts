@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -85,7 +85,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     owner.placements.set(change.sessionId, { placement: change.facts.placement, sequence });
   }
   applyPlacementReadPublication(owner, change, sequence);
-  if (affectsPlacementObservation(change)) {
+  if (change.kind !== "tools" && (change.kind !== "claim" || !change.localOnly)) {
     owner.preservation = undefined;
   }
   if (change.kind !== "tools") {
@@ -310,7 +310,7 @@ export async function prepareSessionPlacementRead(
   }
 }
 
-function stageChange(db: DatabaseSync, change: ClaimChange): void {
+function stageChange(db: EngineConnection, change: ClaimChange): void {
   const owner = ownerFor(requireOpenClawStateDatabaseIdentity({ db }));
   if (
     !stageSqliteTransactionState(db, {
@@ -353,10 +353,12 @@ export function stagePlacementTurnClaimWorkerPublication(
   workspacePlacement?: WorkerSessionPlacementRecord,
   projection?: WorkerSessionPlacementReadResult,
   nativeSettlement?: Promise<SqliteWorkerOperationSettlement>,
+  inventoryUnchanged = false,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
     localOnly: facts.state === "local" && (previousState === null || previousState === "local"),
+    ...(inventoryUnchanged ? { inventoryUnchanged: true as const } : {}),
     sessionId: facts.sessionId,
     facts: freezeJsonSnapshot(facts),
     workspacePlacement: freezeJsonSnapshot(workspacePlacement),
@@ -529,7 +531,7 @@ export function stagePlacementTurnToolWorkerPublication(
 }
 
 export function publishPlacementTurnToolState(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: { sessionId: string; claimId: string },
 ): void {
   stageChange(db, { kind: "tools", sessionId: identity.sessionId, claimId: identity.claimId });
@@ -572,8 +574,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
       apply();
     }
   };
-  const publish = () => {
-    const notify = preparePlacementChangeNotification(owner, change);
+  const publish = (notify = preparePlacementChangeNotification(owner, change)) => {
     commitChange(owner, change, sequence);
     notify();
     for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
@@ -589,6 +590,8 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
       }),
     invalidate: () =>
       settle(() => {
+        // Keep the refresh identity without publishing an uncertain postimage.
+        const notify = preparePlacementChangeNotification(owner, change);
         change.indeterminate = true;
         // Uncertain claim/tool writes revoke that incarnation. Workspace-only writes
         // invalidate read observations while preserving the separate turn authority.
@@ -604,14 +607,14 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
             change.workspacePlacement = undefined;
           }
         }
-        publish();
+        publish(notify);
       }),
   };
 }
 
 /** Publish only an existing successful writer postimage; this performs no database read. */
 export function publishPlacementTurnClaimState(
-  db: DatabaseSync,
+  db: EngineConnection,
   record: WorkerSessionPlacementRecord,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
 ): void {
@@ -626,7 +629,7 @@ export function publishPlacementTurnClaimState(
 }
 
 export function publishPlacementTurnClaimCleared(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
   retired?: true,
@@ -640,7 +643,7 @@ export function publishPlacementTurnClaimCleared(
 }
 
 export function publishPlacementWorkspaceResultState(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   facts: WorkspaceResultPostimage | null,
 ): void {
@@ -648,7 +651,7 @@ export function publishPlacementWorkspaceResultState(
 }
 
 export function publishPlacementWorkspaceJournalState(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   present: boolean,
 ): void {

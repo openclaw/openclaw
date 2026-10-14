@@ -157,6 +157,7 @@ describe("setup activation credentials and configuration", () => {
       });
       expect(result).toMatchObject({ ok: true });
       expect(setup.login).not.toHaveBeenCalled();
+      expect(setup.run).toHaveBeenCalledOnce();
       expect(readNativeKey).not.toHaveBeenCalled();
       expect(setup.readProfile()).toBeUndefined();
       expect(
@@ -167,6 +168,33 @@ describe("setup activation credentials and configuration", () => {
       ).toEqual({ enabled: true });
     },
   );
+
+  it("does not activate a native sign-in revoked before commit", async () => {
+    const setup = await fixture({ codex: true, homeScope: "user" });
+    const verifySetup = vi.fn(async () => {
+      if (verifySetup.mock.calls.length > 1) {
+        throw new Error("Native account no longer has model access");
+      }
+    });
+    setup.pluginRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Native setup fixture",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        verifySetup,
+        runAttempt: async () => {
+          throw new Error("Setup must not start a turn");
+        },
+      },
+    });
+    expect((await setup.activate("codex-cli")).ok).toBe(false);
+    expect(verifySetup).toHaveBeenCalledTimes(2);
+    expect(setup.run).not.toHaveBeenCalled();
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+  });
 
   it.each([
     { authMethod: "oauth", homeScope: "user" },

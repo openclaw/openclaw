@@ -2,10 +2,14 @@ import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type { SessionActorVersion } from "./session-actor-state.types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import type {
+  SessionEntryPatchCommitted,
+  SessionEntryPatchGuard,
+} from "./session-entry-patch.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
-import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 
 type PrepareEntryPatch = (
   database: OpenClawAgentDatabase,
@@ -13,7 +17,10 @@ type PrepareEntryPatch = (
 ) =>
   | {
       snapshot(): SqliteLifecycleTargetSnapshot[number];
-      transcript: { sessionId: string; watermark: SessionTranscriptWatermark };
+      readPredicate: (predicate: SessionEntryPatchGuard["shouldCommitIf"]) => {
+        matches: boolean;
+        transcriptPredicate?: SessionEntryPatchCommitted["transcriptPredicate"];
+      };
       publish(
         postimages: SessionEntryWritePostimages,
         publication: SessionEntryReplacementPublication,
@@ -31,7 +38,13 @@ type ParticipantOwner = {
   prepare: (
     database: ParticipantDatabase,
     sessionKey: string,
-  ) => ((participants: SessionParticipantRecord[]) => void) | undefined;
+    singleStatement?: boolean,
+  ) =>
+    | {
+        version: SessionActorVersion;
+        publish(participants: SessionParticipantRecord[]): void;
+      }
+    | undefined;
 };
 const participantOwners = new WeakMap<DatabaseSync, ParticipantOwner>();
 
@@ -58,8 +71,9 @@ export function readSessionActorParticipants(
 export function prepareSessionActorParticipantUpdate(
   database: ParticipantDatabase,
   sessionKey: string,
+  singleStatement = false,
 ) {
-  return participantOwners.get(database.db)?.prepare(database, sessionKey);
+  return participantOwners.get(database.db)?.prepare(database, sessionKey, singleStatement);
 }
 
 export function registerSessionActorEntryPatchOwner(

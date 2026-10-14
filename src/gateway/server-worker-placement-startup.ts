@@ -8,11 +8,15 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
@@ -420,12 +424,28 @@ export function createGatewayWorkerPlacementRuntime(
       runnerAvailability,
     });
     metadataChanges = changes;
-    const uninstallPlacementChanges = params.placements.subscribeChanges(() => {
-      sessionRetirement.invalidate();
+    const uninstallPlacementChanges = params.placements.subscribeChanges((placement) => {
+      sessionRetirement.markPending(placement.sessionId);
       diskSpace.invalidate();
       scheduleDiskSpaceSweep?.();
     });
-    const uninstallConfigChanges = sessionChanges.subscribe((change) => {
+    const uninstallConfigChanges = sessionChanges.subscribeFacts((change) => {
+      if ("all" in change) {
+        if (
+          change.scope === "config" ||
+          change.scope === "worker-environments" ||
+          sessionChangeScopeAffectsStoredRows(change)
+        ) {
+          sessionRetirement.invalidateAll();
+        }
+      } else if (
+        change.factsInvalidated === true &&
+        change.scope !== "transcript" &&
+        sessionChangeScopeAffectsStoredRows(change)
+      ) {
+        // Unknown storage outcomes have no committed identity to enqueue.
+        sessionRetirement.invalidateAll();
+      }
       if (
         "all" in change &&
         (typeof change.scope !== "string" ||
@@ -433,7 +453,6 @@ export function createGatewayWorkerPlacementRuntime(
           change.scope === "config" ||
           change.scope === "worker-environments")
       ) {
-        sessionRetirement.invalidate();
         diskSpace.invalidate();
         scheduleDiskSpaceSweep?.();
       }
@@ -544,10 +563,10 @@ export function createGatewayWorkerPlacementRuntime(
     const uninstallSessionIdentityMutation = onSessionIdentityMutation((mutation) =>
       // Reconciliation belongs to the Gateway, not the notifying request's cancellation scope.
       runInDetachedAsyncContext(() => {
-        sessionRetirement.invalidate();
         const previousSessionId = mutation.previous.sessionId;
         const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
         if (previousSessionId && previousSessionId !== currentSessionId) {
+          sessionRetirement.markPending(previousSessionId);
           const pending = operations.get("reconcile");
           if (!pending) {
             void reconcileActivePlacements();
@@ -581,15 +600,30 @@ export function createGatewayWorkerPlacementRuntime(
         }
         const currentStop = (async () => {
           await Promise.allSettled([
-            changes.stop(),
-            githubPublicationReady,
-            ...operations.values(),
+            measureGatewayCloseStep("shutdown.worker-placement.changes", () => changes.stop()),
+            measureGatewayCloseStep(
+              "shutdown.worker-placement.github-ready",
+              () => githubPublicationReady,
+            ),
+            ...Array.from(operations, ([name, operation]) =>
+              measureGatewayCloseStep(`shutdown.worker-placement.${name}`, () => operation),
+            ),
           ]);
-          await closeGitHubPublication();
-          await nodeWorkspaceRetention.stop();
-          await scope.stop();
-          await params.environments.stop();
-          await uninstallEnvironmentReconcileGuard();
+          await measureGatewayCloseStep(
+            "shutdown.worker-placement.github-close",
+            closeGitHubPublication,
+          );
+          await measureGatewayCloseStep("shutdown.worker-placement.workspace-retention", () =>
+            nodeWorkspaceRetention.stop(),
+          );
+          await measureGatewayCloseStep("shutdown.worker-placement.scope", () => scope.stop());
+          await measureGatewayCloseStep("shutdown.worker-placement.environments", () =>
+            params.environments.stop(),
+          );
+          await measureGatewayCloseStep(
+            "shutdown.worker-placement.reconcile-guard",
+            uninstallEnvironmentReconcileGuard,
+          );
         })();
         stopPromise = currentStop;
         void currentStop.catch(() => {

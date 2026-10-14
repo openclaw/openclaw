@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
@@ -15,6 +17,7 @@ import {
 } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 import { createToolsInvokeHttpTestServer } from "./tools-invoke-http.test-support.js";
+import { invokeGatewayTool } from "./tools-invoke-shared.js";
 
 const runtime = vi.hoisted(() => {
   const execute = vi.fn(async () => ({ ok: true }));
@@ -25,7 +28,15 @@ const runtime = vi.hoisted(() => {
       blocked: false as const,
       params,
     })),
-    createTools: vi.fn(async () =>
+    createTools: vi.fn<
+      () => Promise<
+        Array<{
+          name: string;
+          parameters: object;
+          execute: (...args: Parameters<AnyAgentTool["execute"]>) => Promise<unknown>;
+        }>
+      >
+    >(async () =>
       ["session_status", "plugin_doctor"].map((name) => ({
         name,
         parameters: { type: "object", properties: {} },
@@ -178,7 +189,8 @@ describe.each(["HTTP", "WebSocket"] as const)(
     ];
 
     it.each(cases)("$label", async (testCase) => {
-      await withOpenClawTestState({ label: "standalone-tool-role" }, async () => {
+      const stateOptions = { label: "standalone-tool-role", prepareProfileCatalog: true };
+      await withOpenClawTestState(stateOptions, async () => {
         const email = "standalone-operator@example.test";
         const profile = ensureProfileForEmail(email);
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -303,6 +315,76 @@ describe.each(["HTTP", "WebSocket"] as const)(
           expect(runtime.execute).toHaveBeenCalledOnce();
         }
       });
+    });
+  },
+);
+
+it.each([
+  ["send", "settled", false, 200],
+  ["send", "settled", true, 500],
+] as const)(
+  "keeps the result boundary for %s (%s, revoked=%s)",
+  async (action, deliveryStatus, revokeCaller, expectedStatus) => {
+    await withOpenClawTestState({ label: "standalone-tool-creation" }, async () => {
+      const sessionKey = "agent:main:outbound-first-contact";
+      let callerCurrent = true;
+      runtime.cfg = { agents: { entries: { main: {} } } };
+      runtime.authorize.mockResolvedValue({ ok: true, method: "token" });
+      runtime.createTools.mockImplementationOnce(async () => {
+        const tool: AnyAgentTool = {
+          name: "message",
+          label: "Message",
+          description: "Message result fixture",
+          parameters: Type.Object({ action: Type.String() }),
+          execute: async () => {
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              {
+                sessionId: "outbound-created-session",
+                updatedAt: 1,
+              },
+            );
+            callerCurrent = !revokeCaller;
+            return {
+              content: [{ type: "text", text: "private tool result" }],
+              details: {
+                messageDelivery: {
+                  status: deliveryStatus,
+                  primaryPlatformMessageId: "accepted-message",
+                  partialDelivery: false,
+                  createdThreadIds: [],
+                },
+              },
+            };
+          },
+        };
+        return [tool];
+      });
+      const input = { name: "message", sessionKey, args: { action } };
+      if (revokeCaller) {
+        const outcome = await invokeGatewayTool({
+          cfg: runtime.cfg,
+          input,
+          senderIsOwner: true,
+          toolCallIdPrefix: "http",
+          assertInvocationCurrent: () => {
+            if (!callerCurrent) {
+              throw new Error("caller credentials revoked");
+            }
+          },
+        });
+        expect(outcome).toMatchObject({ ok: false, status: expectedStatus });
+        expect(JSON.stringify(outcome)).not.toContain("private tool result");
+        return;
+      }
+      const response = await postToolsInvoke({
+        port: sharedPort,
+        headers: gatewayAuthHeaders(),
+        body: input,
+      });
+      expect(response.status).toBe(expectedStatus);
+      const body = await response.text();
+      expect(body.includes("private tool result")).toBe(expectedStatus === 200);
     });
   },
 );
