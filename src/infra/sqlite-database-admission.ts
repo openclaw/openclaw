@@ -131,6 +131,7 @@ export const {
   withoutSqliteDatabaseWriteScope,
   readSqliteDatabaseScopedWriteToken,
   readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseScopedWriteTokensForPath,
   readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabaseWriteTokenForPath,
   readSqliteDatabasePendingWriteToken,

@@ -37,6 +37,7 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { readQuestionDispatchCapability } from "../harness/host-private-capabilities.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -74,6 +75,8 @@ type AgentToolGatewayRequest = Pick<
   | "scopes"
   | "timeoutMs"
 > & {
+  /** In-process result intake can finish without owing another answer. */
+  replyExpectation?: ReplyExpectation;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   agentToolCaller?: TrustedAgentToolCaller;
   /** Target policy checked at the mutation boundary, not after its own committed change. */
@@ -275,6 +278,7 @@ async function callAgentToolGatewayRequestBound<T>(
       agentRunTracking: _agentRunTracking,
       agentToolCaller: _agentToolCaller,
       sessionMutationCommitGuard: _sessionMutationCommitGuard,
+      replyExpectation: _replyExpectation,
       ...wireRequest
     } = request;
     return await runBoundInProcessGatewayCall(
@@ -320,6 +324,7 @@ async function callAgentToolGatewayRequestBound<T>(
   }
   const dispatchOptions = {
     prepareDispatchCurrent: request.prepareDispatchCurrent,
+    ...(request.replyExpectation ? { replyExpectation: request.replyExpectation } : {}),
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),

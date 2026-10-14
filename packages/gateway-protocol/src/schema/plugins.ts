@@ -135,6 +135,10 @@ export const PluginControlUiModuleSchema = closedObject({
   entryUrl: NonEmptyString,
   imports: Type.Optional(Type.Array(NonEmptyString, { maxItems: 128 })),
   uiCapabilities: Type.Optional(PluginUiCapabilitiesSchema),
+  // Host-owned runtime provenance; plugin manifests cannot opt into this delivery route.
+  bundledDistribution: Type.Optional(
+    closedObject({ packageName: NonEmptyString, packageVersion: NonEmptyString }),
+  ),
   styles: Type.Array(NonEmptyString, { maxItems: 16 }),
 });
 

@@ -8,7 +8,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
@@ -86,19 +86,10 @@ export async function withSessionTranscriptDeltaReader<T>(
         };
         const read = async <Value>(operation: () => Promise<Value>) => {
           assertCurrent();
-          const value = await readRestoredSessionTranscript(source.scope, operation, {
-            assertCurrent,
-            coldRead: {
-              target: source.resolved,
-              readMetadata: async () =>
-                (
-                  await reader.readColdMetadata({
-                    sessionId: source.resolved.sessionId,
-                    env: source.scope.env,
-                  })
-                ).archive,
-            },
-          });
+          const value = await readRestoredSessionTranscriptInWorker(
+            { ...source, owner: reader, assertCurrent },
+            operation,
+          );
           assertCurrent();
           return value;
         };
