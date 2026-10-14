@@ -5,6 +5,7 @@ import { setDiscordPolicyBindings } from "../channel-policy-state.js";
 import { resolveDiscordGroupToolPolicy } from "../group-policy.js";
 import { ChannelType } from "../internal/discord.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
@@ -43,6 +44,13 @@ describe("Discord admitted conversation tool policy", () => {
               toolsBySender: { "id:111": { allow: ["write"] } },
             },
           },
+        },
+      };
+      // Admission sees resolved entries; tool policy is read from the authored config.
+      const guildEntries: Record<string, DiscordGuildEntryResolved> = {
+        "145": {
+          requireMention: false,
+          channels: { "246": { includeThreadStarter: false }, general: {} },
         },
       };
       const cfg: OpenClawConfig = {
@@ -86,7 +94,7 @@ describe("Discord admitted conversation tool policy", () => {
               message,
             }),
           }),
-          guildEntries: guilds,
+          guildEntries,
           groupPolicy: "allowlist",
         });
         expect(preflight).not.toBeNull();
