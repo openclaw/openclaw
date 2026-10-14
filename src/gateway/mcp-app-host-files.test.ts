@@ -41,8 +41,24 @@ vi.mock("./server-methods/session-scoped-read.js", () => ({
 vi.mock("./server-methods/sessions-files.js", () => ({
   resolveLocalSessionWorkspaceRoot: () => state.root,
 }));
-vi.mock("./session-utils.js", () => ({
-  loadGatewaySessionEntryReadOnly: () => ({ entry: { sessionId: state.sessionId } }),
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
+  loadGatewaySessionEntryReadOnlyAsync: async (sessionKey: string) => ({
+    cfg: {},
+    agentId: "main",
+    canonicalKey: sessionKey,
+    storePath: state.root,
+    entry: { sessionId: state.sessionId },
+  }),
+}));
+vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
+  readRetainedSessionEntryFacts: (_database: unknown, request: { sessionKeys: string[] }) => ({
+    entries: request.sessionKeys.map((sessionKey) => ({
+      sessionKey,
+      entry: { sessionId: state.sessionId },
+    })),
+  }),
 }));
 // mock-isolation: Host-file tests supply the bound session identity without opening session storage.
 vi.mock("./session-utils-store-worker.js", () => ({

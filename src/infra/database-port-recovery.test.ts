@@ -146,9 +146,10 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
     };
     write(complete);
     expect(() => assertDatabasePortStartupAllowed(stateDir)).not.toThrow();
-    expect(() => assertDatabasePortRecoveryAllowed(stateDir, intent())).toThrow(
-      DatabasePortRecoveryError,
-    );
+    expect(assertDatabasePortRecoveryAllowed(stateDir, intent())).toEqual(complete);
+    expect(() =>
+      assertDatabasePortRecoveryAllowed(stateDir, { ...intent(), action: "rollback" }),
+    ).toThrow(DatabasePortRecoveryError);
     const archived = archiveDatabasePortManifest(stateDir, manifest.operationId, custody);
     expect(JSON.parse(fs.readFileSync(archived, "utf8"))).toEqual(complete);
     expect(fs.existsSync(fixed)).toBe(false);

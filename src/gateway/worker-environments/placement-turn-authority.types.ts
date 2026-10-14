@@ -25,6 +25,7 @@ export type ClaimChange = {
   | {
       kind: "claim";
       localOnly?: boolean;
+      inventoryUnchanged?: true;
       facts?: WorkerSessionTurnClaimFacts;
       workspaceResult?: WorkspaceResultPostimage;
       workspacePlacement?: WorkerSessionPlacementRecord;

@@ -47,7 +47,7 @@ import {
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
-import type { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
+import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   readSessionWorkerPlacementAsync,
@@ -161,7 +161,7 @@ async function mutatePreparedSessionAtMessage({
   action: MessageCutAction;
   cfg: OpenClawConfig;
   requestedAgentId: string;
-  initial: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
+  initial: GatewaySessionEntryRead;
   assertSourceCurrent: () => void;
 }): Promise<void> {
   const { params, respond, context, client } = options;
@@ -447,6 +447,7 @@ async function mutatePreparedSessionAtMessage({
         return;
       }
       let result: MessageCutMutationResult;
+      let repositoryForkCommitted = false;
       let forkRepository:
         | {
             workspaceId: string;
@@ -543,6 +544,7 @@ async function mutatePreparedSessionAtMessage({
             assertUpstreamCurrent: assertLocalUpstreamCurrent,
           },
         );
+        repositoryForkCommitted = result.status === "created";
       } catch (error) {
         if (error === upstreamChanged) {
           respond(false, undefined, upstreamChanged.error);
@@ -558,7 +560,7 @@ async function mutatePreparedSessionAtMessage({
         reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
         return;
       } finally {
-        if (forkRepository) {
+        if (forkRepository && !repositoryForkCommitted) {
           const { workspaceId, store, source } = forkRepository;
           if (repositoryEntries?.isForkUnclaimed(workspaceId)) {
             await store.delete({

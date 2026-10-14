@@ -1,36 +1,13 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, createSignal, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import type { CheckoutChipOptions } from "./checkout-chip.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
-import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import { PickerLabel } from "./picker-label.tsx";
-let fieldDragging = false;
-
-function handleFieldPointer(event: PointerEvent) {
-  fieldDragging = event.type === "pointerdown";
-}
-
-function handlePopoverHide(event: Event, onHide: () => void) {
-  if (event.target !== event.currentTarget) {
-    return;
-  }
-  const active = document.activeElement;
-  if (
-    active instanceof HTMLInputElement &&
-    fieldDragging &&
-    active.selectionStart !== active.selectionEnd
-  ) {
-    fieldDragging = false;
-    event.preventDefault();
-    return;
-  }
-  onHide();
-}
-
+import { PickerPopover } from "./picker-popover.tsx";
 function clearActiveBranchSuggestion(field: Element | null) {
   field?.querySelector("input")?.removeAttribute("aria-activedescendant");
   for (const suggestion of field?.querySelectorAll("[data-worktree-suggestion]") ?? []) {
@@ -38,20 +15,7 @@ function clearActiveBranchSuggestion(field: Element | null) {
   }
 }
 
-function setBranchSuggestionsOpen(target: EventTarget | null, open: boolean) {
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
-  const field = target.closest(".new-session-page__branch-field");
-  field?.querySelector("wa-popup")?.toggleAttribute("active", open);
-  const input = field?.querySelector("input");
-  input?.setAttribute("aria-expanded", String(open));
-  if (!open) {
-    clearActiveBranchSuggestion(field);
-  }
-}
-
-function handleBranchKeydown(target: HTMLElement, event: KeyboardEvent): boolean {
+function handleBranchKeydown(target: HTMLElement, event: KeyboardEvent, show: () => void): boolean {
   const field = target.closest(".new-session-page__branch-field");
   const suggestions = [
     ...(field?.querySelectorAll<HTMLButtonElement>("[data-worktree-suggestion]") ?? []),
@@ -80,17 +44,27 @@ function handleBranchKeydown(target: HTMLElement, event: KeyboardEvent): boolean
     suggestion.setAttribute("aria-selected", String(index === nextIndex));
   }
   target.setAttribute("aria-activedescendant", suggestions[nextIndex]!.id);
-  setBranchSuggestionsOpen(target, true);
+  show();
   return true;
 }
 
-function WorktreeFields(props: { params: CheckoutChipOptions }) {
+function WorktreeFields(props: {
+  params: CheckoutChipOptions;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [suggestionsOpen, setSuggestionsOpen] = createSignal(false);
+  let baseRef!: HTMLInputElement;
+  const closeSuggestions = () => {
+    setSuggestionsOpen(false);
+    clearActiveBranchSuggestion(baseRef.closest(".new-session-page__branch-field"));
+  };
   const handleFieldKeydown = (event: KeyboardEvent) => {
     const target = event.currentTarget;
     if (!(target instanceof HTMLElement)) {
       return;
     }
-    if (handleBranchKeydown(target, event)) {
+    if (handleBranchKeydown(target, event, () => setSuggestionsOpen(true))) {
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -98,10 +72,10 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      target.closest("wa-popover")?.removeAttribute("open");
+      props.onClose();
       return;
     }
-    const popover = target.closest("wa-popover");
+    const popover = target.closest(".new-session-page__checkout-popover");
     const liveWorktreeName =
       popover?.querySelector<HTMLInputElement>("input[data-worktree-name]")?.value ??
       props.params.worktreeName;
@@ -112,19 +86,8 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
     ) {
       return;
     }
-    fieldDragging = false;
     event.preventDefault();
-    if (popover) {
-      const confirmAfterOuterHide = (hideEvent: Event) => {
-        if (hideEvent.target !== popover) {
-          return;
-        }
-        popover.removeEventListener("wa-after-hide", confirmAfterOuterHide);
-        props.params.onConfirm();
-      };
-      popover.addEventListener("wa-after-hide", confirmAfterOuterHide);
-      popover.removeAttribute("open");
-    }
+    props.onConfirm();
   };
   const suggestions = createMemo(() => (props.params.branches?.branches ?? []).slice(0, 8));
   const branchName = () => props.params.worktreeName.trim();
@@ -136,7 +99,7 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
       aria-label={t("newSession.worktreeBaseRef")}
       aria-autocomplete={suggestions().length ? "list" : undefined}
       aria-controls={suggestions().length ? "new-session-worktree-branch-suggestions" : undefined}
-      aria-expanded={suggestions().length ? "false" : undefined}
+      aria-expanded={suggestions().length ? (suggestionsOpen() ? "true" : "false") : undefined}
       disabled={props.params.submitting || props.params.pendingPlacement}
       placeholder={
         props.params.branchesLoading
@@ -144,20 +107,20 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
           : (props.params.branches?.defaultBranch ?? t("newSession.worktreeBaseRef"))
       }
       value={props.params.baseRef}
-      onFocus={(event: FocusEvent) => setBranchSuggestionsOpen(event.currentTarget, true)}
+      onFocus={() => setSuggestionsOpen(true)}
       onInput={(event: Event) => {
         if (event.currentTarget instanceof HTMLInputElement) {
           clearActiveBranchSuggestion(
             event.currentTarget.closest(".new-session-page__branch-field"),
           );
-          setBranchSuggestionsOpen(event.currentTarget, true);
+          setSuggestionsOpen(true);
           props.params.onBaseRefInput(event.currentTarget.value);
         }
       }}
-      ref={nativeListener("keydown", handleFieldKeydown)}
-      onPointerDown={handleFieldPointer}
-      onPointerUp={handleFieldPointer}
-      onPointerCancel={handleFieldPointer}
+      ref={(node) => {
+        baseRef = node;
+      }}
+      onKeyDown={handleFieldKeydown}
     />
   );
   return (
@@ -173,16 +136,18 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
                 field instanceof HTMLElement &&
                 (!(event.relatedTarget instanceof Node) || !field.contains(event.relatedTarget))
               ) {
-                setBranchSuggestionsOpen(field, false);
+                closeSuggestions();
               }
             }}
           >
             {baseRefInput}
-            <wa-popup
+            <Popover
+              id="new-session-worktree-branch-popup"
+              label={t("newSession.worktreeBaseRef")}
               class="new-session-page__branch-popup"
-              anchor="new-session-worktree-base-ref"
-              placement="bottom-start"
-              sync="width"
+              anchor={baseRef}
+              open={suggestionsOpen()}
+              onOpenChange={setSuggestionsOpen}
             >
               <div
                 id="new-session-worktree-branch-suggestions"
@@ -202,9 +167,9 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
                         data-worktree-suggestion={branch().name}
                         tabindex="-1"
                         onMouseDown={(event: MouseEvent) => event.preventDefault()}
-                        ref={nativeListener("click", (event: MouseEvent) => {
+                        ref={nativeListener("click", () => {
                           props.params.onBaseRefInput(branch().name);
-                          setBranchSuggestionsOpen(event.currentTarget, false);
+                          closeSuggestions();
                         })}
                       >
                         <span class="session-menu__text">{branch().name}</span>
@@ -213,7 +178,7 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
                   </For>
                 }
               </div>
-            </wa-popup>
+            </Popover>
           </div>
         ) : (
           baseRefInput
@@ -242,9 +207,6 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
                 }
               }}
               ref={nativeListener("keydown", handleFieldKeydown)}
-              onPointerDown={handleFieldPointer}
-              onPointerUp={handleFieldPointer}
-              onPointerCancel={handleFieldPointer}
             />
           </label>
           <div class="new-session-page__menu-note">
@@ -259,11 +221,17 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
 }
 
 export function CheckoutChip(props: { params: CheckoutChipOptions }) {
+  let trigger!: HTMLButtonElement;
+  let popover!: PopoverHandle;
+  let confirmPending = false;
   return (
     <>
       <span class="new-session-page__select">
         <button
           id="new-session-checkout-trigger"
+          ref={(node) => {
+            trigger = node;
+          }}
           type="button"
           class={[
             "new-session-page__trigger",
@@ -273,22 +241,34 @@ export function CheckoutChip(props: { params: CheckoutChipOptions }) {
           aria-label={`${t("newSession.checkout")}: ${props.params.state.label}`}
           data-worktree={String(props.params.worktree)}
           aria-haspopup="dialog"
+          aria-controls="new-session-checkout-popover"
           aria-expanded={props.params.popoverOpen ? "true" : "false"}
           disabled={props.params.submitting || props.params.pendingPlacement}
-          ref={nativeListener("click", (event) => props.params.onGuardTransition(event))}
+          onClick={(event) => {
+            props.params.onGuardTransition(event);
+            if (!event.defaultPrevented) {
+              popover.overlay.request(!popover.overlay.open);
+            }
+          }}
         >
           <PickerLabel icon={<Icon name="gitBranch" />} label={props.params.state.label} />
         </button>
       </span>
-      <wa-popover
-        ref={syncPopoverLabel}
+      <PickerPopover
+        ref={(handle) => {
+          popover = handle;
+        }}
+        id="new-session-checkout-popover"
+        label={`${t("newSession.checkout")}: ${props.params.state.label}`}
+        anchor={trigger}
         class="new-session-page__select new-session-page__checkout-popover new-session-page__picker-popover"
-        for="new-session-checkout-trigger"
-        placement="bottom-start"
-        without-arrow
-        onWa-show={onOwnPopoverEvent(() => props.params.onPopoverShow())}
-        onWa-hide={(event: Event) => handlePopoverHide(event, props.params.onPopoverHide)}
-        onWa-after-hide={onOwnPopoverEvent(() => props.params.onPopoverAfterHide())}
+        lifecycle={props.params}
+        onAfterHide={() => {
+          if (confirmPending) {
+            confirmPending = false;
+            props.params.onConfirm();
+          }
+        }}
       >
         <div class="new-session-page__picker-root">
           <div class="new-session-page__menu-title">{t("newSession.checkout")}</div>
@@ -331,7 +311,15 @@ export function CheckoutChip(props: { params: CheckoutChipOptions }) {
             </>
           )}
           {props.params.worktree || props.params.repository ? (
-            <WorktreeFields params={props.params} />
+            <WorktreeFields
+              params={props.params}
+              onClose={() => popover.hide()}
+              onConfirm={() => {
+                if (popover.hide()) {
+                  confirmPending = true;
+                }
+              }}
+            />
           ) : undefined}
           {props.params.remotePlacement ? (
             <div class="new-session-page__menu-note">
@@ -344,7 +332,7 @@ export function CheckoutChip(props: { params: CheckoutChipOptions }) {
             </div>
           ) : undefined}
         </div>
-      </wa-popover>
+      </PickerPopover>
     </>
   );
 }

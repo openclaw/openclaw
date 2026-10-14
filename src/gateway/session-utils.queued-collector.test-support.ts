@@ -34,7 +34,7 @@ import type {
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
 vi.mock("./server-recovery-runtime-context.js", async (importOriginal) => ({
@@ -99,7 +99,7 @@ export function useQueuedCollectorFixture() {
         expect(method).toBe("agent");
         const runId = String(params.idempotencyKey);
         const sessionKey = String(params.sessionKey);
-        const { storePath, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
+        const { storePath, entry } = await loadGatewaySessionEntryReadOnlyAsync(sessionKey);
         await upsertSessionEntryCore(
           { storePath, sessionKey },
           (

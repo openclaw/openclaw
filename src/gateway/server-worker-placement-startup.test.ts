@@ -833,7 +833,7 @@ describe("worker placement startup recovery authority", () => {
                 await moveDestinationMocks.resolveCanonicalSession.withImplementation(
                   () => ({
                     sessionId: "session-replaced",
-                    worktree: { id: "worktree-recovery" },
+                    worktree: { id: "worktree-recovery", branch: "fixture", repoRoot: root },
                   }),
                   async () => {
                     await expect(

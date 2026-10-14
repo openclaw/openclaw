@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import {
   matchesAgentDatabaseReadCandidatePath,
   registerAgentDatabaseReaderCloser,
@@ -307,7 +308,7 @@ export function noteAuthProfileFileWrite(databasePath: string): void {
 }
 
 export function authProfileSourceExists(sourcePath: string): boolean {
-  if (isArtifactPreservingStateRead() || getOpenClawDatabaseMaintenanceScope()) {
+  if (!isMainThread || isArtifactPreservingStateRead() || getOpenClawDatabaseMaintenanceScope()) {
     return fs.existsSync(sourcePath);
   }
   const state = directoryState(path.dirname(sourcePath));

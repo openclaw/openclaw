@@ -32,8 +32,8 @@ import {
   rpcObservation,
   type Response,
 } from "./server.agent-runtime-authority-proof.test-support.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import * as resets from "./session-reset-service.js";
-import { loadSessionEntry } from "./session-utils.js";
 import { agentCommandMock } from "./test-helpers.js";
 
 describe("agent RPC real delegated-authority effects", () => {
@@ -57,18 +57,20 @@ describe("agent RPC real delegated-authority effects", () => {
       entered.resolve();
       await release.promise;
     };
-    const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+    const before = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
     registerInternalHook("command:reset", hook);
     let request: Promise<Response> | undefined;
     try {
       request = f.dispatch({ message: "/reset" });
       await reach(entered.promise, request);
-      expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(before);
+      expect((await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry).toEqual(
+        before,
+      );
       f.owner.revoke();
       release.resolve();
       const result = await request;
       await f.drain();
-      const observedEntry = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+      const observedEntry = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
       observe("reset", {
         mode: "revoked",
         ...(await f.effects()),
@@ -80,7 +82,9 @@ describe("agent RPC real delegated-authority effects", () => {
       expect(agentCommandMock).not.toHaveBeenCalled();
       expect(result.ok).toBe(false);
       expect(result.error?.message).toContain("authority is no longer active");
-      expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(before);
+      expect((await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry).toEqual(
+        before,
+      );
       expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
     } finally {
       release.resolve();
@@ -102,7 +106,7 @@ describe("agent RPC real delegated-authority effects", () => {
     if (signal.aborted) {
       unblock();
     }
-    const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+    const before = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
     const perform = resets.performGatewaySessionReset;
     const observer = vi
       .spyOn(resets, "performGatewaySessionReset")
@@ -119,7 +123,7 @@ describe("agent RPC real delegated-authority effects", () => {
       const params = { message: "/reset continue with retained proof input" };
       request = f.dispatch(params);
       await reach(entered.promise, request);
-      const committed = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+      const committed = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
       observe("reset-committed", {
         ...(await f.effects()),
         rowChanged: !isDeepStrictEqual(committed, before),
@@ -150,7 +154,7 @@ describe("agent RPC real delegated-authority effects", () => {
         ...(await f.effects()),
         ...rpcObservation(retry),
         rowChanged: !isDeepStrictEqual(
-          loadSessionEntry(f.sessionKey, { agentId: "main" }).entry,
+          (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry,
           committed,
         ),
       });
@@ -163,7 +167,9 @@ describe("agent RPC real delegated-authority effects", () => {
         result: { payloads: [{ text: expect.stringContaining("before the follow-up ran") }] },
       });
       expect(observer).toHaveBeenCalledOnce();
-      expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(committed);
+      expect((await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry).toEqual(
+        committed,
+      );
       expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
       expect(agentCommandMock).not.toHaveBeenCalled();
       expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
@@ -420,7 +426,7 @@ describe("agent RPC real delegated-authority effects", () => {
         },
       });
       observe("delivery-setup", { mode, ...f.owner.observation(), recordingAdapterRetained });
-      const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+      const before = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
       let request: Promise<Response> | undefined;
       let replacement: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
       try {
@@ -434,7 +440,7 @@ describe("agent RPC real delegated-authority effects", () => {
         };
         request = f.dispatch(params);
         await reach(entered.promise, request);
-        const committed = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+        const committed = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
         expect(committed?.sessionId).toBe(f.sessionId);
         expect(committed?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
         await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
@@ -497,9 +503,9 @@ describe("agent RPC real delegated-authority effects", () => {
           expect(retry.payload).toEqual(result.payload);
           expect(retry.error).toEqual(result.error);
         }
-        expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry?.lifecycleRevision).toBe(
-          committed?.lifecycleRevision,
-        );
+        expect(
+          (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry?.lifecycleRevision,
+        ).toBe(committed?.lifecycleRevision);
         if (mode !== "live") {
           await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
           if (mode === "revoked") {
@@ -548,7 +554,7 @@ describe("agent RPC real delegated-authority effects", () => {
         });
       const resetObserver = vi.spyOn(resets, "performGatewaySessionReset");
       const execution = await holdExecution(signal);
-      const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+      const before = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
       let request: Promise<Response> | undefined;
       try {
         expect(recordingAdapterRetained).toBe(true);
@@ -562,7 +568,9 @@ describe("agent RPC real delegated-authority effects", () => {
         };
         request = f.dispatch(params);
         await reach(entered.promise, request);
-        expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(before);
+        expect((await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry).toEqual(
+          before,
+        );
         expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
         expect(attempts()).toBe(0);
         await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
@@ -570,7 +578,7 @@ describe("agent RPC real delegated-authority effects", () => {
         observe("reset-adopted", { followUpPending, ...(await f.effects()) });
         release.resolve();
         const response = await request;
-        const committed = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+        const committed = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
         const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
         observe("reset-after-close", {
           followUpPending,
@@ -621,7 +629,9 @@ describe("agent RPC real delegated-authority effects", () => {
           },
         });
         expect(resetObserver).toHaveBeenCalledOnce();
-        expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(committed);
+        expect((await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry).toEqual(
+          committed,
+        );
         expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
         expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
         expect(execution.observer).not.toHaveBeenCalled();
@@ -773,7 +783,7 @@ describe("agent RPC real delegated-authority effects", () => {
         fixture,
         { failSend: mode === "ambiguous" ? "after write" : true },
       );
-      const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+      const before = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
       const resetObserver = vi.spyOn(resets, "performGatewaySessionReset");
       try {
         expect(recordingAdapterRetained).toBe(true);
@@ -786,7 +796,7 @@ describe("agent RPC real delegated-authority effects", () => {
         };
         const response = await f.dispatch(params, null);
         await f.drain();
-        const committed = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+        const committed = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
         const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
         observe("strict-delivery-failure", {
           mode,
@@ -826,7 +836,7 @@ describe("agent RPC real delegated-authority effects", () => {
           ...(await f.effects()),
           resetCalls: resetObserver.mock.calls.length,
           rowChanged: !isDeepStrictEqual(
-            loadSessionEntry(f.sessionKey, { agentId: "main" }).entry,
+            (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry,
             committed,
           ),
           deliveryAttempts: attempts(),
@@ -836,7 +846,9 @@ describe("agent RPC real delegated-authority effects", () => {
         expect(retry.error).toEqual(response.error);
         expect(retry.payload).toEqual(response.payload);
         expect(resetObserver).toHaveBeenCalledOnce();
-        expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(committed);
+        expect((await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry).toEqual(
+          committed,
+        );
         expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
         expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
         expect(attempts()).toBe(1);

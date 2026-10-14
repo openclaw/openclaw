@@ -8,6 +8,7 @@ import {
 } from "../agents/worktrees/registry.js";
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import * as configIo from "../config/io.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
@@ -48,7 +49,9 @@ const mocks = vi.hoisted(() => ({
   identity: vi.fn(),
 }));
 // mock-isolation: Keep session-owner SQL outside the worktree-read measurement.
-vi.mock("./session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
+vi.mock("./session-utils.js", () => ({
+  loadIncognitoGatewaySessionEntryReadOnly: (...args: unknown[]) => mocks.session(...args),
+}));
 // mock-isolation: Keep session-worker state outside the worktree-read measurement.
 vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async (
@@ -102,6 +105,33 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
     );
   },
 }));
+vi.mock("../config/sessions/session-entry-read-facts.js", async (original) => {
+  const actual = await original<typeof import("../config/sessions/session-entry-read-facts.js")>();
+  return {
+    ...actual,
+    readRetainedSessionEntryFacts: ((database, request, owner) => {
+      if (
+        database.agentId !== session.agentId ||
+        database.path !== sessionStorePath ||
+        !request.sessionKeys?.includes(session.sessionKey)
+      ) {
+        return actual.readRetainedSessionEntryFacts(database, request, owner);
+      }
+      return {
+        kind: "session-exact-entries",
+        source: sessionReadSource,
+        databaseIdentity: {
+          identity: sessionReadSource.databaseIdentity,
+          incarnation: "synthetic",
+          filename: sessionStorePath,
+          canonicalPath: sessionStorePath,
+        },
+        entries: [{ sessionKey: session.sessionKey, entry: mocks.session().entry }],
+        lifecycleTimestamps: {},
+      };
+    }) satisfies typeof actual.readRetainedSessionEntryFacts,
+  };
+});
 // mock-isolation: Use the synthetic registry without starting managed-worktree services.
 vi.mock("../agents/worktrees/service.js", () => ({
   managedWorktrees: {
@@ -134,7 +164,13 @@ vi.mock("../secrets/runtime-state.js", () => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionStorePath = "/publication-availability/sessions.sqlite";
 const session = { sessionKey: "agent:main:publication", sessionId: "session", agentId: "main" };
+const sessionReadSource = {
+  agentId: session.agentId,
+  path: sessionStorePath,
+  databaseIdentity: "synthetic-publication-availability",
+};
 const worktree: ManagedWorktreeRecord = {
   id: "publication-worktree",
   name: "publication",
@@ -152,9 +188,12 @@ const worktree: ManagedWorktreeRecord = {
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("publication-worktree-read-"));
   mocks.config.mockReset().mockReturnValue({});
+  vi.spyOn(configIo, "getRuntimeConfig").mockImplementation(mocks.config);
   mocks.session.mockReset().mockReturnValue({
     canonicalKey: session.sessionKey,
     agentId: session.agentId,
+    storePath: sessionStorePath,
+    readSource: sessionReadSource,
     entry: {
       sessionId: session.sessionId,
       lifecycleRevision: "lifecycle",
@@ -194,6 +233,8 @@ it("rejects an unbound session without dispatching a worktree read", async () =>
   mocks.session.mockReturnValue({
     canonicalKey: session.sessionKey,
     agentId: session.agentId,
+    storePath: sessionStorePath,
+    readSource: sessionReadSource,
     entry: { sessionId: session.sessionId, lifecycleRevision: "lifecycle" },
   });
   expect(await prepareGitHubPublicationAvailability(session)).toBe(false);

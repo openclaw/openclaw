@@ -43,7 +43,10 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
-import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
+import {
+  clearStoredSessionRowTranscriptForTest,
+  observeSessionRowBackfill,
+} from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -465,6 +468,7 @@ describe("resident sessions.list", () => {
         },
       );
       await waitForSessionTranscriptIndexReconcile({ agentId: "main", env: state.env });
+      clearStoredSessionRowTranscriptForTest({ agentId: "main", sessionId, sessionKey });
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       database.db
         .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")

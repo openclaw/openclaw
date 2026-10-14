@@ -10,6 +10,7 @@ import {
   validateSessionsDeleteParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
+import { SessionResetCleanupError } from "../../auto-reply/reply/session-reset-cleanup.js";
 import {
   deleteSessionEntryLifecycle,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
@@ -459,6 +460,9 @@ async function deleteGatewaySessionInScope(
     try {
       deletion = await deleteCurrent();
     } catch (error) {
+      if (error instanceof SessionResetCleanupError) {
+        return { ok: false, error: sessionChangedError() };
+      }
       if (!(error instanceof SessionDeletionError)) {
         throw error;
       }

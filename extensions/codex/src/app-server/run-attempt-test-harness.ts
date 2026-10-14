@@ -305,7 +305,7 @@ async function drainActiveAppServerAttemptsForTest(): Promise<boolean> {
   }
 }
 
-function createHarnessConfig() {
+function createRunAttemptTestConfig(): NonNullable<EmbeddedRunAttemptParams["config"]> {
   return { tools: { web: { search: { enabled: false } } } };
 }
 
@@ -345,7 +345,7 @@ export function createParams(
     },
     thinkLevel: "medium",
     disableTools: false,
-    config: createHarnessConfig(),
+    config: createRunAttemptTestConfig(),
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -702,7 +702,7 @@ export function setupRunAttemptTestHooks(
       vi.stubEnv("HOME", nativeSkillTestHome);
       vi.stubEnv("CODEX_HOME", "");
     }
-    setRuntimeConfigSnapshot(createHarnessConfig());
+    setRuntimeConfigSnapshot(createRunAttemptTestConfig());
     await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.

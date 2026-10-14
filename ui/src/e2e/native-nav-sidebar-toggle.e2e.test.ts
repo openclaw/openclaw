@@ -258,6 +258,7 @@ suite.define(() => {
         }),
       )
       .toEqual({ borderStyle: "none", boxShadow: "none" });
+    await expect.poll(() => sidebarNewThread.getAttribute("aria-disabled")).toBeNull();
     await page.keyboard.press("Tab");
     await sidebarNewThread.focus();
     await expect
@@ -672,7 +673,7 @@ suite.define(() => {
       await catalog.locator(".sidebar-recent-sessions__head").hover();
       await catalog.locator('[data-session-catalog-view-menu="codex"]').click();
       await page
-        .locator('wa-dropdown-item[value="hide-catalog"]')
+        .locator('[data-value="hide-catalog"]')
         .evaluate((element) => (element as HTMLElement).click());
       const host = drawer.locator("openclaw-toast-host");
       const toast = host.locator(".app-toast");

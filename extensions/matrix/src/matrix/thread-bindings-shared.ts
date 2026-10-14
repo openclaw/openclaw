@@ -25,14 +25,14 @@ export type MatrixThreadBindingManager = {
   }) => MatrixThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => MatrixThreadBindingRecord[];
   listBindings: () => MatrixThreadBindingRecord[];
-  /** @deprecated Use touchBindingAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use touchBindingAsync; removal follows a stable deprecation period. */
   touchBinding: (bindingId: string, at?: number) => MatrixThreadBindingRecord | null;
-  /** @deprecated Use setIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use setIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
   setIdleTimeoutBySessionKey: (params: {
     targetSessionKey: string;
     idleTimeoutMs: number;
   }) => MatrixThreadBindingRecord[];
-  /** @deprecated Use setMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use setMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
   setMaxAgeBySessionKey: (params: {
     targetSessionKey: string;
     maxAgeMs: number;
@@ -173,14 +173,14 @@ function createMatrixThreadBindingTimeoutSetter<
   };
 }
 
-/** @deprecated Use setMatrixThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setMatrixThreadBindingIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
 export const setMatrixThreadBindingIdleTimeoutBySessionKey = createMatrixThreadBindingTimeoutSetter(
   "setMatrixThreadBindingIdleTimeoutBySessionKey",
   (manager, params: { accountId: string; targetSessionKey: string; idleTimeoutMs: number }) =>
     manager.setIdleTimeoutBySessionKey(params),
 );
 
-/** @deprecated Use setMatrixThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setMatrixThreadBindingMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
 export const setMatrixThreadBindingMaxAgeBySessionKey = createMatrixThreadBindingTimeoutSetter(
   "setMatrixThreadBindingMaxAgeBySessionKey",
   (manager, params: { accountId: string; targetSessionKey: string; maxAgeMs: number }) =>

@@ -11,6 +11,7 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 export function prepareSessionEventProjection(
   projection: SessionRowProjection,
   read?: SessionRowReadView,
+  prepared?: { ancestors: ReturnType<SessionRowProjection["ancestorRows"]> },
 ): PrepareSessionEventProjection {
   return (event, payload, eventScope, connection) => {
     if (!connection.isCurrentProjection(projection)) {
@@ -62,8 +63,7 @@ export function prepareSessionEventProjection(
       return () => undefined;
     }
     const presentRecipient = prepareSessionRowPublication(projection, Date.now(), rows);
-    const preparedAncestors = new WeakMap<object, ReturnType<typeof prepareSessionAncestor>>();
-    const ancestors = projection.ancestorRows(record, read);
+    const ancestors = prepared ? prepared.ancestors : projection.ancestorRows(record, read);
     const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
     return (client) => {
       if (!connection.isCurrentProjection(projection) || !projection.isCurrent(record)) {
@@ -85,12 +85,7 @@ export function prepareSessionEventProjection(
             if (!presented) {
               return [];
             }
-            let prepared = preparedAncestors.get(presented);
-            if (!prepared) {
-              prepared = prepareSessionAncestor(presented);
-              preparedAncestors.set(presented, prepared);
-            }
-            return [prepared];
+            return [prepareSessionAncestor(presented)];
           })
         : undefined;
       const ancestorDelivery = ancestorRows && references.prepare(ancestorRows);

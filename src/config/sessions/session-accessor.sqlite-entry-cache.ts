@@ -217,6 +217,22 @@ export function trackSessionEntryCacheWrite(
   return complete();
 }
 
+/** The transcript owner certifies only writes that leave node and participant metadata unchanged. */
+export function preserveSessionEntryCacheAcrossWrite(
+  database: OpenClawAgentDatabase,
+  write: () => void,
+): void {
+  const writeGeneration = trackSessionEntryCacheWrite(database, write);
+  if (writeGeneration) {
+    publishTrackedCacheUpdate(database, () => {
+      const cached = sessionEntryCaches.get(database.db);
+      if (cached) {
+        advanceSessionEntryCacheGeneration(cached, writeGeneration);
+      }
+    });
+  }
+}
+
 export function readSessionEntryCache(
   database: SessionEntryCacheDatabase,
   options: SessionEntryCacheReadOptions,

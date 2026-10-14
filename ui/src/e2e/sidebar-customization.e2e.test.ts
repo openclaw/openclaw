@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
@@ -405,7 +406,7 @@ suite.define(() => {
       const openSettingsFromIdentity = async () => {
         await identityCard.click();
         await sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
+          .locator(".sidebar-identity-menu")
           .getByRole("menuitem", { exact: true, name: "Settings" })
           .click();
       };
@@ -630,6 +631,22 @@ suite.define(() => {
         .filter({ has: page.getByRole("link", { name: "Usage", exact: true }) });
       await usage.getByRole("button", { name: "Pin", exact: true }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
+      // A pinned page keeps a filled pin at rest, and hovering the pin keeps the
+      // whole entry, pin included, inside the row highlight.
+      const usagePin = usage.getByRole("button", { name: "Unpin", exact: true });
+      await page.mouse.move(900, 600);
+      await expect
+        .poll(() =>
+          usagePin.evaluate((pin) => ({
+            opacity: getComputedStyle(pin).opacity,
+            filled: getComputedStyle(pin.querySelector("svg")!).fill !== "none",
+          })),
+        )
+        .toEqual({ opacity: "1", filled: true });
+      await usagePin.hover();
+      await expect
+        .poll(() => usage.evaluate((entry) => getComputedStyle(entry).backgroundColor))
+        .not.toBe("rgba(0, 0, 0, 0)");
       await captureUiProof(page, "02-personal-pin.png");
       await page.reload();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
@@ -795,25 +812,13 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
-        await sidebar.evaluate(async (element) => {
-          const host = element as HTMLElement & {
-            requestUpdate(): void;
-            updateComplete: Promise<unknown>;
-          };
-          // The shell refreshes this snapshot whenever its lazy outbox runtime
-          // loads. Keep the warning fixture stable until geometry is measured.
-          const storedOutboxes = {
+        await sidebar.evaluate((element) => {
+          // This layout fixture supplies the sidebar's declared presentation input.
+          (element as AppSidebarElement).storedOutboxes = {
             total: 1,
             attentionCountForSession: () => 1,
             hasSessionDraft: () => false,
           };
-          Object.defineProperty(host, "storedOutboxes", {
-            configurable: true,
-            get: () => storedOutboxes,
-            set: () => undefined,
-          });
-          host.requestUpdate();
-          await host.updateComplete;
         });
 
         const activity = home.locator(".session-glyph");

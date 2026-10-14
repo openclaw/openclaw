@@ -17,6 +17,7 @@ export type CurrentPromptReaction = (params: {
 export type UserTurnPromptReactionSource = Readonly<{
   agentId: string;
   sessionKey: string;
+  prepare?: () => Promise<void>;
   assertCurrent: () => void;
   createReaction: (recorder: UserTurnTranscriptRecorder) => CurrentPromptReaction;
 }>;
@@ -95,6 +96,9 @@ export function inheritUserTurnPromptReactionSource(
   }
   bindUserTurnPromptReactionSource(recorder, {
     ...latest,
+    prepare: async () => {
+      await Promise.all(inherited.flatMap((source) => (source.prepare ? [source.prepare()] : [])));
+    },
     assertCurrent: () => inherited.forEach((source) => source.assertCurrent()),
   });
 }

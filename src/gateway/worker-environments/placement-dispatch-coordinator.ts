@@ -118,10 +118,13 @@ export function coordinateWorkerPlacementDispatch(
         if (!wait || sessionIds.length !== 1) {
           return false;
         }
-        // Result recovery may release the claim a lifecycle operation is awaiting.
-        // Its durable result owner already serializes writes; it needs no queue handoff.
-        await run("results-only");
-        return true;
+        if (operationsInFlight.has(sessionIds[0]!)) {
+          // Result recovery may release the claim a lifecycle operation is awaiting.
+          // Its durable result owner already serializes writes; it needs no queue handoff.
+          await run("results-only");
+          return true;
+        }
+        // A preceding recovery owns completion; targeted callers must await its receipt.
       }
       const admission = reserveSessions(sessionIds);
       // Only recovery units enter here. Environment reconciliation stays outside admission

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import type { SqliteCommitReceipt, SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import {
@@ -180,10 +181,10 @@ export function deferGitHubPublicationDeletionReceipt(
   db: DatabaseSync,
   tombstones: ReadonlyMap<string, { kind: "absent" }>,
 ): void {
-  const receipt = publication.receipt(db, tombstones);
+  const receipt = publication.receipt(sqlPublicationAnchor(db), tombstones);
   // Historical cleanup is unbounded; receipt transport must not prevent its durable deletion.
   deferSqliteWorkerCommitReceipt(
-    db,
+    sqlPublicationAnchor(db),
     serialize(receipt).byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES
       ? receipt
       : { kind: "unknown", identity: receipt.source.identity },
@@ -196,7 +197,7 @@ export function captureGitHubPublicationWorkerReceipt<T extends object>(
   db: DatabaseSync,
   write: () => T,
 ): T & { authority: GitHubPublicationAuthorityReceipt } {
-  const { result, receipt: authority } = publication.capture(db, write);
+  const { result, receipt: authority } = publication.capture(sqlPublicationAnchor(db), write);
   const receipt: T & { authority: GitHubPublicationAuthorityReceipt } = { ...result, authority };
   if (serialize(receipt).byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
     receipt.authority = { kind: "unknown", identity: authority.source.identity };
@@ -213,7 +214,9 @@ function stageGitHubPublicationRow<Kind extends keyof Rows>(
   delete value.title;
   delete value.body;
   delete value.next_action;
-  publication.stagePostimages(db, [[JSON.stringify([kind, row.request_id]), value]]);
+  publication.stagePostimages(sqlPublicationAnchor(db), [
+    [JSON.stringify([kind, row.request_id]), value],
+  ]);
 }
 
 /** The deletion worker sends tombstones, including lifecycle rows, before its ordinary reply. */

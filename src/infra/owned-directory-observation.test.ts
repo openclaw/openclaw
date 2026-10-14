@@ -123,6 +123,7 @@ describe("process-owned directory observation", () => {
     vi.useFakeTimers({
       toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
+    vi.setSystemTime(0);
     const root = tempDirs.make("owned-directory-missing-");
     const directory = path.join(root, "new");
     const listener = vi.fn();

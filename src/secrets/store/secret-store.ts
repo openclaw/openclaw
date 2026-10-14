@@ -53,7 +53,6 @@ export {
 
 export {
   deleteHiddenGitHubSecretRecord,
-  listHiddenGitHubSecretRecordNames,
   readHiddenGitHubSecretRecord,
   writeHiddenGitHubSecretRecord,
 } from "./secret-store-hidden-github.js";

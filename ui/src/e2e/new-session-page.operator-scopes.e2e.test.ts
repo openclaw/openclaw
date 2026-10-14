@@ -95,7 +95,7 @@ suite.define(() => {
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await expect.poll(() => incognito.isDisabled()).toBe(true);
       await page.locator("#new-session-where-trigger").click();
-      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const where = page.locator(".oc-popover.new-session-page__where-popover");
       await where.getByRole("button", { name: /Writer runner/u }).waitFor();
       expect(await where.locator('[data-value="cloud:aws"]').count()).toBe(0);
       expect(await where.locator('[data-action="connect-machine"]').count()).toBe(0);
@@ -207,7 +207,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
       await page.locator("#new-session-project-trigger").click();
-      const place = page.locator("wa-popover.new-session-page__project-popover");
+      const place = page.locator(".oc-popover.new-session-page__project-popover");
       await place.getByRole("searchbox").fill("openclaw");
       await gateway.waitForRequest("projects.searchRemote");
 

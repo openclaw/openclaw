@@ -294,13 +294,18 @@ it("refreshes profile display fields on selected live and archived rows without 
     const release = projectionWork.retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
-      await listProjectedSessions({ projection, opts: { archived: "all", includePeople: true } });
+      await listProjectedSessions({
+        projection,
+        opts: { archived: "all", includePeople: true },
+        acceptsSerializedJson: true,
+      });
       const reads = vi.spyOn(materialization, "readSessionRowEntry");
       setDisplayName(owner.id, "Current owner");
       setDisplayName(participant.id, "Current participant");
       const result = await listProjectedSessions({
         projection,
         opts: { archived: "all", includePeople: true },
+        acceptsSerializedJson: true,
       });
       expect(result.owners?.map((actor) => actor.label)).toEqual(["Current owner"]);
       expect(result.people).toEqual([

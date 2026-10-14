@@ -85,7 +85,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     owner.placements.set(change.sessionId, { placement: change.facts.placement, sequence });
   }
   applyPlacementReadPublication(owner, change, sequence);
-  if (affectsPlacementObservation(change)) {
+  if (change.kind !== "tools" && (change.kind !== "claim" || !change.localOnly)) {
     owner.preservation = undefined;
   }
   if (change.kind !== "tools") {
@@ -353,10 +353,12 @@ export function stagePlacementTurnClaimWorkerPublication(
   workspacePlacement?: WorkerSessionPlacementRecord,
   projection?: WorkerSessionPlacementReadResult,
   nativeSettlement?: Promise<SqliteWorkerOperationSettlement>,
+  inventoryUnchanged = false,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
     localOnly: facts.state === "local" && (previousState === null || previousState === "local"),
+    ...(inventoryUnchanged ? { inventoryUnchanged: true as const } : {}),
     sessionId: facts.sessionId,
     facts: freezeJsonSnapshot(facts),
     workspacePlacement: freezeJsonSnapshot(workspacePlacement),
@@ -572,8 +574,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
       apply();
     }
   };
-  const publish = () => {
-    const notify = preparePlacementChangeNotification(owner, change);
+  const publish = (notify = preparePlacementChangeNotification(owner, change)) => {
     commitChange(owner, change, sequence);
     notify();
     for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
@@ -589,6 +590,8 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
       }),
     invalidate: () =>
       settle(() => {
+        // Keep the refresh identity without publishing an uncertain postimage.
+        const notify = preparePlacementChangeNotification(owner, change);
         change.indeterminate = true;
         // Uncertain claim/tool writes revoke that incarnation. Workspace-only writes
         // invalidate read observations while preserving the separate turn authority.
@@ -604,7 +607,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
             change.workspacePlacement = undefined;
           }
         }
-        publish();
+        publish(notify);
       }),
   };
 }

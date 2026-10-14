@@ -232,7 +232,10 @@ transactional repair, and integrity checks remain with their existing owners.
 First-use schema owners skip additive DDL only when all their tables and indexes
 are present in the published facts. Missing objects use the existing installation
 transaction, which publishes the new schema facts on commit; rollback cannot
-publish a schema that did not commit. Ordinary connection replacement and data
+publish a schema that did not commit. Admission publications use the active
+connection’s transaction state and the store’s shared publication anchor, so
+PostgreSQL transactions also defer facts until commit and discard them on rollback.
+Ordinary connection replacement and data
 commits do not repeat schema validation. Schemas, stored bytes, and update behavior
 are unchanged.
 

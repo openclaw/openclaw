@@ -130,7 +130,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
-    current: (row) => !topologyDirty && records.ready(row) && isCurrent(row),
+    current: isCurrent,
     publish: (row, fields) => revisions.publishTranscript(row, fields, cfg, metadata.current),
   });
   const archive = createSessionRowProjectionArchive({
@@ -346,10 +346,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       cfg = inOwnerContext(() => params.getConfig?.() ?? cfg);
     }
     epoch++;
+    const identityRevision = metadata.current.identityProjection?.revision;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
     const catalogOnly = "all" in change && change.scope === "catalog" && !change.factsInvalidated;
     revisions.publishRuntimeChange(change);
-    if (!presentationOnly) {
+    if (!presentationOnly || metadata.current.identityProjection?.revision !== identityRevision) {
       revisions.invalidate(!catalogOnly);
     }
     placementFacts.invalidateChange(change);

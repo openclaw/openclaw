@@ -130,6 +130,7 @@ describe("memory manager reindex recovery", () => {
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
     resetPluginStateStoreForTests();
     clearRuntimeConfigSnapshot();
     await fs.rm(fixtureRoot, { recursive: true, force: true });

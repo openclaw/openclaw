@@ -8,7 +8,6 @@ import {
 import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
-import { getRuntimeConfig } from "../../config/io.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -17,9 +16,9 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqli
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
-import * as sessionStoreLookup from "../session-utils-store-lookup.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
 import * as sessionStoreWorker from "../session-utils-store-worker.js";
+import * as sessionStore from "../session-utils-store.js";
 import type { GatewaySessionStoreTargetWithStore } from "../session-utils-store.types.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
@@ -48,21 +47,33 @@ export function getDispatchTestMocks() {
 }
 
 beforeEach(() => {
-  vi.spyOn(sessionStoreLookup, "resolveGatewaySessionStoreTargetWithStore").mockImplementation(
-    (params) => dispatchTestMocks.resolveTarget(params),
+  const readFixtureEntry: typeof sessionStore.loadGatewaySessionEntryReadOnlyAsync = async (
+    key,
+    opts,
+    cfg,
+  ) => {
+    const target = await dispatchTestMocks.resolveTarget({
+      cfg,
+      key,
+      ...opts,
+      exactRead: true,
+      readOnly: true,
+    });
+    const match = findCanonicalStoreMatch(target.store, target.storeKeys);
+    return {
+      ...target,
+      cfg,
+      entry: match?.entry,
+      legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
+    };
+  };
+  vi.spyOn(sessionStore, "loadGatewaySessionEntryReadOnlyAsync").mockImplementation(
+    readFixtureEntry,
   );
   vi.spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker").mockImplementation(
     async (params) => {
       params.assertActive?.();
-      const cfg = params.cfg ?? getRuntimeConfig();
-      const target = await dispatchTestMocks.resolveTarget({ ...params, cfg });
-      const match = findCanonicalStoreMatch(target.store, target.storeKeys);
-      return {
-        ...target,
-        cfg,
-        entry: match?.entry,
-        legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
-      };
+      return readFixtureEntry(params.key, params, params.cfg);
     },
   );
   vi.spyOn(managedWorktrees, "findLiveByOwner").mockImplementation(async (...args) =>
@@ -181,12 +192,15 @@ export function makeSessionTarget(entry?: DispatchSessionEntry) {
   const pinnedEntry = entry
     ? { providerOverride: "anthropic", modelOverride: "claude-test", ...entry }
     : undefined;
+  const store: Record<string, DispatchSessionEntry> = pinnedEntry
+    ? { [dispatchTestSessionKey]: pinnedEntry }
+    : {};
   return {
     agentId: "main",
     storePath: "/tmp/openclaw-agent.sqlite",
     canonicalKey: dispatchTestSessionKey,
     storeKeys: [dispatchTestSessionKey],
-    store: pinnedEntry ? { [dispatchTestSessionKey]: pinnedEntry } : {},
+    store,
   };
 }
 

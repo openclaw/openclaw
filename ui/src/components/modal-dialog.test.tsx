@@ -320,6 +320,8 @@ describe("openclaw-modal-dialog", () => {
         await commitRender(appHost);
 
         expect(appHost.parentElement).toBe(shell);
+        await vi.dynamicImportSettled();
+        flush();
         expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
         expect(modal.querySelector(".app-toast")).toBeNull();
       } finally {

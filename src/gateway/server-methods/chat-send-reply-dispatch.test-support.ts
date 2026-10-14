@@ -18,8 +18,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import * as sessionStoreReaders from "../session-utils-store-worker.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 
 function createReplyDispatchSession(clientRunId: string) {
@@ -59,7 +59,7 @@ export async function createReplyTranscriptFixture(
     agentId: "main",
     sessionId: "receipt-session",
     sessionKey,
-    storePath: loadSessionEntry(sessionKey, { agentId: "main" }).storePath,
+    storePath: (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).storePath,
   };
   const sessionEntry = {
     sessionId: scope.sessionId,

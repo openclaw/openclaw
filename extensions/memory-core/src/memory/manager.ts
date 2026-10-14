@@ -145,12 +145,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             key,
             create: async () => {
               let manager: MemoryIndexManager | undefined;
+              let publishedDatabase: MemoryIndexDatabase | undefined;
               try {
                 if (source && (!source.publishedDatabase.isOpen || purpose !== "maintenance")) {
                   throw new Error("Memory maintenance source connection is unavailable");
                 }
                 const effectiveSettings = resolveEffectiveMemorySearchSettings(settings);
-                const publishedDatabase = await MemoryIndexDatabase.openPublished({
+                publishedDatabase = await MemoryIndexDatabase.openPublished({
                   agentId,
                   writeOptions: databaseOptions,
                   readOnly: purpose === "status",
@@ -189,7 +190,15 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                 return manager;
               } catch (error) {
                 try {
-                  await manager?.close();
+                  if (manager) {
+                    await manager.close();
+                  } else if (publishedDatabase) {
+                    try {
+                      await publishedDatabase.closePublicationWorker();
+                    } finally {
+                      publishedDatabase.release();
+                    }
+                  }
                 } catch (cleanupError) {
                   throw new AggregateError(
                     [error, cleanupError],
@@ -250,55 +259,50 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.sources.add(memorySource);
     }
     this.publishedDatabase = params.publishedDatabase;
-    try {
-      this.providerKey = this.computeProviderKey();
-      this.cache = {
-        enabled: effectiveSettings.cache.enabled,
-        maxEntries: effectiveSettings.cache.maxEntries,
-      };
-      this.vector.enabled = effectiveSettings.store.vector.enabled;
-      this.vector.extensionPath = effectiveSettings.store.vector.extensionPath;
-      const meta = this.readMeta();
-      if (meta?.vectorDims) {
-        this.vector.dims = meta.vectorDims;
-      }
-      this.indexIdentityState = this.resolveCurrentIndexIdentityState({
-        meta,
-        providerKeyKnown: false,
+    this.providerKey = this.computeProviderKey();
+    this.cache = {
+      enabled: effectiveSettings.cache.enabled,
+      maxEntries: effectiveSettings.cache.maxEntries,
+    };
+    this.vector.enabled = effectiveSettings.store.vector.enabled;
+    this.vector.extensionPath = effectiveSettings.store.vector.extensionPath;
+    const meta = this.readMeta();
+    if (meta?.vectorDims) {
+      this.vector.dims = meta.vectorDims;
+    }
+    this.indexIdentityState = this.resolveCurrentIndexIdentityState({
+      meta,
+      providerKeyKnown: false,
+    });
+    this.indexIdentityDirty =
+      this.indexIdentityState.status === "mismatched" ||
+      (this.indexIdentityState.status === "missing" && this.sources.has("memory"));
+    const transient = this.purpose !== "default";
+    const invalidatedSources = new Set(this.database.facts.invalidatedSources);
+    this.memorySourceProvenanceRepairPending =
+      this.sources.has("memory") && invalidatedSources.has("memory");
+    this.dirty =
+      (this.sources.has("memory") && (!transient || !meta)) ||
+      this.memorySourceProvenanceRepairPending;
+    if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
+      // Migration cannot map a durable session source path back to one live
+      // transcript file. Carry a full-session retry so unchanged and deleted
+      // transcripts both converge on the next startup/search sync.
+      this.sessionsDirty = true;
+      this.sessionsFullRetryDirty = true;
+    }
+    this.batch = this.resolveBatchConfig();
+    if (!transient) {
+      this.runInBackgroundContext(() => {
+        this.ensureWatcher();
+        this.ensureSessionListener();
+        this.ensureIntervalSync();
+        void this.runInBackgroundContext(() => this.ensureSessionStartupCatchup()).catch(
+          (err: unknown) => {
+            log.warn("memory session startup catch-up failed: " + String(err));
+          },
+        );
       });
-      this.indexIdentityDirty =
-        this.indexIdentityState.status === "mismatched" ||
-        (this.indexIdentityState.status === "missing" && this.sources.has("memory"));
-      const transient = this.purpose !== "default";
-      const invalidatedSources = new Set(this.database.facts.invalidatedSources);
-      this.memorySourceProvenanceRepairPending =
-        this.sources.has("memory") && invalidatedSources.has("memory");
-      this.dirty =
-        (this.sources.has("memory") && (!transient || !meta)) ||
-        this.memorySourceProvenanceRepairPending;
-      if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
-        // Migration cannot map a durable session source path back to one live
-        // transcript file. Carry a full-session retry so unchanged and deleted
-        // transcripts both converge on the next startup/search sync.
-        this.sessionsDirty = true;
-        this.sessionsFullRetryDirty = true;
-      }
-      this.batch = this.resolveBatchConfig();
-      if (!transient) {
-        this.runInBackgroundContext(() => {
-          this.ensureWatcher();
-          this.ensureSessionListener();
-          this.ensureIntervalSync();
-          void this.runInBackgroundContext(() => this.ensureSessionStartupCatchup()).catch(
-            (err: unknown) => {
-              log.warn("memory session startup catch-up failed: " + String(err));
-            },
-          );
-        });
-      }
-    } catch (err) {
-      this.publishedDatabase.release();
-      throw err;
     }
   }
 

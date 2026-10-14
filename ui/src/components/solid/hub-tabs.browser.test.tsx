@@ -46,6 +46,7 @@ it("keeps hub typography, selected ink, and compact height when native defaults 
   try {
     for (const width of [1440, 390]) {
       await page.viewport(width, 900);
+      await userEvent.hover(action);
       setActive("messages");
       flush();
       for (const animation of tabs.getAnimations({ subtree: true })) {

@@ -9,6 +9,7 @@ import {
   acquireSessionActorStorage,
   captureSessionActorStorageOwner,
 } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import {
   SessionReactionLimitError,
@@ -59,7 +60,7 @@ export async function setSessionReactionAsync(
         memory.authority,
       );
       if (outcome.kind === "committed") {
-        return outcome.value;
+        return readSessionActorStorageResult(outcome);
       }
       const error = new Error(outcome.error.message);
       error.name = outcome.error.name;

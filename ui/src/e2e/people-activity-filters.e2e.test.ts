@@ -116,15 +116,12 @@ suite.define(() => {
         await expectBrowser(card.getByRole("link", { name: /Release checklist/ })).toBeVisible();
         await card.getByRole("link", { name: /Release checklist/ }).click();
         await expect.poll(() => new URL(page.url()).pathname).toContain("release-checklist");
-        expect(
-          await sidebar.evaluate(
-            (element: HTMLElement & { sessionInvolvingMeFilterActive: boolean }) =>
-              element.sessionInvolvingMeFilterActive,
-          ),
-        ).toBe(true);
         // Online is a separate view. Returning to Sessions must restore the
         // involvement filter, rather than proving absence in an unmounted list.
         await sidebar.locator('[data-navigation-view="sessions"]').click();
+        await expectBrowser(sidebar.locator("#sidebar-session-owner-title")).toHaveText(
+          "Involving me",
+        );
         await expectBrowser(
           sessionList.locator('[data-session-key="' + selected + '"]'),
         ).toBeVisible();

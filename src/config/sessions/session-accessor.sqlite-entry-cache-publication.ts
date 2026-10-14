@@ -1,3 +1,4 @@
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   sessionChanges,
@@ -63,7 +64,7 @@ export function bindPreparedSessionEntryPublication(
   preparedSharingChanges.changes.set(change, record);
 }
 
-export function bindSessionEntryPublicationSource<T extends SessionRowChange>(
+function bindSessionEntryPublicationSource<T extends SessionRowChange>(
   change: T,
   database: SessionEntryCacheDatabase,
 ): T {
@@ -96,7 +97,7 @@ export function emitPreparedSessionSharingChange(
   if (record.kind === "metadata") {
     const seal = () => sealSessionEntryPublicationSource(record.prepared.source);
     if (
-      !stageSqliteTransactionState(database.db, {
+      !stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
         stage() {},
         commit: seal,
         rollback() {},
@@ -118,7 +119,7 @@ export function invalidateSessionEntryCaches(databaseIdentity: string): void {
 }
 
 /** Retire all facts in a failed installation, including pending older worker receipts. */
-export function invalidateSessionEntryPublication(
+function invalidateSessionEntryPublication(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
   authorityChanged = true,
@@ -294,7 +295,7 @@ export function commitSessionSharingFieldChange(
   }
 }
 
-export function publishSessionSharingFieldChange(
+function publishSessionSharingFieldChange(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
   change: Extract<SessionRowFacts, { kind: "member" | "owner" | "category" }>,

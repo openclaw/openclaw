@@ -16,6 +16,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
@@ -599,15 +600,30 @@ export function createGatewayWorkerPlacementRuntime(
         }
         const currentStop = (async () => {
           await Promise.allSettled([
-            changes.stop(),
-            githubPublicationReady,
-            ...operations.values(),
+            measureGatewayCloseStep("shutdown.worker-placement.changes", () => changes.stop()),
+            measureGatewayCloseStep(
+              "shutdown.worker-placement.github-ready",
+              () => githubPublicationReady,
+            ),
+            ...Array.from(operations, ([name, operation]) =>
+              measureGatewayCloseStep(`shutdown.worker-placement.${name}`, () => operation),
+            ),
           ]);
-          await closeGitHubPublication();
-          await nodeWorkspaceRetention.stop();
-          await scope.stop();
-          await params.environments.stop();
-          await uninstallEnvironmentReconcileGuard();
+          await measureGatewayCloseStep(
+            "shutdown.worker-placement.github-close",
+            closeGitHubPublication,
+          );
+          await measureGatewayCloseStep("shutdown.worker-placement.workspace-retention", () =>
+            nodeWorkspaceRetention.stop(),
+          );
+          await measureGatewayCloseStep("shutdown.worker-placement.scope", () => scope.stop());
+          await measureGatewayCloseStep("shutdown.worker-placement.environments", () =>
+            params.environments.stop(),
+          );
+          await measureGatewayCloseStep(
+            "shutdown.worker-placement.reconcile-guard",
+            uninstallEnvironmentReconcileGuard,
+          );
         })();
         stopPromise = currentStop;
         void currentStop.catch(() => {
