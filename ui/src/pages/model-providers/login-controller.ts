@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import metaManifest from "../../../../extensions/meta/openclaw.plugin.json" with { type: "json" };
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
@@ -359,6 +360,9 @@ export class ModelProviderLoginController {
       doneMessage: this.runner.state.authLabel
         ? t("modelSetup.providerConnected", { provider: this.runner.state.authLabel })
         : t("modelSetup.wizard.connected"),
+      doneDescription: this.completionModel
+        ? t("modelProviders.login.modelReady", { model: this.completionModel.name })
+        : undefined,
       doneAction: this.completionModel
         ? {
             label: t("modelProviders.login.startChat", { model: this.completionModel.name }),
@@ -517,9 +521,15 @@ export class ModelProviderLoginController {
           model.manualSelectionAllowed !== false &&
           model.recommended === true,
       );
+    const name =
+      (provider === "meta"
+        ? metaManifest.modelCatalog.providers.meta.models.find((model) => model.id === id)?.name
+        : undefined) ?? known?.name;
     this.completionModel = recommended
       ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
-      : { provider, id, name: known?.name ?? modelRef };
+      : name
+        ? { provider, id, name }
+        : undefined;
     this.host.requestUpdate();
   }
 

@@ -16,6 +16,7 @@ export type WizardViewProps = {
   state: ModelSetupWizardState;
   refreshWarning: string | null;
   doneMessage?: string;
+  doneDescription?: string;
   doneAction?: { label: string; disabled?: boolean; onClick: () => void };
   cancellationNotice?: string | null;
   value: unknown;
@@ -47,14 +48,22 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}
       >
         <div
-          class={["model-setup-wizard", { "model-setup-wizard--auth": props.mode === "auth" }]}
+          class={[
+            "model-setup-wizard",
+            {
+              "model-setup-wizard--auth": props.mode === "auth",
+              "model-setup-wizard--done": props.state.phase === "done",
+            },
+          ]}
           ref={(element) => {
             content = element;
           }}
         >
-          <div class="model-setup-wizard__header">
-            <h2>{props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}</h2>
-          </div>
+          <Show when={props.state.phase !== "done"}>
+            <div class="model-setup-wizard__header">
+              <h2>{props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}</h2>
+            </div>
+          </Show>
           <div class="model-setup-wizard__body">
             <For
               each={[
@@ -84,12 +93,17 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                   <span class="model-setup-wizard__success-icon" aria-hidden="true">
                     <Icon name="check" />
                   </span>
-                  {props.doneMessage ??
-                    t(
-                      props.mode === "auth"
-                        ? "modelSetup.wizard.connected"
-                        : "modelSetup.wizard.checking",
-                    )}
+                  <h2 class="model-setup-wizard__success-title">
+                    {props.doneMessage ??
+                      t(
+                        props.mode === "auth"
+                          ? "modelSetup.wizard.connected"
+                          : "modelSetup.wizard.checking",
+                      )}
+                  </h2>
+                  <Show when={props.doneDescription}>
+                    <p class="model-setup-wizard__success-description">{props.doneDescription}</p>
+                  </Show>
                 </div>
               </Match>
               <Match when={errorState()}>
