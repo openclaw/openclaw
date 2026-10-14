@@ -912,6 +912,20 @@ container, or service account.
     }
     ```
 
+    Coming from Ollama? llmman also serves `/api/embed`, so the `ollama` provider works with just a new `remote.baseUrl` (no `/v1`). Pull the same model name, then run `openclaw memory index --force` so every vector comes from one server:
+
+    ```json5
+    {
+      memory: {
+        search: {
+          provider: "ollama",
+          model: "embeddinggemma",
+          remote: { baseUrl: "http://127.0.0.1:17434" },
+        },
+      },
+    }
+    ```
+
     Embedding models are capped to their trained context regardless of `LLMMAN_CONTEXT_LENGTH`. See [Memory config](/reference/memory-config#remote-endpoint-config) for the remaining fields.
 
   </Accordion>
