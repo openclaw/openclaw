@@ -18,6 +18,8 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
@@ -185,6 +187,7 @@ type MemorySearchHealthOptions = {
   gatewayMemoryProbe?: Pick<GatewayMemoryProbe, "checked" | "ready"> & Partial<GatewayMemoryProbe>;
   includeWorkspaceMemoryHealth?: boolean;
   skipAuthProfileResolution?: boolean;
+  allowExecSecretRefs?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -205,6 +208,7 @@ export async function collectMemorySearchHealthFindings(
       env: ctx.env,
       includeWorkspaceMemoryHealth: false,
       skipAuthProfileResolution: true,
+      allowExecSecretRefs: ctx.allowExecSecretRefs === true,
       gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
     },
     ({ finding }) => {
@@ -322,8 +326,19 @@ async function inspectMemorySearchHealthForAgent(
     let status = "unavailable";
     let detail = "provider unavailable";
     try {
+      const { resolvedConfig, diagnostics, hadUnresolvedTargets } =
+        await resolveCommandSecretRefsViaGateway({
+          config: cfg,
+          commandName: "doctor",
+          targetIds: getMemoryEmbeddingCommandSecretTargetIds(cfg),
+          mode: "read_only_status",
+          allowLocalExecSecretRefs: opts.allowExecSecretRefs === true,
+        });
+      if (hadUnresolvedTargets) {
+        throw new Error(diagnostics.join("\n"));
+      }
       const acquired = await getActiveMemoryProviderCore({
-        cfg,
+        cfg: resolvedConfig,
         agentId,
         purpose: "status",
         context: {

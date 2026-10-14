@@ -26,8 +26,8 @@ export function verifyTranscriptEvents(
       readTranscriptFingerprint(source.path),
       source.originalPath,
     )((event) => stage.append(0, seq++, JSON.stringify(canonicalizeTranscriptEventMedia(event))));
+    const repair = stage.repairLegacyTranscript(0, mode !== "ordered");
     if (mode === "ordered") {
-      const repair = stage.repairLegacyTranscript(0);
       // Receipt adoption retains its original order and branch-repair contract.
       if (repair.repaired || !repair.recognized) {
         return undefined;
@@ -71,7 +71,7 @@ export function verifyTranscriptEvents(
     }
     if (mode === "ordered" || expected.done) {
       validate();
-      return expected.done ? { events: seq, missingEvents: 0, sqliteEvents } : undefined;
+      return expected.done ? { events: repair.events, missingEvents: 0, sqliteEvents } : undefined;
     }
     let missingEvents = 0;
     let firstMissing: string | undefined;
@@ -97,14 +97,14 @@ export function verifyTranscriptEvents(
       missingEvents += 1;
     }
     if (missingEvents > 0) {
-      const repair = stage.repairLegacyTranscript(0);
+      const branchRepair = stage.repairLegacyTranscript(0);
       // Missing history must be appendable without discarding or rewriting original rows.
-      if (repair.repaired || !repair.recognized) {
+      if (branchRepair.repaired || !branchRepair.recognized) {
         return undefined;
       }
     }
     validate();
-    return { events: seq, missingEvents, sqliteEvents };
+    return { events: repair.events, missingEvents, sqliteEvents };
   });
 }
 
