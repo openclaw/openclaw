@@ -83,7 +83,7 @@ Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 | `/goal <objective>`                                 | Also creates a new goal (any text that is not a recognized action word). |
 | `/goal edit <objective>`                            | Reword the current objective; status and token accounting stay put.      |
 | `/goal pause [note]`                                | Pause an active goal.                                                    |
-| `/goal resume [note]`                               | Resume a paused, blocked, usage-limited, or budget-limited goal.         |
+| `/goal resume [note]`                               | Resume a paused, blocked, limited, or completed goal.                    |
 | `/goal complete [note]`                             | Mark the goal achieved.                                                  |
 | `/goal done [note]`                                 | Alias for `complete`.                                                    |
 | `/goal block [note]`                                | Mark the goal blocked.                                                   |
@@ -109,9 +109,13 @@ with `Goal error: goal already exists` until the current one is cleared.
   restarts pursuit from the same objective with a fresh budget window.
 - `usage_limited`: reserved for a future usage-limit stop state. `/goal
 resume` restarts pursuit the same way.
-- `complete`: the goal was achieved. Complete goals are terminal. Use `/goal
-clear` before starting another goal. Repeating completion preserves the original
-  completion time, including when you add a status note.
+- `complete`: the goal was achieved. It stays complete until you explicitly use
+  `/goal resume` or **Resume** in the Control UI to pursue the same objective again.
+  Resuming preserves its identity, creation time, and conversation history. Token
+  accounting continues unless the budget was reached, in which case resume starts
+  a fresh budget window. A later completion records a new completion time; repeating
+  completion without resuming preserves the original time, including when you add
+  a status note. Use `/goal clear` before starting a different goal.
 
 `/new` and `/reset` clear the current session goal, since they intentionally
 start fresh session context.
@@ -216,7 +220,8 @@ The pill carries inline controls:
 
 - **Pencil** opens an Edit Goal composer with the current objective. Saving
   changes only the objective. Cancelling restores the previous chat draft.
-- **Pause / resume** updates the current Goal. Resume also starts a continuation
+- **Pause / resume** updates the current Goal, including resuming an achieved
+  Goal when more work is warranted. Resume also starts a continuation
   through normal chat admission. Its internal input stays in model history
   without appearing as a human chat message. The assistant reply remains visible.
 - **Trash** clears the current Goal.
@@ -317,7 +322,7 @@ channel, change queue behavior, approve tools, or schedule work.
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Goal error: goal already exists`      | The session already has a goal. Use `/goal` to inspect it, `/goal complete` if done, or `/goal clear` before starting a different objective. |
 | `Goal error: goal not found`           | The session has no goal yet. Start one with `/goal start <objective>`.                                                                       |
-| `Goal error: goal is already complete` | The goal is terminal. Clear it before starting or resuming another objective.                                                                |
+| `Goal error: goal is already complete` | The goal must be explicitly resumed before editing, pausing, or blocking it. Clear it to start a different objective.                        |
 
 If token usage shows `0` or looks stale, the active session may not have a
 fresh token snapshot yet. Usage refreshes as OpenClaw records session usage

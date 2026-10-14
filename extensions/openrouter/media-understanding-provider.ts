@@ -8,7 +8,7 @@ import type {
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
-  readProviderJsonResponse,
+  readProviderJsonObjectResponse,
   requireTranscriptionText,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -67,10 +67,6 @@ function resolveOpenRouterAudioFormat(params: { mime?: string; fileName?: string
   );
 }
 
-type OpenRouterSttResponse = {
-  text?: string;
-};
-
 async function transcribeOpenRouterAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
@@ -119,10 +115,7 @@ async function transcribeOpenRouterAudio(
 
   try {
     await assertOkOrThrowHttpError(response, "OpenRouter audio transcription failed");
-    const payload = await readProviderJsonResponse<OpenRouterSttResponse>(
-      response,
-      "openrouter.stt",
-    );
+    const payload = await readProviderJsonObjectResponse(response, "openrouter.stt");
     return {
       text: requireTranscriptionText(
         payload.text,

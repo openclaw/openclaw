@@ -8,6 +8,10 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import {
+  withSqliteWorkerReservationObservation,
+  type SqliteWorkerReservationObservation,
+} from "../infra/worker-request-diagnostics.js";
 import { getChildLogger } from "../logging/logger.js";
 import { runStoreWriterAcquisitions } from "../shared/store-writer-acquisitions.js";
 import {
@@ -20,6 +24,7 @@ import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { agentDatabaseWriteAdmissionState as admission } from "./openclaw-agent-write-admission-state.js";
 
 const reservationDiagnostics = channel("openclaw.agent-database.reservation");
+type WorkerReservationCaller = "session-reclamation.close";
 type DirectReservationCaller =
   | "session-manager.write"
   | "session-manager.note"
@@ -32,7 +37,8 @@ function observeWriteAdmission<T>(
   operation: "direct" | "worker" | "ordered-read",
   timing: StoreWriterTiming | undefined,
   run: (timing: StoreWriterTiming) => Promise<T>,
-  caller?: DirectReservationCaller,
+  caller?: DirectReservationCaller | WorkerReservationCaller,
+  worker?: SqliteWorkerReservationObservation,
 ): Promise<T> {
   // Supplied timing belongs to the session-write diagnostic owner, or to an
   // enclosing observer here. Neither route should emit a second holder warning.
@@ -54,6 +60,14 @@ function observeWriteAdmission<T>(
     const fields = {
       operation,
       ...(caller ? { caller } : {}),
+      ...(worker
+        ? {
+            workerOperations: [...worker.operations],
+            ...(worker.transactionCount !== undefined
+              ? { transactionCount: worker.transactionCount }
+              : {}),
+          }
+        : {}),
       outcome,
       pid: process.pid,
       threadId,
@@ -167,6 +181,7 @@ export async function runOpenClawAgentWorkerWrite<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
   priority?: "background",
+  caller?: WorkerReservationCaller,
 ): Promise<T> {
   if (priority === "background") {
     const storePath = readDatabasePathIdentitySync(
@@ -179,25 +194,33 @@ export async function runOpenClawAgentWorkerWrite<T>(
       await racePromiseWithAbortSignal(draining, signal, (aborted) => aborted.reason);
     }
   }
-  return observeWriteAdmission("worker", timing, (observed) => {
-    return runOpenClawAgentWriteAdmission(
-      options,
-      async ({ canonicalPath: storePath }) => {
-        const owner = {};
-        admission.workers.set(storePath, owner);
-        try {
-          return await run();
-        } finally {
-          if (admission.workers.get(storePath) === owner) {
-            admission.workers.delete(storePath);
+  const worker: SqliteWorkerReservationObservation = { operations: new Set() };
+  return observeWriteAdmission(
+    "worker",
+    timing,
+    (observed) =>
+      runOpenClawAgentWriteAdmission(
+        options,
+        async ({ canonicalPath: storePath }) => {
+          const owner = {};
+          admission.workers.set(storePath, owner);
+          try {
+            return await (observed.reentrant
+              ? run()
+              : withSqliteWorkerReservationObservation(worker, run));
+          } finally {
+            if (admission.workers.get(storePath) === owner) {
+              admission.workers.delete(storePath);
+            }
           }
-        }
-      },
-      true,
-      observed,
-      signal,
-    );
-  });
+        },
+        true,
+        observed,
+        signal,
+      ),
+    caller,
+    worker,
+  );
 }
 
 /** Compose the existing foreground queues without inverting inherited acquisition order. */

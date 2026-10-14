@@ -7,6 +7,27 @@ export function recordMemorySample(
   memory: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>["memory"],
   byteBuckets: number[],
 ): void {
+  for (const message of memory.workerMessages ?? []) {
+    const labels = { kind: message.kind, direction: message.direction };
+    store.counterValue(
+      "openclaw_worker_messages_total",
+      "Messages crossing the Gateway main-thread worker boundary.",
+      labels,
+      message.messages,
+    );
+    store.counterValue(
+      "openclaw_worker_message_payload_bytes_total",
+      "Known worker payload bytes, excluding transport framing and unmeasured object graphs.",
+      labels,
+      message.payloadBytes,
+    );
+    store.counterValue(
+      "openclaw_worker_message_unmeasured_total",
+      "Worker messages without a known payload size; these do not contribute to payload bytes.",
+      labels,
+      message.unmeasuredMessages,
+    );
+  }
   for (const worker of memory.workerLifecycle ?? []) {
     store.counterValue(
       "openclaw_worker_started_total",

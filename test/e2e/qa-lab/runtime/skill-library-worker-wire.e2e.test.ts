@@ -581,6 +581,17 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           );
           expect(cancelled.status).not.toBe("timeout");
           provider.release("cancelled-worker");
+          // Placement reconciliation alone does not join cancelled-turn persistence.
+          await vi.waitFor(
+            async () => {
+              const history = await alice.request<{
+                sessionInfo: { hasActiveRun: boolean; activeRunIds?: string[] };
+              }>("chat.history", { sessionKey: remoteKey, limit: 1 });
+              expect(history.sessionInfo.hasActiveRun).toBe(false);
+              expect(history.sessionInfo.activeRunIds).toEqual([]);
+            },
+            { timeout: PROOF_TIMEOUT_MS, interval: 100 },
+          );
           await settlement.wait(admin, remoteKey, signal);
           expect((await turn(alice, remoteKey, "replacement-worker")).reference).toBe(
             "ALICE-RESOURCE-2\n",

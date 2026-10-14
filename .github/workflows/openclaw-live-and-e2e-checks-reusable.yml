@@ -4466,9 +4466,11 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-opencode-go-deepseek-glm
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go DeepSeek/GLM
-            # The release workspace does not enable Global regions, so the other DeepSeek V4
-            # routes reject every request. These refs were proven reachable in the Docker lane.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # The release workspace does not enable Global regions, so the active DeepSeek V4
+            # routes reject every request, and upstream metadata deprecated
+            # deepseek-v4-flash-vision-exp, so discovery no longer lists it. These GLM refs
+            # were proven reachable from the release workspace.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
@@ -4495,10 +4497,11 @@ jobs:
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-smoke
             label: Native live gateway profiles OpenCode Go smoke
-            # Pinned while the release OpenCode workspace lacks Global regions: deepseek-v4-flash and
-            # deepseek-v4.1-flash now return 400 "requires Global regions". Restore dynamic selection
-            # (drop OPENCLAW_LIVE_GATEWAY_MODELS) once the workspace enables Global.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash-vision-exp OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # Pinned while the release OpenCode workspace lacks Global regions: deepseek-v4.1-flash
+            # returns 400 "requires Global regions", and upstream metadata deprecated the V4 Flash
+            # routes. Restore dynamic selection (drop OPENCLAW_LIVE_GATEWAY_MODELS) once the
+            # workspace enables Global.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable

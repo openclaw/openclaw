@@ -189,7 +189,15 @@ Detailed readiness exposes the pending reload; an explicit wait has no drain
 deadline. Incoming messages retain their channel's existing queue and replay
 contract; this option does not add durable ingress to channels that lack it.
 Run this maintenance command outside a turn that itself holds the target plugin:
-waiting for that turn while it waits for reload cannot make progress.
+waiting for that turn while it waits for reload cannot make progress. Agents can
+use the `plugins` tool with `action: "reloadAndResume"` and `pluginId` instead.
+This explicit handoff ends the active turn (not the conversation), lets normal
+cleanup release its plugin leases, then runs the ordinary authorized reload and
+wakes the same session with the result, including failures and cleanup warnings.
+It requires a Gateway-hosted conversation with turn-yield support. Stop cancels
+a pending handoff; it never force-releases leases or rolls back a committed reload.
+The handoff is process-local: if the Gateway exits before delivery, inspect the
+plugin state before retrying. Plain CLI reloads are not intercepted or deferred.
 
 Replacement requires the previous registration's resource cleanup to finish
 before its successor acquires those resources. Failed cleanup can prevent

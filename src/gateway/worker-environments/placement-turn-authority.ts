@@ -413,10 +413,7 @@ export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
     const byId = new Map(Array.from(records, (record) => [record.sessionId, record]));
     for (const sessionId of requestedIds ?? byId.keys()) {
       if ((owner.placements.get(sessionId)?.sequence ?? -1) <= sequence) {
-        owner.placements.set(sessionId, {
-          placement: freezeJsonSnapshot(byId.get(sessionId)),
-          sequence,
-        });
+        owner.placements.set(sessionId, { placement: byId.get(sessionId), sequence });
       }
     }
   };

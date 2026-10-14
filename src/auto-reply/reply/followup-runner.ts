@@ -5,6 +5,7 @@ import {
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -93,16 +94,17 @@ export function createFollowupRunner(
     ? initialDefaults.resolveGatewayContext
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const defaults = { ...initialDefaults, resolveGatewayContext };
-  // Every queue handoff, including delivery retries, retains this host owner
-  // without borrowing the invoking turn's request or workspace-preparation authority.
+  // Follow-ups retain the host owner, never the invoking turn's transcript or request scope.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
-    runWithAgentWorkspaceReadiness(undefined, () =>
-      withPluginRuntimeGatewayContextResolver(
-        resolveGatewayContext,
-        () => executeFollowup(queued),
-        {
-          inheritRequestScope: false,
-        },
+    withoutSessionTranscriptReadFence(() =>
+      runWithAgentWorkspaceReadiness(undefined, () =>
+        withPluginRuntimeGatewayContextResolver(
+          resolveGatewayContext,
+          () => executeFollowup(queued),
+          {
+            inheritRequestScope: false,
+          },
+        ),
       ),
     );
   const deliverProgress = async (

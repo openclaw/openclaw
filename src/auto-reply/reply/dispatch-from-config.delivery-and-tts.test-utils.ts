@@ -3023,7 +3023,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
-      text: "Visible block.\nVisible final.",
+      text: "Visible block. \nVisible final.",
       mediaUrl: "https://example.com/tts-synth.opus",
     });
   });

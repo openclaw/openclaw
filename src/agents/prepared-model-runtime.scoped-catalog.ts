@@ -12,10 +12,6 @@ import type {
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
 import {
-  captureModelsJsonContents,
-  prepareWorkspaceBuildGroup,
-} from "./prepared-model-runtime.facts.js";
-import {
   materializePreparedModelCatalog,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
@@ -32,6 +28,7 @@ export async function prepareScopedReadOnlyModelCatalog(
   providerDiscoveryProviderIds: readonly string[],
   catalogMode: PreparedModelRuntimeCatalogMode = "static",
 ): Promise<ModelCatalogSnapshot> {
+  const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
   const scopedInput = input.readOnly ? input : { ...input, readOnly: true };
   const { agentFacts, pluginGeneration } = await prepareWorkspaceBuildGroup(
     [scopedInput],
@@ -127,6 +124,7 @@ export async function prepareAgentCatalogSource(
         providerOutcomes: resultOutcomes(),
       };
     }
+    const { captureModelsJsonContents } = await import("./prepared-model-runtime.facts.js");
     if (!input.readOnly) {
       await ensureOpenClawModelsJson(input.config, input.agentDir, options);
     }

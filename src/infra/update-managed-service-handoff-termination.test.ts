@@ -4,7 +4,6 @@ import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { MANAGED_HANDOFF_COMMAND_SOURCE } from "./update-managed-service-handoff-command-source.js";
 import { HANDOFF_OWNED_COMMAND_SCRIPT } from "./update-managed-service-handoff-control.js";
 import { MANAGED_HANDOFF_LEASE_SOURCE } from "./update-managed-service-handoff-lease-source.js";
 import { MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE } from "./update-managed-service-handoff-native-scope-source.js";
@@ -23,15 +22,14 @@ function sourceBetween(start: string, end: string) {
   return helperSource.slice(from, to);
 }
 
-// Render the shipped signal/transfer, command-result and finally blocks together.
-// Native processes and ledger I/O are deferred fixtures; no helper boot, real signal,
-// service, database, or compiled worker is needed for these ownership transitions.
+// Execute the shipped settlement, diagnostics and finally blocks with deferred
+// native I/O so cancellation and lease ownership stay observable without a boot.
 const lifecycleSource: string = runInNewContext(
   "String.raw`" +
     sourceBetween("let managedUpdateLease = null;", "function sleep(ms)") +
     sourceBetween('process.on("SIGTERM",', "function isLaunchdNotLoaded") +
     "`",
-  { MANAGED_HANDOFF_LEASE_SOURCE, UPDATE_RUN_ID_ENV: "OPENCLAW_UPDATE_RUN_ID" },
+  { MANAGED_HANDOFF_LEASE_SOURCE },
 );
 const finalizerSource = sourceBetween(
   "  } finally {\n    clearTimeout(parentExitDeadline);",
@@ -42,32 +40,31 @@ const finalizerSource = sourceBetween(
 );
 const commandResultSource = sourceBetween(
   "    const exit = await runOwnedUpdateCommand(params.action,",
-  "    automaticRequested = Boolean(exit.continuation);",
+  "    if (updateCancelled || activationRejected)",
+);
+const diagnosticSource = sourceBetween(
+  "async function collectUpdateFailureTriage()",
+  "\n(async () => {",
 );
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 function createBoundary(action: "update" | "triage" = "update") {
-  const serviceSpawned = createDeferred();
-  const commandAdmitted = createDeferred();
   const terminalStarted = createDeferred();
   const terminalFinished = createDeferred();
+  const diagnosticStarted = createDeferred();
+  const diagnosticFinished = createDeferred();
+  const commandAdmitted = createDeferred();
   const order: string[] = [];
-  const stdin = Object.assign(new EventEmitter(), {
-    destroyed: false,
-    destroy: vi.fn((): void => {
-      stdin.destroyed = true;
-    }),
-  });
-  const processResult: { exitCode?: number } = {};
-  const processFixture = Object.assign(new EventEmitter(), processResult, {
+  const stdin = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+  const processFixture = Object.assign(new EventEmitter(), {
     pid: 100,
     platform: "linux",
     execPath: "/fixture/node",
-    argv: ["/fixture/node", "/fixture/helper.cjs", "/fixture/params.json"],
-    env: { OPENCLAW_UPDATE_RUN_ID: "fixture-run" },
+    env: {},
     stdin,
+    exitCode: undefined as number | undefined,
     execve: vi.fn(),
   });
   const params = {
@@ -81,10 +78,14 @@ function createBoundary(action: "update" | "triage" = "update") {
     serviceRecovery: { kind: "systemd", unit: "openclaw-gateway.service" },
     scopeUnit: "openclaw-update-fixture.scope",
     updateLeaseKey: "/fixture/install",
-    systemdRun: "/fixture/systemd-run",
     runtimeArgs: [],
+    nodeExecArgv: [],
     commandArgv: ["/fixture/node", "/fixture/cli.mjs", "triage"],
-    sensitivePaths: ["/fixture/params.json"],
+    triageCommandArgv: ["/fixture/node", "/fixture/cli.mjs", "triage", "--non-interactive"],
+    triageInputPath: "/fixture/diagnostics.json",
+    triageContextPath: "/fixture/failure.json",
+    triageContextCommand: "openclaw triage --run --update-result /fixture/failure.json",
+    sensitivePaths: ["/fixture/params.json", "/fixture/diagnostics.json"],
   };
   const lease = {
     key: params.updateLeaseKey,
@@ -96,11 +97,11 @@ function createBoundary(action: "update" | "triage" = "update") {
   const authority = { current: true };
   const leaseStore = {
     owns: vi.fn(() => authority.current),
-    bind: vi.fn((_lease: typeof lease, pid: number) => ({ ...lease, executor: { pid } })),
-    retarget: vi.fn((_lease: typeof lease, key: string, nextAction: typeof lease.action) => ({
-      kind: "acquired",
-      lease: { ...lease, key, action: nextAction },
-    })),
+    bind: vi.fn((currentLease: typeof lease, pid: number) =>
+      authority.current ? { ...currentLease, executor: { pid } } : false,
+    ),
+    isProcessIdentityCurrent: vi.fn(() => authority.current),
+    retarget: vi.fn(),
     release: vi.fn(() => {
       order.push("release");
       return authority.current;
@@ -111,81 +112,88 @@ function createBoundary(action: "update" | "triage" = "update") {
   const logs: string[] = [];
   const fs = {
     writeFileSync: vi.fn<(filePath: string, contents: string, options: unknown) => void>(),
+    existsSync: vi.fn(() => true),
+    readFileSync: vi.fn(() => JSON.stringify({ error: "candidate-validation-failed" })),
     openSync: vi.fn(() => 9),
     closeSync: vi.fn(),
     rmSync: vi.fn(() => order.push("cleanup")),
   };
-  const service = Object.assign(new EventEmitter(), {
-    stdout: new EventEmitter(),
-    stderr: new EventEmitter(),
-    killed: false,
-  });
-  const gate = Object.assign(new EventEmitter(), {
-    end: (_data: string, callback: () => void): void => {
-      callback();
-      commandAdmitted.resolve();
-      if (action === "update") {
-        order.push("terminal:start");
-        terminalStarted.resolve();
-        void terminalFinished.promise.then(() => {
-          order.push("terminal:done");
-          command.exitCode = 0;
-          command.emit("exit", 0, null);
-          command.emit("close", 0, null);
+  const children: ReturnType<typeof makeCommand>[] = [];
+  function makeCommand(diagnostic: boolean) {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 101,
+      spawnargs: params.commandArgv,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      stdin: Object.assign(new EventEmitter(), { end: vi.fn() }),
+      stdout: new EventEmitter(),
+      stdio: [] as EventEmitter[],
+      kill: vi.fn((signal: NodeJS.Signals) => {
+        void Promise.resolve().then(() => {
+          child.signalCode = signal;
+          child.emit("exit", null, signal);
+          child.emit("close", null, signal);
         });
-      }
-    },
+      }),
+    });
+    const gate = Object.assign(new EventEmitter(), {
+      end: (_data: string, callback: () => void) => {
+        callback();
+        if (action === "triage") {
+          commandAdmitted.resolve();
+          return;
+        }
+        const phase = diagnostic ? "diagnostic" : "terminal";
+        order.push(phase + ":start");
+        (diagnostic ? diagnosticStarted : terminalStarted).resolve();
+        void (diagnostic ? diagnosticFinished : terminalFinished).promise.then(() => {
+          order.push(phase + ":done");
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+          child.emit("close", 0, null);
+        });
+      },
+    });
+    child.stdio = [
+      new EventEmitter(),
+      new EventEmitter(),
+      new EventEmitter(),
+      new EventEmitter(),
+      gate,
+    ];
+    return child;
+  }
+  const spawn = vi.fn((_executable: string, args: string[]) => {
+    const child = makeCommand(args.includes("triage"));
+    children.push(child);
+    void Promise.resolve().then(() => child.emit("spawn"));
+    return child;
   });
-  const commandResult: { exitCode: number | null; signalCode: NodeJS.Signals | null } = {
-    exitCode: null,
-    signalCode: null,
-  };
-  const command = Object.assign(new EventEmitter(), commandResult, {
-    pid: 101,
-    spawnargs: params.commandArgv,
-    stdin: Object.assign(new EventEmitter(), { end: vi.fn() }),
-    stdout: new EventEmitter(),
-    stdio: [null, null, null, null, gate],
-    kill: vi.fn(),
-  });
-  const spawn = vi.fn((executable: string) => {
-    if (executable === "systemctl") {
-      serviceSpawned.resolve();
-      void Promise.resolve().then(() => service.emit("spawn"));
-      return service;
-    }
-    void Promise.resolve().then(() => command.emit("spawn"));
-    return command;
-  });
-  const boundary: {
-    transfer: (continuation: unknown) => Promise<void>;
-    command: () => Promise<void>;
-  } = runInNewContext(
+  const boundary: { settle: () => Promise<void>; command: () => Promise<void> } = runInNewContext(
     `
     let restorationArmed = true;
-    let parkedServiceFragment = "/fixture/gateway.service";
     let foregroundParked = false, foregroundClosed = false, foregroundRespawn = false;
-    let updaterStarted = true, automaticRequested = true;
+    let updaterStarted = true;
     let finishBeforeParkNotice, parentExitDeadline;
     ${lifecycleSource}
     ${MANAGED_HANDOFF_RESULT_SOURCE}
-    ${MANAGED_HANDOFF_COMMAND_SOURCE}
     ${MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE}
     ${HANDOFF_OWNED_COMMAND_SCRIPT}
+    ${diagnosticSource}
     ${sourceBetween("function cleanupSensitiveFiles()", "function assertStateDatabaseWriteAllowed")}
     managedUpdateLease = initialLease;
     if (params.action === "update") {
       runLedger = {};
       runOutcome = { status: "failed", reason: "candidate-validation-failed" };
+      triageFailure = { reason: "candidate-validation-failed" };
+      finalExitCode = 1;
     }
     async function complete(operation) {
       try { await operation();
       ${finalizerSource}
     }
-    ({
-      transfer: (continuation) => complete(() => enterTriageAfterUpdate(continuation)),
-      command: () => complete(async () => { ${commandResultSource} }),
-    });
+    ({ settle: () => complete(async () => {}),
+      command: () => complete(async () => { ${commandResultSource} }), });
     `,
     {
       params,
@@ -202,29 +210,18 @@ function createBoundary(action: "update" | "triage" = "update") {
       setInterval,
       clearInterval,
       appendLog: (line: string) => logs.push(line),
-      parseSystemdProperties: (stdout: string) =>
-        Object.fromEntries(stdout.split("\n").map((line) => line.split("="))),
+      killOwnedCommand: (child: ReturnType<typeof makeCommand>) => child.kill("SIGKILL"),
     },
   );
-  const inspect = () => {
-    service.stdout.emit(
-      "data",
-      "Id=openclaw-gateway.service\nLoadState=loaded\nFragmentPath=/fixture/gateway.service",
-    );
-    service.emit("close", 0);
-  };
-  const continuation = {
-    failure: { installationRoot: "/fixture/installed" },
-    commandArgv: params.commandArgv,
-  };
   return {
     ...boundary,
-    continuation,
-    inspect,
-    serviceSpawned,
-    commandAdmitted,
     terminalStarted,
     terminalFinished,
+    diagnosticStarted,
+    diagnosticFinished,
+    commandAdmitted,
+    children,
+    spawn,
     order,
     logs,
     fs,
@@ -232,61 +229,63 @@ function createBoundary(action: "update" | "triage" = "update") {
     leaseStore,
     authority,
     process: processFixture,
-    child: command,
   };
 }
 
-it.each(["inspection", "finalization"] as const)(
-  "joins normal settlement instead of transferring triage after SIGTERM during %s",
+it.each(["finalization", "diagnostics"] as const)(
+  "joins settlement before cleanup after SIGTERM during %s",
   async (stage) => {
     const fixture = createBoundary();
-    const completed = fixture.transfer(fixture.continuation);
-    await awaitGateBeforeSettlement(
-      fixture.serviceSpawned.promise,
-      completed,
-      "inspection not reached",
-    );
-    if (stage === "inspection") {
-      fixture.process.emit("SIGTERM");
-    }
-    fixture.inspect();
+    const completed = fixture.settle();
     await awaitGateBeforeSettlement(
       fixture.terminalStarted.promise,
       completed,
       "finalization not reached",
     );
-    if (stage === "finalization") {
-      fixture.process.emit("SIGTERM");
-      expect(fixture.child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    if (stage === "diagnostics") {
+      fixture.terminalFinished.resolve();
+      await awaitGateBeforeSettlement(
+        fixture.diagnosticStarted.promise,
+        completed,
+        "diagnostics not reached",
+      );
     }
-    expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
+    fixture.process.emit("SIGTERM");
+    expect(fixture.children.at(-1)?.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
     expect(fixture.leaseStore.release).not.toHaveBeenCalled();
     expect(fixture.fs.rmSync).not.toHaveBeenCalled();
     expect(fixture.process.exitCode).toBeUndefined();
     fixture.terminalFinished.resolve();
+    fixture.diagnosticFinished.resolve();
     await completed;
     expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
     expect(fixture.process.execve).not.toHaveBeenCalled();
     expect(fixture.leaseStore.release).toHaveBeenCalledExactlyOnceWith(fixture.lease);
-    expect(fixture.order).toEqual(["terminal:start", "terminal:done", "release", "cleanup"]);
+    expect(fixture.order).toEqual(
+      stage === "finalization"
+        ? ["terminal:start", "terminal:done", "release", "cleanup", "cleanup"]
+        : [
+            "terminal:start",
+            "terminal:done",
+            "diagnostic:start",
+            "diagnostic:done",
+            "release",
+            "cleanup",
+            "cleanup",
+          ],
+    );
     expect(fixture.logs).toContain("managed update helper completed code=143");
     expect(fixture.process.exitCode).toBe(143);
-    expect(fixture.process.stdin.destroyed).toBe(true);
+    expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   },
 );
 
 it.each([true, false])(
-  "revalidates live lease authority after finalization (current=%s)",
+  "revalidates lease authority before diagnostics (current=%s)",
   async (current) => {
     const fixture = createBoundary();
-    const completed = fixture.transfer(fixture.continuation);
-    await awaitGateBeforeSettlement(
-      fixture.serviceSpawned.promise,
-      completed,
-      "inspection not reached",
-    );
-    fixture.inspect();
+    const completed = fixture.settle();
     await awaitGateBeforeSettlement(
       fixture.terminalStarted.promise,
       completed,
@@ -294,39 +293,39 @@ it.each([true, false])(
     );
     fixture.authority.current = current;
     fixture.terminalFinished.resolve();
+    fixture.diagnosticFinished.resolve();
     await completed;
+    expect(fixture.spawn).toHaveBeenCalledTimes(current ? 2 : 1);
+    expect(
+      fixture.fs.writeFileSync.mock.calls.some(([file]) => file === "/fixture/diagnostics.json"),
+    ).toBe(current);
     if (current) {
-      expect(fixture.leaseStore.retarget).toHaveBeenCalledExactlyOnceWith(
-        fixture.lease,
-        "/fixture/installed",
-        expect.objectContaining({ kind: "triage", phase: "reserved" }),
+      expect(fixture.spawn.mock.calls[1]?.[1]).toEqual(
+        expect.arrayContaining([
+          "triage",
+          "--non-interactive",
+          "--update-result",
+          "/fixture/diagnostics.json",
+        ]),
       );
-      expect(fixture.process.execve).toHaveBeenCalledExactlyOnceWith(
-        "/fixture/systemd-run",
-        expect.arrayContaining(["--unit=openclaw-triage-fixture.scope"]),
-        {},
+      expect(fixture.logs).toContain(
+        "Reuse this diagnostic context on the Gateway host: openclaw triage --run --update-result /fixture/failure.json",
       );
-    } else {
-      expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
-      expect(fixture.process.execve).not.toHaveBeenCalled();
     }
+    expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
+    expect(fixture.process.execve).not.toHaveBeenCalled();
+    expect(fixture.process.exitCode).toBe(1);
   },
 );
 
-it("revalidates the retargeted lease immediately before execve", async () => {
+it("revalidates the lease before admitting the diagnostic child", async () => {
   const fixture = createBoundary();
   fixture.fs.writeFileSync.mockImplementation((filePath) => {
-    if (filePath === "/fixture/params.json") {
+    if (filePath === "/fixture/diagnostics.json") {
       fixture.authority.current = false;
     }
   });
-  const completed = fixture.transfer(fixture.continuation);
-  await awaitGateBeforeSettlement(
-    fixture.serviceSpawned.promise,
-    completed,
-    "inspection not reached",
-  );
-  fixture.inspect();
+  const completed = fixture.settle();
   await awaitGateBeforeSettlement(
     fixture.terminalStarted.promise,
     completed,
@@ -334,16 +333,13 @@ it("revalidates the retargeted lease immediately before execve", async () => {
   );
   fixture.terminalFinished.resolve();
   await completed;
-  expect(fixture.leaseStore.retarget).toHaveBeenCalledTimes(1);
-  expect(fixture.fs.writeFileSync).toHaveBeenCalledWith(
-    "/fixture/params.json",
-    expect.any(String),
-    {
-      mode: 0o600,
-    },
-  );
+  expect(fixture.spawn).toHaveBeenCalledTimes(2);
+  expect(fixture.children[1]?.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  expect(fixture.order).not.toContain("diagnostic:start");
+  expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
   expect(fixture.process.execve).not.toHaveBeenCalled();
-  expect(fixture.process.stdin.destroyed).toBe(true);
+  expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
+  expect(fixture.process.exitCode).toBe(1);
 });
 
 it.each([0, 7])(
@@ -356,16 +352,17 @@ it.each([0, 7])(
       completed,
       "command not admitted",
     );
-    fixture.child.exitCode = code;
-    fixture.child.emit("exit", code, null);
-    fixture.child.emit("close", code, null);
+    const child = fixture.children[0]!;
+    child.exitCode = code;
+    child.emit("exit", code, null);
+    child.emit("close", code, null);
     await completed;
     expect(fixture.logs).toContain(
       "The installed update does not support automatic diagnostics. Run openclaw triage manually.",
     );
     expect(fixture.logs).toContain("managed update helper completed code=" + (code || 1));
     expect(fixture.process.exitCode).toBe(code || 1);
-    expect(fixture.process.stdin.destroyed).toBe(true);
+    expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
     expect(fixture.fs.closeSync).toHaveBeenCalledWith(9);
     expect(fixture.fs.rmSync).toHaveBeenCalledWith("/fixture/params.json", { force: true });
     expect(vi.getTimerCount()).toBe(0);

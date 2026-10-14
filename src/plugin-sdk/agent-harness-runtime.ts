@@ -169,6 +169,7 @@ export type { AgentHarnessUserInputPromptOptions } from "../agents/harness/user-
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question-dispatch.js";
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
+  | "thinkingExplicit"
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"

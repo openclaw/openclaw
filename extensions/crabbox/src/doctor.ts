@@ -19,7 +19,7 @@ import {
 } from "./crabbox-worker-warm-image-store.js";
 
 export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
-export const CRABBOX_SETUP_SECRETS_CHECK_ID = "crabbox/setup-secrets";
+const CRABBOX_SETUP_SECRETS_CHECK_ID = "crabbox/setup-secrets";
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 
 export type CrabboxDoctorRegistrationHost = {

@@ -85,6 +85,8 @@ suite.define(() => {
         expect(await picker.locator(".new-session-page__cloud-configuration").count()).toBe(1);
         const plus = picker.locator('[data-action="manage-cloud-workers"]');
         const chevron = daytona.locator(".new-session-page__submenu-chevron");
+        await plus.waitFor({ state: "visible" });
+        await chevron.waitFor({ state: "visible" });
         const [plusBox, chevronBox] = await Promise.all([
           plus.boundingBox(),
           chevron.boundingBox(),

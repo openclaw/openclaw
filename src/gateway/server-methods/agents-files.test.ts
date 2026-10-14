@@ -100,6 +100,33 @@ for (const storage of ["local", "remote"] as const) {
       }
 
       it.each([
+        { label: "ASCII", character: "x", bytesPerCharacter: 1 },
+        { label: "multibyte", character: "é", bytesPerCharacter: 2 },
+      ])(
+        "bounds document saves by UTF-8 bytes ($label)",
+        async ({ character, bytesPerCharacter }) => {
+          const name = "AGENTS.md";
+          const accepted = character.repeat((2 * 1024 * 1024) / bytesPerCharacter);
+          const saved = await invokeAgentFilesHandler("agents.files.set", {
+            agentId: "main",
+            name,
+            content: accepted,
+          });
+          expect(saved.ok).toBe(true);
+          expect(fs.readFileSync(path.join(storageDir, name), "utf8")).toBe(accepted);
+
+          await expect(
+            invokeAgentFilesHandler("agents.files.set", {
+              agentId: "main",
+              name,
+              content: `${accepted}x`,
+            }).then(({ ok }) => ok),
+          ).rejects.toThrow("Workspace document exceeds its write bound");
+          expect(fs.readFileSync(path.join(storageDir, name), "utf8")).toBe(accepted);
+        },
+      );
+
+      it.each([
         { name: "IDENTITY.md", conflict: false },
         { name: "AGENTS.md", conflict: false },
         { name: "IDENTITY.md", conflict: true },

@@ -380,6 +380,15 @@ export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean
   return parsed.parent_tool_use_id != null;
 }
 
+// User text can be replayed stdin; only the hook's rejection notification is a boundary.
+export function isClaudeStopHookFeedbackRecord(parsed: Record<string, unknown>): boolean {
+  return (
+    parsed.type === "system" &&
+    parsed.subtype === "notification" &&
+    parsed.key === "stop-hook-error"
+  );
+}
+
 const CLAUDE_FOREGROUND_AGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
 
 export function isClaudeForegroundAgentToolName(name: string): boolean {

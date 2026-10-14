@@ -1274,6 +1274,7 @@ describe("test-projects build admission", () => {
   const mockUiTarget = "ui/src/e2e/chat-code-block-fences.e2e.test.ts";
 
   it.each([
+    "src/commands/doctor.auth-profile-consumers.e2e.test.ts",
     "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
     "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
     "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",

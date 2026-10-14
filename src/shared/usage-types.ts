@@ -114,6 +114,7 @@ export type SessionsUsageResult = {
   creatorOptions?: SessionUsageCreator[];
   cacheStatus?: CostUsageSummary["cacheStatus"];
   overview?: SessionsUsageOverview;
+  partial?: { reason: "time-budget"; message: string };
 };
 
 export type UsageOverviewOptions = {

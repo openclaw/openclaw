@@ -1,16 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { recordUnwrittenWebhookCompletion } from "../commands/doctor/shared/legacy-webhook-pins.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { applyResolvedPluginDoctorCompatibilityMigrations } from "./doctor-compatibility-migration.js";
 import { applyPluginDoctorCompatibilityMigrations } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
@@ -81,6 +85,58 @@ function channelConfig(accounts: Record<string, Record<string, unknown>>): OpenC
 }
 
 describe("Doctor historical webhook pins", () => {
+  it("shares one completion read and preserves each rehearsal write across plugins", async () => {
+    const { configPath, env } = await fixture([]);
+    const rehearsalEnv = {
+      ...env,
+      ...buildUpdateRehearsalPathEnv(path.dirname(configPath)),
+      ...buildUpdateDoctorEnv({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+        serviceRepairPolicy: "external",
+      }),
+    };
+    let accountIds: string[] = [];
+    const entries = ["nextcloud-talk", "msteams"].map((pluginId) => ({
+      pluginId,
+      rules: [],
+      providerRenames: [],
+      historicalWebhookListener: { channelId: pluginId, ...endpoint },
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+        config: cfg,
+        changes: [],
+        historicalWebhookAccountIds: accountIds,
+      }),
+    }));
+    const migrate = (config: OpenClawConfig) =>
+      applyResolvedPluginDoctorCompatibilityMigrations(config, entries, {
+        env: rehearsalEnv,
+        historicalWebhookListeners: true,
+        isDeferred: () => false,
+      });
+    openOpenClawStateDatabase({ env: rehearsalEnv });
+    const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      expect(migrate({})).toEqual({ config: {}, changes: [] });
+      expect(
+        sql.queries.filter((query) => /from "config_machine_state"/i.test(query)),
+      ).toHaveLength(1);
+    } finally {
+      sql.restore();
+    }
+    expect(readConfigMachineState(`webhookListeners:${configPath}`, { env: rehearsalEnv })).toEqual(
+      {
+        "nextcloud-talk": [],
+        msteams: [],
+      },
+    );
+    const config: OpenClawConfig = {
+      channels: { "nextcloud-talk": { accounts: { work: {} } }, msteams: {} },
+    };
+    accountIds = ["work"];
+    expect(migrate(config)).toEqual({ config, changes: [] });
+  });
+
   it.each([{ accountIds: [] }, { accountIds: ["work"] }])(
     "keeps real rehearsal webhook pins and records no-op completion in state: $accountIds",
     async ({ accountIds }) => {
@@ -232,10 +288,19 @@ describe("Doctor historical webhook pins", () => {
       });
       const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
       expect(snapshot.valid).toBe(true);
-      const result = migrate(snapshot.sourceConfig, {
-        ...env,
-        ...(evidence === "published updater" ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {}),
-      });
+      const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      let result: ReturnType<typeof migrate>;
+      try {
+        result = migrate(snapshot.sourceConfig, {
+          ...env,
+          ...(evidence === "published updater" ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {}),
+        });
+        expect(
+          sql.queries.filter((query) => /from "gateway_boot_lifecycle"/i.test(query)),
+        ).toHaveLength(evidence === "previous boot" ? 1 : 0);
+      } finally {
+        sql.restore();
+      }
       expect(result.warnings).toBeUndefined();
       await replaceConfigFile({
         io,

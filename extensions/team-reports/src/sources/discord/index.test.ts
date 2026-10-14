@@ -193,30 +193,27 @@ describe("Discord report source", () => {
     expect(result.status.stats.privateArchivesSkipped).toBe(0);
   });
 
-  it.each([3_000_000])(
-    "waits %s seconds for Discord retry_after before retrying",
-    async (seconds) => {
-      vi.useFakeTimers();
-      let attempts = 0;
-      const context = runtime((url) => {
-        if (url.pathname.endsWith("/messages")) {
-          attempts += 1;
-          return attempts === 1
-            ? json({ retry_after: seconds }, 429)
-            : json([message(window.sinceMs + 1)]);
-        }
-        return undefined;
-      });
-      const pending = collect(context, config, window);
-      await vi.advanceTimersByTimeAsync(seconds * 1000 - 1);
-      expect(attempts).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      const result = await pending;
-      expect(attempts).toBe(2);
-      expect(result.messages).toHaveLength(1);
-      expect(result.status.stats.apiCalls).toBe(context.requests.length);
-    },
-  );
+  it.each([60])("waits %s seconds for Discord retry_after before retrying", async (seconds) => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const context = runtime((url) => {
+      if (url.pathname.endsWith("/messages")) {
+        attempts += 1;
+        return attempts === 1
+          ? json({ retry_after: seconds }, 429)
+          : json([message(window.sinceMs + 1)]);
+      }
+      return undefined;
+    });
+    const pending = collect(context, config, window);
+    await vi.advanceTimersByTimeAsync(seconds * 1000 - 1);
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
+    expect(attempts).toBe(2);
+    expect(result.messages).toHaveLength(1);
+    expect(result.status.stats.apiCalls).toBe(context.requests.length);
+  });
 
   it("warns on missing channel access and collects accessible sibling channels without exposing tokens", async () => {
     const context = runtime((url) => {

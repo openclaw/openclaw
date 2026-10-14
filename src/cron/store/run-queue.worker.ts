@@ -11,7 +11,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { isJobEnabled } from "../service/jobs-scheduling.js";
+import { isJobEnabled, recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
@@ -36,6 +36,7 @@ import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
 } from "./runtime-authority-store.js";
+import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 
 const ownerStartTime = getFileLockProcessStartTime(process.pid);
 
@@ -152,6 +153,18 @@ function requestCronRunsInDatabase(
     const timed = parseCronScheduledRunId(request.receiptId);
     let reason: string | undefined;
     if (existing) {
+      if (existing.status !== "running" && job && timed && request.mode === "scheduled") {
+        if (timed.scheduledSlotMs === job.state.nextRunAtMs) {
+          recomputeJobNextRunAtMs({
+            state: { deps: { nowMs: () => input.nowMs, log: createCronMutationLogger([]) } },
+            job,
+            nowMs: input.nowMs,
+            deferredNotifications: [],
+            skipScheduleErrorHandling: true,
+          });
+          updateCronRuntimeRow(db, input.storeKey, job);
+        }
+      }
       reason = "already-requested";
     } else if (
       !job ||

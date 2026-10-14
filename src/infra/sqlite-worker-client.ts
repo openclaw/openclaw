@@ -65,7 +65,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
   isDraining: () => boolean;
   isAvailable: () => boolean;
   dispatch: (
-    payload: Buffer,
+    payload: Buffer<ArrayBuffer>,
     signal: AbortSignal | undefined,
     scope: OperationScope | undefined,
     assertCurrent: (() => void) | undefined,
@@ -91,7 +91,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
           toErrorObject(options.signal.reason, "SQLite worker operation canceled"),
         );
       }
-      let payload: Buffer;
+      let payload: Buffer<ArrayBuffer>;
       let requestClass: string;
       let assertCurrent: (() => void) | undefined;
       const admission = scope?.assertCurrent;
@@ -100,7 +100,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
       const inCaller = admission || createAdmission ? AsyncLocalStorage.snapshot() : undefined;
       try {
         const commandType = command.type;
-        requestClass = classifyWorkerRequest(commandType);
+        requestClass = classifyWorkerRequest(commandType, command.input);
         assertCurrent = admission && inCaller ? () => inCaller(admission, commandType) : undefined;
         assertCurrent?.();
         // The queued guard and wire command must observe the same captured type.

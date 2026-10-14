@@ -79,6 +79,7 @@ import type {
 import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
+import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import {
   createAgentTurnTimingTracker,
   resolveRunStartupPhase,
@@ -194,6 +195,7 @@ async function executeAgentTurnInternalLoop(
   let currentTurnImages: CurrentTurnImages;
   let modelPatch: Awaited<ReturnType<typeof createAgentPatchedSessionModelRunGuard>>;
   try {
+    await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
