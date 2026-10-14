@@ -82,7 +82,7 @@ function SignIn(props: { step: WizardStep }) {
         </div>
         <div class="wizard-step__waiting muted" role="status" aria-live="polite" aria-busy="true">
           <span class="wizard-step__spinner" aria-hidden="true" />
-          {t("modelSetup.waitingForApproval")}
+          {props.step.progressMessage ?? t("modelSetup.waitingForApproval")}
         </div>
         <Show when={code()?.expiresInMinutes}>
           <div class="muted">

@@ -120,6 +120,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   const status = container.querySelector('[role="status"][aria-busy="true"]');
   expect(status?.textContent).toContain("Waiting for approval in your browser");
   expect(status?.querySelector(".wizard-step__spinner")).not.toBeNull();
+  const code = container.querySelector("code");
   expect(container.querySelector("code")?.textContent).toBe("ABCD-1234");
   setState({
     phase: "step",
@@ -129,6 +130,9 @@ it("shows live sign-in activity and focuses the primary action as each step chan
       type: "progress",
       executor: "gateway",
       message: "Verifying access…",
+      progressMessage: "Verifying access…",
+      externalUrl: "https://example.com/sign-in",
+      deviceCode: { code: "ABCD-1234" },
     },
     busy: true,
     validationError: null,
@@ -136,6 +140,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   flush();
   expect(container.querySelectorAll(".wizard-step__spinner")).toHaveLength(1);
   expect(container.textContent).toContain("Verifying access…");
+  expect(container.querySelector("code")).toBe(code);
   setState({ phase: "done" });
   flush();
   const primary = container.querySelector<HTMLButtonElement>("[data-login-start-chat]")!;
