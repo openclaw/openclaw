@@ -93,39 +93,64 @@ describe("prompt cache history fingerprints", () => {
     });
   });
 
-  it.each([
-    ["block", false],
-    ["block", true],
-    ["string", false],
-    ["string", true],
-  ] as const)("detects mutated %s text (rebuilt wrapper=%s)", (kind, rebuildWrapper) => {
-    const sessionId = scopedKey(`mutated-${kind}`);
-    const block: TextContent = { type: "text", text: "original" };
-    const first: Message = { role: "user", content: "question", timestamp: 1 };
-    const message: Message =
-      kind === "string"
-        ? { role: "user", content: "original", timestamp: 2 }
-        : makeAgentAssistantMessage({ content: [block], timestamp: 2 });
-    beginOpenAIObservation({ sessionId, messages: [first, message] });
-    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
-    if (message.role === "user") {
-      message.content = "rewritten";
-    } else {
-      block.text = "rewritten";
-    }
-    const detail = `message 1 (${message.role}) differs from the previous request; history must be append-only; changed fields: ${kind === "string" ? "content" : "content[0].text"}`;
-    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-      expect(() =>
-        beginOpenAIObservation({
-          sessionId,
-          messages: [first, rebuildWrapper ? { ...message } : message],
-        }),
-      ).toThrow(detail);
+  it("does not rehash an unchanged history prefix when a request appends a message", () => {
+    const sessionId = scopedKey("incremental-prefix");
+    const messages: Message[] = Array.from({ length: 100 }, (_, timestamp) => ({
+      role: "user",
+      content: [{ type: "text", text: `Synthetic history ${timestamp}` }],
+      timestamp,
+    }));
+    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    beginOpenAIObservation({ sessionId, messages });
+    hashes.mockClear();
+    messages.push({ role: "user", content: "Next turn", timestamp: 100 });
+    expect(beginOpenAIObservation({ sessionId, messages })).toMatchObject({
+      prefixUnchanged: true,
+      changes: null,
     });
-    expect(
-      completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })?.changes,
-    ).toEqual([{ code: "historyRewrite", detail }]);
+    // Hash work grows with the new message, not the retained prefix.
+    expect(hashes.mock.calls.length).toBeLessThan(10);
   });
+
+  it.each([
+    ["block", false, "original", "rewritten"],
+    ["block", true, "original", "rewritten"],
+    ["string", false, "original", "rewritten"],
+    ["string", true, "original", "rewritten"],
+    ["block", false, "\ud800", "\ud801"],
+    ["string", false, "\ud800", "\ud801"],
+  ] as const)(
+    "detects mutated %s text (rebuilt wrapper=%s)",
+    (kind, rebuildWrapper, original, rewritten) => {
+      const sessionId = scopedKey(`mutated-${kind}`);
+      const block: TextContent = { type: "text", text: original };
+      const first: Message = { role: "user", content: "question", timestamp: 1 };
+      const message: Message =
+        kind === "string"
+          ? { role: "user", content: original, timestamp: 2 }
+          : makeAgentAssistantMessage({ content: [block], timestamp: 2 });
+      beginOpenAIObservation({ sessionId, messages: [first, message] });
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+      if (message.role === "user") {
+        message.content = rewritten;
+      } else {
+        block.text = rewritten;
+      }
+      const detail = `message 1 (${message.role}) differs from the previous request; history must be append-only; changed fields: ${kind === "string" ? "content" : "content[0].text"}`;
+      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+        expect(() =>
+          beginOpenAIObservation({
+            sessionId,
+            messages: [first, rebuildWrapper ? { ...message } : message],
+          }),
+        ).toThrow(detail);
+      });
+      expect(
+        completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })
+          ?.changes,
+      ).toEqual([{ code: "historyRewrite", detail }]);
+    },
+  );
 
   it("detects nested tool arguments mutated in place", () => {
     withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {

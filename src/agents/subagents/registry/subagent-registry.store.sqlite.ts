@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type ExpressionBuilder, type RawBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -20,7 +20,7 @@ import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
-function parentStoreColumns(db: DatabaseSync) {
+function parentStoreColumns(db: EngineConnection) {
   return hasParentStoreColumns(db)
     ? (["requester_store_path", "controller_store_path"] as const)
     : [

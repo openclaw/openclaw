@@ -1,4 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   hasPendingSqliteDatabaseSchemaMutation,
@@ -62,7 +63,7 @@ export function createStateSchemaAdmission<Value>(
     },
   };
   return {
-    get(database: DatabaseSync): Value | undefined {
+    get(database: EngineConnection): Value | undefined {
       if (hasPendingSqliteDatabaseSchemaMutation(database)) {
         return undefined;
       }
@@ -73,7 +74,10 @@ export function createStateSchemaAdmission<Value>(
       const schema = getAdmittedSqliteSchemaFacts(database);
       return admitted.admissionId === schema?.admissionId ? admitted.value : undefined;
     },
-    publish(database: DatabaseSync, value: Value): void {
+    publish(database: EngineConnection, value: Value): void {
+      if (isPostgresSqlConnection(database)) {
+        return;
+      }
       if (isSqliteSchemaAdmissionCold(database)) {
         admitSqliteSchema(database);
       }
@@ -104,9 +108,9 @@ const runtimeAdmission = createStateSchemaAdmission("state.runtime-schema", (val
 );
 
 type ConnectionVersion = { schema: SqliteSchemaFacts; facts: StateSchemaVersionFacts };
-const connectionVersions = new WeakMap<DatabaseSync, ConnectionVersion>();
+const connectionVersions = new WeakMap<EngineConnection, ConnectionVersion>();
 
-function rememberConnectionVersion(database: DatabaseSync, value?: ConnectionVersion): void {
+function rememberConnectionVersion(database: EngineConnection, value?: ConnectionVersion): void {
   const previous = connectionVersions.get(database);
   const install = (entry: ConnectionVersion | undefined) => {
     if (entry) {
@@ -132,7 +136,7 @@ function schemaVersionKey(
   return { name: `state.schema-version:${admissionId}`, read: versionKey.read };
 }
 
-export function getStateSchemaVersionAdmission(database: DatabaseSync) {
+export function getStateSchemaVersionAdmission(database: EngineConnection) {
   const schema = getAdmittedSqliteSchemaFacts(database);
   if (!schema) {
     return undefined;
@@ -159,7 +163,7 @@ export function getStateSchemaVersionAdmission(database: DatabaseSync) {
 
 /** A cold snapshot may discover historical facts without replacing a newer publication. */
 export function rememberStateSchemaVersionAdmission(
-  database: DatabaseSync,
+  database: EngineConnection,
   facts: StateSchemaVersionFacts,
 ): void {
   const schema = getAdmittedSqliteSchemaFacts(database);
@@ -176,7 +180,7 @@ export function rememberStateSchemaVersionAdmission(
 }
 
 export function publishStateSchemaVersionAdmission(
-  database: DatabaseSync,
+  database: EngineConnection,
   facts: StateSchemaVersionFacts,
 ): void {
   publishSqliteDatabaseAdmission(database, versionKey, facts);
@@ -190,12 +194,12 @@ export function publishStateSchemaVersionAdmission(
 }
 
 /** Runtime shape and integrity are physical-file facts, independent of live write authority. */
-export function getStateRuntimeSchemaAdmission(database: DatabaseSync) {
+export function getStateRuntimeSchemaAdmission(database: EngineConnection) {
   return runtimeAdmission.get(database);
 }
 
 export function publishStateRuntimeSchemaAdmission(
-  database: DatabaseSync,
+  database: EngineConnection,
   startupReady: boolean,
 ): void {
   runtimeAdmission.publish(database, { startupReady });

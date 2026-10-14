@@ -8,6 +8,7 @@ import {
   sqliteStringSet,
   sqliteStringSetEntries,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   assertPluginStateKey,
   createPluginStateError,
@@ -128,7 +129,7 @@ export function listPluginStateEntriesInKeyRange(
 }
 
 type PluginStateBatchParams = { pluginId: string; entriesJson: string; now: number };
-const pluginStateBatchQuery = createSqliteQueryCache((db) =>
+const pluginStateBatchQuery = createSqliteQueryCache((db: EngineConnection) =>
   prepareSqliteQuerySync<PluginStateBatchParams, PluginStateReadRow & { position: number }>(
     db,
     (parameter) =>

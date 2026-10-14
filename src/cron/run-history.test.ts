@@ -1,9 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cronQuietTriggerDetail, cronRunLogEntryToDetail } from "./run-history-detail.js";
 import { projectCronRunHistoryPage, type ReadCronRunHistoryPageOptions } from "./run-history.js";
@@ -23,7 +24,7 @@ import {
   type CronRunReceiptWriteSchema,
 } from "./store/run-receipt-write-admission.js";
 
-function pruneHistory(db: DatabaseSync, now: number, schema: CronRunReceiptWriteSchema) {
+function pruneHistory(db: EngineConnection, now: number, schema: CronRunReceiptWriteSchema) {
   const records = readCronRunRecordsInDatabase(db);
   const activeJobs = new Set(records.flatMap((row) => (row.jobId ? [row.jobId] : [])));
   const plan = planCronRunHistoryMaintenance(records, now, activeJobs);
@@ -178,8 +179,10 @@ it("retains history across worker reads, isolates stores, and recovers only an e
           }).finalized,
         ).toBeUndefined();
         // A late result cannot replace the first durable outcome for this exact run.
-        const reads = trackSqliteStatementExecutions(db, ["history"], (sql) =>
-          /^select\b/i.test(sql) && sql.includes('from "task_runs"') ? "history" : null,
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(db),
+          ["history"],
+          (sql) => (/^select\b/i.test(sql) && sql.includes('from "task_runs"') ? "history" : null),
         );
         try {
           recordCronRunInDatabase(db, {
@@ -523,9 +526,10 @@ it("normalizes native SQLite bigint timestamps without rounding unsafe values", 
           9007199254740992n,
           9007199254740992n,
         );
-        const prepare = db.prepare.bind(db);
+        const nativeDb = requireNativeSqliteDatabase(db);
+        const prepare = nativeDb.prepare.bind(nativeDb);
         // Exercise the native integer mode supported by the released row decoder.
-        const nativeBigInts = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+        const nativeBigInts = vi.spyOn(nativeDb, "prepare").mockImplementation((sql) => {
           const statement = prepare(sql);
           statement.setReadBigInts(true);
           return statement;

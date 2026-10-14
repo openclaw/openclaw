@@ -63,6 +63,10 @@ function activeSession(placementMove?: {
   target: { kind: "gateway" };
   updatedAtMs: number;
   error?: string;
+  retry?: {
+    expected: { generation: number; environmentId: string; ownerEpoch: number };
+    target: { kind: "gateway" };
+  };
 }) {
   return {
     key: "agent:main:placement-move",
@@ -767,11 +771,18 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: "Placement failure proof." }],
       methodResponses: {
         "sessions.list": chatSessionListResponse([
-          activeSession({
-            target: { kind: "gateway" },
-            updatedAtMs: 3,
-            error: "Destination device is offline.",
-          }),
+          {
+            ...activeSession({
+              target: { kind: "gateway" },
+              updatedAtMs: 3,
+              error: "Destination device is offline.",
+              retry: {
+                expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+                target: { kind: "gateway" },
+              },
+            }),
+            placement: { ...activeSession().placement, state: "draining", generation: 5 },
+          },
         ]),
       },
       sessionKey: "agent:main:placement-move",
@@ -781,7 +792,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await page.getByRole("button", { name: "Move failed" }).click();
       await page.getByText("Destination device is offline.", { exact: true }).waitFor();
-      await page.getByText("Move session…", { exact: true }).waitFor();
+      await page.getByText("Retry move", { exact: true }).waitFor();
       await capture(page, "05-error.png");
     } finally {
       await suite.closeBrowserContext(context);
