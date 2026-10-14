@@ -78,13 +78,17 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
       "/opt/openclaw/dist/index.js",
       "gateway",
     ];
+    const fixtureValue = "first line \nsecond 'quoted' \\cash$\nthird line";
     await stageLaunchAgent({
       env,
       stdout: new PassThrough(),
       programArguments,
-      environment: { FIXTURE: "retained" },
+      environment: { FIXTURE: fixtureValue },
     });
     const plistPath = resolveLaunchAgentPlistPath(env);
+    await expect(readLaunchAgentProgramArgumentsFromFile(plistPath)).resolves.toMatchObject({
+      environment: { FIXTURE: fixtureValue },
+    });
     await rewriteLaunchAgentPlistForRestart({ env, label, plistPath });
     const plist = await fs.readFile(plistPath, "utf8");
     const array =
@@ -101,7 +105,20 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
         ...resolveLaunchAgentEnvironmentReadOptions(env, label),
         requireEffective: true,
       }),
-    ).toMatchObject({ programArguments, environment: { FIXTURE: "retained" } });
+    ).toMatchObject({ programArguments, environment: { FIXTURE: fixtureValue } });
+    const sourced = spawnSync(
+      "/bin/sh",
+      [
+        resolveLaunchAgentEnvWrapperPath(env, label),
+        resolveLaunchAgentEnvFilePath(env, label),
+        "/bin/sh",
+        "-c",
+        'printf "%s" "$FIXTURE"',
+      ],
+      { encoding: "utf8" },
+    );
+    expect(sourced.status).toBe(0);
+    expect(sourced.stdout).toBe(fixtureValue);
   });
 
   it("executes the installed env wrapper only with its generated readable environment", async () => {

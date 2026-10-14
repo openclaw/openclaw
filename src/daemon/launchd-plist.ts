@@ -46,6 +46,18 @@ function parseGeneratedEnvValue(value: string): string {
   return trimmed.slice(1, -1).replaceAll("'\\''", "'");
 }
 
+function hasOpenSingleQuote(value: string): boolean {
+  let quoted = false;
+  for (let index = 0; index < value.length; index++) {
+    if (value[index] === "\\" && !quoted) {
+      index++;
+    } else if (value[index] === "'") {
+      quoted = !quoted;
+    }
+  }
+  return quoted;
+}
+
 function resolveSiblingGeneratedEnvFilePath(
   envFilePath: string,
   options?: ReadLaunchAgentProgramArgumentsOptions,
@@ -154,7 +166,7 @@ async function readLaunchAgentEnvironmentFile(
   const lines = content.split("\n");
   for (let index = 0; index < lines.length; index++) {
     const rawLine = lines[index] ?? "";
-    const line = options?.requireEffective ? rawLine.trimStart() : rawLine.trim();
+    const line = rawLine.trimStart();
     if (!line.trim() || line.startsWith("#")) {
       continue;
     }
@@ -169,6 +181,12 @@ async function readLaunchAgentEnvironmentFile(
     let value = match[2];
     if (!key || value === undefined) {
       continue;
+    }
+    if (!options?.requireEffective && value.startsWith("'")) {
+      // Generated shell literals can span lines; an unquoted expression cannot consume the next key.
+      while (hasOpenSingleQuote(value) && index + 1 < lines.length) {
+        value += `\n${lines[++index]}`;
+      }
     }
     let parsedValue = parseGeneratedEnvValue(value);
     if (options?.requireEffective) {
