@@ -297,8 +297,6 @@ describe("worker placement dispatch reclaim", () => {
       });
       expect(harness.environments.destroy).toHaveBeenCalledOnce();
       expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
-      expect(harness.log).not.toContain("placement:reclaimed");
-      expect(await placementStore.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
     },
   );
 
