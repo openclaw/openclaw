@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { globSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   gatewayMethodsTestExclude,
@@ -95,6 +96,14 @@ const bunCompatibleWholeOwners = new Map<
   { dir: string; include: readonly string[]; exclude: readonly string[] }
 >([
   [agentVitestProjectOwners.support.config, agentVitestProjectOwners.support],
+  [
+    "test/vitest/vitest.commands.config.ts",
+    {
+      dir: "src/commands",
+      include: ["src/commands/**/*.test.ts"],
+      exclude: [...commandsLightTestFiles, ...databaseWorkerCoreTestFiles],
+    },
+  ],
   [
     gatewayMethodsConfig,
     { dir: ".", include: gatewayMethodsTestInclude, exclude: gatewayMethodsTestExclude },
@@ -234,17 +243,6 @@ const bunCompatibleScopedOwners = new Map([
         "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
         "src/cli/update-cli/update-command-lease.test.ts",
         "src/cli/update-cli/update-command-migrated.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.commands.config.ts",
-    {
-      dir: "src/commands",
-      files: [
-        "src/commands/doctor-config-preflight.process.test.ts",
-        "src/commands/doctor-lint.native-capture.test.ts",
-        "src/commands/doctor-tools-md-migration.test.ts",
       ],
     },
   ],

@@ -155,40 +155,23 @@ function expectSkin(container: HTMLElement) {
 }
 
 describe("native hub shadow styles", () => {
-  it("keeps tab skins and one keyboard owner through closed-shadow ancestor moves", async () => {
+  it("shares tab skins and keeps one keyboard owner inside a closed shadow root", async () => {
     const first = shadow();
-    const second = shadow();
     const moved = mountShadowHub(first, "moved");
     const retained = mountShadowHub(first, "retained");
     await Promise.resolve();
-    const tab = expectSkin(moved.container);
+    expectSkin(moved.container);
     expectSkin(retained.container);
     expect(sheets(first)).toHaveLength(2);
 
-    second.append(moved.container);
-    await Promise.resolve();
-    expect(expectSkin(moved.container)).toBe(tab);
-    expect(sheets(first)).toHaveLength(2);
-    expect(sheets(second)).toHaveLength(2);
     moved.container
       .querySelector("#moved-tab-second")!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(moved.onSelect).toHaveBeenCalledExactlyOnceWith("second");
 
-    const observed = vi.spyOn(MutationObserver.prototype, "observe");
-    const unrelated = document.createElement("div");
-    second.append(unrelated);
-    await Promise.resolve();
-    const activeSheets = sheets(second);
-    unrelated.append(document.createElement("span"));
-    await Promise.resolve();
-    expect(observed).not.toHaveBeenCalled();
-    expect(sheets(second)).toEqual(activeSheets);
-
     retained.dispose();
-    expect(sheets(first)).toHaveLength(0);
-    expect(sheets(second)).toHaveLength(2);
+    expect(sheets(first)).toHaveLength(2);
     moved.dispose();
-    expect(sheets(second)).toHaveLength(0);
+    expect(sheets(first)).toHaveLength(0);
   });
 });

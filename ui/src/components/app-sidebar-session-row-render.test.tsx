@@ -51,7 +51,8 @@ const emptySnapshot: SidebarSnapshotModel = {
   onlineCounts: [],
   peopleSortMode: "presence",
   peopleStatusFilter: "all",
-  onlineExpanded: false,
+  peoplePresenceFilter: "online",
+  offlineUsers: [],
   ownerId: null,
   involvingMe: false,
   footer: null,
@@ -108,12 +109,10 @@ it("paints the restored roster and workspace in the first sidebar update", async
   await host.updateComplete;
 
   expect(host.querySelector('aside[data-snapshot-state="cached"]')).not.toBeNull();
-  const roster = host.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-    "openclaw-sidebar-agent-roster",
+  expect(host.querySelector("openclaw-sidebar-agent-roster")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(host.querySelector('[data-agent-group="main"]')?.textContent).toContain("Harbor"),
   );
-  expect(roster).not.toBeNull();
-  await roster!.updateComplete;
-  expect(host.querySelector('[data-agent-group="main"]')?.textContent).toContain("Harbor");
   expect(host.querySelector('[data-avatar="⚓"]')).not.toBeNull();
 });
 
@@ -299,7 +298,7 @@ it("keeps the rendered preview slot after caching without restoring live run aut
   ).toHaveLength(0);
 });
 
-it("keeps a pre-hello Online expansion after releasing the cached sidebar", () => {
+it("keeps Users visible despite a cached legacy collapse preference", () => {
   const { host, container } = createHost();
   host.sidebarAgentsMode = "chip";
   host.restoreSidebarSnapshot({
@@ -309,16 +308,9 @@ it("keeps a pre-hello Online expansion after releasing the cached sidebar", () =
   });
   host.sessionData.presencePayload = { presence: [{ ts: 1, user: { id: "ada", name: "Ada" } }] };
   const update = mountObservedHost(host, container, renderAppSidebarOnline);
-  const toggle = container.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")!;
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(container.querySelector(".sidebar-online__list")).toBeNull();
-  toggle.click();
-  update();
-  expect(toggle.getAttribute("aria-expanded")).toBe("true");
   expect(container.querySelector(".sidebar-online__person-name")?.textContent).toBe("Ada");
   host.releaseSidebarSnapshot();
   update();
-  expect(toggle.getAttribute("aria-expanded")).toBe("true");
   expect(container.querySelector(".sidebar-online__person-name")?.textContent).toBe("Ada");
 });
 
@@ -327,7 +319,8 @@ it("shows unavailable counts after a failed live summary instead of retaining sa
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
     mode: "roster",
-    onlineExpanded: true,
+    peoplePresenceFilter: "online",
+    offlineUsers: [],
     onlineUsers: [
       { id: "ada", name: "Ada", identity: { type: "profile", id: "ada" }, watchedSessions: [] },
     ],
@@ -443,58 +436,4 @@ it("updates a pinned session's resolved avatar without replacing its row", () =>
 
   expect(container.querySelector("[data-pinned-avatar]")?.textContent).toBe("Ada");
   expect(container.querySelector(".sidebar-recent-session")).toBe(row);
-});
-
-it("keeps Online facepiles idle until presence or time-sensitive ordering changes", async () => {
-  vi.useFakeTimers();
-  const now = 1_800_000_000_000;
-  vi.setSystemTime(now);
-  const { host, container } = createHost();
-  const presence = ["ada", "zoe"].map((id) => ({
-    ts: now,
-    user: { id, identity: { type: "profile" as const, id }, name: id },
-    lastActivityAt: id === "ada" ? now - 119_999 : now,
-  }));
-  host.sessionData.presencePayload = { presence };
-  const [revision, setRevision] = createSignal(0);
-  const observedHost = new Proxy(host, {
-    get(target, key, receiver) {
-      revision();
-      return Reflect.get(target, key, receiver);
-    },
-  });
-  mountSolid(() => renderAppSidebarOnline(observedHost), { container });
-  const update = () => {
-    setRevision((value) => value + 1);
-    flush();
-  };
-  update();
-  const facepile = container.querySelector("openclaw-viewer-facepile")!;
-  await facepile.updateComplete;
-  const updates: MutationRecord[] = [];
-  const observer = new MutationObserver((records) => updates.push(...records));
-  observer.observe(facepile, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-    characterData: true,
-  });
-  onTestFinished(() => observer.disconnect());
-
-  update();
-  await facepile.updateComplete;
-  expect(updates).toHaveLength(0);
-
-  vi.setSystemTime(now + 2);
-  update();
-  await facepile.updateComplete;
-  expect(updates.length).toBeGreaterThan(0);
-  updates.length = 0;
-  expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("zoe, ada");
-
-  host.sessionData.presencePayload = { presence: presence.slice(0, 1) };
-  update();
-  await facepile.updateComplete;
-  expect(updates.length).toBeGreaterThan(0);
-  expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("ada");
 });

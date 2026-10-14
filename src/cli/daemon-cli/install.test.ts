@@ -161,7 +161,7 @@ describe("runDaemonInstall", () => {
           const probe = nodeProbeOutput("26.8.1");
           runExecMock.mockResolvedValue({
             ...probe,
-            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.0" }),
+            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.3" }),
           });
         }
         installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {

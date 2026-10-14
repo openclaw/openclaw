@@ -434,40 +434,41 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected refreshSwarmRoster(): void {
     const context = this.context;
-    let retry = false;
-    void context.connectionBootstrap
-      .run(
-        this,
-        async () => {
-          if (this.context === context) {
-            retry = await this.hydrateSwarmRoster();
-          }
-        },
-        { background: true },
+    // Load before admission so mounting cannot retire the state captured by a held import.
+    void import("../../lib/sessions/swarm-roster.ts")
+      .then((swarm) =>
+        context.connectionBootstrap.run(
+          this,
+          async () => {
+            if (this.context === context) {
+              this.hydrateSwarmRoster(swarm);
+            }
+          },
+          { background: true },
+        ),
       )
-      .then(() => {
-        if (retry && this.context === context && this.presented && this.isConnected) {
-          this.refreshSwarmRoster();
-        }
-      });
+      .catch(() => undefined);
   }
 
-  private async hydrateSwarmRoster(): Promise<boolean> {
+  private hydrateSwarmRoster({
+    isSwarmEnabledInConfig,
+    SwarmRosterHydrator,
+  }: typeof import("../../lib/sessions/swarm-roster.ts")): void {
     const state = this.state;
     const context = this.context;
     if (!state || !this.presented || !this.isConnected) {
-      return false;
+      return;
     }
     const target = this.resolveChatReadTarget();
     if (!target) {
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
-      return false;
+      return;
     }
     const { sessionKey: parentKey, agentId } = target;
     const client = state.client;
     if (!client) {
-      return false;
+      return;
     }
     const sourceEpoch = state.connectionEpoch;
     const isCurrent = () =>
@@ -479,58 +480,47 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       state.connectionEpoch === sourceEpoch &&
       parentKey === this.resolveChatReadTarget()?.sessionKey &&
       agentId === this.resolveChatReadTarget()?.agentId;
-    let retry = false;
-    await import("../../lib/sessions/swarm-roster.ts").then(
-      ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
-        if (!isCurrent()) {
-          // The latest target must pass admission again after this import's task settles.
-          retry = true;
-          return;
-        }
-        const swarmEnabled = isSwarmEnabledInConfig(
-          context.runtimeConfig ? currentDisplayConfig(context.runtimeConfig.state) : null,
-          agentId,
-        );
-        if (this.swarmEnabled !== swarmEnabled) {
-          this.swarmEnabled = swarmEnabled;
+    const swarmEnabled = isSwarmEnabledInConfig(
+      context.runtimeConfig ? currentDisplayConfig(context.runtimeConfig.state) : null,
+      agentId,
+    );
+    if (this.swarmEnabled !== swarmEnabled) {
+      this.swarmEnabled = swarmEnabled;
+      requestChatPageUpdate(state, "animation-frame");
+    }
+    // The child roster also owns ordinary subagent waits, launch rows, and
+    // attention. Disabling swarm must not hide those recorded outcomes.
+    if (!state.connected) {
+      if (this.swarmHydrator) {
+        this.swarmHydrator.dispose();
+        this.swarmHydrator = null;
+        requestChatPageUpdate(state, "animation-frame");
+      }
+      return;
+    }
+    this.swarmHydrator ??= new SwarmRosterHydrator();
+    this.swarmHydrator.update({
+      sessions: context.sessions,
+      parentKey,
+      agentId,
+      sourceEpoch,
+      readParent: (refresh) =>
+        context.sessions
+          .describe(
+            {
+              key: parentKey,
+              ...(parseAgentSessionKey(parentKey) ? {} : { agentId }),
+            },
+            { client, refresh },
+          )
+          .then((result) => result.session ?? null),
+      currentRows: () => (isCurrent() ? (state.sessionsResult?.sessions ?? []) : []),
+      onRows: () => {
+        if (isCurrent()) {
           requestChatPageUpdate(state, "animation-frame");
         }
-        // The child roster also owns ordinary subagent waits, launch rows, and
-        // attention. Disabling swarm must not hide those recorded outcomes.
-        if (!state.connected) {
-          if (this.swarmHydrator) {
-            this.swarmHydrator.dispose();
-            this.swarmHydrator = null;
-            requestChatPageUpdate(state, "animation-frame");
-          }
-          return;
-        }
-        this.swarmHydrator ??= new SwarmRosterHydrator();
-        this.swarmHydrator.update({
-          sessions: context.sessions,
-          parentKey,
-          agentId,
-          sourceEpoch,
-          readParent: (refresh) =>
-            context.sessions
-              .describe(
-                {
-                  key: parentKey,
-                  ...(parseAgentSessionKey(parentKey) ? {} : { agentId }),
-                },
-                { client, refresh },
-              )
-              .then((result) => result.session ?? null),
-          currentRows: () => (isCurrent() ? (state.sessionsResult?.sessions ?? []) : []),
-          onRows: () => {
-            if (isCurrent()) {
-              requestChatPageUpdate(state, "animation-frame");
-            }
-          },
-        });
       },
-    );
-    return retry;
+    });
   }
 
   protected resolveBoardView(): ResolvedBoardView {
