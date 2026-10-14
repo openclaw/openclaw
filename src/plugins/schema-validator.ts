@@ -158,6 +158,8 @@ function checkSchemaWithCurrentFormats(
  */
 export type JsonSchemaValidationError = {
   path: string;
+  /** Exact property segments; display paths can collapse literal dots or slashes. */
+  valuePath?: readonly string[];
   message: string;
   text: string;
   additionalProperty?: string;
@@ -174,10 +176,8 @@ export function parseJsonSchemaIssuePath(
   return path.split(".").map((segment) => parseConfigPathArrayIndex(segment) ?? segment);
 }
 
-function normalizeErrorPath(instancePath: string | undefined): string {
-  const path = Pointer.Indices(instancePath ?? "")
-    .join(".")
-    .replace(/\//g, ".");
+function normalizeErrorPath(valuePath: readonly string[]): string {
+  const path = valuePath.join(".").replace(/\//g, ".");
   return path || "<root>";
 }
 
@@ -282,8 +282,9 @@ function formatValidationErrors(
     const missingProperties = resolveMissingProperties(error);
     const allowedValuesSummary = getAllowedValuesSummary(error);
     const additionalProperty = resolveAdditionalProperty(error);
+    const baseValuePath = Pointer.Indices(error.instancePath ?? "");
+    const basePath = normalizeErrorPath(baseValuePath);
     return (missingProperties.length ? missingProperties : [undefined]).map((missingProperty) => {
-      const basePath = normalizeErrorPath(error.instancePath);
       const path =
         missingProperty === undefined ? basePath : appendPathSegment(basePath, missingProperty);
       const baseMessage =
@@ -297,6 +298,8 @@ function formatValidationErrors(
       const safeMessage = sanitizeTerminalText(message);
       const formattedError: JsonSchemaValidationError = {
         path,
+        valuePath:
+          missingProperty === undefined ? baseValuePath : [...baseValuePath, missingProperty],
         message,
         text: `${safePath}: ${safeMessage}`,
       };
