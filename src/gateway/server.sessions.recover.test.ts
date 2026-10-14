@@ -996,7 +996,7 @@ test("sessions.recover rejects continuation launch after runtime authority close
         status: "rejected",
         error: {
           code: "INVALID_REQUEST",
-          message: "TypeError: agent runtime authority is no longer active",
+          message: "agent runtime authority is no longer active",
         },
       },
     },
