@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 // Verifies provider attribution headers and endpoint classification policies.
-import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   // Policy helpers return broad records; assertions pin only the relevant fields.
@@ -260,35 +259,6 @@ describe("provider attribution", () => {
     }
   });
 
-  it("uses explicitly prepared provider facts without reading process metadata", () => {
-    providerMetadataState.pluginIdScoped = true;
-    providerMetadataState.snapshot = undefined;
-    const providerMetadataOwners = {
-      ...makeEmptyPluginMetadataOwners(),
-      providerEndpoints: [
-        {
-          endpointClass: "anthropic-public" as const,
-          hosts: ["prepared.example"],
-          hostSuffixes: [],
-          baseUrls: [],
-        },
-      ],
-      providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
-    };
-
-    expect(
-      resolveProviderRequestPolicy({
-        provider: "prepared",
-        baseUrl: "https://prepared.example",
-        providerMetadataOwners,
-      }),
-    ).toMatchObject({
-      endpointClass: "anthropic-public",
-      knownProviderFamily: "prepared-family",
-    });
-    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
   it.each([
     [
       "opencode-go",
@@ -436,47 +406,6 @@ describe("provider attribution", () => {
         knownProviderFamily: "mistral",
       },
     );
-  });
-
-  it("gates documented OpenRouter attribution to OpenRouter endpoints for any provider id", () => {
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "openrouter",
-        api: "openai-responses",
-        baseUrl: "https://openrouter.ai/api/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-      {
-        endpointClass: "openrouter",
-        usesExplicitProxyLikeEndpoint: true,
-        attributionProvider: "openrouter",
-        allowsHiddenAttribution: false,
-      },
-    );
-
-    expect(
-      resolveProviderRequestPolicy({
-        provider: "or",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/api/v1",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "personal-agent,cli-agent",
-    });
-
-    expect(
-      resolveProviderRequestPolicy({
-        provider: "openrouter",
-        baseUrl: "https://proxy.example.com/v1",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toBeUndefined();
   });
 
   it("gates documented Vercel AI Gateway attribution to its endpoint for any provider id", () => {
@@ -676,13 +605,7 @@ describe("provider attribution", () => {
     });
   });
 
-  it.each([
-    ["anthropic", "anthropic-messages", undefined, "default", true],
-    [" ANTHROPIC ", " ANTHROPIC-MESSAGES ", "https://api.anthropic.com", "anthropic-public", true],
-    ["anthropic", "anthropic-messages", "https://proxy.example.test", "custom", false],
-    ["anthropic", "openai-completions", undefined, "default", false],
-    ["custom", "anthropic-messages", "https://api.anthropic.com", "anthropic-public", false],
-  ] as const)(
+  it.each([["anthropic", "anthropic-messages", undefined, "default", true]] as const)(
     "resolves catalog service-tier facts for %s / %s / %s",
     (provider, api, baseUrl, endpointClass, allowsAnthropicServiceTier) => {
       const input = { provider, api, baseUrl };

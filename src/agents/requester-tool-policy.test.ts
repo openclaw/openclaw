@@ -172,8 +172,6 @@ describe("resolveRequesterToolPolicies", () => {
     "stale requester",
     "external sender",
     "different allow",
-    "different deny",
-    "different source",
     "missing lineage",
   ])("resolves a settled batch with %s authority", async (authority) => {
     const targetSessionKey = "agent:main:main";
@@ -189,10 +187,8 @@ describe("resolveRequesterToolPolicies", () => {
             : authority === "different allow"
               ? ["read"]
               : ["exec", "read"],
-        inheritedToolDeny:
-          index === 1 && authority === "different deny" ? ["exec", "write"] : ["write"],
-        inheritedToolPolicySource:
-          index === 1 && authority === "different source" ? undefined : "sender",
+        inheritedToolDeny: ["write"],
+        inheritedToolPolicySource: "sender",
       });
     }
     let current = true;

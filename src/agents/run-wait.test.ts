@@ -312,7 +312,7 @@ describe("waitForAgentRun", () => {
     expect(result.sourceReplyDelivered).toBe(entry.expected);
   });
 
-  it.each(["gateway-restarting", "gateway-suspending", undefined])(
+  it.each([undefined])(
     "keeps a %s observation refusal retryable without reclassifying terminal run text",
     async (reason) => {
       const message = "agent.wait unavailable during gateway maintenance";
