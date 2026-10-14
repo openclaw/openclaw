@@ -107,12 +107,14 @@ function stripIdentityValueDecoration(value: string): string {
   let cleaned = value.trim();
   for (;;) {
     const paired = cleaned.match(/^(\*{1,2}|_{1,2}|`+)([\s\S]+)\1$/u);
-    if (!paired) {
+    const marker = paired?.[1];
+    const inner = paired?.[2];
+    if (!marker || inner === undefined) {
       return cleaned;
     }
-    cleaned = paired[2].trim();
+    cleaned = inner.trim();
     // Code spans preserve their contents, including literal emphasis markers.
-    if (paired[1].startsWith("`")) {
+    if (marker.startsWith("`")) {
       return cleaned;
     }
   }
