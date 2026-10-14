@@ -63,7 +63,9 @@ describe("skill payload normalization", () => {
 
   it("keeps non-skill multiline policies and outer payload trimming unchanged", () => {
     const cases = [
-      ["/side first\n\n    second", "/btw first"],
+      ["/side first\n\n    second", "/btw first\n\n    second"],
+      ["/btw\nwhy does this fail?", "/btw\nwhy does this fail?"],
+      ["/loop 10m check:\n- CI\n- deploy", "/loop 10m check:\n- CI\n- deploy"],
       ["/id\n\n    ignored", "/whoami"],
       ["/reset soft\n\n    re-read\tpersona files", "/reset soft re-read persona files"],
       ["/learn first\n\n    second", "/learn first\nsecond"],
