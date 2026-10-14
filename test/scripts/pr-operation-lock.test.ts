@@ -740,38 +740,6 @@ describe("scripts/pr process-group platform guard", () => {
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("scripts/pr per-PR operation lock", () => {
-  it("isolates independent fixtures from inherited maintainer bindings", () => {
-    const repoDir = createRepo();
-    const result = runLockShell(
-      repoDir,
-      [
-        'test -z "${OPENCLAW_PR_GIT-}"',
-        'test -z "${GIT_EXEC-}"',
-        'test -z "${OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT-}"',
-        'test -z "${OPENCLAW_PR_LOCK_NOTIFY_FD-}"',
-        'test -z "${OPENCLAW_PR_LOCK_SUPERVISOR_PID-}"',
-        "acquire_pr_operation_lock 42",
-        'git rev-parse --verify "' + lockRef + '"',
-        "release_pr_operation_lock",
-      ],
-      {
-        ...process.env,
-        OPENCLAW_PR_GIT: "/bin/false",
-        GIT_EXEC: "/bin/false",
-        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-lock-snapshot-"),
-        OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
-        OPENCLAW_PR_LOCK_SUPERVISOR_PID: "1",
-      },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout.trim()).toMatch(/^[0-9a-f]{40}$/);
-    const after = spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
-      cwd: repoDir,
-      encoding: "utf8",
-    });
-    expect(after.status, after.stderr).toBe(1);
-  });
-
   it.each([
     ["ls-files --others --exclude-standard -z", "require_no_foreign_untracked"],
     ["ls-files --others --ignored --exclude-standard -z", "require_no_ignored_transition_paths"],

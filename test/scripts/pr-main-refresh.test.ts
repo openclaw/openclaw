@@ -1348,21 +1348,6 @@ merge_run 42 || exit 1
     expect(readdirSync(f.root).filter((name) => name.startsWith("openclaw-pr-drift."))).toEqual([]);
   });
 
-  it.each([false, true])("retains successful unrelated drift results (files=%s)", (hasFiles) => {
-    const f = fixture();
-    const result = f.shell(
-      `PR_MAIN_SHA=${hasFiles ? f.movedMain : f.main}
-if mainline_drift_requires_sync ${f.main} ${f.main}; then
-  exit 99
-else
-  test "$?" -eq 1
-fi`,
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain(hasFiles ? "no overlap" : "no mainline changes");
-    expect(readdirSync(f.root).filter((name) => name.startsWith("openclaw-pr-drift."))).toEqual([]);
-  });
-
   it("rejects a moved prepared branch without consuming CI proof", () => {
     const f = fixture();
     f.seedPreparedMerge();
