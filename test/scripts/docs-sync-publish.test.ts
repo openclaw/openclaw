@@ -480,9 +480,7 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
           .filter((page): page is string => typeof page === "string")
           .slice(0, 1)
           .map((page) => `sv/${page}`),
-        ...entry.pages
-          .filter((page): page is NavGroup => typeof page !== "string")
-          .map(group),
+        ...entry.pages.filter((page): page is NavGroup => typeof page !== "string").map(group),
       ],
     });
     const overlay = JSON.parse(fs.readFileSync("docs/.i18n/sv-navigation.json", "utf8"));

@@ -68,7 +68,6 @@ the source of truth for this mapping.
 | `pl`                | `docs/pl/`       | `pl-navigation.json`                    | `glossary.pl.json`    | `pl.tm.jsonl`    | clone-en |
 | `th`                | `docs/th/`       | `th-navigation.json` (not present)      | `glossary.th.json`    | `th.tm.jsonl`    | clone-en |
 | `ru`                | `docs/ru/`       | `ru-navigation.json` (not present)      | `glossary.ru.json`    | `ru.tm.jsonl`    | clone-en |
-
 | `sv`                | `docs/sv/`       | `sv-navigation.json`                    | `glossary.sv.json`    | `sv.tm.jsonl`    | overlay  |
 
 Only three locales differ between the two code families: `zh-Hans`/`zh-CN`,
