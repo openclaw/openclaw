@@ -399,10 +399,11 @@ async function run(
     if (
       error instanceof WorkerTaskError &&
       isRecord(error.cause) &&
-      error.cause.code === "ERR_WORKER_OUT_OF_MEMORY"
+      (error.cause.code === "ERR_WORKER_OUT_OF_MEMORY" ||
+        error.cause.code === "ERR_CODE_MODE_GC_THRASH")
     ) {
       return failure(
-        `Code Mode worker exhausted its ${Math.floor(pool.memoryLimitBytes / (1024 * 1024))} MiB JavaScript heap. Paginate or narrow tool results and avoid retaining large arrays. Inspect any completed actions before retrying.`,
+        `${error.cause.code === "ERR_CODE_MODE_GC_THRASH" ? "Code Mode worker stopped after sustained garbage collection near its JavaScript heap limit" : `Code Mode worker exhausted its ${Math.floor(pool.memoryLimitBytes / (1024 * 1024))} MiB JavaScript heap`}. Paginate or narrow tool results and avoid retaining large arrays. Inspect any completed actions before retrying.`,
         "runtime_unavailable",
       );
     }

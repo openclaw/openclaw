@@ -58,7 +58,7 @@ function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> 
 }
 
 describe("Node Code Mode executor", () => {
-  it("reports heap exhaustion after dispatch with the native cause and recovers", async () => {
+  it("reports heap exhaustion, recovers, and bounds captured output below the heap limit", async () => {
     // Vitest runs inside a Worker whose inherited heap flags can override resourceLimits.
     // A standalone process exercises native OOM without changing the test runner's V8 flags.
     const probe = `
@@ -90,7 +90,35 @@ describe("Node Code Mode executor", () => {
         const recovered = await host.run(() => nodeCodeModeExecutor.execute({
           kind: "exec", config, catalog: [], namespaces: [], source: "return 42",
         }, { timeoutMs: 7000 }));
-        console.log(JSON.stringify({ result, recovered, boundaries, failure }));
+        const boundedOutput = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [],
+          source: 'for (let i = 0; i < 20000; i++) json({ i, value: "x".repeat(4096) }); return 42;',
+        }, { timeoutMs: 7000 }));
+        registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url).href)}));
+        const lowPressure = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config: { ...config, memoryLimitBytes: 128 * 1024 * 1024 }, catalog: [], namespaces: [],
+          source: 'const until = Date.now() + 1100; while (Date.now() < until) { collectGarbage(); await yield_control(); } return 1;',
+        }, { timeoutMs: 7000, inlineHost: {
+          onBoundary: async (boundary, context) => ({
+            kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
+            settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
+          }),
+        } }));
+        const pressureStarted = performance.now();
+        const pressure = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config: { ...config, timeoutMs: 10000, memoryLimitBytes: 128 * 1024 * 1024 }, catalog: [], namespaces: [],
+          source: 'const data = []; while (heapStatistics().used_heap_size < heapStatistics().heap_size_limit * 0.87) data.push(new Array(131072).fill(1)); for (;;) { collectGarbage(); await yield_control(); }',
+        }, { timeoutMs: 10000, inlineHost: {
+          onBoundary: async (boundary, context) => ({
+            kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
+            settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
+          }),
+        } }));
+        const pressureMs = performance.now() - pressureStarted;
+        const afterPressure = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [], source: "return 7",
+        }, { timeoutMs: 7000 }));
+        console.log(JSON.stringify({ result, recovered, boundedOutput, boundaries, failure, pressure, pressureEndedQuickly: pressureMs < 5000, afterPressure, lowPressure }));
       } finally {
         await host.close();
         await scheduler.stop();
@@ -105,10 +133,20 @@ describe("Node Code Mode executor", () => {
         "-e",
         probe,
       ],
-      { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 20_000 },
+      { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 25_000 },
     );
     const observed: unknown = JSON.parse(stdout);
     expect(observed).toMatchObject({
+      lowPressure: { status: "completed", value: { json: "1" } },
+      pressureEndedQuickly: true,
+      pressure: {
+        status: "failed",
+        code: "runtime_unavailable",
+        error: expect.stringContaining(
+          "sustained garbage collection near its JavaScript heap limit",
+        ),
+      },
+      afterPressure: { status: "completed", value: { json: "7" } },
       boundaries: 1,
       result: {
         status: "failed",
@@ -121,6 +159,11 @@ describe("Node Code Mode executor", () => {
         workerId: expect.stringMatching(/^code-mode-node:/),
       },
       recovered: { status: "completed", value: { json: "42" } },
+      boundedOutput: {
+        status: "completed",
+        value: { json: "42" },
+        output: { count: 20000, source: { kind: "prefix" } },
+      },
     });
     expect(observed).toMatchObject({
       result: { error: expect.stringContaining("Inspect any completed actions before retrying") },
