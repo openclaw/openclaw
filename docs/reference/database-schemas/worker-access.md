@@ -155,6 +155,11 @@ Replacement files also require new admission; migration and repair owners publis
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
 
+Reopening an agent's host compatibility handle reuses its retained worker's
+preparation. Closing that handle alone does not request another worker schema
+admission; committed in-process DDL invalidates the physical owner's schema facts
+and triggers readmission when needed.
+
 The SQLite worker broker also retains the canonical database and owner-lock paths
 captured at open. Ordinary operations reuse those paths while still checking live
 ownership; they do not resolve filesystem aliases again. Repointing an alias does

@@ -14,6 +14,7 @@ export function trackJsdomResources(): JsdomResourceTracking | undefined {
   }
   const ownerDocument = document;
   const ownerWindow = window;
+  const eventTargetPrototype = ownerWindow.EventTarget.prototype;
   const listeners: [EventTarget, string, EventListenerOrEventListenerObject, boolean][] = [];
   const observers = new Set<MutationObserver>();
   const forgetListener = (
@@ -37,10 +38,10 @@ export function trackJsdomResources(): JsdomResourceTracking | undefined {
   };
   // Native methods are captured once and always invoked with their original target.
   // oxlint-disable-next-line typescript/unbound-method -- called with the native EventTarget as this.
-  const add = EventTarget.prototype.addEventListener;
+  const add = eventTargetPrototype.addEventListener;
   // oxlint-disable-next-line typescript/unbound-method -- called with the native EventTarget as this.
-  const remove = EventTarget.prototype.removeEventListener;
-  EventTarget.prototype.addEventListener = function (type, callback, options) {
+  const remove = eventTargetPrototype.removeEventListener;
+  eventTargetPrototype.addEventListener = function (type, callback, options) {
     // Only these targets survive body replacement. Avoid a stack capture for
     // the ordinary short-lived element listeners in every rendered view.
     if (
@@ -61,7 +62,7 @@ export function trackJsdomResources(): JsdomResourceTracking | undefined {
     }
     return add.call(this, type, callback, options);
   };
-  EventTarget.prototype.removeEventListener = function (type, callback, options) {
+  eventTargetPrototype.removeEventListener = function (type, callback, options) {
     forgetListener(this, type, callback, options);
     return remove.call(this, type, callback, options);
   };
