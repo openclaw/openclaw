@@ -68,13 +68,12 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       }
       params.hostCapabilities.assertActive();
       params.abortSignal?.throwIfAborted();
-      if (
-        params.sandbox ||
-        params.requireWorkspaceOnly ||
-        params.pluginHarnessToolPolicyRestricted
-      ) {
+      // Core admits a restricted tool policy only after native-runtime consent
+      // (assertPluginHarnessConversationToolPolicySupport). Muse exposes no
+      // OpenClaw tools, so a consented restriction has nothing left to filter.
+      if (params.sandbox || params.requireWorkspaceOnly) {
         throw museRefusal(
-          "Muse cannot enforce this OpenClaw sandbox or tool policy. Select the openclaw runtime for this session.",
+          "Muse cannot enforce this OpenClaw sandbox or workspace-only policy. Select the openclaw runtime for this session.",
         );
       }
       if (params.thinkLevel === "adaptive") {

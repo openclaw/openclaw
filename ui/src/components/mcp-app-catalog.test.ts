@@ -95,12 +95,14 @@ describe("app launch catalog", () => {
     expect(request.mock.calls).toHaveLength(discover ? 1 : 0);
   });
 
-  it("shares pending discovery and refreshes after it settles", async () => {
+  it("shares discovery and retains focused entries through refresh before remounting", async () => {
     const current = createDeferred<McpAppDiscoverResult>();
+    const refreshed = createDeferred<McpAppDiscoverResult>();
     const remounted = createDeferred<McpAppDiscoverResult>();
     const request = vi
       .fn()
       .mockReturnValueOnce(current.promise)
+      .mockReturnValueOnce(refreshed.promise)
       .mockReturnValueOnce(remounted.promise);
     const { context, events } = discoveryContext(request);
     const sidebar = document.createElement("openclaw-mcp-app-catalog");
@@ -126,7 +128,19 @@ describe("app launch catalog", () => {
       listener(event);
     }
     expect(request).toHaveBeenCalledOnce();
-    current.resolve({ servers: [{ ...result.servers[0]!, mentionTool: "search" }] });
+    const server = {
+      ...result.servers[0]!,
+      mentionTool: "search",
+      entrypoints: result.servers[0]!.entrypoints.flatMap((entry) => [
+        entry,
+        {
+          ...entry,
+          title: `${entry.title} alternate`,
+          resourceUri: `${entry.resourceUri}-alternate`,
+        },
+      ]),
+    };
+    current.resolve({ servers: [server] });
     await current.promise;
     for (const element of elements) {
       await element.updateComplete;
@@ -135,11 +149,67 @@ describe("app launch catalog", () => {
     expect(thread.querySelector("button")).not.toBeNull();
     expect(resources.querySelector("button")).not.toBeNull();
 
+    thread.querySelector<HTMLButtonElement>("button")!.click();
+    await waitForSolid(() =>
+      expect(thread.querySelectorAll(".mcp-app-catalog__entry > button")).toHaveLength(2),
+    );
+    const sidebarEntry = sidebar.querySelectorAll<HTMLButtonElement>("button")[1]!;
+    const threadEntry = thread.querySelectorAll<HTMLButtonElement>(
+      ".mcp-app-catalog__entry > button",
+    )[1]!;
+    sidebarEntry.focus();
+    for (const listener of events) {
+      listener(event);
+    }
+    await waitForSolid(() => {
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(sidebar.querySelectorAll("button")[1]).toBe(sidebarEntry);
+      expect(document.activeElement).toBe(sidebarEntry);
+      expect(thread.querySelectorAll(".mcp-app-catalog__entry > button")[1]).toBe(threadEntry);
+    });
+    refreshed.resolve({
+      servers: [
+        {
+          ...server,
+          label: "Updated parts plugin",
+          entrypoints: server.entrypoints.map((entry) =>
+            Object.assign({}, entry, {
+              title: `Updated ${entry.title}`,
+              resourceUri: `${entry.resourceUri}-updated`,
+            }),
+          ),
+        },
+      ],
+    });
+    await refreshed.promise;
+    await waitForSolid(() => {
+      expect(sidebar.querySelectorAll("button")).toHaveLength(2);
+      expect(sidebar.querySelectorAll("button")[1]).toBe(sidebarEntry);
+      expect(document.activeElement).toBe(sidebarEntry);
+      expect(sidebarEntry.textContent).toBe("Updated Library alternate");
+      expect(sidebarEntry.title).toBe("Updated parts plugin");
+      expect(thread.querySelectorAll(".mcp-app-catalog__entry > button")).toHaveLength(2);
+      expect(thread.querySelectorAll(".mcp-app-catalog__entry > button")[1]).toBe(threadEntry);
+      expect(threadEntry.textContent).toContain("Updated Parts tray alternate");
+    });
+    const launch = vi.fn((launchEvent: Event) => launchEvent.preventDefault());
+    thread.addEventListener(MCP_APP_OPEN_EVENT, launch);
+    threadEntry.click();
+    expect(launch).toHaveBeenCalledOnce();
+    expect(launch.mock.calls[0]![0]).toMatchObject({
+      detail: {
+        entrypoint: {
+          title: "Updated Parts tray alternate",
+          resourceUri: "ui://parts/tray-alternate-updated",
+        },
+      },
+    });
+
     sidebar.remove();
     await Promise.resolve();
     appendElement(sidebar);
     await sidebar.updateComplete;
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     remounted.resolve({ servers: [] });
     await remounted.promise;
     await sidebar.updateComplete;

@@ -533,7 +533,7 @@ describe("AppSidebar viewer presence", () => {
     expect(sidebar.querySelector(".sidebar-online__list")).not.toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(5);
     expect(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections")).toBe(
-      JSON.stringify([]),
+      JSON.stringify(["online"]),
     );
     await selectSidebarView(sidebar, "sessions");
     expect(sidebar.querySelector(".sidebar-online")).toBeNull();

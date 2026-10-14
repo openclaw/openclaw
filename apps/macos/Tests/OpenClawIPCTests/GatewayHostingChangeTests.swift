@@ -55,6 +55,32 @@ struct GatewayHostingChangeTests {
         }
     }
 
+    @Test func `bundled repair retains inline service settings with selected runtime facts`() {
+        let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/new-runtime"))
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "repair-proof"])
+        let environment = GatewayProcessManager.appHostedEnvironment(
+            runtime: runtime, profile: profile,
+            processEnvironment: ["FIXTURE_SETTING": "process-value"],
+            retainedEnvironment: ["FIXTURE_SETTING": "retained-value"],
+            searchPaths: ["/usr/bin"],
+            capturedServiceEnvironment: [
+                "FIXTURE_SETTING": "service-value",
+                "FIXTURE_API_KEY": "synthetic-service-key",
+                "HTTPS_PROXY": "http://fixture.invalid:8080",
+                "PATH": "/fixture/service/bin",
+                "OPENCLAW_SQLITE_LIBRARY": "/fixture/old/libsqlite3.dylib",
+                "OPENCLAW_STATE_DIR": "/fixture/old-state",
+            ])
+        #expect(environment["FIXTURE_SETTING"] == "service-value")
+        #expect(environment["FIXTURE_API_KEY"] == "synthetic-service-key")
+        #expect(environment["HTTPS_PROXY"] == "http://fixture.invalid:8080")
+        #expect(environment["PATH"]?.contains("/fixture/service/bin") == true)
+        #expect(environment["OPENCLAW_SQLITE_LIBRARY"] == runtime.sqliteLibrary.path)
+        #expect(environment["OPENCLAW_STATE_DIR"] == profile.stateDirectoryURL().path)
+        #expect(environment["OPENCLAW_CONFIG_PATH"] == profile.stateDirectoryURL()
+            .appendingPathComponent("openclaw.json").path)
+    }
+
     @Test(arguments: [true, false])
     func `retired Dashboard authority prevents the first hosting effect`(duringPreparation: Bool) async {
         let fixture = Fixture()
@@ -98,6 +124,33 @@ struct GatewayHostingChangeTests {
             try await GatewayProcessManager.changeHosting(operations: operations)
         }
         #expect(fixture.calls.suffix(2) == ["restore-app", "health-app"])
+    }
+
+    @Test(arguments: [
+        (
+            #"{"status":"error","failureFacts":[{"check":"openclaw doctor","code":"doctor-processes-unsettled","message":"Keep the Gateway stopped"}]}"#,
+            true),
+        ("invalid classified result", true),
+        (#"{"status":"ok","maintenanceRefusal":{"kind":"deferred","reason":"agent-database-in-use"}}"#, false),
+    ])
+    func `Doctor settlement governs predecessor restoration after repair`(payload: String, keepStopped: Bool) async {
+        let fixture = Fixture(previous: .service)
+        var operations = fixture.operations
+        let replace = operations.replace
+        operations.replace = { admit in
+            _ = try await replace(admit)
+            let response = ShellExecutor.ShellResult(
+                stdout: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH=\(payload)\n",
+                stderr: "", exitCode: 1, timedOut: false, success: false,
+                errorMessage: nil, preflightError: nil)
+            _ = try CLIInstaller.bundledDoctorDiagnostics(response)
+            return true
+        }
+        await #expect(throws: (any Error).self) {
+            try await GatewayProcessManager.changeHosting(operations: operations)
+        }
+        let initial = ["prepare", "stop-service", "install-app"]
+        #expect(fixture.calls == initial + (keepStopped ? [] : ["stop-app", "restore-service", "health-service"]))
     }
 
     @Test func `CLI custody refusal ends the hosting change without recovery`() async {

@@ -33,12 +33,6 @@ import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 
 registerModelControlsEnglish();
 
-export function openChatPaneModelPicker(state: ChatPageHost): void {
-  state.chatModelPickerOpenSessionKey = state.sessionKey;
-  void refreshChatModelCatalogOnDemand(state);
-  state.requestUpdate?.();
-}
-
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
 type SessionActionCallbacks = Pick<ChatProps, "onAbort" | "onForkMessage" | "onRewindMessage">;

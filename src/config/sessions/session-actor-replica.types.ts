@@ -22,9 +22,7 @@ export type ReplicaCell = {
   entry?: SessionActorEntryFacts;
   transcript?: SessionActorTranscriptReplica;
   generation?: string;
-  reservation: number;
   handles: number;
-  pending: number;
   bytes: number;
 };
 export type ReplicaPool = {

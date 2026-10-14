@@ -116,16 +116,8 @@ export function Typography(
                     maxlength={100}
                     spellcheck="false"
                     value={terminalFontFamily()}
-                    onInput={(
-                      event: Event & {
-                        currentTarget: HTMLInputElement;
-                      },
-                    ) => event.currentTarget.setCustomValidity("")}
-                    onChange={(
-                      event: Event & {
-                        currentTarget: HTMLInputElement;
-                      },
-                    ) => {
+                    onInput={(event) => event.currentTarget.setCustomValidity("")}
+                    onChange={(event) => {
                       const input = event.currentTarget;
                       const family = normalizeTerminalFontFamily(input.value);
                       if (input.value.trim() && !family) {
