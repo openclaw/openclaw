@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  CRABBOX_NONBLOCKING_CAPTURE_VERSION,
+  isCrabboxVersionAtLeast,
+} from "./crabbox-managed-binary.js";
 import { leaseRunArgs } from "./crabbox-worker-command.js";
 import {
   resolveCrabboxWarmImageProfileKey,
@@ -205,8 +209,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
             return;
           }
         }
-        const [major = 0, minor = 0, patch = 0] =
-          context.cliVersion?.split(/[.+-]/u).map(Number) ?? [];
         const nonBlocking = Boolean(
           context.provider === "aws" &&
           !context.teardown &&
@@ -214,9 +216,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
           owner.purpose !== "reserve" &&
           !existing.image &&
           !existing.previous &&
-          (major > 0 ||
-            minor > 78 ||
-            (minor === 78 && (patch > 0 || !context.cliVersion?.split("+")[0]?.includes("-")))),
+          isCrabboxVersionAtLeast(context.cliVersion ?? "", CRABBOX_NONBLOCKING_CAPTURE_VERSION),
         );
         const now = Date.now();
         assertCurrent(context);
