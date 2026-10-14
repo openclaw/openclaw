@@ -31,6 +31,7 @@ interface BrowserPanelStreamHost extends StreamState {
     "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
   readonly observedViewportSize: { width: number; height: number } | null;
+  forgetViewportResize(): void;
   setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
   syncUrlDraft(url: string): void;
   clearUnavailableView(): boolean;
@@ -249,6 +250,8 @@ export class BrowserPanelStream {
 
   private async resume(recovery: Recovery): Promise<void> {
     if (await this.ensure(recovery.targetId, recovery.client, recovery.epoch)) {
+      // A reconnected stream may come from a restarted browser that dropped the panel size.
+      this.host.forgetViewportResize();
       return;
     }
     // A failed reconnect must not discard a fallback screenshot that is still in flight.
