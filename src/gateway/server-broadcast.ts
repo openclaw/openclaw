@@ -74,14 +74,11 @@ function serializeFrameField(
 ): string | EncodedMessagePayload {
   // The projection owns a fresh envelope; encode its large fields separately.
   // SAFETY: serializeSession certifies a fresh, mutable record envelope.
-  const shareSession =
-    serializeSession !== undefined &&
-    !("toJSON" in (value as object)) &&
-    !("toJSON" in Object.prototype);
-  // SAFETY: the same projection contract owns this record during synchronous encoding.
-  const projected = shareSession ? (value as Record<string, unknown>) : undefined;
-  const sessionJSON = shareSession ? serializeSession() : undefined;
-  const messageBytes = shareSession ? serializeMessage?.() : undefined;
+  const envelope = serializeSession ? (value as Record<string, unknown>) : undefined;
+  const projected =
+    envelope && !("toJSON" in envelope) && !("toJSON" in Object.prototype) ? envelope : undefined;
+  const sessionJSON = projected ? serializeSession?.() : undefined;
+  const messageBytes = projected ? serializeMessage?.() : undefined;
   const session = projected?.session;
   const message = projected?.message;
   if (projected) {
@@ -101,7 +98,7 @@ function serializeFrameField(
       }
     }
   }
-  if (shareSession) {
+  if (projected) {
     const separator = fieldJSON.endsWith("{}}") ? "" : ",";
     const prefix = `,${fieldJSON.slice(1, -2)}${separator}`;
     const suffix = `"session":${sessionJSON}}`;
