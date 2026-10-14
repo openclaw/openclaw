@@ -120,7 +120,7 @@ function configureDelegatedBrowserProvider(
   });
   return fixture;
 }
-async function invokeCreate(options: GatewayRequestHandlerOptions) {
+async function invokeCreate(options: GatewayRequestHandlerOptions, retainRequestAuthority = false) {
   setRuntimeConfigSnapshot(options.context.getRuntimeConfig());
   using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const admission = await resolveSessionMutationAuthorizationAsync({
@@ -134,7 +134,12 @@ async function invokeCreate(options: GatewayRequestHandlerOptions) {
     return;
   }
   try {
-    await createTalkClient({ ...options, sessionMutationAuthorization: admission.authorization });
+    const handlerOptions = { ...options, sessionMutationAuthorization: admission.authorization };
+    await createTalkClient(
+      retainRequestAuthority
+        ? bindGatewayRequestHandlerMutationAuthority(options, handlerOptions, undefined)
+        : handlerOptions,
+    );
   } finally {
     admission.authorization?.release?.();
   }
@@ -537,13 +542,14 @@ describe("voice creation authority", () => {
     expect(clientVoiceSessionTesting.readRecord("main", replacementId)?.status).toBe("open");
   });
 
-  it.each(
-    ["same-store", "custom-store", "incognito"].flatMap((kind) =>
-      [false, true].map((revoked) => ({ kind, revoked })),
+  it.each([
+    ...["same-store", "custom-store", "incognito"].flatMap((kind) =>
+      [false, true].map((revoked) => ({ kind, revoked, authority: "compatibility" })),
     ),
-  )(
-    "creates a $kind replacement without cold reads in write grants (revoked=$revoked)",
-    async ({ kind, revoked }) => {
+    { kind: "custom-store", revoked: false, authority: "worker" },
+  ])(
+    "creates a $kind replacement without cold reads in write grants (revoked=$revoked, authority=$authority)",
+    async ({ kind, revoked, authority }) => {
       const createBrowserSession = vi.fn(async (request: BrowserRequest) => ({
         ...browserSession,
         voice: request.voice ?? "cove",
@@ -572,13 +578,44 @@ describe("voice creation authority", () => {
         { fallbackEntry: seedEntry, replaceEntry: true, skipMaintenance: true },
       );
       const respond = vi.fn();
-      const create = (voiceChangeId?: string) =>
-        invokeCreate({
-          params: { sessionKey: key, capabilities: ["voice-selection"], voiceChangeId },
-          respond,
-          context: fixture.context,
-          client: fixture.client,
-        } as never);
+      const workerClient =
+        authority === "worker"
+          ? makeClient(fixture.client.connId, "operator", ["operator.admin"]).client
+          : undefined;
+      const client = workerClient ?? fixture.client;
+      fixture.clients.clear();
+      fixture.clients.add(client);
+      using deviceAuthority =
+        authority === "worker"
+          ? (() => {
+              const lifetime = captureGatewayDeviceRevocation(fixture.context, {}, () => true);
+              return { ...lifetime, [Symbol.dispose]: lifetime.release };
+            })()
+          : undefined;
+      const generation = new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: undefined,
+      });
+      const bindAuthority = (options: GatewayRequestHandlerOptions) => {
+        if (deviceAuthority && workerClient) {
+          options.hasCurrentClientAuthority = deviceAuthority.isCurrent;
+          bindWebSocketRequestMutationAuthority(options, workerClient, generation.reader);
+        }
+        return options;
+      };
+      const create = async (voiceChangeId?: string) => {
+        await invokeCreate(
+          bindAuthority({
+            req: { type: "req", id: "voice-create", method: "talk.client.create" },
+            params: { sessionKey: key, capabilities: ["voice-selection"], voiceChangeId },
+            respond,
+            context: fixture.context,
+            client,
+            isWebchatConnect: () => false,
+          } as never),
+          authority === "worker",
+        );
+      };
       await create();
       expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(true);
       ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;
@@ -594,14 +631,16 @@ describe("voice creation authority", () => {
       const changed = vi.fn();
       const waitForVoiceChange = observeTalkVoiceChangeRequest(fixture.context.broadcastToConnIds);
       const change = Promise.resolve(
-        talkVoiceHandlers["talk.voice.set"]!({
-          req: { type: "req", id: "change", method: "talk.voice.set", params: {} },
-          params: { voiceSessionId: ownedVoiceSessionId, voice: "ember" },
-          respond: changed,
-          context: fixture.context,
-          client: fixture.client,
-          isWebchatConnect: () => false,
-        } as never),
+        talkVoiceHandlers["talk.voice.set"]!(
+          bindAuthority({
+            req: { type: "req", id: "change", method: "talk.voice.set", params: {} },
+            params: { voiceSessionId: ownedVoiceSessionId, voice: "ember" },
+            respond: changed,
+            context: fixture.context,
+            client,
+            isWebchatConnect: () => false,
+          } as never),
+        ),
       );
       await waitForVoiceChange(change);
       const changeId = fixture.context.broadcastToConnIds.mock.calls.find(
