@@ -1,5 +1,4 @@
 import { logWarn } from "../../../logger.js";
-import { matchesSubagentRequesterSession } from "../registry/subagent-registry-queries.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
@@ -214,6 +213,7 @@ export function resolveRequesterSettlePolicy(
   requesterYielded: boolean,
   state: RequesterSettleWakeBatchState,
   requester: { sessionId: string; lifecycleRevision?: string },
+  completionRowsMatchRequester: boolean,
 ) {
   // One private result makes the aggregate private; public siblings keep their own route.
   const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
@@ -224,9 +224,7 @@ export function resolveRequesterSettlePolicy(
   // Retained public history keeps its existing admission; it cannot mint a new
   // own-session alternative from a later reread of the requester key.
   const bindRequester =
-    hasPrivateRows ||
-    (completionRows.length > 0 &&
-      completionRows.every((entry) => matchesSubagentRequesterSession(entry, requester)));
+    hasPrivateRows || (completionRows.length > 0 && completionRowsMatchRequester);
   const requesterBinding = {
     ...(parentOnly ? { completionTarget: "parent" as const } : {}),
     ...(bindRequester

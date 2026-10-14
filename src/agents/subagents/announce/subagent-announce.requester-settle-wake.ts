@@ -425,6 +425,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       lifecycleRevision: requesterEntry.lifecycleRevision,
     };
     const completionRows = currentCompletionRows(settledBatch);
+    const recoveryRows = completionRows.filter((entry) =>
+      matchesSubagentRequesterSession(entry, requesterIdentity),
+    );
     // Delivered children remain in yield cohorts; the admitted marker owns whether
     // the requester may deliver its final under the conversation's reply policy.
     const { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker } =
@@ -433,6 +436,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         requesterYieldedAfterDelivery,
         selectedState,
         requesterIdentity,
+        recoveryRows.length === completionRows.length,
       );
     // `/new` keeps the session id but rotates the lifecycle revision, so compare the
     // whole incarnation; a deliverable retry must not post old findings into a reset session.
@@ -447,9 +451,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       });
       return false;
     }
-    const recoveryRows = completionRows.filter((entry) =>
-      matchesSubagentRequesterSession(entry, requesterIdentity),
-    );
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
       : await readChildCompletionFindings(completionRows);
