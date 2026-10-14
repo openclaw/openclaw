@@ -78,9 +78,15 @@ export async function runGatewaySuspend(
       );
       const port = options.rpcOpts.localPortOverride;
       const command = `openclaw gateway resume ${latest.suspensionId}`;
-      deps.runtime.log(
-        `Resume with: ${formatCliCommand(port === undefined ? command : `${command} --port ${port}`)}`,
-      );
+      if (options.rpcOpts.url?.trim()) {
+        deps.runtime.log(
+          `To resume this remote Gateway, run ${formatCliCommand(command)} with the same --url and authentication options used for suspend.`,
+        );
+      } else {
+        deps.runtime.log(
+          `Resume with: ${formatCliCommand(port === undefined ? command : `${command} --port ${port}`)}`,
+        );
+      }
       return;
     }
     if (latest.status === "draining") {

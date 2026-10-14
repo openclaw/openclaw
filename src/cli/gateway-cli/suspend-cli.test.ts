@@ -47,7 +47,11 @@ function mockClock(advance = (delayMs: number) => delayMs) {
 it("prints a ready lease without exposing remote credentials in the resume hint", async () => {
   vi.stubEnv("OPENCLAW_PROFILE", "work");
   vi.stubEnv("OPENCLAW_CONTAINER_HINT", "demo");
-  const rpcOpts = { url: "wss://r.test", token: "secret", localPortOverride: 18999 };
+  const rpcOpts = {
+    url: "wss://url-user:url-password@gateway.example:19444/private?token=url-secret",
+    token: "opaque-credential",
+    localPortOverride: 18999,
+  };
 
   await suspend({ rpcOpts, waitSeconds: 0 });
 
@@ -59,8 +63,35 @@ it("prints a ready lease without exposing remote credentials in the resume hint"
     `Expires: 2026-08-11T12:00:00.000Z (${readyResult.expiresAtMs} ms)`,
   );
   expect(runtime.log).toHaveBeenCalledWith(
-    "Resume with: openclaw --container demo gateway resume suspension-1 --port 18999",
+    "To resume this remote Gateway, run openclaw --container demo gateway resume suspension-1 with the same --url and authentication options used for suspend.",
   );
+  const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+  expect(output).not.toContain(rpcOpts.url);
+  expect(output).not.toContain(rpcOpts.token);
+  expect(output).not.toContain("url-secret");
+  expect(output).not.toContain("Resume with:");
+});
+
+it.each([
+  {
+    name: "named profile and custom local port",
+    profile: "work",
+    container: "",
+    command: "openclaw --profile work gateway resume suspension-1 --port 18999",
+  },
+  {
+    name: "container takes precedence over profile",
+    profile: "work",
+    container: "demo",
+    command: "openclaw --container demo gateway resume suspension-1 --port 18999",
+  },
+])("prints a correctly scoped resume hint for $name", async ({ profile, container, command }) => {
+  vi.stubEnv("OPENCLAW_PROFILE", profile);
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
+
+  await suspend({ rpcOpts: { localPortOverride: 18999 } });
+
+  expect(runtime.log).toHaveBeenCalledWith(`Resume with: ${command}`);
 });
 
 it("rejects whitespace-only wait before acquiring a lease", async () => {
