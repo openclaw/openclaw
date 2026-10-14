@@ -193,6 +193,97 @@ describe("Git checkout execution", () => {
     },
   );
 
+  it.each([false, true])(
+    "fetches only the selected source before candidate admission (shallow: %s)",
+    async (shallow) => {
+      if (shallow) {
+        await git(root, "fetch", "--depth=1", "origin");
+      }
+      const target = await advanceRemote();
+      await git(remote, "checkout", "-b", "unrelated", beforeSha);
+      await fs.writeFile(path.join(remote, "unrelated.txt"), "unrelated branch content");
+      await git(remote, "add", ".");
+      await git(remote, "commit", "-m", "unrelated remote work");
+      const unrelated = await git(remote, "rev-parse", "HEAD:unrelated.txt");
+      const config = await fs.readFile(path.join(root, ".git", "config"));
+      const resultRoots: string[] = [];
+      const execute = runCommand;
+      runCommand = (argv, options) => {
+        const inspection = argv.find((arg) => arg.startsWith("--git-dir="));
+        if (inspection) {
+          resultRoots.push(inspection.slice("--git-dir=".length));
+        }
+        return execute(argv, options);
+      };
+      const result = await update({
+        inspectGitTarget: async () => {
+          const inspection = resultRoots.at(-1)!;
+          const object = await runCommandWithTimeout(
+            ["git", "--no-lazy-fetch", "--git-dir=" + inspection, "cat-file", "-e", unrelated],
+            { timeoutMs: 5000 },
+          );
+          expect(object.code).not.toBe(0);
+        },
+      });
+      expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+      await expectRuntime(root, target);
+    },
+  );
+
+  it("refuses an option-shaped upstream before downloading unrelated branches", async () => {
+    await advanceRemote();
+    await git(remote, "checkout", "-b", "unrelated", beforeSha);
+    await fs.writeFile(path.join(remote, "unrelated.txt"), "unrelated branch content");
+    await git(remote, "add", ".");
+    await git(remote, "commit", "-m", "unrelated remote work");
+    const unrelated = await git(remote, "rev-parse", "HEAD:unrelated.txt");
+    await git(root, "config", "branch.main.merge", "--no-tags");
+    const config = await fs.readFile(path.join(root, ".git", "config"));
+    const observations: { code: number | null; stdout: string }[] = [];
+    const execute = runCommand;
+    runCommand = async (argv, options) => {
+      const result = await execute(argv, options);
+      const inspection = argv.find((arg) => arg.startsWith("--git-dir="));
+      if (inspection && argv.includes("fetch")) {
+        const object = await runCommandWithTimeout(
+          [
+            "git",
+            "--no-lazy-fetch",
+            inspection,
+            "cat-file",
+            "--batch-check=%(objectname) %(objecttype)",
+          ],
+          { timeoutMs: 5000, input: unrelated + "\n" },
+        );
+        observations.push({ code: object.code, stdout: object.stdout.trim() });
+      }
+      return result;
+    };
+    const result = await update();
+    expect(observations).toEqual([{ code: 0, stdout: unrelated + " missing" }]);
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(
+      result.steps.find((step) => step.name === "git-target-inspection-fetch")?.stderrTail,
+    ).toContain("--no-tags");
+    expect(stopped).toBe(false);
+    expect(events).toEqual([]);
+    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+    await expectRuntime(root, beforeSha);
+  });
+
+  it("does not admit cached tracking data excluded from the source fetch", async () => {
+    await advanceRemote();
+    await git(root, "config", "--add", "remote.origin.fetch", "^refs/heads/main");
+    const config = await fs.readFile(path.join(root, ".git", "config"));
+    const result = await update();
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(stopped).toBe(false);
+    expect(events).toEqual([]);
+    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+    await expectRuntime(root, beforeSha);
+  });
+
   it("fails before activation when the authoritative remote is unavailable", async () => {
     await advanceRemote();
     await git(root, "remote", "add", "secondary", remote);

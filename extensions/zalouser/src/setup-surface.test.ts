@@ -60,7 +60,7 @@ describe("zalouser setup wizard", () => {
   function createQuickstartPrompter(params?: {
     note?: ReturnType<typeof createTestWizardPrompter>["note"];
     seen?: string[];
-    dmPolicy?: "pairing" | "allowlist";
+    dmPolicy?: "pairing" | "allowlist" | "open";
     groupAccess?: boolean;
     groupPolicy?: "allowlist";
     textByMessage?: Record<string, string>;
@@ -328,35 +328,44 @@ describe("zalouser setup wizard", () => {
     ],
   });
 
-  it("shows the account-scoped current DM policy in quickstart notes", async () => {
-    const note = vi.fn(async (_message: string, _title?: string) => {});
-    const prompter = createQuickstartPrompter({ note, dmPolicy: "pairing" });
+  it.each(["pairing", "open"] as const)(
+    "sets %s policy on the quickstart account",
+    async (policy) => {
+      const note = vi.fn(async (_message: string, _title?: string) => {});
+      const prompter = createQuickstartPrompter({ note, dmPolicy: policy });
 
-    await runSetupWizardConfigure({
-      configure: zalouserConfigure,
-      cfg: {
-        channels: {
-          zalouser: {
-            dmPolicy: "disabled",
-            accounts: {
-              work: {
-                profile: "work",
-                dmPolicy: "allowlist",
-                allowFrom: ["123456789"],
+      const result = await runSetupWizardConfigure({
+        configure: zalouserConfigure,
+        cfg: {
+          channels: {
+            zalouser: {
+              dmPolicy: "disabled",
+              accounts: {
+                default: { profile: "default", dmPolicy: "disabled" },
+                work: {
+                  profile: "work",
+                  dmPolicy: "allowlist",
+                  allowFrom: ["123456789"],
+                },
               },
             },
           },
-        },
-      } as OpenClawConfig,
-      prompter,
-      options: { quickstartDefaults: true },
-      accountOverrides: { zalouser: "work" },
-    });
+        } as OpenClawConfig,
+        prompter,
+        options: { quickstartDefaults: true },
+        accountOverrides: { zalouser: "work" },
+      });
 
-    expect(
-      note.mock.calls.some(([message]) =>
-        message.includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
-      ),
-    ).toBe(true);
-  });
+      expect(
+        note.mock.calls.some(([message]) =>
+          message.includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
+        ),
+      ).toBe(true);
+      expect(result.cfg.channels?.zalouser?.accounts?.default?.dmPolicy).toBe("disabled");
+      expect(result.cfg.channels?.zalouser?.accounts?.work).toMatchObject({
+        dmPolicy: policy,
+        allowFrom: policy === "open" ? ["123456789", "*"] : ["123456789"],
+      });
+    },
+  );
 });

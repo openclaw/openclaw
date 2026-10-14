@@ -1,22 +1,15 @@
 /** Runtime auth reads compose worker-prepared facts through the store's captured host scope. */
 import path from "node:path";
-import { isMainThread } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
-import {
-  getActiveOpenClawStateDatabaseReadSnapshot,
-  isArtifactPreservingStateRead,
-} from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import type { ExternalCliOverlayOptions } from "./external-auth.js";
-import { readAuthProfileDatabaseIdentity } from "./file-state.js";
 import {
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
@@ -35,12 +28,10 @@ import type {
 import { readAuthProfileStoreInWorker } from "./runtime-read.worker.js";
 import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
 import { createEmptyAuthProfileStore } from "./runtime-snapshot-owner.js";
-import { runtimeAuthProfileRowsCache } from "./runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
   prepareAgentAuthProfileRowsRead,
-  readAuthProfileRowsAtPath,
   readSharedAuthProfileRows,
   readUserModelAuthProfileAsync,
 } from "./sqlite-read.js";
@@ -181,11 +172,6 @@ export function createAuthProfileStoreRuntimeReader({
       getScopedAuthProfileEnv() ?? suppliedEnv ?? process.env,
     );
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    const trackPersistedRows =
-      isMainThread &&
-      !isArtifactPreservingStateRead() &&
-      !getOpenClawDatabaseMaintenanceScope() &&
-      !getActiveOpenClawStateDatabaseReadSnapshot({ env });
     const selectedDir = resolveRuntimeAuthProfileAgentDir(agentDir);
     const effectiveAgentDir = selectedDir
       ? path.dirname(resolveAgentAuthPath(selectedDir))
@@ -315,19 +301,7 @@ export function createAuthProfileStoreRuntimeReader({
         requestOptions.deferScopedMigrationRefusals,
       );
       const candidates = resolveLegacyAuthProfileSourceCandidates({ agentDir: ownerAgentDir, env });
-      if (trackPersistedRows) {
-        readAuthProfileDatabaseIdentity(databasePath);
-      }
-      const preparedReader =
-        rowReaders.get(databasePath) ??
-        (trackPersistedRows
-          ? runtimeAuthProfileRowsCache.prepare(
-              databasePath,
-              reader,
-              () => readAuthProfileRowsAtPath(databasePath, env),
-              !scope.isolated,
-            )
-          : reader);
+      const preparedReader = rowReaders.get(databasePath) ?? reader;
       rowReaders.set(databasePath, preparedReader);
       const capturedAuthority = credentialAuthorities.get(databasePath);
       if (capturedAuthority && !capturedAuthority.ok) {
@@ -591,7 +565,7 @@ export function createAuthProfileStoreRuntimeReader({
     return withPreparedAuthProfileStoreReads(agentDir, options, undefined, env);
   }
 
-  /** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Retained until an announced stable removal window. */
+  /** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Supported through 2026-12-31. */
   function loadAuthProfileStoreForRuntime(
     agentDir?: string,
     options?: LoadAuthProfileStoreOptions,

@@ -20,15 +20,21 @@ import {
 } from "./doctor.js";
 
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
+const CRABBOX_SETUP_SECRETS_CHECK_ID = "crabbox/setup-secrets";
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 const listPluginStateEntries: CrabboxDoctorRegistrationHost["listPluginStateEntries"] = <T>(
   options: OpenKeyedStoreOptions,
 ) => crabboxState.openKeyedStore<T>(options).entries();
 
-function captureCrabboxDoctorCheck(id = CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID): HealthCheck {
+function captureCrabboxDoctorCheck(
+  id = CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
+  inspectSetupSecrets: CrabboxDoctorRegistrationHost["inspectSetupSecrets"] = async (names) =>
+    names.map((name) => ({ name, status: "missing" })),
+): HealthCheck {
   const checks = new Map<string, HealthCheck>();
   registerCrabboxWorkerProviderDoctorChecks({
     openclawRoot: OPENCLAW_ROOT,
+    inspectSetupSecrets,
     listPluginStateEntries,
     getHealthCheck: (key) => checks.get(key),
     registerHealthCheck(value) {
@@ -315,4 +321,109 @@ describe("Crabbox warm-image doctor", () => {
       expect(probe).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("Crabbox setup secret migration", () => {
+  const context = (settings: Record<string, unknown>): HealthRepairContext => ({
+    cfg: { cloudWorkers: { profiles: { worker: { provider: "crabbox", settings } } } },
+    mode: "fix",
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  });
+  const ready: CrabboxDoctorRegistrationHost["inspectSetupSecrets"] = async (names) =>
+    names.map((name) => ({ name, status: "ready" }));
+
+  it("does not inspect secrets or spawn Crabbox without legacy secret names", async () => {
+    const inspect = vi.fn(ready);
+    const spawn = vi.spyOn(processRuntime, "runCommandWithTimeout");
+    try {
+      const check = captureCrabboxDoctorCheck(CRABBOX_SETUP_SECRETS_CHECK_ID, inspect);
+      const base = context({});
+      for (const cfg of [
+        {},
+        base.cfg,
+        context({
+          setupSecrets: { TOKEN: { source: "store", provider: "default", id: "TOKEN" } },
+        }).cfg,
+        context({ setupEnv: [] }).cfg,
+      ]) {
+        const ctx = { ...base, cfg };
+        await check.detect(ctx);
+        await check.repair!(ctx, []);
+      }
+      expect(inspect).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      spawn.mockRestore();
+    }
+  });
+
+  it("migrates complete profiles without mutating audit input and is idempotent", async () => {
+    const check = captureCrabboxDoctorCheck(CRABBOX_SETUP_SECRETS_CHECK_ID, ready);
+    const ctx = context({ setup: "install", setupEnv: ["TOKEN", "PASSWORD"], class: "standard" });
+    const before = structuredClone(ctx.cfg);
+    expect(await check.detect(ctx)).toHaveLength(1);
+    expect(ctx.cfg).toEqual(before);
+    expect(await check.repair!({ ...ctx, dryRun: true }, [])).toMatchObject({
+      status: "skipped",
+      changes: [],
+    });
+    expect(ctx.cfg).toEqual(before);
+    const result = await check.repair!(ctx, []);
+    expect(result).toMatchObject({ status: "repaired", warnings: [] });
+    expect(result.config?.cloudWorkers?.profiles?.worker?.settings).toEqual({
+      setup: "install",
+      class: "standard",
+      setupSecrets: {
+        TOKEN: { source: "store", provider: "default", id: "TOKEN" },
+        PASSWORD: { source: "store", provider: "default", id: "PASSWORD" },
+      },
+    });
+    expect(ctx.cfg).toEqual(before);
+    const repeated = { ...ctx, cfg: result.config! };
+    expect(await check.detect(repeated)).toEqual([]);
+    expect(await check.repair!(repeated, [])).toMatchObject({ status: "skipped", changes: [] });
+  });
+
+  it.each(["missing", "missing-bindings", "conflicting-value", "unavailable"] as const)(
+    "preserves the whole profile when one entry is %s",
+    async (problem) => {
+      const check = captureCrabboxDoctorCheck(CRABBOX_SETUP_SECRETS_CHECK_ID, async (names) =>
+        names.map((name) => ({ name, status: name === "TOKEN" ? problem : "ready" })),
+      );
+      const ctx = context({ setupEnv: ["TOKEN", "PASSWORD"] });
+      const result = await check.repair!(ctx, []);
+      expect(result).toMatchObject({ status: "skipped", config: ctx.cfg, changes: [] });
+      expect(result.warnings?.join(" ")).toContain(problem);
+      expect(result.warnings?.join(" ")).toContain("allowed hosts");
+    },
+  );
+
+  it("preserves a conflicting approved mapping and migrates other profiles independently", async () => {
+    const check = captureCrabboxDoctorCheck(CRABBOX_SETUP_SECRETS_CHECK_ID, ready);
+    const ctx = context({
+      setupEnv: ["TOKEN"],
+      setupSecrets: { TOKEN: { source: "store", provider: "default", id: "OTHER" } },
+    });
+    ctx.cfg.cloudWorkers!.profiles!.other = { provider: "crabbox", settings: { setupEnv: [] } };
+    const result = await check.repair!(ctx, []);
+    expect(result.status).toBe("repaired");
+    expect(result.config?.cloudWorkers?.profiles?.worker).toEqual(
+      ctx.cfg.cloudWorkers?.profiles?.worker,
+    );
+    expect(result.config?.cloudWorkers?.profiles?.other?.settings).toEqual({ setupSecrets: {} });
+    expect(result.warnings?.join(" ")).toContain("conflicts");
+  });
+
+  it("uses the operator's default store provider and retains compatible current mappings", async () => {
+    const check = captureCrabboxDoctorCheck(CRABBOX_SETUP_SECRETS_CHECK_ID, ready);
+    const ctx = context({
+      setupEnv: ["TOKEN"],
+      setupSecrets: { TOKEN: { source: "store", provider: "protected", id: "TOKEN" } },
+    });
+    ctx.cfg.secrets = { defaults: { store: "protected" } };
+    const result = await check.repair!(ctx, []);
+    expect(result.config?.cloudWorkers?.profiles?.worker?.settings).toEqual({
+      setupSecrets: { TOKEN: { source: "store", provider: "protected", id: "TOKEN" } },
+    });
+  });
 });

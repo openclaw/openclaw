@@ -148,6 +148,7 @@ const LockPayloadSchema = z.object({
   /** Present when Gateway cron writes use the dynamic-default ownership projection. */
   cronOwnerProjection: z.literal("dynamic-default-v1").optional(),
   createdAt: z.string(),
+  startupPhase: z.literal("starting").optional(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
   role: z

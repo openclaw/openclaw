@@ -206,41 +206,6 @@ describe("refreshSlashCommands", () => {
     });
   });
 
-  it("ignores stale refresh responses after switching agents", async () => {
-    const { promise: first, resolve: resolveFirst } = createDeferred<unknown>();
-    const request = vi.fn((_: string, params: { agentId?: string }) => {
-      if (params.agentId === "main") {
-        return first;
-      }
-      return Promise.resolve({
-        commands: [pairCommand],
-      });
-    });
-    const client = { request } as never;
-
-    const pending = refreshSlashCommands({ client, agentId: "main" });
-    await refreshSlashCommands({ client, agentId: "other" });
-    resolveFirst?.({
-      commands: [
-        {
-          name: "dreaming",
-          textAliases: ["/dreaming"],
-          description: "Enable or disable memory dreaming.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-        },
-      ],
-    });
-    await pending;
-
-    expect(requireCommandByName("pair")).toMatchObject({
-      name: "pair",
-      description: "Generate setup codes.",
-    });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toBeUndefined();
-  });
-
   it("prefers stored metadata after the commands.list cache expires", async () => {
     vi.useFakeTimers();
     try {

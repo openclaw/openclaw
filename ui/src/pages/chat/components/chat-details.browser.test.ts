@@ -3,7 +3,7 @@ import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import type { ChatDetailsProgress } from "./chat-details-progress.tsx";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails } from "./chat-details.tsx";
@@ -59,9 +59,9 @@ async function fixture(value = props(), width = 600) {
   mounted.push(frame, styles);
   await element.updateComplete;
   const session = frame.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
-  const progress = frame.querySelector<ChatDetailsProgress>("openclaw-chat-details-progress")!;
+  const progress = frame.querySelector<HTMLElement>("openclaw-chat-details-progress")!;
   await session.updateComplete;
-  await progress?.updateComplete;
+  flush();
   return {
     element,
     frame,
@@ -105,16 +105,15 @@ describe("chat Details presentation", () => {
     document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    const disclosure = session.querySelector<HTMLDetailsElement>(".chat-details-session")!;
-    await toggle(disclosure);
+    const metadata = session.querySelector(".chat-details-session")!;
     // A side panel consumes pane width even when the desktop stays wide.
     frame.style.width = "900px";
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(900);
     frame.style.width = "1320px";
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-    expect(session.querySelector(".chat-details-session")).toBe(disclosure);
-    expect(disclosure.open).toBe(false);
+    expect(session.querySelector(".chat-details-session")).toBe(metadata);
+    expect(metadata.querySelector(":scope > summary")).toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.click();
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(1320);
@@ -209,25 +208,17 @@ describe("chat Details presentation", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("collapses session details and progress independently without revisions reopening them", async () => {
+  it("keeps metadata visible while progress retains its collapse across revisions", async () => {
     const { element, trigger, session, progress } = await fixture();
     trigger.click();
     await element.updateComplete;
     await session.updateComplete;
-    await progress.updateComplete;
-    const sessionSection = session.querySelector<HTMLDetailsElement>(".chat-details-session")!;
+    flush();
+    const sessionSection = session.querySelector<HTMLElement>(".chat-details-session")!;
     const progressSection = progress.querySelector<HTMLDetailsElement>(".session-progress-card")!;
-    expect(sessionSection.open).toBe(true);
+    expect(sessionSection.querySelector(":scope > summary")).toBeNull();
     expect(progressSection.open).toBe(true);
-    expect(
-      session.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')!.open,
-    ).toBe(false);
-    expect(
-      session.querySelector<HTMLDetailsElement>('[data-details-group="automations"]')!.open,
-    ).toBe(false);
-    await toggle(sessionSection);
-    await session.updateComplete;
-    expect(progressSection.open).toBe(true);
+    expect(session.querySelector("[data-details-group]")).toBeNull();
     await toggle(progressSection);
     expect(progressSection.open).toBe(false);
     expect(getComputedStyle(progress.querySelector(".chat-details-progress__menu")!).display).toBe(
@@ -235,10 +226,9 @@ describe("chat Details presentation", () => {
     );
     element.props = { ...element.props!, progressCard: { ...card, revision: 3 } };
     await element.updateComplete;
-    await progress.updateComplete;
-    expect(sessionSection.open).toBe(false);
+    flush();
+    expect(sessionSection.checkVisibility()).toBe(true);
     expect(progressSection.open).toBe(false);
-    await toggle(sessionSection);
     expect(progressSection.open).toBe(false);
   });
 
@@ -298,7 +288,7 @@ describe("chat Details presentation", () => {
     );
     trigger.click();
     await element.updateComplete;
-    await progress.updateComplete;
+    flush();
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
@@ -331,7 +321,7 @@ describe("chat Details presentation", () => {
     expect(clear).toHaveBeenCalledWith(card);
     element.presented = false;
     await element.updateComplete;
-    await progress.updateComplete;
+    flush();
     menu.querySelector<HTMLButtonElement>('[data-value="hide"]')!.click();
     expect(hide).toHaveBeenCalledTimes(1);
   });

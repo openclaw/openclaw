@@ -16,6 +16,12 @@ split; widening the window restores the saved desktop layout. **Details** opens
 a full-width overlay above the composer. Desktop keeps the **Layout** menu and
 separate **Details** control.
 
+Details keeps session metadata visible. Pull requests and automations appear
+expanded when they contain items; empty sections are omitted entirely. You can
+collapse populated sections without ordinary updates reopening them. Loading or
+failed automation reads show their status and retry action without an empty
+disclosure. Task progress remains independently collapsible.
+
 ## OpenClaw system care
 
 Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. To open it alongside your current page, click **Home** in the sidebar footer and select the **Ask OpenClaw** tab, or use the **Ask OpenClaw** command-palette action. The full page and dockable panel share one machine-wide conversation whose durable history lives on the Gateway. Closing the UI never cancels a turn; reopening Ask OpenClaw shows the completed conversation. The panel docks on the right or bottom, remembers its placement and size in the browser profile, and hides itself while the full page is open.
@@ -158,6 +164,8 @@ control the session list instead. Opening the Browser panel does not create or
 expand a [Browser dashboard](/web/dashboards#share-a-browser-dashboard-with-your-agent).
 
 The Control UI ships a **Browser** tab in the unified Chat side panel that renders the Gateway-controlled browser (the same one agents drive through the [browser tool](/tools/browser-control)) in any regular web browser - no native webview required. It appears in the panel's **+** menu when the connected Gateway advertises `browser.request` to an `operator.admin` connection; the globe action in **Files** toggles it. In a regular web browser, choosing **Browser** again while its panel tab is already open creates another Agent browser tab. The panel shows a live screencast, with screenshot fallback when streaming is unavailable, plus tabs, an editable URL bar, back/forward/reload, and open-in-your-browser, and forwards clicks, wheel scrolling, and basic typing to the remote page. The remote page follows the shared panel: opening it, resizing it, or switching tabs resizes the remote browser viewport to the panel's available space, so the snapshot fills the panel instead of rendering at whatever size an agent last used.
+
+Wheel scrolling targets the scrollable container under the pointer, including reversed chat lists and horizontal lists in left-to-right or right-to-left layouts.
 
 While the panel or a Browser dashboard is visible, a later remote resize also
 resynchronizes the page to the available space. Hidden panels leave the remote

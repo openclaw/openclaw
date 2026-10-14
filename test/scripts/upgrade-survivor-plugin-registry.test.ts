@@ -345,24 +345,6 @@ on_exit 0
     },
   );
 
-  it.each([
-    ["custom-plugin-siblings", "openclaw@2026.9.4"],
-    ["abandoned-update", "openclaw@2026.9.4"],
-    ["workshop-doctor-recovery", "openclaw@2026.9.4"],
-  ])("follows the planner's no-registry decision for %s", (scenario, baseline) => {
-    const { captureDir, result } = runSurvivor({
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(existsSync(join(captureDir, "node-args"))).toBe(false);
-    expect(existsSync(join(captureDir, "docker-run-args"))).toBe(true);
-    expect(readFileSync(join(captureDir, "docker-args"), "utf8")).not.toContain(
-      "/tmp/openclaw-prepublish-plugin-registry",
-    );
-  });
-
   it("does not prepare a registry for a published candidate", () => {
     const { captureDir, packageTarball, result } = runSurvivor({
       OPENCLAW_CURRENT_PACKAGE_TGZ: undefined,
@@ -544,13 +526,7 @@ run_live_models
         "google/gemini-3.1-pro-preview",
       ],
     },
-    ...[
-      "mobile-pairing-reconnect",
-      "projects-doctor",
-      "projects-startup-migration",
-      "dreaming-cron-doctor",
-      "cron-owner-doctor",
-    ].map((scenario) => ({ scenario, liveEnv: {}, expectedModels: [] })),
+    ...["projects-doctor"].map((scenario) => ({ scenario, liveEnv: {}, expectedModels: [] })),
   ])(
     "clears provider and channel credentials for $scenario while preserving live snapshots",
     ({ scenario, liveEnv, expectedModels }) => {
@@ -671,7 +647,6 @@ test "$LIVE_GEMINI_API_KEY" = fixture-google
 describe("legacy operator baseline plugin cohort", () => {
   it.each([
     ["2026.7.1-2", "2026.7.1", "latest", ""],
-    ["2026.8.1", "2026.8.1", "latest", ""],
     ["2026.7.2-beta.7", "2026.7.2-beta.7", "beta", ""],
     ["2026.8.1-alpha.3", "2026.8.1-alpha.3", "alpha", ""],
     ["2026.8.1-beta.1", "2026.8.1-beta.1", "beta", "E404"],

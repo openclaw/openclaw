@@ -103,6 +103,20 @@ or still-valid admitted input keeps recovery pending. Native parent rotation mus
 the current connection and requester identity checks. A later parent registration cannot
 supply missing historical ownership.
 
+Queued requester finals also retain their original completion source alongside the
+final-delivery intent. Command admission snapshots the source, session lifecycle,
+and route before execution; a refreshed cache cannot lend a successor’s source to
+a finishing run. An identified send on that captured route records a durable
+receipt before queue acknowledgement, including when terminal cleanup has already
+retired the active recovery claim. Every logical final and every physical payload
+in its batch must have successful identified delivery evidence. Reported recipients
+and threads, including nested aggregate receipt parts, must match the captured route;
+omitted provider metadata retains the existing channel contract.
+Later cleanup cannot replace that receipt with an earlier capture, and a newer
+requester or different route cannot borrow it. Empty, unsent, suppressed, or
+uncertain results do not establish delivery. Existing missing-receipt records are
+not retroactively treated as delivered.
+
 An interrupted admitted completion keeps its complete recovery claim even when
 the saved run status is failed, timed out, or killed. The next visible message or queued
 follow-up resumes that recovery before taking foreground ownership or entering
@@ -164,6 +178,9 @@ a restart, or a gateway update) does not kill in-flight work immediately. The
 gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
+
+On Linux, shutdown closes idle pooled database readers through IPC before closing
+their spawn broker; active readers retain the existing cancellation grace.
 
 CLI shutdown drains process-wide work. Closing an individual Gateway drains its
 own active chat runs and queued turns, and waits on the process-wide pending-reply
@@ -738,6 +755,9 @@ If recovery fails during preparation before the agent starts, the Gateway restor
 the interrupted state and releases that attempt's delivery claim. The next recovery
 attempt uses a fresh run ID while retaining the original interrupted turn and retry
 budget, so a rejected pending input cannot leave the conversation permanently busy.
+This includes an accepted continuation refused by shutdown before its runtime turn
+starts. Its charged attempt remains in the same retry budget across startups;
+exhaustion still produces the normal recovery notice.
 
 ## Automatic resume
 
@@ -920,6 +940,10 @@ the breaker's recovery window ends.
 Startup restores completed runs directly from the registry. Any retained delivery
 keeps its normal session and ownership checks. Unfinished runs still reconcile
 the current child session before resuming.
+Human follow-ups in retained child sessions take native custody under the actual
+executing run ID and follow-up prompt, including browser chat. The completed
+original run keeps its own outcome. Human ownership and dashboard nesting do not
+turn a child into a main-session replay candidate.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 For native children with completion notifications disabled, recovery sends a

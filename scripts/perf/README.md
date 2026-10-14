@@ -151,6 +151,64 @@ on Linux, `OPENCLAW_LAUNCHD_LABEL=ai.openclaw.team-shape-40967` on macOS, or
 Use the corresponding suffix when changing ports. The generated config uses no authentication
 and is only suitable for isolated loopback repros.
 
+## Measure the post-restart reconnect burst
+
+Build runtime artifacts on the authorized benchmark host and generate a fresh
+offline team-shape fixture for each revision. Then run:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/post-restart-burst-measure.ts \
+  --state-dir /path/to/team-shape --clients 50 --runs 30 --seconds 300
+```
+
+The driver owns a loopback Gateway on port 41058 and a synthetic SSE model on
+41059; port collisions fail. It creates 30 shared sessions and starts real
+`agent` turns. Every uniquely marked primary model request remains held until
+all 30 arrive (a three-minute deadline). A primary response closing before the
+crash fails the run, and all 30 must still be actively held immediately before
+SIGKILL. The driver kills only its owned Gateway process group, drains all held
+response close callbacks, and restarts against the same synthetic state. After
+restart, model requests receive immediate short acknowledgements. Unique
+recovery arrivals are reported separately: startup may settle interrupted runs
+without a model replay. Utility calls never count as primary arrivals.
+
+The Gateway uses a fake fixture token. Clients use a non-ephemeral UI connection
+mode and sign the normal Gateway device challenge with generated Ed25519 keys.
+All clients pair through the normal loopback/shared-token admission before the
+crash and reconnect with the same device keys after restart. Connect verifies
+token authentication, retained read/admin scopes, and a durable owner profile through
+`users.self`, so `projects.list` exercises the signed-in session/recents phase.
+A generated catalog plugin consumes the real Gateway session metadata snapshot
+and returns up to 100 synthetic catalog rows; absent/empty catalog results fail.
+This measures catalog snapshot preparation, not real provider filesystem scans
+or remote discovery latency. All connections share one synthetic owner profile.
+
+As soon as the restarted Gateway becomes ready, 50 clients connect concurrently
+and request sidebar `sessions.list` rows (limit 100), `sessions.catalog.list`
+(limit 100 for the synthetic local host), and `projects.list` in parallel every five seconds. Each
+client waits for its batch before issuing another, bounding outstanding work.
+The measurement window starts at restart spawn; requests begun in its first
+five minutes are drained even if they finish later. Latency percentiles include
+successful replies only; errors, connection retries, and raw timings are retained
+so failed requests cannot disappear into the p99. `--seconds 900` extends ELU
+observation beyond five minutes without changing the first-five-minute summary.
+`--entry`, `--port`, `--mock-port`, and `--poll-ms` adjust execution and load.
+
+Results in `post-restart-burst-*/result.json` include readiness time, per-RPC p99,
+private Gateway main-thread ELU/CPU and loop-delay samples every five seconds,
+and time to three consecutive ELU samples below 0.8 after reconnect load begins
+(null if unobserved). Raw ELU includes startup; no inspector or profiling RPC is
+exposed. Unexpected child
+exit, incomplete initial arrivals, missing successful endpoint samples, or
+missing client/sample coverage fails the run. Owned children and the model
+server stop on completion or interruption. Teardown confirms each child has
+exited and its managed process group is dead; unresolved cleanup fails and is
+reported even when stopping a child throws. The model server always closes.
+Synthetic state and logs remain for
+inspection. This reproduces recovery and reconnect/list pressure, rather than
+production provider latency or arbitrary plugin load. Never point it at live
+state, and apply the sandbox rules below to every Team command.
+
 ## Sandbox measurements
 
 Follow the current host policy. On Team, use only a task-owned
@@ -166,3 +224,72 @@ Use loopback ports at least 40000. Never read/copy production databases or touch
 production services. Stop your own Gateway, then remove your sandbox after
 recording results. Local validation is limited to changed-file format/lint and
 focused tests; PR CI owns broad gates.
+
+## Allocated bytes per RPC or turn
+
+Use the same owned Gateway driver with `--allocations` and a named `--scenario`:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --allocations --scenario sessions.list \
+  --clients 1 --runs 1 --operations 100 --limit 100 --rounds 5 \
+  --revision <measured-commit-sha>
+```
+
+Use `--row-mode sidebar --limit 200` for the sidebar's fact-packed wire response,
+or `--row-mode dashboard` for gallery rows. The default `compact` shape does not
+exercise sidebar fact packing; compare matching shapes when attributing allocation.
+The report records `rowMode` alongside the page limit.
+
+Supported scenarios:
+
+| Scenario               | One measured operation                                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                               |
+| `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list |
+| `chat.send`            | One completed turn: synthetic read-tool call, then paced streaming answer; one client and one run          |
+| `transcript-broadcast` | One completed `agent` turn, streamed to `--clients` subscribers; `--runs` concurrent turns per round       |
+| `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                      |
+
+RPC scenarios use `--operations` per round. Turn scenarios use `--runs` (forced
+to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`
+defaults to one operation per round; other RPC scenarios default to 100. Count
+the warmup when choosing reload batches: the admin RPC allows 30 calls per minute.
+Setup, startup
+recovery, subscription establishment, and one warmup round are outside capture.
+Each measured window includes completion and event drain, including the one-second
+quiet interval. The fixture inventory and request/client/run counts are recorded
+in `result.json`; the driver prints each sample as JSON and a short table.
+Raw `.heapprofile` files and numeric diagnostics remain alongside the report.
+Each profile also records `.worker-messages.json`: main-to-worker and
+worker-to-main message counts, known payload bytes, and unmeasured-message counts
+by bounded message kind for that capture window. Divide those totals by the
+validated operation count when comparing bytes or messages per RPC/turn. Buffer
+lengths are exact and string lengths approximate UTF-16 storage; envelope and
+object-graph sizes are not included. Compare the unmeasured counts too: a kind
+with no known bytes is not necessarily cheap. These are logical payload bytes,
+including transferred buffers, rather than bytes copied by structured clone.
+Use a freshly generated fixture on each revision and compare multiple rounds.
+The driver adds a small parent/child session set; those sessions are included in
+list measurements. For production-shaped database size use `--transcript-mib 1500`
+when generating the fixture and record its actual database bytes.
+
+The existing private benchmark IPC preload samples the **Gateway main isolate**,
+with both `includeObjectsCollectedByMajorGC` and
+`includeObjectsCollectedByMinorGC` enabled and a 32 KiB average interval. V8's
+node `selfSize` totals estimate allocated bytes, including objects collected
+during capture. `estimatedAllocatedBytesPerOperation` divides that total by the
+validated completed operation count. Top sites include up to eight caller frames
+in entry-to-leaf order. These are statistical estimates: small batches can have
+substantial sampling noise. Run an idle comparison if background allocation is
+material; the driver does not subtract it or silently present heap deltas as churn.
+
+`gcMs`, `gcCount`, and `gcMsPerOperation` come from the main isolate's GC performance
+entries. Heap-used and RSS deltas are separate context fields. Worker allocations,
+worker GC, external buffers, and driver/model-fixture allocation are **not** in
+these per-operation estimates. Process CPU and RSS include workers; main-thread
+CPU is reported separately. Profiling adds CPU and memory overhead, so compare
+with the same sampling settings. No profiling runs when `--allocations` is absent.
+For live operator attribution, `diagnostics.heapProfile` accepts
+`{ "durationMs": 10000, "includeCollected": true }` with the existing admin
+scope and 30-second churn cap; it remains a timed sample, not an RPC denominator.

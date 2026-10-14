@@ -1,8 +1,12 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import {
+  readSessionMessageIdentity,
+  readSessionProjectionFinalMessageIdentity,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sleepWithAbort } from "@openclaw/retry";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
+import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
@@ -496,10 +500,16 @@ export function handlePageGatewayEvent(
       const sessionMatches = Boolean(
         payload && visibleSessionMatches(state, payload.sessionKey, payload.agentId),
       );
+      const finalMessage = payload?.state === "final" ? asNullableRecord(payload.message) : null;
+      // Retired source text can remain on the wire with an empty display projection.
+      // Like an omitted final, it still needs the durable reply if publication was missed.
       const recoveryRunId =
         (payload?.state === "error" ||
           (payload?.state === "final" &&
-            (payload.message === undefined || payload.message === null))) &&
+            (!finalMessage ||
+              !readSessionProjectionFinalMessageIdentity(
+                projectAssistantDisplayContent(finalMessage),
+              )))) &&
         sessionMatches &&
         typeof payload.runId === "string" &&
         (!state.chatRunId || state.chatRunId === payload.runId)

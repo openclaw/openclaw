@@ -160,6 +160,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   schemas?: DoctorDatabasePreflight;
   runtime?: RuntimeEnv;
   json?: boolean;
+  signal?: AbortSignal;
   /** These entry points run before a shipped parent can delegate Doctor. */
   entry?: "cli-bootstrap" | "package-lifecycle";
   postCoreSchemaRepair?: UpdateDoctorWriteAuthority["postCoreSchemaRepair"];
@@ -291,6 +292,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       assertCurrent();
       let snapshotFacts: readonly BackupSqliteSnapshotFact[] = [];
       const backup = await createBackupArchive({
+        signal: options.signal,
         output: path.join(
           resolveUpdateCaptureRoot(resolveStateDir()),
           `agent-schema-${updater.runId}-${randomUUID()}.tar.gz`,

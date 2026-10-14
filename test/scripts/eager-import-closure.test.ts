@@ -510,3 +510,15 @@ it.each([
   const closure = collectRuntimeImportClosure(process.cwd(), entrypoints);
   expect(closure.filter((file) => deferredOwners.includes(file))).toEqual([]);
 });
+
+it("keeps Git operation workers independent of worktree allocation and registry owners", () => {
+  const closure = collectRuntimeImportClosure(
+    process.cwd(),
+    ["src/infra/git-operation.worker.ts"],
+    {
+      includeDynamicImports: true,
+    },
+  );
+  expect(closure).not.toContain("src/agents/worktrees/service-preparation.ts");
+  expect(closure).not.toContain("src/agents/worktrees/allocation.ts");
+});

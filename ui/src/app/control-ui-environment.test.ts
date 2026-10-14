@@ -6,7 +6,7 @@ import type {
   ControlUiBootstrapConfig,
   ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import "../components/app-topbar.ts";
+import "../components/app-topbar-solid.tsx";
 import { SidebarAgentCard } from "../components/sidebar-agent-card.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";

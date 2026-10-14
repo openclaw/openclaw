@@ -325,7 +325,7 @@ suite.define(() => {
                 await row.click({ button: "right" });
               }
               await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
-              await page.locator("openclaw-session-menu wa-dropdown-item:focus").waitFor();
+              await page.locator('openclaw-session-menu [role^="menuitem"]:focus').waitFor();
               // A background render must not admit new geometry while a popover owns focus.
               await gateway.emitGatewayEvent("presence", { presence: [] });
               await settleSidebarIdleWork(page);
@@ -411,7 +411,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat/main`);
-      await page.locator(".sidebar-shell__footer").waitFor();
+      await page.locator("openclaw-app-sidebar").waitFor();
       const card = page.locator(".community-invite-card");
       await settleSidebarIdleWork(page);
       expect(await card.count()).toBe(0);
@@ -443,7 +443,7 @@ suite.define(() => {
         communityInvite = enabled;
         await page.reload();
         await waitForInvitePolicy(page, enabled);
-        await page.locator(".sidebar-shell__footer").waitFor();
+        await page.locator("openclaw-app-sidebar").waitFor();
         await settleSidebarIdleWork(page);
         expect(await card.count()).toBe(0);
         expect(await mountedInvites()).toBe(0);
@@ -575,7 +575,7 @@ suite.define(() => {
       await page.keyboard.press("Control+Shift+,");
       await waitForControlUiSettingsTakeover(page);
       await page.keyboard.press("Escape");
-      await page.locator(".sidebar-shell__footer").waitFor();
+      await page.locator("openclaw-app-sidebar").waitFor();
       await settleSidebarIdleWork(page);
       expect(await card.count()).toBe(0);
       expect(await mountedInvites()).toBe(1);

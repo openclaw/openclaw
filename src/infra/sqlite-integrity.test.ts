@@ -166,11 +166,24 @@ describe("assertSqliteIntegrity", () => {
     }
   });
 
-  it("reports violations deterministically without truncating 64-bit rowids", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
+  function expectForeignKeyViolation(
+    sql: string,
+    expected: RegExp,
+    beforeCheck?: (database: DatabaseSync) => void,
+  ) {
+    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
     try {
-      database.exec(`
+      database.exec(sql);
+      beforeCheck?.(database);
+      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
+    } finally {
+      database.close();
+    }
+  }
+
+  it("reports violations deterministically without truncating 64-bit rowids", () => {
+    expectForeignKeyViolation(
+      `
         PRAGMA foreign_keys = OFF;
         CREATE TABLE parents (id INTEGER PRIMARY KEY);
         CREATE TABLE children (
@@ -179,21 +192,14 @@ describe("assertSqliteIntegrity", () => {
         );
         INSERT INTO children (id, parent_id)
         VALUES (9007199254740993, 99), (1, 99);
-      `);
-
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        /children row 1 references parents \(foreign key 0\); children row 9007199254740993 references parents \(foreign key 0\)/u,
-      );
-    } finally {
-      database.close();
-    }
+      `,
+      /children row 1 references parents \(foreign key 0\); children row 9007199254740993 references parents \(foreign key 0\)/u,
+    );
   });
 
   it("bounds foreign-key violation diagnostics", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    try {
-      database.exec(`
+    expectForeignKeyViolation(
+      `
         PRAGMA foreign_keys = OFF;
         CREATE TABLE parents (id INTEGER PRIMARY KEY);
         CREATE TABLE children (
@@ -202,21 +208,14 @@ describe("assertSqliteIntegrity", () => {
         );
         INSERT INTO children (id, parent_id)
         VALUES (1, 99), (2, 99), (3, 99), (4, 99), (5, 99), (6, 99);
-      `);
-
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        /children row 5 references parents \(foreign key 0\); additional violations omitted\. Stop the Gateway, run "openclaw doctor --fix"/u,
-      );
-    } finally {
-      database.close();
-    }
+      `,
+      /children row 5 references parents \(foreign key 0\); additional violations omitted\. Stop the Gateway, run "openclaw doctor --fix"/u,
+    );
   });
 
   it("cannot be bypassed by a schema object shadowing the table-valued pragma", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    try {
-      database.exec(`
+    expectForeignKeyViolation(
+      `
         PRAGMA foreign_keys = OFF;
         CREATE TABLE parents (id INTEGER PRIMARY KEY);
         CREATE TABLE children (
@@ -230,24 +229,21 @@ describe("assertSqliteIntegrity", () => {
           parent TEXT NOT NULL,
           fkid INTEGER NOT NULL
         );
-      `);
-      expect(
-        database.prepare('SELECT "table", rowid, parent, fkid FROM pragma_foreign_key_check').all(),
-      ).toEqual([]);
-
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        /foreign_key_check failed for test database: children row 1 references parents \(foreign key 0\)/u,
-      );
-    } finally {
-      database.close();
-    }
+      `,
+      /foreign_key_check failed for test database: children row 1 references parents \(foreign key 0\)/u,
+      (database) => {
+        expect(
+          database
+            .prepare('SELECT "table", rowid, parent, fkid FROM pragma_foreign_key_check')
+            .all(),
+        ).toEqual([]);
+      },
+    );
   });
 
   it("identifies violations in WITHOUT ROWID tables", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    try {
-      database.exec(`
+    expectForeignKeyViolation(
+      `
         PRAGMA foreign_keys = OFF;
         CREATE TABLE parents (id TEXT PRIMARY KEY);
         CREATE TABLE children (
@@ -255,14 +251,9 @@ describe("assertSqliteIntegrity", () => {
           parent_id TEXT NOT NULL REFERENCES parents(id)
         ) WITHOUT ROWID;
         INSERT INTO children (id, parent_id) VALUES ('child-1', 'missing-parent');
-      `);
-
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        /foreign_key_check failed for test database: children row without rowid references parents \(foreign key 0\)/u,
-      );
-    } finally {
-      database.close();
-    }
+      `,
+      /foreign_key_check failed for test database: children row without rowid references parents \(foreign key 0\)/u,
+    );
   });
 });
 

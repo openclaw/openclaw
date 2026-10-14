@@ -48,7 +48,7 @@ describe("file path tooltip", () => {
     await userEvent.keyboard("{Escape}");
     await page.elementLocator(anchor()).hover();
     await expect.element(copyButton()).toBeVisible();
-    expect(card()?.textContent).not.toContain("Copied!");
+    await expect.poll(() => card()?.textContent?.trim()).toBe(filePath);
     await page.elementLocator(anchor()).click();
     expect(open).toHaveBeenCalledOnce();
     expect(card()).toBeNull();
@@ -121,6 +121,7 @@ describe("file path tooltip", () => {
       if (dismissal === "reopen") {
         await page.elementLocator(anchor()).hover();
         await expect.element(copyButton()).toBeVisible();
+        await expect.poll(card).not.toBeNull();
       }
       reject(new Error("Denied"));
       await new Promise<void>((resolve) => {

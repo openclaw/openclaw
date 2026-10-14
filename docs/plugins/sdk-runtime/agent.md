@@ -191,16 +191,19 @@ keeps the full selected context. Async reads retain admission, anchor, and
 cancellation checks.
 
 For a temporary model-only view, callers may explicitly add
-`toolResultOverflow: "omit"` to `limits`. If the newest atomic tool frame would
-otherwise leave no fitting context, recovery replaces only the tool-result bodies
-needed to fit with omission notices, before loading those bodies from SQLite.
-Each notice identifies the tool, call, and original projected event size. Recovery
-retains the latest historical user request and complete owned call/result frames.
-Unselected result bodies and tool-call arguments remain intact.
+`toolResultOverflow: "omit"` to `limits`. Under byte pressure, the reader replaces
+tool-result bodies with omission notices before selecting a bounded suffix, so
+earlier goals and constraints can remain in context. It omits only bodies whose
+savings help the view fit, before loading those bodies from SQLite. Each notice
+identifies the tool, call, and original projected event size. If dropping a prefix
+makes retained bodies affordable again, the reader restores the newest ones that
+fit. Tool-call arguments and owned call/result frames remain intact.
 
 This is a lossy model view, not a full-fidelity history API. It does not rewrite
-stored transcripts or change evidence and fork readers. The same byte/event
-limits, required boundaries, and tool-result ownership checks still apply. Reads
+stored transcripts or change evidence and fork readers. Preferring earlier
+requests over result bodies changes retention and may change reusable prompt
+prefixes. The same byte/event limits, required boundaries, and tool-result
+ownership checks still apply. Reads
 still fail if required user messages, call arguments, summaries, or event counts
 cannot fit, or result ownership is ambiguous. Omitting `toolResultOverflow`
 preserves strict bounded-read behavior.
@@ -304,7 +307,7 @@ the provider's own awaited work.
 
     An explicit `resolveReplyDelivery` always takes precedence. If `onBlockReply` only collects output, updates a preview, or fails before sending, return `"missing"` when the adapter can confirm that no source transport owns a final response; this permits required recovery. Migrate delivery adapters to the observer so they can report actual receipts and uncertain sends. The block callback returns no delivery result, so a generic rejection alone does not authorize recovery. Legacy custody is scoped to the run and assistant-message index, retired for later inputs and on cancellation or completion; blocks without an index apply only to the initial input.
 
-    The optional `githubPublicationAvailable` input shipped in 2026.9.4 is deprecated and ignored. Remove it from plugin calls: the host checks the current session and Gateway for every attempt. The SDK accepts the old input until the next Plugin SDK major; it does not grant or disable publication tools.
+    The optional `githubPublicationAvailable` input shipped in 2026.9.4 is deprecated and ignored. Remove it from plugin calls: the host checks the current session and Gateway for every attempt. The SDK accepts the old input until a separately announced ordinary stable removal release; it does not grant or disable publication tools.
 
     `resolveCliBackendDispatchEligibility({ provider, model, agentId, authProfileId, config, agentDir, workspaceDir })` shares the embedded runner's CLI-backend dispatch decision (route, the backend's declared `subscriptionAuthDispatch` capability, stored credential mode — honoring an explicitly pinned `authProfileId`) with callers that opt embedded runs into `cliBackendDispatch: "subscription-auth"`. It returns `{ provider }` when the run would execute through the CLI backend and `undefined` when it stays on the direct passthrough, so callers can budget timeouts for the run that will actually execute.
 
@@ -354,7 +357,7 @@ the provider's own awaited work.
 
     Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `prepareSessionEntryPatch(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic repair of the underlying store.
 
-    Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and will be removed at the next Plugin SDK major. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
+    Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and remain supported through 2026-12-31, with removal in the first January 2027 stable release. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
 
     By default, `getSessionEntryByIdAsync(...)` chooses the first visible exact ID match in session-key order, falling back to trimmed legacy IDs only when there is no exact match. Pass `orderBy: "updatedAt"` to choose the most recently updated match across exact and trimmed IDs, with session-key order breaking ties. Active Memory uses this option to preserve its most-recent-session selection.
 

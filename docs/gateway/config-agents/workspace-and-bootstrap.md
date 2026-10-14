@@ -107,7 +107,7 @@ Skips creation of selected optional workspace files while still writing required
 Controls workspace bootstrap-file injection in the embedded runtime. Default: `"always"`. These modes do not control CLI-backed prompt preparation or prevent an agent from reading files with tools.
 
 - `"always"`: use normal workspace bootstrap injection, subject to the run's context mode and file filters.
-- `"continuation-skip"`: eligible continuation turns after a recorded full-bootstrap turn skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs, pending full-bootstrap setup, and post-compaction retries still use normal context resolution.
+- `"continuation-skip"`: eligible continuation turns after a successful turn that delivered workspace context skip bootstrap re-injection, including workspaces whose setup is already complete. Failed, aborted, lightweight, cron, and heartbeat turns do not record completion; unreadable files are retried on the next turn. Pending full-bootstrap setup and post-compaction retries still use normal context resolution.
 - `"never"`: disable workspace bootstrap and context-file injection on every turn, including heartbeat and compaction-recovery turns. Use this for embedded agents with specialized bootstrap-free workflows.
 
 ```json5

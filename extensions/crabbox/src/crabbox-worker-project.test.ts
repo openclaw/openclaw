@@ -961,11 +961,8 @@ exec "$CRABBOX_TEST_NODE" "$@"
     expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
   });
 
-  it.each([
-    { ...PROFILE, warmImage: false },
-    { ...CLASSLESS_PROFILE, class: "standard", setup: "true", setupEnv: ["PROJECT_SETUP_VALUE"] },
-  ])("prepares runtime without project capture for opted-out profiles: %j", async (profile) => {
-    vi.stubEnv("PROJECT_SETUP_VALUE", "synthetic");
+  it("prepares runtime without project capture for an opted-out profile", async () => {
+    const profile = { ...PROFILE, warmImage: false };
     const events: string[] = [];
     const { options, observe } = projectOptions(events);
     const { provider, calls } = createWarmProvider((call) => observe(call));

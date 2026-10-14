@@ -425,9 +425,13 @@ describe("initSessionState guarded initialization", () => {
         },
         cfg: { session: { store: storePath } } as OpenClawConfig,
       }),
-    ).rejects.toThrow(
-      'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
-    );
+    ).rejects.toMatchObject({
+      name: "SessionWorkStartError",
+      reason: "archived",
+      retryable: false,
+      message:
+        'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
+    });
   });
 
   it.each(["/new"] as const)(
@@ -1342,6 +1346,33 @@ describe("initSessionState RawBody", () => {
       expect(
         resolvePreparedSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: stored }),
       ).toMatchObject({ sandboxed: required, sandboxRequired: required });
+    },
+  );
+
+  it.each(["hello again", "/reset"])(
+    "preserves device-folder affinity through reply-session rollover (%s)",
+    async (body) => {
+      const storePath = await makeStorePath("openclaw-rollover-device-folder-");
+      const sessionKey = "agent:main:dashboard:device-folder-rollover";
+      const deviceFolder = { deviceId: "rollover-device", path: "/existing/project" };
+      const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: "device-folder-before-rollover",
+          updatedAt: staleStartedAt,
+          sessionStartedAt: staleStartedAt,
+          lastInteractionAt: staleStartedAt,
+          deviceFolder,
+        },
+      });
+      const result = await initSessionState({
+        ctx: { RawBody: body, ChatType: "direct", SessionKey: sessionKey },
+        cfg: { session: { store: storePath, reset: { mode: "daily", atHour: 4 } } },
+      });
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(body === "/reset");
+      expect(result.sessionEntry.deviceFolder).toEqual(deviceFolder);
+      expect(loadSessionEntry({ storePath, sessionKey })?.deviceFolder).toEqual(deviceFolder);
     },
   );
 

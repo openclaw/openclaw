@@ -459,7 +459,7 @@ it("reads full durable context through workers and preserves the deprecated sync
 });
 
 it.each(["durable", "admitted", "incognito"] as const)(
-  "shares immutable initial messages (%s)",
+  "keeps projected initial messages detached from the stored view (%s)",
   async (mode) => {
     await withOpenClawTestState({ label: "shared-model-context" }, async (state) => {
       const scope = {
@@ -541,12 +541,10 @@ it.each(["durable", "admitted", "incognito"] as const)(
       ) {
         throw new Error("Missing stored messages");
       }
-      expect(context.messages[0]).toBe(user.message);
-      expect(projectedReply.content).toBe(reply.message.content);
-      expect(Object.isFrozen(user.message)).toBe(true);
-      expect(Object.isFrozen(reply.message.content)).toBe(true);
+      expect(context.messages[0]).toEqual(user.message);
+      expect(projectedReply.content).not.toBe(reply.message.content);
       expect(JSON.stringify(context)).not.toContain("synthetic-private-native-payload");
-      expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(false);
+      expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(true);
       expect(reply.message.content).toEqual([{ type: "text", text: "answer" }]);
     });
   },

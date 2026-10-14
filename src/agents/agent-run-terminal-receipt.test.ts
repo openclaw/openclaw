@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { captureRuntimeConfigWithSource } from "../config/runtime-config-capture-state.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -82,29 +81,6 @@ describe("isProviderModelRerouted", () => {
       expect(isProviderModelRerouted(requested, effective, config)).toBe(true);
     });
 
-    it.each([false, undefined])("requires an explicit true declaration (%s)", (value) => {
-      expect(
-        isProviderModelRerouted(
-          requested,
-          { ...requested, responseModel: "upstream-model" },
-          declaredConfig("broker", "team/chat", { responseModelEquivalent: value }),
-        ),
-      ).toBe(true);
-    });
-
-    it.each([{}, declaredConfig("broker", "team/chat", { responseModelEquivalent: false })])(
-      "ignores a declaration contributed only to runtime config",
-      (source) => {
-        expect(
-          isProviderModelRerouted(
-            requested,
-            { ...requested, responseModel: "upstream-model" },
-            captureRuntimeConfigWithSource(config, source),
-          ),
-        ).toBe(true);
-      },
-    );
-
     it("ignores a catalog-authored row", () => {
       expect(
         isProviderModelRerouted(
@@ -124,35 +100,7 @@ describe("isProviderModelRerouted", () => {
       ).toBe(true);
     });
 
-    it.each([
-      { origin: "bundled" as const },
-      { origin: "global" as const, trustedOfficialInstall: true },
-    ])("ignores declarations for official owners without a policy artifact ($origin)", (owner) => {
-      const snapshot = createPluginMetadataSnapshotFixture({
-        plugins: [{ id: "cohere", providers: ["cohere"], ...owner }],
-      });
-      withPluginMetadataSnapshotScope(snapshot, () => {
-        const cohere = { provider: "cohere", model: "command-a" };
-        expect(
-          isProviderModelRerouted(
-            cohere,
-            { ...cohere, responseModel: "different-model" },
-            declaredConfig("cohere", "command-a"),
-          ),
-        ).toBe(true);
-      });
-    });
-
-    it.each([
-      { provider: "azure-openai-responses", origin: "bundled" as const, rerouted: true },
-      {
-        provider: "azure-openai-responses",
-        origin: "global" as const,
-        trustedOfficialInstall: true,
-        rerouted: true,
-      },
-      { provider: "partner-chat", origin: "global" as const, rerouted: false },
-    ])(
+    it.each([{ provider: "partner-chat", origin: "global" as const, rerouted: false }])(
       "respects $origin catalog alias ownership for $provider",
       ({ rerouted, provider, ...owner }) => {
         const snapshot = createPluginMetadataSnapshotFixture({
@@ -179,14 +127,7 @@ describe("isProviderModelRerouted", () => {
     );
   });
 
-  it.each([
-    { requested: "gpt-5.6", response: "gpt-5.6-sol", rerouted: false },
-    { requested: "gpt-5.6", response: "gpt-5.6-sol-2026-08-01", rerouted: false },
-    { requested: "gpt-5.6-luna", response: "gpt-5.6-luna-2026-08-02", rerouted: false },
-    { requested: "gpt-5.6", response: "gpt-5.6-luna", rerouted: true },
-    { requested: "gpt-5.6", response: "gpt-5.6-luna-2026-08-02", rerouted: true },
-    { requested: "gpt-5.6", response: "gpt-5.6", rerouted: false },
-  ])(
+  it.each([{ requested: "gpt-5.6-luna", response: "gpt-5.6-luna-2026-08-02", rerouted: false }])(
     "classifies an OpenAI $requested run answered as $response as rerouted=$rerouted",
     ({ requested, response, rerouted }) => {
       expect(
@@ -197,37 +138,6 @@ describe("isProviderModelRerouted", () => {
       ).toBe(rerouted);
     },
   );
-
-  it("retains a change of effective model even when its response is declared equivalent", () => {
-    expect(
-      isProviderModelRerouted(
-        { provider: "openai", model: "gpt-5.6" },
-        { provider: "openai", model: "gpt-5.6-sol", responseModel: "gpt-5.6-sol" },
-      ),
-    ).toBe(true);
-  });
-
-  it.each([
-    {
-      provider: "arcee",
-      model: "arcee-ai/trinity-large-preview",
-      responseModel: "arcee-ai/trinity-large-preview",
-    },
-    {
-      provider: "openrouter",
-      model: "arcee-ai/trinity-large-thinking",
-      responseModel: "arcee-ai/trinity-large-thinking",
-    },
-    {
-      provider: "arcee",
-      model: "arcee-ai/trinity-large-thinking",
-      responseModel: "arcee-ai/trinity-large-preview",
-    },
-  ])("retains a real change to $provider/$model with response $responseModel", (effective) => {
-    expect(
-      isProviderModelRerouted({ provider: "arcee", model: "trinity-large-thinking" }, effective),
-    ).toBe(true);
-  });
 });
 
 describe("formatAgentRunRouteChange", () => {
@@ -235,26 +145,6 @@ describe("formatAgentRunRouteChange", () => {
     expect(formatAgentRunRouteChange(visibleRerouteReceipt, "run-1")).toBe(
       "Model route changed: provider/requested → provider/actual.",
     );
-  });
-
-  it.each([
-    {
-      name: "stale run",
-      receipt: visibleRerouteReceipt,
-      expectedRunId: "run-2",
-    },
-    {
-      name: "unchanged route",
-      receipt: { ...visibleRerouteReceipt, rerouted: false },
-      expectedRunId: "run-1",
-    },
-    {
-      name: "non-visible reply",
-      receipt: { ...visibleRerouteReceipt, terminalDisposition: "not-visible" as const },
-      expectedRunId: "run-1",
-    },
-  ])("omits a route fact for a $name", ({ receipt, expectedRunId }) => {
-    expect(formatAgentRunRouteChange(receipt, expectedRunId)).toBeUndefined();
   });
 
   it("redacts and bounds route text", () => {

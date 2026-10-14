@@ -37,6 +37,7 @@ export const discordConversationBindings: NonNullable<
       persist: false,
       enableSweeper: false,
     }),
+  // Released synchronous runtime setters dispatch here through 2026-12-31.
   setIdleTimeoutBySessionKey: (params) =>
     setThreadBindingIdleTimeoutBySessionKey({
       ...params,

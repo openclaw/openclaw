@@ -5,7 +5,12 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../../test/helpers/promise.js";
 import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -239,6 +244,85 @@ async function publishedArchive(content = "synthetic retained archive payload") 
       ),
   };
 }
+
+it("skips writer admission when the archive budget target is already satisfied", async ({
+  signal,
+}) => {
+  const fixture = await publishedArchive();
+  const entered = createDeferred();
+  const release = createDeferred();
+  releases.push(release.resolve);
+  const blocker = own(
+    runExclusiveSqliteSessionWrite(
+      fixture.options,
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+      "session-entry.patch",
+    ),
+  );
+  await entered.promise;
+  const work = fixture.prune(Infinity);
+  try {
+    await expect(withinTest(work, signal)).resolves.toMatchObject({
+      removedFiles: 0,
+      completed: true,
+      checkpointIncomplete: 0,
+    });
+    expect(fixture.readArchive()).toEqual(fixture.originalArchive);
+    expect(fs.readFileSync(fixture.archivePath)).toEqual(fixture.archivedBytes);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([blocker, work]);
+  }
+});
+
+it("lets foreground writes settle while archive pruning scans physical usage", async ({
+  signal,
+}) => {
+  const fixture = await publishedArchive();
+  const scanning = createDeferred();
+  const release = createDeferred();
+  releases.push(release.resolve);
+  const measure = diskBudget.measureSessionPhysicalDiskUsage;
+  let measurements = 0;
+  vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage").mockImplementation(async (storePath) => {
+    if (++measurements === 3) {
+      scanning.resolve();
+      await release.promise;
+    }
+    return measure(storePath);
+  });
+  const work = fixture.prune();
+  void work.catch(scanning.reject);
+  let foreground: Promise<unknown> | undefined;
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        scanning.promise,
+        work,
+        "Archive pruning did not reach its usage scan",
+      ),
+      signal,
+    );
+    foreground = own(
+      replaceSessionEntry(
+        { sessionKey: "agent:main:foreground", storePath: fixture.storePath },
+        { sessionId: "foreground", updatedAt: 2 },
+      ),
+    );
+    await withinTest(foreground, signal);
+    release.resolve();
+    await expect(withinTest(work, signal)).resolves.toMatchObject({
+      removedFiles: 1,
+      completed: true,
+    });
+  } finally {
+    release.resolve();
+    await Promise.allSettled([work, foreground]);
+  }
+});
 
 it("enforces a physical archive budget without ordinary host SQLite calls", async () => {
   const fixture = await withSessionHistoryBudgetSweepsForTest(() =>

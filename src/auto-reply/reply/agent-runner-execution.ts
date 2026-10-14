@@ -47,6 +47,7 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
@@ -78,6 +79,7 @@ import type {
 import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
+import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import {
   createAgentTurnTimingTracker,
   resolveRunStartupPhase,
@@ -193,6 +195,7 @@ async function executeAgentTurnInternalLoop(
   let currentTurnImages: CurrentTurnImages;
   let modelPatch: Awaited<ReturnType<typeof createAgentPatchedSessionModelRunGuard>>;
   try {
+    await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
@@ -481,16 +484,25 @@ async function executeAgentTurnInternalLoop(
     (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
   );
   if (!hasNonErrorContent) {
+    const providerFailure = runResult.payloads
+      ?.filter((payload) => payload.isError)
+      .map((payload) => getReplyPayloadMetadata(payload)?.providerFailure)
+      .find((failure) => failure?.rateLimitRetriesExhausted !== undefined);
     const metaErrorMsg = runResult.meta?.error?.message ?? "";
     const rawErrorPayloadText =
       runResult.payloads?.find(
         (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
       )?.text ?? "";
     const errorCandidate = metaErrorMsg || rawErrorPayloadText;
-    const candidateReason = errorCandidate ? classifyFailoverReason(errorCandidate) : null;
+    const candidateReason =
+      providerFailure?.reason ?? (errorCandidate ? classifyFailoverReason(errorCandidate) : null);
     const formattedErrorCandidate =
       candidateReason === "rate_limit" || candidateReason === "overloaded"
-        ? renderRateLimitOrOverloadedCopy({ reason: candidateReason, raw: errorCandidate })
+        ? renderRateLimitOrOverloadedCopy({
+            reason: candidateReason,
+            raw: errorCandidate,
+            rateLimitRetriesExhausted: providerFailure?.rateLimitRetriesExhausted,
+          })
         : undefined;
     if (formattedErrorCandidate) {
       runResult.payloads = [

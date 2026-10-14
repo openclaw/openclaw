@@ -731,6 +731,12 @@ These retries exclude writes, caller cancellation, certificate errors, invalid
 JSON, oversized responses, and unrecognized errors. HTTP, connection, and
 response-body errors identify the request method and endpoint.
 
+GitHub can persistently fail a 100-job page of a CI attempt while smaller pages
+succeed. The review reads CI jobs at page sizes of 100, then 50, then 25. A size
+above 25 skips the server-error retries and immediately requests the same job
+range at half size. Pages at 25 jobs use the normal read retries, timeout, and
+recovery. Enumeration must still reach the reported job count.
+
 If a read-only request reaches its 30-second deadline, including while reading
 its response body, the script restarts the complete evaluation with fresh PR,
 approval, role, and CI data. These restarts use one-, two-, and four-second delays

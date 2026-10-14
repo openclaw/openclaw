@@ -28,6 +28,12 @@ for (const platform of ["linux", "windows"]) {
     write(installed, `${core}/package.json`, { name: "openclaw" });
     write(installed, `${core}/openclaw.mjs`, "export {};\n");
     write(installed, `${core}/dist/build-info.json`, { commit });
+    write(installed, `${core}/dist/plugin-sdk/index.d.ts`, "export declare const sdk: string;\n");
+    write(installed, "node_modules/openai/package.json", { name: "openai", version: "7.28.0", main: "index.js" });
+    write(installed, "node_modules/openai/index.js", "export {};\n");
+    write(installed, "node_modules/openai/index.d.ts", "export {};\n");
+    write(installed, "node_modules/openai/src/index.ts", "export {};\n");
+    write(installed, "node_modules/openai/src/README.md", "Retain source documentation.\n");
     write(installed, `${core}/dist/extensions/codex/package.json`, {
       openclaw: { extensions: ["./index.js"] },
     });
@@ -53,6 +59,10 @@ for (const platform of ["linux", "windows"]) {
     });
     assert.equal(decode(`${native}/vendor/codex`).toString(), "synthetic platform executable");
     const manifest = read(work, "manifest.json");
+    assert.equal(fs.existsSync(path.join(work, "package", core, "dist/plugin-sdk/index.d.ts")), false);
+    assert.equal(fs.existsSync(path.join(work, "package/node_modules/openai/index.d.ts")), false);
+    assert.equal(fs.existsSync(path.join(work, "package/node_modules/openai/src/index.ts")), false);
+    assert.equal(decode("node_modules/openai/src/README.md").toString(), "Retain source documentation.\n");
     assert.equal(manifest.files["bin/bun"], "existing-runtime-hash");
     assert.equal(manifest.files[`package/${core}/openclaw-install-owner.json`],
       createHash("sha256").update(owner).digest("hex"));

@@ -1,4 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
@@ -11,16 +12,16 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // Native and transformed SDK graphs may share the same transaction owner.
 const managedStateTransactions = resolveGlobalSingleton(
   Symbol.for("openclaw.managedStateTransactions"),
-  () => new WeakSet<DatabaseSync>(),
+  () => new WeakSet<EngineConnection>(),
 );
 
 /** Only the synchronous transaction owner may lend its uncommitted authority rows. */
-export function isManagedStateTransaction(database: DatabaseSync): boolean {
+export function isManagedStateTransaction(database: EngineConnection): boolean {
   return database.isTransaction && managedStateTransactions.has(database);
 }
 
 export function runManagedStateTransaction<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   operation: () => T,
   options: SqliteTransactionOptions & { singleStatement?: true },
 ): T {
@@ -45,7 +46,7 @@ export function runManagedStateTransaction<T>(
         }
       }
     });
-  return options.busyTimeoutMs === undefined
+  return options.busyTimeoutMs === undefined || isPostgresSqlConnection(database)
     ? transaction()
     : runWithSqliteBusyTimeout(database, options.busyTimeoutMs, transaction);
 }

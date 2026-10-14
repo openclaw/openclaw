@@ -114,6 +114,7 @@ export type SessionsUsageResult = {
   creatorOptions?: SessionUsageCreator[];
   cacheStatus?: CostUsageSummary["cacheStatus"];
   overview?: SessionsUsageOverview;
+  partial?: { reason: "time-budget"; message: string };
 };
 
 export type UsageOverviewOptions = {
@@ -137,6 +138,8 @@ export type SessionsUsageOverview = {
   selectedSessionCount: number;
   /** Matching rows in the selected population, including empty sessions eligible for detail reads. */
   selectedRowCount: number;
+  /** Every explicitly selected source has complete usage before query/day/hour filtering. */
+  selectedUsageComplete?: boolean;
   /** Explicitly selected matching rows, in selection order and independent of the table page. */
   selectedRows: SessionUsageEntry[];
   /** Comparison statistics before paging and the Recent roster selection. */

@@ -18,7 +18,7 @@ import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
-import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
+import { buildMainSessionRecoveryAfterAgentRunPatch } from "../main-session-recovery/main-session-recovery-clear.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
@@ -137,7 +137,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.agentHarnessId = agentHarnessId;
     }
     next.abortedLastRun = result.meta.aborted ?? false;
-    clearMainSessionRecoveryAfterAgentRun(next, params.clearRestartRecoveryForceSafeTools);
     if (result.meta.systemPromptReport) {
       next.systemPromptReport = result.meta.systemPromptReport;
     }
@@ -208,6 +207,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
             current: currentEntry,
             reassertAbortedLastRun: result.meta.aborted === true,
           });
+      if (!preserveUserFacingRunState) {
+        Object.assign(
+          patch,
+          buildMainSessionRecoveryAfterAgentRunPatch(
+            { ...currentEntry, ...patch },
+            params.clearRestartRecoveryForceSafeTools,
+          ),
+        );
+      }
       if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
         // Clear the current snooze, including one set while this run was in flight.
         patch.snoozedUntil = undefined;

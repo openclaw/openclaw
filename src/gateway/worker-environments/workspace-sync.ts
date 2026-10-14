@@ -316,14 +316,14 @@ export function createWorkerWorkspaceActions(
         if (!success(packTransfer)) {
           throw workspaceSyncError(packTransfer);
         }
-        const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
-          runTask(
-            argv,
-            workerSshCommandOptions({
+        const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv, gitOptions) =>
+          runTask(argv, {
+            ...workerSshCommandOptions({
               timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
               signal: options.ownerSignal,
             }),
-          ),
+            ...gitOptions,
+          }),
         );
         const seeded = await runWorkspaceCommand({
           transportRetry: "never",
@@ -651,6 +651,11 @@ export function createWorkerWorkspaceActions(
     runWorkspaceCommand,
     // Keep the outer task registered across local-file phases so tunnel stop drains all owner work.
     syncWorkspace: (request: WorkerWorkspaceSyncRequest) => {
+      if (request.source.kind === "device-folder") {
+        return Promise.reject(
+          new Error("Device folders require their paired node, not an SSH workspace tunnel."),
+        );
+      }
       if (request.source.kind === "repository") {
         return Promise.reject(
           new Error(

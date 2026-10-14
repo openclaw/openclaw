@@ -1,6 +1,6 @@
-import type { ReactiveController } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
+import type { SolidController } from "../lit/solid-controller-host.ts";
 import { SessionAttentionController } from "./session-attention-controller.ts";
 
 afterEach(() => vi.useRealTimers());
@@ -13,8 +13,8 @@ function setup(snoozedUntil: number) {
   const host = {
     isConnected: true,
     sessionAttentionContext: undefined,
-    addController: (_controller: ReactiveController) => {},
-    removeController: (_controller: ReactiveController) => {},
+    addController: (_controller: SolidController) => {},
+    removeController: (_controller: SolidController) => {},
     updateComplete: Promise.resolve(true),
     requestUpdate: vi.fn(() => {
       visible = !isSessionSnoozed(row, Date.now());

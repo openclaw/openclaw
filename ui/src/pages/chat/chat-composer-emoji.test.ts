@@ -13,7 +13,7 @@ import {
   createComposerProps,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const controllers: NewSessionComposerTextareaController[] = [];
@@ -154,9 +154,9 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
   return { container, textarea, input, key, colon, send, backgroundSend, draft: () => draft };
 }
 
-describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
+describe("chat emoji acceptance", () => {
   it("does not send on held Enter after accepting an emoji, but sends on a fresh press", () => {
-    const f = fixture(kind);
+    const f = fixture("chat");
     f.input(":smi");
     f.key("Enter");
     expect(f.draft()).toBe("😄");
@@ -170,7 +170,7 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
   });
 
   it("supports mouse and Tab acceptance and persistent Escape dismissal", () => {
-    const f = fixture(kind);
+    const f = fixture("chat");
     f.input(":smi");
     f.key("Escape");
     f.textarea.dispatchEvent(new Event("select"));
@@ -184,7 +184,9 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
     expect(f.draft()).toBe("👍");
     expect(f.send).not.toHaveBeenCalled();
   });
+});
 
+describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
   it("ignores a queued selection event after focus leaves the composer", () => {
     const f = fixture(kind);
     f.input(":smi");

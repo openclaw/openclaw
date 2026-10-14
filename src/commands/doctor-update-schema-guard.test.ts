@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsAsync from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
@@ -7,12 +8,14 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
+import { waitForCliSignalExit, waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { resolveStateDir } from "../config/paths.js";
 import * as backupCreate from "../infra/backup-create.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as packageRoot from "../infra/openclaw-root.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -159,6 +162,79 @@ async function withDoctorMaintenance(
     await maintenance?.release();
   }
 }
+
+it("stops pre-migration backup production when Doctor accepts SIGINT", async () => {
+  const signal = "SIGINT";
+  let signalDrain: Promise<void> | undefined;
+  try {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const f = await legacyAgentFixture(true);
+      const payload = path.join(state.stateDir, "synthetic-backup-payload.txt");
+      fs.writeFileSync(payload, "synthetic retained source\n");
+      fs.truncateSync(payload, 8 * 1024 * 1024);
+      const files = [f.pathname, state.configPath, payload];
+      const before = files.map((filename) => fs.readFileSync(filename));
+      const scratch = state.path("backup-scratch");
+      fs.mkdirSync(scratch);
+      for (const name of ["TMPDIR", "TMP", "TEMP"]) {
+        vi.stubEnv(name, scratch);
+      }
+      const open = fsAsync.open;
+      let source: Awaited<ReturnType<typeof open>> | undefined;
+      let archiveReads = 0;
+      vi.spyOn(fsAsync, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (args[0] === payload) {
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+            const result = await read(...readArgs);
+            if (result.bytesRead >= 1024 * 1024) {
+              source = handle;
+              archiveReads += 1;
+              if (archiveReads === 1) {
+                signalDrain = waitForSignalExitBarriers(signal);
+              }
+            }
+            return result;
+          });
+        }
+        return handle;
+      });
+      const onVerifiedBackup = vi.fn();
+      await withDoctorMaintenance({}, async (maintenance) => {
+        const options = {
+          schemas: f.schemas,
+          signal: maintenance.signal,
+          postCoreSchemaRepair: { runId: f.runId, assertCurrent() {} },
+          onVerifiedBackup,
+        };
+        const result = await maintenance
+          .run(() => guardUpdateDoctorSchemaUpgrade(options))
+          .catch((error: unknown) => error);
+        expect(archiveReads).toBe(1);
+        expect(result).toBeInstanceOf(Error);
+        await expect(
+          expectDefined(source, "actual backup source handle").read(Buffer.alloc(1), 0, 1, 0),
+        ).rejects.toMatchObject({ code: "EBADF" });
+        expect(onVerifiedBackup).not.toHaveBeenCalled();
+      });
+      expect(fs.readdirSync(resolveUpdateCaptureRoot(state.stateDir))).toEqual([]);
+      expect(fs.readdirSync(scratch).filter((name) => name.startsWith("openclaw-backup-"))).toEqual(
+        [],
+      );
+      expect(files.map((filename) => fs.readFileSync(filename))).toEqual(before);
+      const database = new DatabaseSync(f.pathname, { readOnly: true });
+      try {
+        expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
+      } finally {
+        database.close();
+      }
+    });
+  } finally {
+    await signalDrain;
+    await waitForCliSignalExit();
+  }
+});
 
 type AdmissionCase = {
   name: string;

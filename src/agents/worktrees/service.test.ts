@@ -871,7 +871,17 @@ describe("ManagedWorktreeService", () => {
     it("gc retires an unchanged missing checkout", async () => {
       const created = await fixture("missing");
       await git(repo, "worktree", "remove", "--force", created.path);
-      expect(await service.gc()).toEqual({ ...completedGcResult, orphansRetired: 1 });
+      expect(await service.gc()).toEqual({
+        ...completedGcResult,
+        orphansRetired: 1,
+        packsRemoved: 0,
+        gitMaintenance: {
+          repoRoot: created.repoRoot,
+          stage: "completed",
+          packsBefore: 0,
+          packsAfter: 0,
+        },
+      });
       expect(getRegistryWorktree(env, created.id)).toEqual({ ...created, removedAt: now });
     });
 
@@ -940,7 +950,16 @@ describe("ManagedWorktreeService", () => {
         expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
           "retained user changes\n",
         );
-        expect(result).toEqual(completedGcResult);
+        expect(result).toEqual({
+          ...completedGcResult,
+          packsRemoved: 0,
+          gitMaintenance: {
+            repoRoot: liveIdentity.repoRoot,
+            stage: "completed",
+            packsBefore: 0,
+            packsAfter: 0,
+          },
+        });
       } finally {
         gate.inspect.resolve();
         gate.resume.resolve();

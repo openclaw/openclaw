@@ -12,10 +12,15 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
-When the latest history page has no visible messages, for example because tool
-activity is hidden, the pane keeps **Show earlier** available. Scroll upward or
-select it to load earlier history; reloading does not fetch unrequested older
-pages. An incomplete history page does not show the new-chat welcome screen.
+When the visible conversation does not fill the chat pane, including when the
+latest history page is empty or tool activity is hidden, earlier history loads
+automatically after the layout settles. Filling stops once the prefetch margin
+is filled, after three automatic pages per open, when history ends, or when a
+request fails. A first page that already fills the viewport does not start this
+automatic loading. Scroll upward or select **Show earlier** to load more or retry.
+Hidden panes, background tabs, and programmatic or maintenance scrolling do not
+trigger automatic loading. An incomplete history page does not show the new-chat welcome
+screen.
 
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
 While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
@@ -617,6 +622,8 @@ pasted-text attachments. Older history without origin metadata recognizes
 `text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
 
 Uploaded attachments keep their original filenames on download, including spaces and Unicode characters.
+Document cards show a labeled **Download** action without hovering, both in the
+transcript and in the **Files** panel when no preview is available.
 Uploaded images also retain their names in accessible transcript image and image-viewer labels after sending and reloading; descriptive alt text takes precedence when provided.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
 panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents

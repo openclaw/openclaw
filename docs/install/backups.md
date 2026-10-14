@@ -37,6 +37,11 @@ committed state safely.
 SQLite snapshots, including Doctor's pre-migration backups and backup reuse on
 retry, preserve vector memory tables without loading the native `sqlite-vec`
 extension. Backup creation therefore works on older Intel CPUs without AVX.
+Table-scoped startup migration archives are a specialized recovery format, not
+full backups. They contain only a migration's declared tables and metadata. Use
+[the scoped restore command](/reference/database-schemas/versioning#declared-migration-backup-scopes)
+for those files; package updater rollback continues to capture full databases.
+
 Vector search still needs a compatible extension; on those hosts, build
 `sqlite-vec` without AVX and set `memory.search.store.vector.extensionPath`
 to that build's loadable extension.

@@ -73,6 +73,14 @@ describe("memory tool schemas", () => {
     expect(Value.Check(tool.parameters, prepared)).toBe(true);
     expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
   });
+
+  it("describes search as evidence-driven without repeating supplied recall", () => {
+    const description = createMemorySearchToolOrThrow().description;
+
+    expect(description).toContain("not already present in the current turn");
+    expect(description).toContain("Do not repeat memory retrieval");
+    expect(description).not.toContain("Mandatory recall step");
+  });
 });
 
 describe("memory_search unavailable payloads", () => {

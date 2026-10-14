@@ -241,7 +241,7 @@ export async function withTrustedPluginSessionFacts<T>(
       const cache = authority ?? createReadScope("");
       const snapshot = await projection.withSelectionPreparation(async () => {
         do {
-          await projection.prepareSelection(true);
+          await projection.prepareSelection({ yieldForCatalog: true });
           await projection.prepareMembership();
           assertAuthority();
         } while (projection.needsSelectionPreparation());

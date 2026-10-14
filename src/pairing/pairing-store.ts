@@ -10,6 +10,7 @@ import {
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -118,6 +119,7 @@ function mutatePairing(params: PairingOptions, mutation: PairingMutation) {
             context.admission.assertCurrent();
             assertCurrent?.();
             facts.replyPort.postMessage(normalized, []);
+            recordWorkerMessage("admission", "to_worker", normalized.length * 2);
           } else if (
             facts.kind !== "channel-pairing" ||
             (request.stage !== "transaction" && request.stage !== "commit")
@@ -131,7 +133,7 @@ function mutatePairing(params: PairingOptions, mutation: PairingMutation) {
   );
 }
 
-/** @deprecated Await readChannelAllowFromStore; removal follows a stable deprecation period. */
+/** @deprecated Await readChannelAllowFromStore; final compatibility day: 2026-12-31. */
 export function readChannelAllowFromStoreSync(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,

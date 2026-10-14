@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { movePendingDeliveryQueueEntryNamespace } from "../delivery-queue-sqlite-namespace.js";
 import {
   commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
@@ -144,10 +145,13 @@ describe("outbound delivery namespace ownership", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
     const readOwner = () => {
-      const reads = trackSqliteStatementExecutions(database.db, ["owners"], (sql) =>
-        sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
-          ? "owners"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["owners"],
+        (sql) =>
+          sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
+            ? "owners"
+            : null,
       );
       try {
         const [owner, missing, duplicate] = findDeliveryIntentOwnersInDatabase(database, {

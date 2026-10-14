@@ -1,7 +1,8 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as retry from "@openclaw/retry";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -2861,6 +2862,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     ],
     ["retries writer rebound without send evidence", writerRebound(), 2, "delivered", "active"],
     [
+      "keeps exhausted writer rebound retryable instead of permanent",
+      writerRebound(),
+      4,
+      "retryable",
+    ],
+    [
+      "keeps exhausted wrapped writer rebound retryable",
+      new Error("requester handoff failed", { cause: writerRebound() }),
+      4,
+      "retryable",
+    ],
+    [
+      "keeps a permanent cause of writer rebound permanent",
+      writerRebound(new Error("chat not found")),
+      1,
+      "permanent_failure",
+    ],
+    [
       "does not text-fallback after an identified incomplete platform send",
       new OutboundDeliveryError("incomplete terminal response", {
         cause: new Error("incomplete terminal response"),
@@ -2877,6 +2896,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       "ambiguous",
     ],
   ])("%s", async (_name, error, attempts, outcome, route) => {
+    const sleep = vi.spyOn(retry, "sleepWithAbort").mockResolvedValue(undefined);
+    onTestFinished(() => sleep.mockRestore());
     const callGateway = createGatewayMock();
     const gatewayMock = vi.mocked(callGateway).mockRejectedValue(error);
     if (outcome === "delivered") {

@@ -8,6 +8,7 @@ import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   buildReleaseStateArtifact,
+  readReleaseJobListing,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { validateParentManifest } from "../../scripts/release-ci-summary.mjs";
@@ -59,6 +60,46 @@ describe("FRV protected gh evidence reads", () => {
       expect(result.calls).toHaveLength(1);
     },
   );
+
+  it("rereads a job listing at a smaller page size after a GitHub 5xx", () => {
+    const result = runProtectedFrv(
+      "getAttemptJobs",
+      ["101", 2],
+      "actions/runs/101/attempts/2/jobs?per_page=50",
+      "large-page-502",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(result.calls.map((call) => call[2])).toEqual([
+      `repos/${REPOSITORY}/actions/runs/101/attempts/2/jobs?per_page=100`,
+      `repos/${REPOSITORY}/actions/runs/101/attempts/2/jobs?per_page=50`,
+    ]);
+  });
+
+  it("fails closed when every job listing page size returns a 5xx", async () => {
+    const serverError = Object.assign(new Error("Command failed"), {
+      stderr: "gh: Server Error (HTTP 502)",
+    });
+    const pageSizes: number[] = [];
+    await expect(
+      readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+        pageSizes.push(perPage);
+        expect(smallerPageFallback).toBe(perPage !== 30);
+        throw serverError;
+      }),
+    ).rejects.toBe(serverError);
+    expect(pageSizes).toEqual([100, 50, 30]);
+    const notFound = Object.assign(new Error("Command failed"), {
+      stderr: "gh: Not Found (HTTP 404)",
+    });
+    await expect(
+      readReleaseJobListing(async (perPage) => {
+        pageSizes.push(perPage);
+        throw notFound;
+      }),
+    ).rejects.toBe(notFound);
+    expect(pageSizes).toEqual([100, 50, 30, 100]);
+  });
 
   it("reads the mutable release tip freshly even when watcher reads are cached", () => {
     const result = runProtectedFrv(
@@ -143,6 +184,7 @@ function runProtectedFrv(
     | "unrelated"
     | "transient-deadline"
     | "empty"
+    | "large-page-502"
     | "403"
     | "429" = "none",
   cachedReads = false,
@@ -159,6 +201,10 @@ const fail = (message, code) => { console.error(message); process.exit(code); };
 const failure = ${JSON.stringify(failure)};
 if (failure === "protected") fail("protected refusal", 19);
 if (failure === "transient-deadline") fail("HTTP 502: transient fixture failure", 1);
+if (failure === "large-page-502" && args.some((arg) => arg.endsWith("/jobs?per_page=100"))) {
+  process.stdout.write("HTTP/2.0 502 Bad Gateway\\r\\n\\r\\n");
+  fail("gh: Server Error (HTTP 502)", 1);
+}
 if (args[0] !== "api" || !args.includes(${JSON.stringify(`repos/${REPOSITORY}/${endpoint}`)})) fail("unexpected request", 17);
 if (!args.some((arg, i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
 if (${endpoint.endsWith("/logs")} && failure === "legacy-flag" && args.includes("--allow-escape-sequences")) fail("unknown flag: --allow-escape-sequences", 1);

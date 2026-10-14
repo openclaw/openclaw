@@ -43,7 +43,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
 
-/** @deprecated Use GitHubPublicationClaimRequestV2; removed in the next Plugin SDK major. */
+/** @deprecated Use GitHubPublicationClaimRequestV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type GitHubPublicationClaimRequest = {
   claim: WorkerSessionTurnClaim;
   sessionKey: string;
@@ -55,7 +55,7 @@ export type GitHubPublicationClaimRequest = {
   expectedPublisher?: GitHubPublicationPublisher;
 };
 
-/** @deprecated Use GitHubPublicationSessionRequestV2; removed in the next Plugin SDK major. */
+/** @deprecated Use GitHubPublicationSessionRequestV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type GitHubPublicationSessionRequest = SessionGitHubPublishParams & {
   agentId: string;
   expectedRunId?: string;

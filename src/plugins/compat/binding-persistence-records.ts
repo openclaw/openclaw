@@ -8,12 +8,13 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     introduced: "2026-09-08",
     deprecated: "2026-10-09",
     warningStarts: "2026-10-09",
-    removalGate: "stable-deprecation-period",
+    removeAfter: "2026-12-31",
     replacement:
-      "Use createAccountScopedConversationBindingManagerV2, registerSessionBindingAdapterV2, and awaited service list/resolve/touch methods. V2 adapters supply a coherent inspection snapshot with its current-source assertion. Legacy synchronous operations preserve completion and expiry semantics until removed in an announced later stable release.",
+      "Use createAccountScopedConversationBindingManagerV2, iMessage createIMessageConversationBindingManagerV2, registerSessionBindingAdapterV2, and awaited service list/resolve/touch methods. V2 adapters supply a coherent inspection snapshot with its current-source assertion. Legacy synchronous operations preserve completion and expiry semantics through 2026-12-31; removal ships in the first January 2027 stable release.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings",
     surfaces: [
       "openclaw/plugin-sdk/thread-bindings-runtime.createAccountScopedConversationBindingManager",
+      "@openclaw/imessage api.createIMessageConversationBindingManager",
       "AccountScopedConversationBindingManager.getByConversationId",
       "AccountScopedConversationBindingManager.listBySessionKey",
       "AccountScopedConversationBindingManager.bindConversation",
@@ -48,7 +49,7 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     introduced: "2026-09-08",
     deprecated: "2026-10-09",
     warningStarts: "2026-10-09",
-    removalGate: "stable-deprecation-period",
+    removeAfter: "2026-12-31",
     replacement:
       "Use createNativeSessionBindingLifecycleV2 and resolvePreparedNativeSessionBinding with the worker-backed binding store, and release the prepared capture after terminal cleanup. Implement AgentHarness.resolveSessionRuntimeOwnershipAsync for preparation. Released synchronous authority factories remain deprecated compatibility adapters.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings",
@@ -76,9 +77,9 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     introduced: "2026-09-08",
     deprecated: "2026-10-10",
     warningStarts: "2026-10-10",
-    removalGate: "stable-deprecation-period",
+    removeAfter: "2026-12-31",
     replacement:
-      "Await approvalEvents.publishRequestedAsync. The legacy publisher retains synchronous delivery counts for synchronous subscribers and refuses async eligibility before delivery; removed in an announced later stable release.",
+      "Await approvalEvents.publishRequestedAsync. The legacy publisher retains synchronous delivery counts for synchronous subscribers and refuses async eligibility before delivery; removed in the first January 2027 stable release after the final compatibility day, 2026-12-31.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-gateway-approval-publication",
     surfaces: ["GatewayRequestHandlerOptions.context.approvalEvents.publishRequested"],
     diagnostics: ["TypeScript @deprecated annotation and the shared capability-family warning"],

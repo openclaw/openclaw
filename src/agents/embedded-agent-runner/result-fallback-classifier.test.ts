@@ -1,6 +1,8 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { buildKnownAgentRunFailureReplyPayload } from "../../auto-reply/reply/agent-runner-failure-reply.js";
+import { FailoverError } from "../failover-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -22,6 +24,56 @@ function classifyErrorPayload(provider: string, model: string, text: string) {
 }
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
+  it.each([false, true])(
+    "retains retry exhaustion across fallback aggregation (billing=%s)",
+    async (billing) => {
+      const rawError = "429 rate limit exceeded. Please try again in 221ms.";
+      const runs: string[] = [];
+      const failure: unknown = await runWithModelFallback({
+        cfg: undefined,
+        provider: "external",
+        model: "primary",
+        fallbacksOverride: ["external/fallback"],
+        skipAuthProfileRuntime: true,
+        run: async (provider, model) => {
+          runs.push(model);
+          const errorMessage =
+            billing && model === "fallback" ? "402 Insufficient credits" : rawError;
+          return {
+            payloads: buildPayloads({
+              provider,
+              lastAssistant: makeAssistantMessageFixture({ provider, model, errorMessage }),
+              rateLimitRetriesExhausted: billing && model === "fallback" ? undefined : 9,
+            }),
+            meta: { durationMs: 1 },
+          };
+        },
+        classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+      }).catch((error: unknown) => error);
+      expect(runs).toEqual(["primary", "fallback"]);
+      expect(failure).toBeInstanceOf(FailoverError);
+      if (!(failure instanceof FailoverError)) {
+        throw new Error("expected failover error");
+      }
+      expect(failure.attempts?.[0]).toMatchObject({
+        error: rawError,
+        rateLimitRetriesExhausted: 9,
+      });
+      const payload = buildKnownAgentRunFailureReplyPayload({
+        err: failure,
+        sessionCtx: {},
+        resolvedVerboseLevel: "off",
+      });
+      expect(payload?.text).toContain(
+        billing ? "billing" : "on the final model after 9 automatic retries",
+      );
+      expect(payload?.text).not.toContain("221ms");
+      if (billing) {
+        expect(payload?.text).not.toContain("automatic retries");
+      }
+    },
+  );
+
   it("defaults embedded cyber failover to Daybreak Blue", () => {
     expect(resolveEmbeddedCyberFailoverConfig(undefined)).toEqual({
       mode: "auto",

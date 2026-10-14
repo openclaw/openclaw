@@ -54,6 +54,27 @@ describe("typed no-send retryability", () => {
       typed: undefined,
       retryable: false,
     },
+    ...(["connect", "read"] as const).map((syscall) => ({
+      name: `grammY-wrapped dual-stack ${syscall} timeout`,
+      error: () =>
+        Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+          name: "HttpError",
+          error: new TypeError("fetch failed", {
+            cause: Object.assign(
+              new AggregateError([
+                Object.assign(new Error("IPv6 route unavailable"), {
+                  code: "ENETUNREACH",
+                  syscall: "connect",
+                }),
+                Object.assign(new Error("IPv4 timed out"), { code: "ETIMEDOUT", syscall }),
+              ]),
+              { code: "ETIMEDOUT" },
+            ),
+          }),
+        }),
+      typed: undefined,
+      retryable: syscall === "connect",
+    })),
     {
       name: "mixed retryable and permanent markers",
       error: () => new AggregateError([retryableMarker(), permanentMarker()]),

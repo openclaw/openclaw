@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
@@ -71,10 +72,10 @@ function manifestPath(value: unknown): string {
 }
 
 function manifestMode(value: unknown): number {
-  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 0o777) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 0o777) {
     throw new Error("Worker workspace manifest contains an invalid mode");
   }
-  return value as number;
+  return value;
 }
 
 export function gitFileMode(mode: number): number {
@@ -109,11 +110,10 @@ function createManifestBudget() {
   };
 }
 
-function parseRawEntry(value: unknown): RawManifestEntry {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function parseRawEntry(entry: unknown): RawManifestEntry {
+  if (!isRecord(entry)) {
     throw new Error("Worker workspace manifest contains an invalid entry");
   }
-  const entry = value as Record<string, unknown>;
   const entryPath = manifestPath(entry.path);
   const mode = manifestMode(entry.mode);
   if (entry.type === "directory") {
@@ -121,8 +121,9 @@ function parseRawEntry(value: unknown): RawManifestEntry {
   }
   if (entry.type === "file") {
     if (
+      typeof entry.size !== "number" ||
       !Number.isSafeInteger(entry.size) ||
-      (entry.size as number) < 0 ||
+      entry.size < 0 ||
       typeof entry.sha256 !== "string" ||
       !/^[a-f0-9]{64}$/u.test(entry.sha256)
     ) {
@@ -132,7 +133,7 @@ function parseRawEntry(value: unknown): RawManifestEntry {
       path: entryPath,
       type: "file",
       mode: gitFileMode(mode),
-      size: entry.size as number,
+      size: entry.size,
       sha256: entry.sha256,
     };
   }
@@ -241,11 +242,10 @@ export function parseWorkerWorkspaceManifest(
   if (createHash("sha256").update(raw).digest("hex") !== match[1]) {
     throw new Error("Worker workspace manifest digest does not match its reference");
   }
-  const value = JSON.parse(raw) as unknown;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const manifest: unknown = JSON.parse(raw);
+  if (!isRecord(manifest)) {
     throw new Error("Worker workspace manifest is invalid");
   }
-  const manifest = value as Record<string, unknown>;
   if (
     manifest.version !== 1 ||
     (manifest.baseCommit !== null &&
@@ -256,7 +256,7 @@ export function parseWorkerWorkspaceManifest(
   }
   return {
     version: 1,
-    baseCommit: manifest.baseCommit as string | null,
+    baseCommit: manifest.baseCommit,
     ...validateAndProjectEntries(manifest.entries),
   };
 }
@@ -290,11 +290,15 @@ export function serializeWorkerWorkspaceReconciliationPlan(
 export function parseWorkerWorkspaceReconciliationPlan(
   raw: string,
 ): WorkerWorkspaceReconciliationPlan {
-  const value = JSON.parse(raw) as unknown;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const plan: unknown = JSON.parse(raw);
+  if (!isRecord(plan)) {
     throw new Error("Worker workspace reconciliation journal is invalid");
   }
-  const plan = value as Record<string, unknown>;
+  // Only absent arrays default to empty; persisted null must still fail validation.
+  const {
+    baseDirectories: rawBaseDirectories = [],
+    appliedDirectories: rawAppliedDirectories = [],
+  } = plan;
   if (
     plan.version !== 1 ||
     typeof plan.temporaryNonce !== "string" ||
@@ -309,25 +313,23 @@ export function parseWorkerWorkspaceReconciliationPlan(
     !/^[a-f0-9]{64}$/u.test(plan.basePackSha256) ||
     !Array.isArray(plan.baseEntries) ||
     !Array.isArray(plan.appliedEntries) ||
-    (plan.baseDirectories !== undefined && !Array.isArray(plan.baseDirectories)) ||
-    (plan.appliedDirectories !== undefined && !Array.isArray(plan.appliedDirectories)) ||
+    !Array.isArray(rawBaseDirectories) ||
+    !Array.isArray(rawAppliedDirectories) ||
     (plan.appliedManifestRef !== undefined &&
       (typeof plan.appliedManifestRef !== "string" ||
         !MANIFEST_REF_PATTERN.test(plan.appliedManifestRef))) ||
     plan.baseEntries.length +
       plan.appliedEntries.length +
-      ((plan.baseDirectories as unknown[] | undefined)?.length ?? 0) +
-      ((plan.appliedDirectories as unknown[] | undefined)?.length ?? 0) >
+      rawBaseDirectories.length +
+      rawAppliedDirectories.length >
       MAX_RECONCILIATION_ENTRIES
   ) {
     throw new Error("Worker workspace reconciliation journal has an unsupported shape");
   }
   const baseEntries = plan.baseEntries.map(parseJournalEntry);
   const appliedEntries = plan.appliedEntries.map(parseJournalEntry);
-  const baseDirectories = ((plan.baseDirectories as unknown[] | undefined) ?? []).map(manifestPath);
-  const appliedDirectories = ((plan.appliedDirectories as unknown[] | undefined) ?? []).map(
-    manifestPath,
-  );
+  const baseDirectories = rawBaseDirectories.map(manifestPath);
+  const appliedDirectories = rawAppliedDirectories.map(manifestPath);
   for (const entries of [baseEntries, appliedEntries]) {
     const paths = entries.map((entry) => entry.path);
     if (new Set(paths).size !== paths.length) {
@@ -348,7 +350,7 @@ export function parseWorkerWorkspaceReconciliationPlan(
     appliedEntries,
     baseDirectories,
     appliedDirectories,
-    appliedManifestRef: plan.appliedManifestRef as string | undefined,
+    appliedManifestRef: plan.appliedManifestRef,
     baseTree: plan.baseTree,
     basePackSha256: plan.basePackSha256,
   };

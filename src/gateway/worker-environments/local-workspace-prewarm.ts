@@ -4,11 +4,9 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { withWorktreeMutationLease } from "../../agents/worktrees/allocation.js";
 import { resolveWorktreeBase } from "../../agents/worktrees/base-ref.js";
+import { resolveRepository } from "../../agents/worktrees/repository-paths.js";
 import { withWorktreeRunEnd } from "../../agents/worktrees/run-end-lifecycle.js";
-import {
-  resolveRepository,
-  withWorktreeSources,
-} from "../../agents/worktrees/service-preparation.js";
+import { withWorktreeSources } from "../../agents/worktrees/service-preparation.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";

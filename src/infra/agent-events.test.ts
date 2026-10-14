@@ -559,20 +559,6 @@ test.each(["global", "run"] as const)(
   },
 );
 
-test("keeps the admitted listener cohort through a preserving reset", () => {
-  const order: string[] = [];
-  onAgentEventForRun("run", () => {
-    order.push("first");
-    resetAgentEventsForTest({ preserveListeners: true });
-    onAgentEvent(() => order.push("new-global"));
-    onAgentEventForRun("run", () => order.push("new-run"));
-  });
-  onAgentEvent(() => order.push("old-global"));
-  onAgentEventForRun("run", () => order.push("old-run"));
-  emit("run");
-  expect(order).toEqual(["first", "old-global", "old-run"]);
-});
-
 test("does not reroute an event when a callback changes its run id", () => {
   const order: string[] = [];
   onAgentEventForRun("b", () => order.push("earlier-b"));

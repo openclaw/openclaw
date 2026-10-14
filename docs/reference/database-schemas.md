@@ -170,6 +170,12 @@ retains the physical database's completed validation facts for later opens in th
 same process. Explicit retirement closes the host identity descriptor only after
 all sibling native handles have drained, preserving their POSIX locks.
 
+Shared-state commands load their registered domain directly. The remaining command
+runtime loads only when an operation needs it, so workers serving registered
+operations alone do not retain unrelated command modules. Preparation still
+finishes before synchronous database execution; writer admission and receipts
+stay with their existing owners.
+
 The shared-state reader pool keeps its first worker warm for the normal handle
 idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
 Retirement uses the pool's existing task and native-resource settlement so an

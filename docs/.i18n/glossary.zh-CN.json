@@ -1,5 +1,13 @@
 [
   {
+    "source": "Migrate synchronous SQLite APIs",
+    "target": "迁移同步 SQLite API"
+  },
+  {
+    "source": "Async SQLite migration",
+    "target": "异步 SQLite 迁移"
+  },
+  {
     "source": "X / Twitter",
     "target": "X / Twitter"
   },
@@ -726,6 +734,10 @@
   {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
+  },
+  {
+    "source": "Neon AI Gateway",
+    "target": "Neon AI Gateway"
   },
   {
     "source": "Mistral",

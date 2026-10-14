@@ -51,7 +51,7 @@ suite.define(() => {
     await expectHistoryBoundaryState(page, false);
     await page.close();
   });
-  it("pages an underfilled native transcript only after reader input", async () => {
+  it("automatically fills an underfilled native transcript and stops once scrollable", async () => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("chat-history-underfill", artifactRoot)
@@ -136,16 +136,6 @@ suite.define(() => {
       const thread = pane.locator(".chat-thread");
       await page.getByText("Recent answer", { exact: true }).waitFor();
       await expectTranscriptLayoutCommitted(thread);
-      await page.evaluate(async () => {
-        for (let frame = 0; frame < 24; frame += 1) {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
-        }
-      });
-      expect(await gateway.getRequests("chat.history")).toHaveLength(0);
-      await thread.hover();
-      await page.mouse.wheel(0, -1000);
       await expect
         .poll(async () =>
           (await gateway.getRequests("chat.history")).map(
@@ -175,7 +165,7 @@ suite.define(() => {
           ),
         )
         .toEqual([2, 6]);
-      const showEarlier = await expectHistoryBoundaryState(pane, false);
+      const showEarlier = await expectHistoryBoundaryState(pane, true);
       expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
         true,
       );
@@ -186,8 +176,6 @@ suite.define(() => {
         );
       }
 
-      await showEarlier.click();
-      await expectHistoryBoundaryState(pane, true);
       await gateway.resolveDeferred("chat.history");
       await expect
         .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
@@ -203,23 +191,22 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, pane.locator(".chat-main"), [thread]),
         );
       }
-      // The second applied page staged one background prefetch (offset 22);
-      // the now-scrollable transcript must not consume or chain beyond it.
+      // Filling the viewport must not stage an unused automatic page.
       await expect
         .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
-        .toBe(3);
+        .toBe(2);
       expect(
         (await gateway.getRequests("chat.history")).map(
           (request) => (request.params as { offset?: number } | undefined)?.offset,
         ),
-      ).toEqual([2, 6, 22]);
+      ).toEqual([2, 6]);
       for (const request of await gateway.getRequests("chat.history")) {
         expect(request.params).toMatchObject({ limit: 1000, maxBytes: 1024 * 1024 });
       }
     } finally {
       await suite.closeBrowserContext(context);
       if (artifactDir && proofVideo) {
-        await proofVideo.saveAs(path.join(artifactDir, "native-history-reader-pagination.webm"));
+        await proofVideo.saveAs(path.join(artifactDir, "native-history-autofill.webm"));
       }
     }
   });

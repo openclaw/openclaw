@@ -71,12 +71,12 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private resolveRuntime = createDraftAgentRuntimeResolver();
 
   constructor(
-    private readonly notify: () => void,
+    requestUpdate: () => void,
     onSelectionChange: ModelSelectionChange = () => undefined,
     private readonly onCatalogTargetSelect: (catalogId: string) => void = () => undefined,
   ) {
-    super(onSelectionChange);
-    this.catalogTargets = new CatalogTargetDiscovery(notify);
+    super(onSelectionChange, requestUpdate);
+    this.catalogTargets = new CatalogTargetDiscovery(this.notify);
     this.metadataReader = new ModelCatalogReader(
       () => {
         if (
@@ -479,7 +479,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
 
   private restorePreference() {
     const policy = this.metadataState.modelSelectionPolicy;
-    this.restoreModelPreference(
+    const changed = this.restoreModelPreference(
       this.pendingPreference,
       {
         agent: this.pendingAgent,
@@ -492,6 +492,9 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.modelDefaultsPolicy !== "configured" &&
         this.modelDefaultsPolicy !== null,
     );
+    if (changed) {
+      this.notify();
+    }
   }
 
   restoreDraftSelection(selection: DurableDraftModelSelection | undefined) {
@@ -706,6 +709,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.markExplicitSelection();
         this.persistSelection();
         this.onDraftSelectionChange?.();
+        this.notify();
       },
       onFastModeSelect: (value) => {
         this.selectionGeneration += 1;

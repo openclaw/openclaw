@@ -12,7 +12,7 @@ import {
   withPreparedSessionEventRow,
 } from "./session-event-prepared-row.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { withPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
+import { readPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
@@ -37,7 +37,7 @@ it.each([0, 7])(
       if (queries(cfg)[0]?.key === keys[0]) {
         await held.promise;
       }
-      return withPreparedSessionRows(projection, () => true, queries, consume);
+      return readPreparedSessionRows(projection, () => true, queries, consume);
     };
     const published: string[] = [];
     const labels = new Map<string, string | undefined>();
@@ -145,7 +145,7 @@ it("publishes lifecycle rows after their producer drains and before publication 
   projection.withPreparedExactRows = async (queries, consume) => {
     entered.resolve();
     await release.promise;
-    return withPreparedSessionRows(projection, () => true, queries, consume);
+    return readPreparedSessionRows(projection, () => true, queries, consume);
   };
   const order: string[] = [];
   const broadcastToConnIds = vi.fn(() => order.push("publication"));
@@ -182,37 +182,16 @@ it("publishes lifecycle rows after their producer drains and before publication 
   expect(order).toEqual(["publication", "drained"]);
 });
 
-it("retains canonical deferral and rejects asynchronous prepared consumers", async () => {
+it("rejects asynchronous prepared consumers", async () => {
   const projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
-  projection.withPreparedExactRows = (queries, consume) =>
-    withPreparedSessionRows(projection, () => true, queries, consume);
-  const database = {
-    agentId: "main",
-    path: "/synthetic/pending.sqlite",
-    initializeCanonicalValidation: true,
-    assertStateCurrent: () => {},
-    source: {
-      key: "file:synthetic",
-      canonicalPath: "/synthetic/pending.sqlite",
-      incarnation: "test",
-    },
-  };
-  vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-    kind: "pending",
-    database,
-  });
+  projection.withPreparedExactRows = async (queries, consume) =>
+    readPreparedSessionRows(projection, () => true, queries, consume);
   onTestFinished(async () => {
     await drainSessionEventPublications(projection);
     projection.dispose();
     vi.restoreAllMocks();
   });
   const rows = sessionEventPublicationRows(projection);
-  const publish = vi.fn();
-  await expect(rows.withPreparedExactRows(() => [], publish)).resolves.toEqual({
-    kind: "pending",
-    database,
-  });
-  expect(publish).not.toHaveBeenCalled();
   await expect(
     rows.withPreparedExactRows(
       () => [],
