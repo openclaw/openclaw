@@ -1,6 +1,7 @@
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
 import { ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD } from "./assistant-text-phase-terminal-hint-record.js";
+import { ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS } from "./async-sqlite-preparation-records.js";
 import { AUTH_ASYNC_COMPAT_RECORD } from "./auth-async-record.js";
 import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
@@ -42,6 +43,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
   AUTH_ASYNC_COMPAT_RECORD,
+  ...ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS,
   ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   CRON_STORE_PATH_COMPAT_RECORD,
@@ -156,7 +158,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-09-20",
     deprecated: "2026-09-20",
     warningStarts: "2026-09-20",
-    removalGate: "next-plugin-sdk-major",
+    removalGate: "stable-deprecation-period",
     replacement:
       "Await getSessionBindingService().bind, unbind, inspectByConversationAsync, resolveByConversationAsync, touchAsync, resolveRuntimeConversationBindingRouteAsync, and the Async-suffixed thread-binding lifecycle setters. Bundled current-conversation mutations and session listings use the existing worker owner. Project prepared inspection facts with inspectRuntimeConversationBindingRoute. Legacy external adapters retain their synchronous projection contract.",
     docsPath: "/plugins/sdk-runtime/channel#awaited-conversation-binding-mutations",
@@ -170,9 +172,15 @@ export const PLUGIN_COMPAT_RECORDS = [
       "ChannelConversationBindingSupport.setMaxAgeBySessionKey",
       "api.runtime.channel.threadBindings.setIdleTimeoutBySessionKey",
       "api.runtime.channel.threadBindings.setMaxAgeBySessionKey",
+      "@openclaw/discord.setThreadBindingIdleTimeoutBySessionKey",
+      "@openclaw/discord.setThreadBindingMaxAgeBySessionKey",
+      "@openclaw/telegram.setTelegramThreadBindingIdleTimeoutBySessionKey",
+      "@openclaw/telegram.setTelegramThreadBindingMaxAgeBySessionKey",
+      "@openclaw/matrix.setMatrixThreadBindingIdleTimeoutBySessionKey",
+      "@openclaw/matrix.setMatrixThreadBindingMaxAgeBySessionKey",
     ],
     diagnostics: [
-      "TypeScript @deprecated annotations on synchronous methods; resolver migration is recorded here and in docs while its broad barrel remains deprecated; no runtime warnings",
+      "TypeScript @deprecated annotations and bounded capability-family warnings on legacy binding calls",
     ],
     tests: [
       "src/infra/outbound/session-binding-service.test.ts",
@@ -193,13 +201,13 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-08-21",
     deprecated: "2026-09-15",
     warningStarts: "2026-09-15",
-    removalGate: "next-plugin-sdk-major",
+    removalGate: "stable-deprecation-period",
     replacement:
       "Await context.acquireManagedWorkspaceAsync(request) and release the returned lease in finally. Retain synchronous acquisition for supported external plugins until explicit breaking-release approval.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#managed-node-workspace-acquisition",
     surfaces: ["OpenClawPluginNodeHostCommandContext.acquireManagedWorkspace"],
     diagnostics: [
-      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+      "TypeScript @deprecated annotation and bounded capability-family warning on legacy workspace acquisition",
     ],
     tests: [
       "src/node-host/invoke-workspace.test.ts",

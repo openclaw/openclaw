@@ -26,6 +26,7 @@ import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
+import { sessionEntryWindowColumns } from "./session-entry-window.types.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -165,34 +166,7 @@ export function hydrateSessionActorState(
         jsonObjectFrom(
           db
             .selectFrom("session_windows")
-            .select([
-              "account_id",
-              "acp_owned",
-              "agent_harness_id",
-              "channel",
-              "chat_type",
-              "created_at",
-              "display_name",
-              "ended_at",
-              "hook_external_content_source",
-              "model",
-              "model_provider",
-              "parent_session_key",
-              "plugin_owner_id",
-              "previous_session_id",
-              "primary_conversation_id",
-              "reason",
-              "session_entry_provenance",
-              "session_id",
-              "session_key",
-              "session_scope",
-              "spawned_by",
-              "started_at",
-              "status",
-              "transcript_observed_at",
-              "transcript_updated_at",
-              "updated_at",
-            ])
+            .select(sessionEntryWindowColumns)
             .where("session_windows.session_id", "=", eb.ref("session_nodes.current_session_id")),
         ).as("actor_window"),
         jsonObjectFrom(
