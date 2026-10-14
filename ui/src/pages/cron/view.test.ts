@@ -319,8 +319,12 @@ describe("cron view editor", () => {
     expect(telegramOption?.querySelector(".picker-select__label")?.textContent?.trim()).toBe(
       "Telegram fallback",
     );
+    const channelTrigger = getElement(channel, ".picker-select__trigger", HTMLButtonElement);
+    channelTrigger.focus();
     await choosePickerValue(channel, "telegram");
     expect(onFormChange).toHaveBeenLastCalledWith({ failureAlertChannel: "telegram" });
+    expect(channel.querySelector(".picker-select__trigger")).toBe(channelTrigger);
+    expect(document.activeElement).toBe(channelTrigger);
 
     const mode = getElement(
       container,
@@ -330,8 +334,12 @@ describe("cron view editor", () => {
     expect(mode.querySelector('[role="option"][data-value=""]')?.textContent).toContain(
       "Inherit global setting",
     );
+    const modeTrigger = getElement(mode, ".picker-select__trigger", HTMLButtonElement);
+    modeTrigger.focus();
     await choosePickerValue(mode, "");
     expect(onFormChange).toHaveBeenLastCalledWith({ failureAlertDeliveryMode: "" });
+    expect(mode.querySelector(".picker-select__trigger")).toBe(modeTrigger);
+    expect(document.activeElement).toBe(modeTrigger);
   });
 
   it("switches schedule inputs by segmented kind and wires kind changes", () => {
