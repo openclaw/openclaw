@@ -580,7 +580,14 @@ it.each([
     const portBusy = Object.assign(new Error("Port is already in use."), {
       name: "PortInUseError",
     });
-    fixture.portProbe.mockRejectedValueOnce(portBusy).mockResolvedValue(undefined);
+    const probeAlive: boolean[] = [];
+    fixture.portProbe.mockImplementation(async () => {
+      const alive = fixture.alive;
+      probeAlive.push(alive);
+      if (alive) {
+        throw portBusy;
+      }
+    });
     fixture.diagnose.mockResolvedValue({ ok: false, code, cdpUrl: profile.cdpUrl });
     vi.stubGlobal(
       "fetch",
@@ -601,8 +608,19 @@ it.each([
     });
     if (recovers) {
       await expect(launch).resolves.toMatchObject({ exe: { path: chrome }, proc });
-      expect(fixture.portProbe).toHaveBeenCalledTimes(2);
       expect(fixture.spawn).toHaveBeenCalledTimes(1);
+      const stopOrder = kill.mock.invocationCallOrder[0]!;
+      const spawnOrder = fixture.spawn.mock.invocationCallOrder[0]!;
+      expect(probeAlive[0]).toBe(true);
+      expect(fixture.portProbe.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
+      const freeProbeOrders = fixture.portProbe.mock.invocationCallOrder.filter(
+        (_, index) => probeAlive[index] === false,
+      );
+      expect(freeProbeOrders.length).toBeGreaterThan(0);
+      for (const probeOrder of freeProbeOrders) {
+        expect(probeOrder).toBeGreaterThan(stopOrder);
+        expect(probeOrder).toBeLessThan(spawnOrder);
+      }
     } else {
       await expect(launch).rejects.toBe(portBusy);
       expect(fixture.spawn).not.toHaveBeenCalled();
