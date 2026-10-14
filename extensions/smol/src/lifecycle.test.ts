@@ -423,7 +423,8 @@ describe("mount plans", () => {
   });
 
   it("matches a machine only when its recorded plan equals the requested mounts", () => {
-    const plan = [{ hostPath: "/a", guestPath: "/w", readOnly: false }];
+    const mount: SmolMount = { hostPath: "/a", guestPath: "/w", readOnly: false };
+    const plan = [mount];
     expect(
       smolMachineMountsMatch(
         { labels: { [SMOL_MOUNT_PLAN_LABEL]: hashSmolMountPlan(plan) } },
@@ -433,7 +434,7 @@ describe("mount plans", () => {
     expect(smolMachineMountsMatch({ labels: {} }, plan)).toBe(false);
     expect(
       smolMachineMountsMatch({ labels: { [SMOL_MOUNT_PLAN_LABEL]: hashSmolMountPlan(plan) } }, [
-        { ...plan[0], readOnly: true },
+        { ...mount, readOnly: true },
       ]),
     ).toBe(false);
   });
