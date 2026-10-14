@@ -93,13 +93,12 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   const restartRestrictions = createRestrictions();
   const commitRestrictions = createRestrictions();
   const committedTerminalConfig = () => appliedConfigWhileRestartPending ?? activeConfig;
-  const resolveForConfig = (config: OpenClawConfig, agentId?: string, shellConfig = config) => {
-    return resolveTerminalLaunch({
+  const resolveForConfig = (config: OpenClawConfig, agentId?: string, shellConfig = config) =>
+    resolveTerminalLaunch({
       config,
       agentId,
       configuredShell: shellConfig.gateway?.terminal?.shell,
     });
-  };
   const accumulateRestrictions = (
     config: OpenClawConfig,
     restrictions: ReturnType<typeof createRestrictions>,
@@ -119,6 +118,13 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   const clearRestrictions = (restrictions: ReturnType<typeof createRestrictions>) => {
     restrictions.disabled = false;
     restrictions.blockedAgents.clear();
+  };
+  const settlePreparedConfig = () => {
+    preparedConfig = null;
+    clearRestrictions(commitRestrictions);
+    if (appliedConfigWhileRestartPending) {
+      accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
+    }
   };
   const isEnabled = () =>
     isTerminalConfigEnabled(committedTerminalConfig()) &&
@@ -166,27 +172,21 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       accumulateRestrictions(preparedConfig, commitRestrictions);
     },
     commitConfig: () => {
-      if (hasPendingRestart) {
+      if (preparedConfig) {
         // The applied marker separates runtime truth from a later candidate
         // that may fail before publication while this restart remains pending.
-        if (preparedConfig) {
+        if (hasPendingRestart) {
           appliedConfigWhileRestartPending = preparedConfig;
+        } else {
+          activeConfig = preparedConfig;
         }
-      } else if (preparedConfig) {
-        activeConfig = preparedConfig;
       }
-      preparedConfig = null;
-      clearRestrictions(commitRestrictions);
-      if (hasPendingRestart && appliedConfigWhileRestartPending) {
-        accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
-      }
+      settlePreparedConfig();
     },
     acceptConfig: (options) => {
       // Baseline acceptance retires an un-published candidate, including config
       // intentionally skipped by reload policy. Only committed publication stages
       // runtime truth for promotion after a rejected restart.
-      preparedConfig = null;
-      clearRestrictions(commitRestrictions);
       if (options.retireRejectedRestart) {
         hasPendingRestart = false;
         clearRestrictions(restartRestrictions);
@@ -194,11 +194,8 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
           activeConfig = appliedConfigWhileRestartPending;
         }
         appliedConfigWhileRestartPending = null;
-        return;
       }
-      if (appliedConfigWhileRestartPending) {
-        accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
-      }
+      settlePreparedConfig();
     },
   };
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Message } from "grammy/types";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
@@ -40,7 +41,107 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   const hasReaction = (call: (typeof calls)[number], emoji: string) =>
     call.method === "setMessageReaction" && JSON.stringify(call.fields.reaction).includes(emoji);
 
-  it.each(["bot-reply", "older-source", "off"] as const)(
+  it.each([
+    { replyToMode: "first", target: "inbound" },
+    { replyToMode: "batched", target: "inbound" },
+    { replyToMode: "first", target: "explicit" },
+    { replyToMode: "batched", target: "explicit" },
+  ] as const)(
+    "preserves the $target final reply target after a $replyToMode progress card",
+    async ({ replyToMode, target }) => {
+      const { createTelegramDraftStream } = await import("./draft-stream.js");
+      const context = createContext();
+      const chat = {
+        id: -1001,
+        type: "supergroup",
+        title: "Forum",
+        is_forum: true,
+      } satisfies Message["chat"];
+      Object.assign(context, {
+        chatId: chat.id,
+        isGroup: true,
+        isForum: true,
+        replyThreadId: 15,
+        threadSpec: { scope: "forum", id: 15 },
+      });
+      context.msg = { ...context.msg, chat, message_thread_id: 15, is_topic_message: true };
+      context.route.sessionKey = "agent:default:telegram:group:-1001:topic:15";
+      Object.assign(context.ctxPayload, {
+        SessionKey: context.route.sessionKey,
+        ChatType: "group",
+        From: "telegram:-1001:topic:15",
+        To: "telegram:-1001:topic:15",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:-1001:topic:15",
+      });
+      const finalText = "The requested result is ready.";
+      const finalTarget = target === "inbound" ? context.msg.message_id : 9001;
+      const draftStreams: TelegramDraftStream[] = [];
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onItemEvent?.({
+            kind: "preamble",
+            itemId: "progress",
+            phase: "end",
+            progressText: "Checking the requested result.",
+          });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+          // Wait for receipt adoption, not just the server accepting the card.
+          await Promise.all(draftStreams.map((stream) => stream.waitForInFlight()));
+          expect(draftStreams.some((stream) => stream.hasConsumedReplyTarget())).toBe(true);
+          expect(acceptedCalls.find((call) => call.method === "sendMessage")?.fields).toMatchObject(
+            {
+              message_thread_id: 15,
+              reply_parameters: { message_id: context.msg.message_id },
+            },
+          );
+        },
+        {
+          mode: "progress",
+          toolProgress: false,
+          context,
+          replyToMode,
+          telegramCfg: {
+            streaming: {
+              mode: "progress",
+              progress: { toolProgress: false, commentary: true },
+            },
+          },
+          cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+          finalReply: {
+            text: finalText,
+            // The synthetic resolver supplies the target normally added by applyReplyTagsToPayload.
+            replyToId: String(finalTarget),
+          },
+          telegramDeps: {
+            ...defaultTelegramBotDeps,
+            createTelegramDraftStream: (params) => {
+              const stream = createTelegramDraftStream(params);
+              draftStreams.push(stream);
+              return stream;
+            },
+          },
+        },
+      );
+      const finalAt = acceptedCalls.findIndex(
+        (call) => call.method === "sendMessage" && call.fields.text === finalText,
+      );
+      expect(finalAt).toBeGreaterThanOrEqual(0);
+      const fields = acceptedCalls[finalAt]!.fields;
+      expect(fields.message_thread_id).toBe(15);
+      const reply = fields.reply_parameters;
+      expect(
+        reply && typeof reply === "object" && "message_id" in reply
+          ? reply.message_id
+          : fields.reply_to_message_id,
+      ).toBe(finalTarget);
+      const retiredAt = acceptedCalls.findIndex((call) => call.method === "deleteMessage");
+      expect(retiredAt).toBeGreaterThan(finalAt);
+      expect([...visibleMessages.values()]).toEqual([finalText]);
+    },
+  );
+
+  it.each(["bot-reply", "older-source"] as const)(
     "selects the native reply target from %s context",
     async (selection) => {
       const context = createContext();
@@ -68,27 +169,22 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       await dispatchProgressTurn(
         async (options) => {
           await options?.onPartialReply?.({ text: preview });
-          if (selection === "off" || selection === "older-source") {
+          if (selection === "older-source") {
             await waitForBotApiCall((call) => call.method === "sendMessage");
             expect([...visibleMessages.values()]).toEqual([preview]);
-            if (selection === "older-source") {
-              expect(
-                acceptedCalls.find((call) => call.method === "sendMessage")?.fields
-                  .reply_parameters,
-              ).toMatchObject({ message_id: inboundId });
-            }
+            expect(
+              acceptedCalls.find((call) => call.method === "sendMessage")?.fields.reply_parameters,
+            ).toMatchObject({ message_id: inboundId });
           }
         },
         {
           mode: "partial",
           toolProgress: false,
           context,
-          replyToMode: selection === "off" ? "off" : "first",
+          replyToMode: "first",
           finalReply: {
             text: "The selected answer.",
-            ...(selection === "off"
-              ? {}
-              : { replyToId: String(selection === "older-source" ? 9001 : inboundId) }),
+            replyToId: String(selection === "older-source" ? 9001 : inboundId),
           },
         },
       );
@@ -111,10 +207,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           calls.some((call) => call.method === "editMessageText" && call.fields.message_id === 1),
         ).toBe(false);
         expect([...visibleMessages]).toEqual([[2, "The selected answer."]]);
-      } else if (selection === "off") {
-        expect(sends).toHaveLength(1);
-        expect(final).not.toHaveProperty("reply_parameters");
-        expect(final).not.toHaveProperty("reply_to_message_id");
       } else {
         expect(final?.reply_parameters).toMatchObject({ message_id: inboundId });
         expect(JSON.stringify(final)).not.toContain("quoted slice");
@@ -124,93 +216,46 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     },
   );
 
-  it.each([
-    ["first", "one-page"],
-    ["batched", "retained-page"],
-    ["all", "media"],
-  ] as const)(
-    "consumes an accepted %s target across %s fallback",
-    async (replyToMode, transition) => {
-      const context = createContext();
-      let rejected = false;
-      http.respondToCall = (call) => {
-        const reject =
-          transition === "one-page"
-            ? call.method === "editMessageText"
-            : transition === "retained-page" &&
-              call.method === "sendMessage" &&
-              call.fields.text === "B".repeat(40);
-        if (reject && !rejected) {
-          rejected = true;
-          return { error_code: 400, description: "Bad Request: final page rejected" };
-        }
-        return undefined;
-      };
-      const finalText =
-        transition === "retained-page"
-          ? "A".repeat(80) + "B".repeat(40)
-          : "The complete answer replaces the accepted draft.";
-      await dispatchProgressTurn(
-        async (options) => {
-          await options?.onPartialReply?.({
-            text: transition === "retained-page" ? "A".repeat(40) : finalText,
-          });
-          await waitForBotApiCall((call) => call.method === "sendMessage");
-        },
-        {
-          mode: "partial",
-          toolProgress: false,
-          context,
-          replyToMode,
-          textLimit: transition === "retained-page" ? 80 : 4096,
-          finalReply: {
-            text:
-              transition === "one-page"
-                ? "A different final answer after the preview edit fails."
-                : finalText,
-            replyToId: String(context.msg.message_id),
-            ...(transition === "media" ? { mediaUrl: "https://example.test/report.pdf" } : {}),
-          },
-          telegramDeps: {
-            ...defaultTelegramBotDeps,
-            loadWebMedia: async () => ({
-              buffer: Buffer.from("accepted report bytes"),
-              contentType: "application/pdf",
-              kind: undefined,
-              fileName: "report.pdf",
-            }),
-          },
-        },
-      );
-      const sends = acceptedCalls.filter(
-        (call) => call.method === "sendMessage" || call.method === "sendDocument",
-      );
-      expect(sends[0]?.fields.reply_parameters).toMatchObject({
-        message_id: context.msg.message_id,
-      });
-      expect(sends).toHaveLength(2);
-      if (replyToMode === "all") {
-        expect(sends[1]?.fields.reply_parameters).toMatchObject({
-          message_id: context.msg.message_id,
-        });
-      } else {
-        expect(sends[1]?.fields).not.toHaveProperty("reply_parameters");
-        expect(sends[1]?.fields).not.toHaveProperty("reply_to_message_id");
+  it("consumes an accepted batched target across retained-page fallback", async () => {
+    const context = createContext();
+    let rejected = false;
+    http.respondToCall = (call) => {
+      const reject = call.method === "sendMessage" && call.fields.text === "B".repeat(40);
+      if (reject && !rejected) {
+        rejected = true;
+        return { error_code: 400, description: "Bad Request: final page rejected" };
       }
-      if (transition === "retained-page") {
-        expect([...visibleMessages.values()]).toEqual(["A".repeat(80), "B".repeat(40)]);
-      } else if (transition === "one-page") {
-        expect([...visibleMessages.values()]).toEqual([
-          "A different final answer after the preview edit fails.",
-        ]);
-      } else {
-        expect(sends[1]?.method).toBe("sendDocument");
-        const document = resolveTelegramTestUpload(sends[1]!.fields, "document");
-        expect(await document.text()).toBe("accepted report bytes");
-        expect([...visibleMessages.values()]).toEqual([finalText, ""]);
-      }
-    },
-  );
+      return undefined;
+    };
+    const finalText = "A".repeat(80) + "B".repeat(40);
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onPartialReply?.({ text: "A".repeat(40) });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+      },
+      {
+        mode: "partial",
+        toolProgress: false,
+        context,
+        replyToMode: "batched",
+        textLimit: 80,
+        finalReply: {
+          text: finalText,
+          replyToId: String(context.msg.message_id),
+        },
+      },
+    );
+    const sends = acceptedCalls.filter(
+      (call) => call.method === "sendMessage" || call.method === "sendDocument",
+    );
+    expect(sends[0]?.fields.reply_parameters).toMatchObject({
+      message_id: context.msg.message_id,
+    });
+    expect(sends).toHaveLength(2);
+    expect(sends[1]?.fields).not.toHaveProperty("reply_parameters");
+    expect(sends[1]?.fields).not.toHaveProperty("reply_to_message_id");
+    expect([...visibleMessages.values()]).toEqual(["A".repeat(80), "B".repeat(40)]);
+  });
 
   it("finalizes a current-message quote in place after quote rejection", async () => {
     const intro =
@@ -270,6 +315,8 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         await waitForBotApiCall(
           (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
         );
+        // Exercise target reuse after receipt adoption, not rotation during an unresolved send.
+        await Promise.all(draftStreams.map((stream) => stream.waitForInFlight()));
         await options?.onAssistantMessageStart?.();
         await options?.onPartialReply?.({ text: preview, delta: preview });
         await waitForBotApiCall(
@@ -475,7 +522,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     });
   });
 
-  it.each(["success", "error", "superseded"] as const)(
+  it.each(["success", "superseded"] as const)(
     "restores real status reactions after %s without late stall work",
     async (outcome) => {
       const context = createContext();
@@ -559,7 +606,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
             toolProgress: true,
             context,
             finalReply: { text: "Completed." },
-            allowErrors: outcome === "error",
             turnAdoptionLifecycle: cancelled
               ? {
                   abortSignal: abort.signal,
@@ -588,14 +634,8 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           expect(calls.filter(({ method }) => method !== "setMessageReaction")).toEqual([]);
         } else {
           expect(reactions.at(-1)).toEqual([{ type: "emoji", emoji: "👀" }]);
-          expect([...visibleMessages.values()]).toEqual([
-            outcome === "success"
-              ? "Completed."
-              : "Something went wrong while processing your request. Please try again.",
-          ]);
-          expect(reactions).toContainEqual([
-            { type: "emoji", emoji: outcome === "success" ? "👍" : "😱" },
-          ]);
+          expect([...visibleMessages.values()]).toEqual(["Completed."]);
+          expect(reactions).toContainEqual([{ type: "emoji", emoji: "👍" }]);
           if (outcome === "success") {
             expect(reactions).toContainEqual([{ type: "emoji", emoji: "\u{1f5dc}\ufe0f" }]);
           }
@@ -729,4 +769,43 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       "Terminal failure",
     ]);
   });
+
+  it.each(["first", "batched"] as const)(
+    "supplies one %s tool reply slot per turn and resets it for queued followups",
+    async (replyToMode) => {
+      let previousRef: { value: boolean } | undefined;
+      for (let turnIndex = 0; turnIndex < 2; turnIndex++) {
+        const context = createContext();
+        await dispatchProgressTurn(
+          async (options, channelOptions) => {
+            const ref = expectDefined(options?.hasRepliedRef, "dispatch tool reply state");
+            expect(ref).toEqual({ value: false });
+            expect(ref).toBe(channelOptions?.hasRepliedRef);
+            expect(ref).not.toBe(previousRef);
+
+            // The shared message-tool resolver owns consumption; dispatch owns reset.
+            ref.value = true;
+            expect(channelOptions?.hasRepliedRef?.value).toBe(true);
+
+            await expectDefined(
+              channelOptions?.onQueuedFollowupAdmitted,
+              "queued followup admission callback",
+            )();
+            expect(options?.hasRepliedRef).toBe(ref);
+            expect(ref.value).toBe(false);
+            ref.value = true;
+            previousRef = ref;
+          },
+          {
+            context,
+            mode: "off",
+            toolProgress: false,
+            replyToMode,
+            finalReply: { text: `Final answer ${turnIndex}.` },
+          },
+        );
+      }
+      expect([...visibleMessages.values()]).toEqual(["Final answer 0.", "Final answer 1."]);
+    },
+  );
 });

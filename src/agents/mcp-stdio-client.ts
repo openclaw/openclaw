@@ -182,7 +182,6 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
       return;
     }
     failure = error;
-    available = false;
     // Retirement flushes SDK requests immediately while disposal retains process ownership.
     void transport.terminate().catch(() => undefined);
     beginShutdown();
@@ -238,7 +237,6 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
     },
     async stop() {
       stopped = true;
-      available = false;
       failure ??= errors.unavailable("proxy is stopping");
       void transport.retire().catch(() => undefined);
       beginShutdown();

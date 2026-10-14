@@ -6,7 +6,7 @@ import type {
 import { callWhatsAppGatewaySend } from "./whatsapp-live.gateway.js";
 import {
   requireWhatsAppTriggerMessageId,
-  waitForScenarioObservedMessage,
+  waitForWhatsAppQuotedMessage,
   waitForWhatsAppSutReactionSequenceToTrigger,
   waitForWhatsAppSutReactionToTrigger,
 } from "./whatsapp-live.observations.js";
@@ -44,38 +44,18 @@ export const whatsappDeliveryScenarios = {
           message: longText,
           replyToId: quotedTriggerMessageId,
         });
-        const firstChunk = await waitForScenarioObservedMessage(context, {
+        const firstChunk = await waitForWhatsAppQuotedMessage(context, {
           observedAfter: chunkStartedAt,
-          diagnosticChecks: [
-            {
-              label: "longBeginMarker",
-              match: (message) => message.text.includes(`${token}_LONG_BEGIN`),
-            },
-            {
-              label: "quotesTrigger",
-              match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
-            },
-          ],
-          match: (message) =>
-            message.text.includes(`${token}_LONG_BEGIN`) &&
-            message.quoted?.messageId === quotedTriggerMessageId,
+          textMarker: `${token}_LONG_BEGIN`,
+          quotedMessageId: quotedTriggerMessageId,
+          diagnosticLabels: ["longBeginMarker", "quotesTrigger"],
         });
-        const secondChunk = await waitForScenarioObservedMessage(context, {
+        const secondChunk = await waitForWhatsAppQuotedMessage(context, {
           observedAfter: chunkStartedAt,
-          diagnosticChecks: [
-            {
-              label: "longEndMarker",
-              match: (message) => message.text.includes(`${token}_LONG_END`),
-            },
-            {
-              label: "quotesTrigger",
-              match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
-            },
-          ],
-          match: (message) =>
-            message.messageId !== firstChunk.messageId &&
-            message.text.includes(`${token}_LONG_END`) &&
-            message.quoted?.messageId === quotedTriggerMessageId,
+          textMarker: `${token}_LONG_END`,
+          quotedMessageId: quotedTriggerMessageId,
+          diagnosticLabels: ["longEndMarker", "quotesTrigger"],
+          distinctFrom: firstChunk,
         });
         return `long reply chunked across ${firstChunk.messageId ?? "<first>"} and ${secondChunk.messageId ?? "<second>"}`;
       },

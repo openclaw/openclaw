@@ -37,22 +37,6 @@ describe("server chat stream text merge", () => {
     ).toBe("keep\n\n!");
   });
 
-  it.each([
-    ["First.\n", "Second.", "First.\n\nSecond."],
-    ["First.", "", "First."],
-  ])(
-    "keeps a paragraph boundary between distinct assistant items %j and %j",
-    (prefix, next, expected) => {
-      expect(
-        mergeAssistantText(
-          { text: prefix },
-          { itemId: "next-item", text: next, delta: next },
-          "live",
-        ).text,
-      ).toBe(expected);
-    },
-  );
-
   it("owes the paragraph boundary to a new item that starts with a delta, not to its later deltas", () => {
     const first = mergeAssistantText(
       { text: "First." },

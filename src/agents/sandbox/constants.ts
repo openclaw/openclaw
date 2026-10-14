@@ -26,6 +26,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "edit",
   "apply_patch",
   "view_image",
+  "github_publish",
   "sessions_list",
   "sessions_history",
   "sessions_search",

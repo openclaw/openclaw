@@ -510,25 +510,15 @@ export class ChatWizardHost {
       const label = bridge.label;
       if (result.status === "done") {
         if (bridge.kind === "memory-import") {
-          try {
-            return {
-              text: await (
-                await import("./hosted-setup.runtime.js")
-              ).renderMemoryImport(
-                bridge.completion.memoryImport,
-                this.options.dependencies?.appendAuditEntry,
-              ),
-              configWritten: false,
-            };
-          } catch (error) {
-            log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
-            return {
-              text: await (
-                await import("./hosted-setup.runtime.js")
-              ).renderMemoryImport(bridge.completion.memoryImport, async () => ""),
-              configWritten: false,
-            };
-          }
+          return {
+            text: await (
+              await import("./hosted-setup.runtime.js")
+            ).renderMemoryImport(
+              bridge.completion.memoryImport,
+              this.options.dependencies?.appendAuditEntry,
+            ),
+            configWritten: false,
+          };
         }
         if (bridge.completion.status === "kept-current") {
           return {
@@ -547,16 +537,12 @@ export class ChatWizardHost {
         return { text: success.join("\n"), configWritten: true };
       }
       if (bridge.kind === "memory-import") {
-        try {
-          await (
-            await import("./hosted-setup.runtime.js")
-          ).auditMemoryImport(
-            bridge.completion.memoryImportProviders ?? [],
-            this.options.dependencies?.appendAuditEntry,
-          );
-        } catch (error) {
-          log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
-        }
+        await (
+          await import("./hosted-setup.runtime.js")
+        ).auditMemoryImport(
+          bridge.completion.memoryImportProviders ?? [],
+          this.options.dependencies?.appendAuditEntry,
+        );
       }
       if (result.status === "cancelled") {
         return {

@@ -5,6 +5,7 @@ import {
   hiddenSessionNotFound,
   sharingIdentity,
 } from "../session-sharing-policy.js";
+import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import {
   createSessionListEntryFilter,
   SessionMutationAuthorizationChangedError,
@@ -14,7 +15,7 @@ import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.j
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Person-owned reads retain visibility, row generation and the physical store through I/O. */
-export function retainSessionScopedRead(
+export async function retainSessionScopedRead(
   options: GatewayRequestHandlerOptions,
   sessionKey: string,
   agentId: string,
@@ -25,27 +26,35 @@ export function retainSessionScopedRead(
   const profileId = sharingIdentity(options.client, actor)?.id;
   const operatorProfileId = actor?.kind === "operator" ? actor.profileId : undefined;
   const narrow = authority.sessionScope === "operator.sessions.read";
+  const getConfig = options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig;
+  const cfg = getConfig();
   // Canonical solo owner, admin and system exemptions keep their existing workspace access.
   const initialVisibility = createSessionListEntryFilter({
     client: options.client,
-    cfg: (options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig)(),
+    cfg,
   });
   if (!narrow && !initialVisibility) {
     return undefined;
   }
-  const read = retainGatewaySessionEntryReadOnly(
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId },
+  ]);
+  const read = await retainGatewaySessionEntryReadOnly(
     sessionKey,
     agentId,
     readOptions.allowMetadataChanges
       ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
       : undefined,
+    cfg,
   );
   const assertCurrent = () => {
     authority.assertCurrent();
+    const currentCfg = getConfig();
+    assertRoutingCurrent(currentCfg);
     const currentActor = resolveGatewayOperatorRoleActor(options.client);
     const visible = createSessionListEntryFilter({
       client: options.client,
-      cfg: (options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig)(),
+      cfg: currentCfg,
     });
     if (
       (narrow &&

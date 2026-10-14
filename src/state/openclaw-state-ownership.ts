@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   assertStateDatabaseAccessAllowed,
@@ -9,6 +8,12 @@ import {
 } from "../infra/gateway-state-owner.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
 import { isSqliteLockError, withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
 import {
   hasOrphanedSqliteSidecars,
@@ -18,6 +23,7 @@ import {
   OpenClawStateExternalOwnershipError,
   OpenClawStateOwnershipMetadataError,
 } from "../infra/sqlite-lifecycle-errors.js";
+import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import {
   prepareSqliteReadOnlyLocationSyncInProcess,
   readSourceJournalMode,
@@ -52,6 +58,38 @@ export type OpenClawExternalStateOwnership = {
   mode: "external";
   version: 1;
 };
+
+const ownershipAdmission: SqliteDatabaseAdmissionKey<OpenClawExternalStateOwnership | null> = {
+  name: "state.external-ownership",
+  read(value) {
+    if (value === null) {
+      return null;
+    }
+    if (
+      isRecord(value) &&
+      value.version === 1 &&
+      value.mode === "external" &&
+      typeof value.managerId === "string" &&
+      typeof value.claimedAt === "number"
+    ) {
+      return {
+        version: 1,
+        mode: "external",
+        managerId: value.managerId,
+        claimedAt: value.claimedAt,
+      };
+    }
+    return undefined;
+  },
+};
+
+/** The ownership writer publishes at its outer commit; lease loss remains a live authority check. */
+export function publishOpenClawStateOwnership(
+  database: EngineConnection,
+  ownership: OpenClawExternalStateOwnership,
+): void {
+  publishSqliteDatabaseAdmission(database, ownershipAdmission, { ...ownership });
+}
 
 export function isOpenClawStateWriteContentionError(error: unknown): boolean {
   return (
@@ -111,7 +149,7 @@ function parseExternalOwnership(
 
 /** Inspect the reserved ownership row without entering the shared-state lifecycle. */
 export function inspectOpenClawStateOwnershipFromDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   configMachineStateTableReady = false,
 ): OpenClawExternalStateOwnership | null {
@@ -120,9 +158,10 @@ export function inspectOpenClawStateOwnershipFromDatabase(
       return null;
     }
     // Raw admission must not mistake a damaged ownership index for an unclaimed store.
-    const ownershipSql = configMachineStateTableReady
-      ? "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1"
-      : "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1";
+    const ownershipSql =
+      configMachineStateTableReady || isPostgresSqlConnection(database)
+        ? "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1"
+        : "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1";
     const row = database.prepare(ownershipSql).get(STATE_SUPERVISION_KEY) as
       | { value_json?: unknown }
       | undefined;
@@ -262,6 +301,7 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     preserveSourceArtifacts: true,
     signal: options.signal,
   });
+  let readSucceeded = false;
   try {
     options.signal?.throwIfAborted();
     assertStateDatabaseAccessAllowed(databasePath);
@@ -274,26 +314,45 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
       databasePath,
       env,
     );
+    readSucceeded = true;
   } finally {
-    await prepared.cleanupAsync();
+    await prepared.cleanupAsync().catch((error: unknown) => {
+      if (!readSucceeded || !deferSqliteSnapshotCleanupAfterRead(error, prepared.cleanupRoot)) {
+        throw error;
+      }
+    });
   }
 }
 
 /** Fence shared-state writes once an external manager has claimed ownership. */
 export function assertOpenClawStateWriteAllowed(options: {
-  database: DatabaseSync;
+  database: EngineConnection;
   databasePath: string;
   env?: NodeJS.ProcessEnv;
   // Only the shared-state lifecycle owner may carry this positive schema fact.
   // Close/reopen and replacement bootstrap a new owner before setting it again.
   schemaReady?: boolean;
+  /** Doctor and explicit repair inspect durable ownership before their mutations. */
+  inspectOwnership?: true;
 }): void {
   const resolvedPath = path.resolve(options.databasePath);
   assertStateDatabaseAccessAllowed(resolvedPath);
-  const status = inspectOpenClawStateOwnershipFromDatabase(
-    options.database,
-    resolvedPath,
-    options.schemaReady,
-  );
+  let status = options.inspectOwnership
+    ? undefined
+    : getSqliteDatabaseAdmission(options.database, ownershipAdmission);
+  if (status === undefined) {
+    const inspected = inspectOpenClawStateOwnershipFromDatabase(
+      options.database,
+      resolvedPath,
+      options.schemaReady,
+    );
+    status = options.inspectOwnership
+      ? undefined
+      : getSqliteDatabaseAdmission(options.database, ownershipAdmission);
+    if (status === undefined) {
+      status = inspected;
+      publishSqliteDatabaseAdmission(options.database, ownershipAdmission, status);
+    }
+  }
   assertOwnershipAllowsWrite(status, resolvedPath, options.env ?? process.env);
 }

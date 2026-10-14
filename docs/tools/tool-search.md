@@ -26,9 +26,15 @@ optional tools. Set `tools.toolSearch: false` to restore direct schemas. Engaged
 [Code Mode](/tools/code-mode) takes precedence, and Codex keeps its native surface.
 This automatic default does not rewrite the configuration file.
 
+Embedded runs with a local model on the native Ollama transport keep
+policy-approved `web_search` and `web_fetch` schemas directly visible by default.
+Other optional tools still use Tool Search. Any explicit `tools.toolSearch` value
+keeps its configured behavior, including `true`, an object, or `false`. Known
+hosted Ollama routes and the OpenAI-compatible transport keep the general default.
+
 When enabled for OpenClaw runs, the model automatically receives a bounded
 directory of the available trusted tool names and descriptions, plus the
-structured `tool_search`, `tool_describe`, and `tool_call` controls. Setting
+structured `tool_search`, `tool_describe`, and `dispatch_action` controls. Setting
 `tools.toolSearch: true` or an object without a mode selects this structured
 surface. Direct-only tools remain visible alongside the controls.
 
@@ -69,7 +75,7 @@ run:
 4. Add eligible client tools supplied for the current run.
 5. Keep core coding primitives and direct-only tools model-visible and index
    compact descriptors for the remaining catalog-eligible tools.
-6. Add a deterministic, bounded, policy-filtered capability directory to the
+6. Add a size-limited capability directory selected by fixed rules and filtered by policy to the
    cache-stable system-prompt prefix.
 7. Expose the structured search, describe, and call tools or the compact
    directory surface alongside those stable, directly callable tools.
@@ -83,9 +89,9 @@ policy, approval, hook, logging, and result handling still apply.
 
 - `tools`: the default when `tools.toolSearch` is unset, `true`, or an object
   without a mode. Exposes `tool_search`,
-  `tool_describe`, and `tool_call` as plain structured tools, alongside the
+  `tool_describe`, and `dispatch_action` as plain structured tools, alongside the
   capability directory and direct-only tools.
-- `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
+- `directory`: exposes `tool_search`, `tool_describe`, and `dispatch_action` plus a
   bounded, cache-stable prompt directory. Core coding primitives, direct-only
   tools, and tools required by the run's delivery policy remain visible; other
   schemas stay deferred.
@@ -98,7 +104,7 @@ compacted behind the directory catalog. A direct call to an exact hidden
 directory name is hydrated from that same authorized catalog before execution
 in the embedded harness. The [Copilot harness](/plugins/copilot) instead maps
 `directory` to structured `tools` semantics: hidden OpenClaw catalog names must
-be invoked through `tool_call`, because they are not registered SDK handlers.
+be invoked through `dispatch_action`, because they are not registered SDK handlers.
 
 The structured `tools` surface is on by default for OpenClaw runs. Target tools
 keep their own timeouts and approval behavior. Codex harness runs use their
@@ -127,6 +133,10 @@ Tool Search changes the shape:
   search/describe/call controls, policy-required direct tools, and any
   direct-only tools
 - during the turn: the model can load remaining schemas as needed
+
+An enabled `message` tool stays directly visible in both modes, even when the
+current turn delivers final replies automatically. Switching reply delivery
+modes does not change that tool prefix or grant access to unavailable tools.
 
 Tool Search is useful when one run can see many tools, especially from MCP
 servers or client-provided app tools. Structured search is the default, but
@@ -192,32 +202,34 @@ tool declares one.
 
 ### Call
 
-`tool_call` accepts a tool `id` and its target `args`, calls the selected tool
-through OpenClaw, and returns the `{ tool, result }` envelope. JSON-returning tools normally place their value in
-`result.details`. OpenClaw validates a trusted core or plugin tool's declared
-input schema before execution. Missing required arguments, incorrect types,
-and forbidden properties return actionable tool errors instead of executing
-the tool; misspelled properties include a suggested parameter when available.
+`dispatch_action` accepts a tool `id` and its target `args`, calls the selected tool
+through OpenClaw, and returns the `{ tool, result }` envelope. The model-facing
+`result` contains the target's content and model-relevant status fields.
+OpenClaw validates a trusted core or plugin tool's declared input schema before
+execution. Missing required arguments, incorrect types, and forbidden
+properties return actionable tool errors instead of executing the tool;
+misspelled properties include a suggested parameter when available.
 If a trusted tool also declares `outputSchema`, OpenClaw compiles that schema
 before execution and validates final `details` after normal tool hooks before
 returning the catalog call. MCP and client-owned schemas remain deferred to
 their owning execution boundary.
 
-If `tool_call` names a direct-only tool declared for the current turn, it returns
+If `dispatch_action` names a direct-only tool declared for the current turn, it returns
 guidance to call that tool directly by its declared name and parameters. It does
 not dispatch direct-only tools through the catalog or suggest searching for them.
 Tools not available in the current turn still receive the ordinary catalog-miss
 error.
 
-`tool_call` also repairs flattened target arguments from
+`dispatch_action` also repairs flattened target arguments from
 local models. It preserves target fields such as `id` and `name`, and rejects
 ambiguous tool selectors instead of calling the wrong tool. Nest target
 arguments under `args` when a target field matches another cataloged tool.
 
 The structured control's model-facing text includes only the tool's `id`,
-`name`, and `source` alongside the unchanged target `result`; it does not repeat
-the description and input signature. Its structured `details` retain the full
-call envelope for runtime consumers. Use `tool_describe` for full tool metadata.
+`name`, and `source` alongside the target's model-visible content and status; it
+does not repeat the target's structured `details`, description, or input
+signature. The control's own structured `details` retain the full call envelope
+for runtime consumers. Use `tool_describe` for full tool metadata.
 
 ```json
 {
@@ -236,8 +248,8 @@ all non-throwing variants or omit it for unstable results. See
 [Tool plugins](/plugins/tool-plugins#output-contracts).
 
 Deferred names are catalog entries, not directly callable functions in this
-mode. Put the result ID or name in `tool_call.id` and all target parameters in
-`tool_call.args`, including when other instructions refer to the deferred tool
+mode. Put the result ID or name in `dispatch_action.id` and all target parameters in
+`dispatch_action.args`, including when other instructions refer to the deferred tool
 by name. A compact search signature may be enough to call it; use
 `tool_describe` when the full schema is needed.
 
@@ -298,7 +310,7 @@ Directory mode exposes:
 
 - `tool_search`
 - `tool_describe`
-- `tool_call`
+- `dispatch_action`
 
 It also keeps core file and shell primitives, client-provided tools, direct-only
 tools, and policy-required delivery tools directly visible. Other authorized
@@ -307,7 +319,7 @@ cannot impersonate a directly visible core or policy-required delivery tool. If
 the bounded directory omits entries, use `tool_search` to find them and
 `tool_describe` to retrieve their full schemas. If the model requests an exact
 hidden directory tool name directly, the embedded harness resolves it from the
-authorized catalog before normal execution. Copilot uses `tool_call` instead,
+authorized catalog before normal execution. Copilot uses `dispatch_action` instead,
 as described under [Modes](#modes).
 Directory-mode client tool names must not collide with OpenClaw, plugin, or MCP
 tool names because exact deferred dispatch uses those names.
@@ -407,6 +419,14 @@ Disable it:
 
 ## Upgrading
 
+The dispatcher is now named `dispatch_action` on every generic harness. Update
+custom instructions to use that name with the same `id` and `args` parameters.
+Existing completed `tool_call` transcript entries replay and display without
+rewriting stored history. Tool-policy entries matching `tool_call` (including
+wildcards) and literal plugin hook matchers still govern `dispatch_action`; hook event names and invocation IDs are
+unchanged. New model calls must use the currently advertised name. Codex keeps
+its native Tool Search surface.
+
 Tool Search code mode (`tool_search_code`) is retired. Run
 `openclaw doctor --fix` to migrate `tools.toolSearch.mode: "code"` to `"tools"`
 and remove `codeTimeoutMs`. The migration preserves whether Tool Search is
@@ -425,7 +445,7 @@ OpenClaw does not record serialized tool or prompt byte counts. The
 [E2E scenario](#e2e-validation) measures provider payload bytes separately from
 the mock provider lane.
 
-Regardless of mode, completed target calls persist as bounded, redacted display
+Regardless of mode, completed target calls persist as bounded display
 activity in session history without adding synthetic model turns to replay.
 Search, describe, and call results carry each tool's `id` and `source`.
 Session logs therefore still answer:
@@ -458,7 +478,7 @@ The regression proves:
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts.
 7. Structured mode resolves two queries with one `tool_search` call before the
-   selected plugin tool runs through `tool_call`.
+   selected plugin tool runs through `dispatch_action`.
 
 ### Real-model comparison
 
@@ -478,10 +498,10 @@ benchmark.
 
 ## Failure behavior
 
-Tool Search should fail closed:
+Tool Search should reject unavailable or disallowed tools:
 
 - if a tool is not in the effective policy, search should not return it
-- if a selected tool becomes unavailable, `tool_call` should fail
+- if a selected tool becomes unavailable, `dispatch_action` should fail
 - if policy or approval blocks execution, the call result should report that
   block instead of bypassing it
 

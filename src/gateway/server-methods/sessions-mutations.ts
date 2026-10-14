@@ -28,6 +28,7 @@ import {
   projectAssignableSessionOwner,
   projectSessionActor,
 } from "../session-identity-projection.js";
+import { loadSessionLifecycleRuntime } from "../session-lifecycle-runtime-loader.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
@@ -46,8 +47,7 @@ import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
 import { createCommitGuard } from "./sessions-patch-errors.js";
-import { sessionPatchTargetIdentity } from "./sessions-patch-expectations.js";
-import { loadSessionsRuntimeModule, requireSessionKey } from "./sessions-shared.js";
+import { requireSessionKey } from "./sessions-shared.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -112,7 +112,7 @@ function createSessionPatchHandler(
         }
         const singlePatch = structuredClone({ ...request.params, key });
         patch = singlePatch;
-        targets = [sessionPatchTargetIdentity(singlePatch)];
+        targets = [singlePatch];
       }
       const assertCurrent = () => {
         requestAuthority.assertCurrent();
@@ -612,7 +612,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
 
     const reason = p.reason === "new" ? "new" : "reset";
-    const { performGatewaySessionReset } = await loadSessionsRuntimeModule();
+    const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
     const result = await performGatewaySessionReset({
       key,
       ...(p.agentId ? { agentId: p.agentId } : {}),
@@ -636,32 +636,26 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const deleted = "incognitoDeleted" in result;
-    if (deleted) {
-      respond(
-        true,
-        {
-          ok: true,
-          key: result.key,
-          deleted: true,
-          ...(result.worktreePreserved ? { worktreePreserved: result.worktreePreserved } : {}),
-        },
-        undefined,
-      );
-    } else {
-      respond(
-        true,
-        {
-          ok: true,
-          key: result.key,
-          entry: {
-            ...result.entry,
-            fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
-          },
-          resolved: result.resolved,
-        },
-        undefined,
-      );
-    }
+    respond(
+      true,
+      {
+        ok: true,
+        key: result.key,
+        ...(deleted
+          ? {
+              deleted: true,
+              ...(result.worktreePreserved ? { worktreePreserved: result.worktreePreserved } : {}),
+            }
+          : {
+              entry: {
+                ...result.entry,
+                fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
+              },
+              resolved: result.resolved,
+            }),
+      },
+      undefined,
+    );
     emitSessionsChanged(context, {
       sessionKey: result.key,
       agentId: result.agentId,

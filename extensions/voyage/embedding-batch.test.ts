@@ -1,5 +1,7 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runVoyageEmbeddingBatches } from "./embedding-batch.js";
 import { createVoyageEmbeddingProvider } from "./embedding-provider.js";
@@ -266,12 +268,15 @@ describe("voyage batch bounded reads", () => {
     }
   });
 
-  it("clamps polling to the remaining timeout and stops before fetching expired status", async () => {
+  it("clamps polling to the remaining timeout and stops before fetching expired status", async ({
+    signal,
+  }) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const fetchMock = stubBatchFetch();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const nowSpy = vi.spyOn(Date, "now");
+    const polling = createDeferred<void>();
     const result = runBatch({
       pollIntervalMs: 2_000,
       timeoutMs: 1_000,
@@ -279,23 +284,34 @@ describe("voyage batch bounded reads", () => {
         if (message === "memory embeddings: voyage batch created") {
           nowSpy.mockReturnValueOnce(0).mockReturnValue(500);
         }
+        if (message.startsWith("voyage batch batch-0 in_progress; waiting ")) {
+          polling.resolve();
+        }
       },
     });
     const rejection = expect(result).rejects.toThrow("voyage batch batch-0 timed out after 1000ms");
-    for (
-      let attempt = 0;
-      attempt < 100 && !timeoutSpy.mock.calls.some(([, ms]) => ms === 500);
-      attempt++
-    ) {
-      await Promise.resolve();
+    const settled = Promise.allSettled([result, rejection]);
+    try {
+      // The polling owner logs immediately before arming its wait; submission may span I/O turns.
+      await withinTest(
+        awaitGateBeforeSettlement(polling.promise, result, "Voyage batch settled before polling"),
+        signal,
+      );
+      expect(timeoutSpy.mock.calls.some(([, ms]) => ms === 500)).toBe(true);
+      nowSpy.mockReturnValue(1_000);
+      await vi.advanceTimersByTimeAsync(500);
+      await withinTest(rejection, signal);
+      expect(
+        fetchMock.mock.calls.some(([url]) => fetchInputUrl(url).endsWith("/batches/batch-0")),
+      ).toBe(false);
+    } finally {
+      nowSpy.mockReturnValue(1_000);
+      try {
+        await vi.runOnlyPendingTimersAsync();
+      } finally {
+        await settled;
+      }
     }
-    expect(timeoutSpy.mock.calls.some(([, ms]) => ms === 500)).toBe(true);
-    nowSpy.mockReturnValue(1_000);
-    await vi.advanceTimersByTimeAsync(500);
-    await rejection;
-    expect(
-      fetchMock.mock.calls.some(([url]) => fetchInputUrl(url).endsWith("/batches/batch-0")),
-    ).toBe(false);
   });
 
   it("caps an oversized batch status stream through the public runner", async () => {

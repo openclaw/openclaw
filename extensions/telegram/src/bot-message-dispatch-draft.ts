@@ -8,7 +8,6 @@ import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-e
 import type {
   TelegramDispatchTurn as Turn,
   TelegramDispatchTurnConfig as TurnConfig,
-  TelegramDraftPartialTextUpdate,
   TelegramDraftStateSlice,
   TelegramQueuedAnswerBlockRotation,
   TelegramSplitLaneSegmentsResult,
@@ -144,16 +143,13 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           threadId: params.context.threadSpec.id,
         }),
     });
-  const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
-    const stream = enabled ? createLaneStream(laneName) : undefined;
-    return {
-      stream,
-      lastPartialText: "",
-      hasStreamedMessage: false,
-      finalized: false,
-      retainedPromptContextPages: [],
-    };
-  };
+  const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => ({
+    stream: enabled ? createLaneStream(laneName) : undefined,
+    lastPartialText: "",
+    hasStreamedMessage: false,
+    finalized: false,
+    retainedPromptContextPages: [],
+  });
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: createDraftLane("answer", canStreamAnswerDraft),
     reasoning: createDraftLane("reasoning", canStreamReasoningDraft),
@@ -306,73 +302,49 @@ export async function prepareAnswerLaneForToolProgress(turn: Turn): Promise<void
 
 export function splitTextIntoLaneSegments(
   turn: Turn,
-  update: { text?: string; delta?: string; replace?: true; isReasoningSnapshot?: boolean },
+  sourceText: string | undefined,
   isReasoning?: boolean,
 ): TelegramSplitLaneSegmentsResult {
-  const split = splitTelegramReasoningText(update.text, isReasoning);
-  const splitSegments: Array<{ lane: LaneName; text: string }> = [];
-  const useDelta =
-    !update.replace && update.isReasoningSnapshot !== true && update.delta !== undefined;
+  const split = splitTelegramReasoningText(sourceText, isReasoning);
+  const lane = isReasoning === true ? "reasoning" : "answer";
+  const text = lane === "reasoning" ? split.reasoningText : split.answerText;
   const suppressReasoning = turn.resolvedReasoningLevel === "off";
-  if (split.reasoningText && !suppressReasoning) {
-    splitSegments.push({ lane: "reasoning", text: split.reasoningText });
-  }
-  if (split.answerText) {
-    splitSegments.push({ lane: "answer", text: split.answerText });
-  }
   return {
-    segments: splitSegments.map((segment) => ({
-      lane: segment.lane,
-      update: {
-        text: segment.text,
-        ...(!useDelta || splitSegments.length !== 1 ? {} : { delta: update.delta }),
-        ...(update.replace ? { replace: true as const } : {}),
-        ...(update.isReasoningSnapshot ? { isReasoningSnapshot: true } : {}),
-      },
-    })),
-    suppressedReasoningOnly:
-      isReasoning === true && !split.answerText && (suppressReasoning || !split.reasoningText),
+    segment: text && (lane === "answer" || !suppressReasoning) ? { lane, text } : undefined,
+    suppressedReasoningOnly: isReasoning === true && (suppressReasoning || !text),
   };
 }
 
 function updateTelegramDraftFromPartial(
   turn: Turn,
   lane: DraftLaneState,
-  update: TelegramDraftPartialTextUpdate,
+  text: string,
   schedule = true,
 ): string | undefined {
-  if (!lane.stream || !update.text) {
+  if (!lane.stream || !text) {
     return undefined;
   }
   const previousText = lane === turn.answerLane ? turn.lastAnswerPartialText : lane.lastPartialText;
-  const nextText =
-    update.replace || update.isReasoningSnapshot || update.delta === undefined
-      ? update.text
-      : `${previousText}${update.delta}`;
-  if (
-    !nextText ||
-    nextText === previousText ||
-    (lane === turn.answerLane && turn.streamMode === "progress")
-  ) {
+  if (text === previousText || (lane === turn.answerLane && turn.streamMode === "progress")) {
     return undefined;
   }
   if (lane === turn.answerLane) {
     turn.activeAnswerDraftIsToolProgressOnly = false;
     turn.progressCompositor.resetActivity({ suppressed: true });
-    turn.lastAnswerPartialText = nextText;
+    turn.lastAnswerPartialText = text;
   }
   lane.hasStreamedMessage = true;
   lane.finalized = false;
-  lane.lastPartialText = nextText;
+  lane.lastPartialText = text;
   if (schedule) {
-    lane.stream.update(nextText);
+    lane.stream.update(text);
   }
-  return nextText;
+  return text;
 }
 
 export async function ingestDraftLaneSegments(
   turn: Turn,
-  update: { text?: string; delta?: string; replace?: true; isReasoningSnapshot?: boolean },
+  update: { text?: string },
   isReasoning?: boolean,
 ): Promise<void> {
   if (isReasoning !== true) {
@@ -393,7 +365,7 @@ export async function ingestDraftLaneSegments(
         return;
       }
       await prepareAnswerLaneForText(turn);
-      updateTelegramDraftFromPartial(turn, turn.answerLane, { text, replace: true });
+      updateTelegramDraftFromPartial(turn, turn.answerLane, text);
       return;
     }
     let didMaterialize = false;
@@ -404,7 +376,7 @@ export async function ingestDraftLaneSegments(
         // Partial text is cumulative, so the newest snapshot remains authoritative when
         // intermediate delta-bearing payloads are coalesced before this flush.
         materialized = text
-          ? updateTelegramDraftFromPartial(turn, turn.answerLane, { text, replace: true }, false)
+          ? updateTelegramDraftFromPartial(turn, turn.answerLane, text, false)
           : undefined;
         didMaterialize = true;
       }
@@ -412,16 +384,11 @@ export async function ingestDraftLaneSegments(
     });
     return;
   }
-  const split = splitTextIntoLaneSegments(turn, update, isReasoning);
-  for (const segment of split.segments) {
-    if (segment.lane === "answer") {
-      await prepareAnswerLaneForText(turn);
-    }
-    if (segment.lane === "reasoning") {
-      turn.reasoningStepState.noteReasoningHint();
-      turn.reasoningStepState.noteReasoningDelivered();
-    }
-    updateTelegramDraftFromPartial(turn, turn.lanes[segment.lane], segment.update);
+  const segment = splitTextIntoLaneSegments(turn, update.text, true).segment;
+  if (segment) {
+    turn.reasoningStepState.noteReasoningHint();
+    turn.reasoningStepState.noteReasoningDelivered();
+    updateTelegramDraftFromPartial(turn, turn.reasoningLane, segment.text);
   }
 }
 
@@ -468,9 +435,7 @@ export async function prepareQueuedAnswerBlock(
   blockContext?: BlockReplyContext,
 ): Promise<void> {
   if (
-    !splitTextIntoLaneSegments(turn, { text: payload.text }, payload.isReasoning).segments.some(
-      (segment) => segment.lane === "answer",
-    )
+    splitTextIntoLaneSegments(turn, payload.text, payload.isReasoning).segment?.lane !== "answer"
   ) {
     return;
   }

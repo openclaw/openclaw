@@ -12,8 +12,9 @@ import {
   resolvePluginMetadataSnapshotAsync,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import * as workerStore from "../state/openclaw-state-worker-store.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { loadSessionLogs } from "./session-cost-usage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -68,7 +69,7 @@ it("keeps async cold adoption, workspace scopes, and forced fresh inventories di
 });
 
 it.each(["database admission", "plugin cache"] as const)(
-  "rejects the log request when pricing loses its %s instead of omitting a record",
+  "retains every log record or rejects when pricing loses its %s",
   async (owner) => {
     const stateDir = tempDirs.make("openclaw-pricing-log-cancellation-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -101,11 +102,15 @@ it.each(["database admission", "plugin cache"] as const)(
     );
     const started = createDeferredCore();
     const reading = createDeferredCore();
-    vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementationOnce(async () => {
-      started.resolve();
-      await reading.promise;
-      throw new Error("optional metadata unavailable");
-    });
+    const executeRead = stateReads.executeExistingOpenClawStateRead;
+    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
+      async (options, command, readOptions) => {
+        const context = readOptions?.context ?? captureOpenClawStateReadWorkerContext(options);
+        started.resolve();
+        await reading.promise;
+        return executeRead(options, command, { ...readOptions, context });
+      },
+    );
     const config: OpenClawConfig = {
       plugins: { enabled: false },
       models: {
@@ -131,24 +136,7 @@ it.each(["database admission", "plugin cache"] as const)(
     try {
       await using cache = createPluginCache();
       const params = { agentId: "main", sessionFile, config };
-      const request = withPluginCache(cache, () => loadSessionLogs(params));
-      const rejected =
-        owner === "database admission"
-          ? expect(request).rejects.toMatchObject({
-              code: "PLUGIN_CACHE_FACT_INVALIDATED",
-              cause: { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" },
-            })
-          : expect(request).rejects.toThrow();
-      await started.promise;
-      const retirement = owner === "plugin cache" ? retirePluginCache(cache) : undefined;
-      if (owner === "database admission") {
-        await closeOpenClawStateDatabaseAsync();
-      }
-      reading.resolve();
-      await rejected;
-      await retirement;
-      await using resumed = createPluginCache();
-      expect(await withPluginCache(resumed, () => loadSessionLogs(params))).toEqual([
+      const expectedLogs = [
         { timestamp: 1, role: "assistant", content: "Billed", tokens: 10, cost: 0 },
         {
           timestamp: 2,
@@ -157,7 +145,39 @@ it.each(["database admission", "plugin cache"] as const)(
           tokens: 120,
           cost: expect.closeTo(0.00026, 12),
         },
-      ]);
+      ];
+      const request = withPluginCache(cache, () => loadSessionLogs(params));
+      const outcome = request.then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      let retirement: ReturnType<typeof retirePluginCache> | undefined;
+      try {
+        const first = await Promise.race([started.promise.then(() => "reading" as const), outcome]);
+        expect(first).toBe("reading");
+        retirement = owner === "plugin cache" ? retirePluginCache(cache) : undefined;
+        if (owner === "database admission") {
+          await closeOpenClawStateDatabaseAsync();
+        }
+        reading.resolve();
+        if (owner === "database admission") {
+          expect(await outcome).toMatchObject({
+            status: "rejected",
+            error: {
+              code: "PLUGIN_CACHE_FACT_INVALIDATED",
+              cause: { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" },
+            },
+          });
+        } else {
+          expect(await outcome).toEqual({ status: "fulfilled", value: expectedLogs });
+        }
+      } finally {
+        reading.resolve();
+        await outcome;
+        await retirement;
+      }
+      await using resumed = createPluginCache();
+      expect(await withPluginCache(resumed, () => loadSessionLogs(params))).toEqual(expectedLogs);
     } finally {
       reading.resolve();
       vi.restoreAllMocks();

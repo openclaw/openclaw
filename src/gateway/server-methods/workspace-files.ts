@@ -396,13 +396,11 @@ export async function listSessionWorkspaceFiles(
     ),
   );
   const browser = await buildBrowserResult({
+    ...params,
     root,
-    workspaceRoot,
     fileRoot: params.fileRoot,
-    path: params.path,
-    search: params.search,
+    workspaceRoot,
     files: workspaceFiles,
-    assertCurrent: params.assertCurrent,
   });
   return {
     ...(root ? { root } : {}),

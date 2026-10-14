@@ -15,6 +15,7 @@ import { colorize, isRich, theme } from "../../../packages/terminal-core/src/the
 import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
+import type { assertSupportedJobSpec } from "../../cron/service/jobs-validation.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
@@ -38,6 +39,16 @@ import { isJsonOutputModeActive } from "../json-output-mode.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 import { CronCliError, type CronCliJobMatch } from "./cron-cli-error.js";
+
+export async function assertCronCliJobSpec(job: Parameters<typeof assertSupportedJobSpec>[0]) {
+  const { assertSupportedJobSpec: assertJobSpec } =
+    await import("../../cron/service/jobs-validation.js");
+  try {
+    assertJobSpec(job);
+  } catch (error) {
+    throw new CronCliError(error instanceof Error ? error.message : String(error));
+  }
+}
 
 export function parseCronStringOption(value: unknown, flag: string): string | undefined {
   const parsed = normalizeOptionalString(value);
@@ -125,7 +136,7 @@ export function parseCronCommandEnv(values: unknown): Record<string, string> | u
   if (rawValues.length === 0) {
     return undefined;
   }
-  const env: Record<string, string> = {};
+  const env: Record<string, string> = Object.create(null);
   for (const raw of rawValues) {
     if (typeof raw !== "string") {
       throw new CronCliError("--command-env must be KEY=VALUE");

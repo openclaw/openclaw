@@ -98,10 +98,9 @@ export function clearPaneSessionHandoff(
 
 export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {
   const byPane = paneSessionHandoffs.get(context);
-  if (!byPane?.get(paneId)) {
+  if (!byPane?.delete(paneId)) {
     return;
   }
-  byPane.delete(paneId);
   if (byPane.size === 0) {
     paneSessionHandoffs.delete(context);
   }
@@ -122,8 +121,6 @@ export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 // the same distance out. Splitting them re-creates the wall at the smaller value.
 export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
-export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
-export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 
 export function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);

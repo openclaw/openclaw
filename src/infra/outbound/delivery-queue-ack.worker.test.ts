@@ -7,6 +7,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { deriveDeliveryQueueRetentionColumns } from "../delivery-queue-retention-columns.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
@@ -109,9 +111,11 @@ describe("outbound acknowledgement worker", () => {
     if (!claimId || !entry) {
       throw new Error("Expected a claimed queue entry");
     }
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const db = requireNativeSqliteDatabase(
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }).db,
+    );
     const reply = holdAcknowledgementReply(id);
     const options: AckDeliveryOptions = {
       expectedPlatformSendAttemptId: claimId,
@@ -138,10 +142,16 @@ describe("outbound acknowledgement worker", () => {
       ]);
       await setImmediate();
       expect(settled).toBe(false);
+      const entryJson = JSON.stringify({ ...entry, availableAt: Date.now() - 1 });
       db.prepare(
-        "UPDATE delivery_queue_entries SET entry_json = ? WHERE queue_name = ? AND id = ?",
+        `UPDATE delivery_queue_entries SET entry_json = ?,
+          retention_id_prefix = @retention_id_prefix,
+          retention_max_age_ms = @retention_max_age_ms,
+          retention_max_entries = @retention_max_entries
+          WHERE queue_name = ? AND id = ?`,
       ).run(
-        JSON.stringify({ ...entry, availableAt: Date.now() - 1 }),
+        deriveDeliveryQueueRetentionColumns(id, entryJson),
+        entryJson,
         OUTBOUND_DELIVERY_QUEUE_NAME,
         id,
       );

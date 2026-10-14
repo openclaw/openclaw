@@ -1,4 +1,5 @@
 import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -63,6 +64,7 @@ import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
@@ -314,16 +316,6 @@ export async function prepareReplyAgentPayloads(state: {
     didLogHeartbeatStrip = result.didLogHeartbeatStrip;
     return result.replyPayloads;
   };
-  const returnPreparedFallbackPayload = async (
-    payload: ReplyPayload,
-  ): Promise<ReplyPayload | undefined> => {
-    const [preparedPayload] = await buildFinalPayloads([payload]);
-    if (!preparedPayload) {
-      return undefined;
-    }
-    await signalTypingIfNeeded([preparedPayload], typingSignals);
-    return returnWithQueuedFollowupDrain(preparedPayload);
-  };
   const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
     const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
       fallbackTransition,
@@ -342,7 +334,12 @@ export async function prepareReplyAgentPayloads(state: {
       ),
     );
     opts?.onAgentRunTerminalOutcome?.("failed");
-    return returnPreparedFallbackPayload(silentFallbackFailurePayload);
+    const [preparedPayload] = await buildFinalPayloads([silentFallbackFailurePayload]);
+    if (!preparedPayload) {
+      return undefined;
+    }
+    await signalTypingIfNeeded([preparedPayload], typingSignals);
+    return returnWithQueuedFollowupDrain(preparedPayload);
   };
   const finishEmptyReply = async () => {
     if (completion.outcome === "silent" || completion.outcome === "blocked") {
@@ -480,7 +477,16 @@ export async function prepareReplyAgentPayloads(state: {
     });
   }
 
+  // Dispatch installs onRawLlmResponse only when output capture is enabled.
+  if (opts?.onRawLlmResponse) {
+    const finalDiagnosticResponse = resolveDiagnosticModelResponse(runResult);
+    if (finalDiagnosticResponse !== undefined) {
+      opts.onRawLlmResponse(finalDiagnosticResponse);
+    }
+  }
+
   if (
+    completion.outcome !== "delivered" &&
     payloadArray.length === 0 &&
     fallbackNoticePayloads.length === 0 &&
     !shouldDeliverTerminalFailure &&
@@ -561,12 +567,11 @@ export async function prepareReplyAgentPayloads(state: {
       isPayloadLaneEnabled(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
-  const hasDeliveredBlockStream = Boolean(blockReplyPipeline?.didStream());
   const canDeliverStandaloneFallbackNotice =
-    hasDeliveredBlockStream || successfulSideEffectDelivery;
+    Boolean(blockReplyPipeline?.didStream()) || successfulSideEffectDelivery;
   if (
-    replyPayloads.length === 0 ||
-    (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice)
+    completion.outcome !== "delivered" &&
+    (replyPayloads.length === 0 || (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice))
   ) {
     return finishEmptyReply();
   }
@@ -593,10 +598,18 @@ export async function prepareReplyAgentPayloads(state: {
   const statusPayload = guardedReplyPayloads.find(
     (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
   );
+  // Media admission owns runs under the tools' runtime policy key, not a shared main key.
+  const mediaSessionKey =
+    implicitContinuation && !continuationOwner
+      ? (runtimePolicySessionKey ?? sessionKey ?? followupRun.run.sessionKey)
+      : undefined;
   if (statusPayload) {
     await attachWaitingStatusProgressContinuation({
       payload: statusPayload,
       acceptedSessionSpawns: runResult.acceptedSessionSpawns,
+      mediaRequester: mediaSessionKey
+        ? { sessionKey: mediaSessionKey, agentId: followupRun.run.agentId }
+        : undefined,
       operation: replyOperation,
     });
   }
@@ -680,13 +693,16 @@ export async function prepareReplyAgentPayloads(state: {
   // Refresh inherited verbosity even when it started off: session preferences
   // and plugin diagnostics may change while the model runs.
   if (followupRun.run.verboseLevelOverride !== "off" || followupRun.run.traceAuthorized === true) {
-    activeSessionEntry = await refreshSessionEntryFromStore({
-      storePath,
-      sessionKey,
-      fallbackEntry: activeSessionEntry,
-      activeSessionStore,
-      expectedGeneration: accounting.expectedSession,
-    });
+    activeSessionEntry = context.completion
+      ? await context.completion.refresh()
+      : await refreshSessionEntryFromStore({
+          storePath,
+          sessionKey,
+          fallbackEntry: activeSessionEntry,
+          activeSessionStore,
+          expectedGeneration: accounting.expectedSession,
+          reader: getReplyOperationSessionReader(replyOperation),
+        });
   }
 
   return {

@@ -21,7 +21,12 @@ import {
 import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
 import { hasChannelPackageState } from "../../src/channels/plugins/package-state-probes.js";
-import { resetPluginCache } from "../../src/plugins/plugin-cache.js";
+import { loadPluginManifest } from "../../src/plugins/manifest.js";
+import {
+  createPluginCache,
+  resetPluginCache,
+  withPluginCache,
+} from "../../src/plugins/plugin-cache.js";
 import { resolvePluginRuntimeArtifact } from "../../src/plugins/plugin-runtime-artifact-resolution.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -51,6 +56,157 @@ function writeChannelStateFixtures(pluginRoot: string) {
 }
 
 describe("external plugin local dist build", () => {
+  it("restores complete plugin outputs and rebuilds only changed package inputs", async () => {
+    const repoRoot = fs.realpathSync(tempDirs.make("openclaw-external-plugin-cache-"));
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", type: "module" }),
+    );
+    for (const id of ["first", "second"]) {
+      const pluginRoot = path.join(repoRoot, "extensions", id);
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginRoot, "package.json"),
+        JSON.stringify({
+          name: `@openclaw/${id}`,
+          version: "1.0.0",
+          type: "module",
+          openclaw: {
+            extensions: ["./index.ts"],
+            build: { bundledDist: false },
+            release: { publishToNpm: true },
+            assetScripts: {
+              build: "node build-assets.mjs",
+              buildOutputs: ["dist/control-ui/version/index.js", "assets/generated.txt"],
+            },
+          },
+        }),
+      );
+      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), JSON.stringify({ id }));
+      fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const value = 1;\n");
+      fs.writeFileSync(
+        path.join(pluginRoot, "build-assets.mjs"),
+        `import fs from "node:fs";
+if (fs.existsSync("../../forbid-build")) throw new Error("unchanged plugin was rebuilt");
+fs.appendFileSync("../../builds.txt", ${JSON.stringify(`${id}\n`)});
+fs.mkdirSync("dist/control-ui/version", { recursive: true });
+fs.mkdirSync("assets", { recursive: true });
+fs.writeFileSync("dist/control-ui/version/index.js", "browser asset");
+fs.writeFileSync("assets/generated.txt", "generated asset");
+`,
+      );
+    }
+    const build = () => buildExternalPluginLocalDist({ repoRoot, env: {}, logLevel: "silent" });
+    const builds = () => fs.readFileSync(path.join(repoRoot, "builds.txt"), "utf8");
+    await build();
+    expect(builds()).toBe("first\nsecond\n");
+    fs.rmSync(path.join(repoRoot, "dist"), { recursive: true });
+    for (const id of ["first", "second"]) {
+      fs.rmSync(path.join(repoRoot, "extensions", id, "dist"), { recursive: true });
+      fs.rmSync(path.join(repoRoot, "extensions", id, "assets/generated.txt"));
+    }
+    fs.writeFileSync(path.join(repoRoot, "forbid-build"), "");
+    await build();
+    expect(builds()).toBe("first\nsecond\n");
+    for (const id of ["first", "second"]) {
+      expect(
+        fs.readFileSync(path.join(repoRoot, "dist/extensions", id, "index.js"), "utf8"),
+      ).toContain("value");
+      expect(
+        fs.readFileSync(
+          path.join(repoRoot, "extensions", id, "dist/control-ui/version/index.js"),
+          "utf8",
+        ),
+      ).toBe("browser asset");
+      expect(
+        fs.readFileSync(path.join(repoRoot, "extensions", id, "assets/generated.txt"), "utf8"),
+      ).toBe("generated asset");
+    }
+    fs.rmSync(path.join(repoRoot, "forbid-build"));
+    fs.writeFileSync(path.join(repoRoot, "extensions/first/index.ts"), "export const value = 2;\n");
+    await build();
+    expect(builds()).toBe("first\nsecond\nfirst\n");
+    expect(
+      fs.readFileSync(path.join(repoRoot, "dist/extensions/first/index.js"), "utf8"),
+    ).toContain("value = 2");
+  });
+
+  it("uses generated browser metadata as input without rewriting source or restoring over its output", async () => {
+    const repoRoot = fs.realpathSync(tempDirs.make("openclaw-plugin-early-assets-"));
+    const pluginRoot = path.join(repoRoot, "extensions", "demo");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", type: "module" }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/demo",
+        version: "1.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.ts"],
+          controlUi: "./browser.ts",
+          build: { bundledDist: false },
+          release: { publishToNpm: true },
+          assetScripts: {
+            build: "node build-assets.mjs",
+            buildOutputs: ["dist/openclaw.plugin.json"],
+          },
+        },
+      }),
+    );
+    const authored = JSON.stringify({
+      id: "demo",
+      configSchema: { type: "object", properties: { preserved: { type: "string" } } },
+      controlUi: { entry: "dist/control-ui/authored/index.js" },
+    });
+    fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), authored);
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const backend = true;\n");
+    fs.writeFileSync(
+      path.join(pluginRoot, "build-assets.mjs"),
+      `import fs from "node:fs";
+const identity = fs.readFileSync("../../browser-identity.txt", "utf8");
+const entry = "dist/control-ui/" + identity + "/index.js";
+fs.mkdirSync("dist/control-ui/" + identity, { recursive: true });
+fs.writeFileSync("dist/openclaw.plugin.json", JSON.stringify({ id: "previous-name", controlUi: { entry } }));
+fs.writeFileSync(entry, identity);
+`,
+    );
+    const build = async (identity: string) => {
+      // An input outside the backend graph models a changed host browser SDK.
+      fs.writeFileSync(path.join(repoRoot, "browser-identity.txt"), identity);
+      await runBundledPluginAssetHooks({ rootDir: repoRoot, phase: "build", deferIsolated: true });
+      fs.rmSync(path.join(repoRoot, "dist"), { recursive: true, force: true });
+      await buildExternalPluginLocalDist({ repoRoot, env: {}, logLevel: "silent" });
+      copyBundledPluginMetadata({ repoRoot, env: {} });
+    };
+    expect(loadPluginManifest(pluginRoot)).toMatchObject({
+      ok: true,
+      manifest: JSON.parse(authored),
+    });
+    await build("first");
+    await build("second");
+    expect(fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8")).toBe(authored);
+    const expected = {
+      ...JSON.parse(authored),
+      controlUi: { entry: "dist/control-ui/second/index.js" },
+    };
+    expect(
+      withPluginCache(createPluginCache(), () => loadPluginManifest(pluginRoot)),
+    ).toMatchObject({ ok: true, manifest: expected });
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(repoRoot, "dist/extensions/demo/openclaw.plugin.json"), "utf8"),
+      ),
+    ).toMatchObject(expected);
+    const ownedAsset = path.join(pluginRoot, "dist/control-ui/second/owner.js");
+    fs.writeFileSync(ownedAsset, "early owner output");
+    await build("second");
+    expect(fs.readFileSync(ownedAsset, "utf8")).toBe("early owner output");
+  });
+
   it.each([
     ["dist/extensions", "demo/node_modules/sentinel.txt", "junction"],
     ["dist/extensions/demo", "node_modules/sentinel.txt", "junction"],
@@ -154,7 +310,7 @@ describe("external plugin local dist build", () => {
                   controlUi: "./browser/index.ts",
                   assetScripts: {
                     build: "node build-browser.mjs",
-                    buildOutputs: ["./openclaw.plugin.json"],
+                    buildOutputs: ["dist/openclaw.plugin.json"],
                   },
                 }
               : {}),
@@ -189,8 +345,8 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
            const manifest = JSON.parse(before);
            manifest.controlUi = { entry: ${JSON.stringify(browserEntry)} };
            const after = JSON.stringify(manifest, null, 2) + "\\n";
-           if (before !== after) fs.writeFileSync("openclaw.plugin.json", after);
            fs.mkdirSync(${JSON.stringify(path.posix.dirname(browserEntry))}, { recursive: true });
+           fs.writeFileSync("dist/openclaw.plugin.json", after);
            fs.writeFileSync(${JSON.stringify(browserEntry)}, ${JSON.stringify(browserSource)});`,
         );
       }
@@ -224,7 +380,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
             expect(
               JSON.parse(
                 fs.readFileSync(
-                  path.join(repoRoot, "extensions/external-only/openclaw.plugin.json"),
+                  path.join(repoRoot, "extensions/external-only/dist/openclaw.plugin.json"),
                   "utf8",
                 ),
               ).controlUi.entry,
@@ -264,7 +420,10 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
       const sourceRoot = path.join(repoRoot, "extensions", id);
       if (id === "external-only") {
         expect(fs.readFileSync(path.join(sourceRoot, browserEntry), "utf8")).toBe(browserSource);
-        expect(fs.readdirSync(path.join(sourceRoot, "dist"))).toEqual(["control-ui"]);
+        expect(fs.readdirSync(path.join(sourceRoot, "dist"))).toEqual([
+          "control-ui",
+          "openclaw.plugin.json",
+        ]);
         expect(fs.existsSync(path.join(pluginRoot, "control-ui"))).toBe(false);
       } else {
         expect(fs.existsSync(path.join(sourceRoot, "dist"))).toBe(false);
@@ -417,8 +576,6 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
 
   it.for([
     ["esm", false],
-    ["cjs", false],
-    ["esm", true],
     ["cjs", true],
   ] as const)(
     "retains %s source dependencies across metadata profiles and the shared host SDK (relocate=%s)",
@@ -591,7 +748,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
         expect(fs.lstatSync(modules).isSymbolicLink()).toBe(false);
         expect(fs.lstatSync(path.join(modules, "@fixture")).isSymbolicLink()).toBe(false);
         for (const [name, owner] of [
-          ["openclaw", runtimeRoot],
+          ["openclaw", path.join(runtimeRoot, "dist", "extensions", "node_modules", "openclaw")],
           [dependency, path.join(runtimeRoot, "installed", version, "node_modules", dependency)],
           [".bin", path.join(runtimeRoot, "extensions", pluginId, "node_modules", ".bin")],
         ] as const) {

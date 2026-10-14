@@ -11,9 +11,9 @@ import {
 } from "./chat-comment-preview.ts";
 import {
   needsAttachmentSourceAdmission,
-  renderChatAttachmentAdmission,
   type AttachmentAdmission,
-} from "./chat-message-attachment-admission.ts";
+} from "./chat-message-attachment-admission-model.ts";
+import { renderChatAttachmentAdmission } from "./chat-message-attachment-admission.ts";
 import type {
   AssistantAttachmentItem,
   AttachmentItem,
@@ -51,7 +51,7 @@ export function renderSentCommentAttachments(
         ? { identity: item.attachment.url, pending: true, fallback: nothing }
         : resolve(item),
     )}
-    .scope=${JSON.stringify([options.sessionKey, options.agentId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
+    .scope=${JSON.stringify([options.sessionKey, options.agentId, options.messageId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
     .admission=${admission}
   ></openclaw-chat-sent-comments>`;
   return comments.some((item) => needsAttachmentSourceAdmission(item.attachment))

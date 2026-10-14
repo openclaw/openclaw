@@ -101,7 +101,7 @@ async function recovery(io: ReturnType<typeof createConfigIO>) {
 
 describe("prepared config recovery", () => {
   it.each(["sync", "async"] as const)(
-    "preserves unavailable dependencies when preparing a backup candidate (%s)",
+    "prepares a canonical backup when migration metadata is unavailable (%s)",
     async (mode) => {
       const root = tempDirs.make("openclaw-backup-preparation-io-");
       const context = createConfigIoContext({
@@ -116,28 +116,30 @@ describe("prepared config recovery", () => {
         raw: '{"gateway":{"mode":"local"}}',
         parsed: { gateway: { mode: "local" } },
       };
-      if (mode === "sync") {
-        const read = vi
-          .spyOn(deferredMigrations, "readDeferredPluginMigrations")
-          .mockImplementation(() => {
-            throw unavailable;
-          });
-        try {
-          expect(() => context.prepareRecoveryBackupCandidate(candidate)).toThrow(unavailable);
-        } finally {
-          read.mockRestore();
-        }
-      } else {
-        const read = vi
-          .spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync")
-          .mockRejectedValue(unavailable);
-        try {
-          await expect(context.prepareRecoveryBackupCandidateAsync(candidate)).rejects.toBe(
-            unavailable,
-          );
-        } finally {
-          read.mockRestore();
-        }
+      const readSync = vi
+        .spyOn(deferredMigrations, "readDeferredPluginMigrations")
+        .mockImplementation(() => {
+          throw unavailable;
+        });
+      const readAsync = vi
+        .spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync")
+        .mockRejectedValue(unavailable);
+      try {
+        const prepared =
+          mode === "sync"
+            ? context.prepareRecoveryBackupCandidate(candidate)
+            : await context.prepareRecoveryBackupCandidateAsync(candidate);
+        expect(prepared).toMatchObject({
+          ok: true,
+          candidate: {
+            raw: '{"gateway":{"mode":"local"}}',
+            parsed: { gateway: { mode: "local" } },
+            config: { gateway: { mode: "local" } },
+          },
+        });
+      } finally {
+        readSync.mockRestore();
+        readAsync.mockRestore();
       }
     },
   );
@@ -371,7 +373,7 @@ describe("prepared config recovery", () => {
       expect(plan.snapshot.path).toBe(configPath);
       expect(plan.snapshot.config.gateway).toMatchObject({ mode: "local", port: 18720 });
       expect(plan.snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      expect(Boolean(plan.pluginMetadataSnapshot)).toBe(pluginValidation === "full");
+      expect(plan.snapshot.valid).toBe(true);
       expect(env).not.toHaveProperty("RECOVERY_MARKER");
       expect(manifest(root)).toEqual(before);
 
@@ -444,6 +446,32 @@ describe("prepared config recovery", () => {
       expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
     },
   );
+
+  it("defers prepared recovery when the forensic snapshot cannot be written", async () => {
+    const warn = vi.fn();
+    const { root, configPath, original, backup, io } = fixture({
+      logger: { warn, error: vi.fn() },
+      fs: {
+        ...fs,
+        promises: {
+          ...fs.promises,
+          writeFile: async (target, data, options) => {
+            if (typeof target === "string" && target.includes(".clobbered.")) {
+              throw Object.assign(new Error("snapshot disk full"), { code: "ENOSPC" });
+            }
+            return fs.promises.writeFile(target, data, options);
+          },
+        },
+      },
+    });
+    const plan = await recovery(io);
+
+    await expect(plan.apply()).rejects.toThrow("Config backup recovery deferred");
+
+    expectUnchanged(root, configPath, original);
+    expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("recovery deferred"));
+  });
 
   it("rejects failed replacement while retaining the original and its clobbered snapshot", async () => {
     const { root, configPath, original, env } = fixture();

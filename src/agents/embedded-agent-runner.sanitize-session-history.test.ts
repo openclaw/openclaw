@@ -400,7 +400,10 @@ describe("sanitizeSessionHistory", () => {
     expect(out.some((message) => (message as { model?: string }).model === "delivery-mirror")).toBe(
       false,
     );
-    expect(out[2]).toMatchObject({ toolCallId: "call_message", content: [text("aborted")] });
+    expect(out[2]).toMatchObject({
+      toolCallId: "call_message|fc_message",
+      content: [text("aborted")],
+    });
   });
 
   it("rejects dangling OpenAI Responses tool calls before provider replay when repair is disabled", async () => {

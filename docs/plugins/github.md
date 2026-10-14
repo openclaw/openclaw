@@ -58,6 +58,10 @@ and unavailable results remain distinct; a partial response never implies that
 all checks passed. These results describe CI, not approval or merge readiness.
 Use **Refresh** to fetch the current PR and its checks again.
 
+Descriptions and replies render named emoji shortcodes such as `:white_check_mark:`
+and `:rocket:` in prose, tables, link labels, and disclosure summaries. Code, URLs,
+unknown shortcodes, and plain emoticons such as `:)` stay literal.
+
 HTML comments in descriptions and replies stay hidden, matching
 GitHub; literal comment examples inside code remain visible.
 Markdown images and standalone HTML image attachments can display inline. The
@@ -111,7 +115,17 @@ hovercard, and GitHub links open externally.
   unavailable error. The full reader keeps its longer request timeout.
 - Hover previews are shared for one minute across readers using the same GitHub
   identity. Concurrent requests share a fetch, but each reader must still have
-  access when the result arrives. **Refresh** bypasses the cached preview.
+  access when the result arrives. Expired previews can appear with a stale marker
+  while one background refresh runs. Cached delivery checks the current credential
+  once; each upstream dispatch also checks it. **Refresh** waits for current metadata.
+  Refreshes use GitHub ETags for unchanged item and commit responses; identity
+  changes, eviction, or a failed refresh retire those cached responses. Repository
+  visibility is checked again for every authenticated refresh.
+- Slow preview reads (500 ms or longer) log phase durations for identity preparation,
+  cache/load wait, delivery credential checks, metadata rendering, optional decoration,
+  and upstream authentication/network waits. Network timings cover response headers;
+  metadata/decorations include response-body reads. These diagnostics omit URLs,
+  item contents, and credentials.
 - **Refresh** requests the current item again. Rate limits, deleted items, and
   unavailable services show their specific explanation in the reader and hovercards,
   including GitHub's retry delay when available. Cached preview details stay visible

@@ -20,10 +20,7 @@ function parseExit(result: NodeInvokeResult): TerminalBackendExit {
     const raw =
       result.payloadJSON ??
       (result.payload === undefined ? undefined : JSON.stringify(result.payload));
-    if (!raw) {
-      return { exitCode: 0 };
-    }
-    const record = asOptionalRecord(JSON.parse(raw));
+    const record = raw ? asOptionalRecord(JSON.parse(raw)) : undefined;
     if (!record) {
       return { exitCode: 0 };
     }

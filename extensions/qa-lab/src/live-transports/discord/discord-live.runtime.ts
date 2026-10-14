@@ -637,21 +637,6 @@ export async function waitForDiscordMessageDeleted(params: {
   );
 }
 
-async function listChannelMessagesAfter(params: {
-  token: string;
-  channelId: string;
-  afterSnowflake: string;
-}) {
-  const query = new URLSearchParams({
-    after: params.afterSnowflake,
-    limit: "50",
-  });
-  return await requestDiscord<DiscordMessage[]>(
-    `/channels/${params.channelId}/messages?${query.toString()}`,
-    params.token,
-  );
-}
-
 export function computeDiscordRttMs(triggerTimestamp?: string, replyTimestamp?: string) {
   if (!triggerTimestamp || !replyTimestamp) {
     return undefined;
@@ -788,11 +773,11 @@ export async function pollChannelMessages(params: {
   const startedAt = Date.now();
   let afterSnowflake = params.afterSnowflake;
   while (Date.now() - startedAt < params.timeoutMs) {
-    const messages = await listChannelMessagesAfter({
-      token: params.token,
-      channelId: params.channelId,
-      afterSnowflake,
-    });
+    const query = new URLSearchParams({ after: afterSnowflake, limit: "50" });
+    const messages = await requestDiscord<DiscordMessage[]>(
+      `/channels/${params.channelId}/messages?${query.toString()}`,
+      params.token,
+    );
     const sorted = messages
       .filter((message) => isDiscordSnowflake(message.id))
       .toSorted((a, b) => compareDiscordSnowflakes(a.id, b.id));

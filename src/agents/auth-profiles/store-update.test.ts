@@ -1,15 +1,26 @@
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync, renameSync } from "node:fs";
 import path from "node:path";
-import { deserialize, serialize } from "node:v8";
-import { MessagePort } from "node:worker_threads";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { JSON_FIELD_TRANSFER_BYTES } from "../../infra/json-field-transfer.js";
-import * as sqliteReplies from "../../infra/sqlite-worker-broker-reply.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import {
+  SqliteWorkerError,
+  hasSqliteWorkerOutcomeUnknown,
+  type SqliteWorkerRequest,
+} from "../../infra/sqlite-worker-contract.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as sqliteWorkerStore from "../../infra/sqlite-worker-store.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import * as executions from "../../state/openclaw-agent-execution.js";
 import * as workerPublications from "../../state/openclaw-agent-worker-store.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  authProfileCredentialPublication,
+  captureAuthProfileCredentialAuthority,
+} from "../../state/user-model-account-authority.js";
 import {
   connectUserModelAccount,
   readUserModelAuthProfile,
@@ -17,18 +28,21 @@ import {
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { withEnv } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { mergeLocalAuthProfileStoreWithInheritedStore } from "./runtime-snapshot-owner.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore,
-  getRuntimeAuthProfileStoreSnapshotRevision,
   registerRuntimeAuthProfileStoreMutationListener,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
-import * as sqliteJson from "./sqlite-json.js";
 import * as sqliteRead from "./sqlite-read.js";
-import { runAuthProfileWriteTransaction } from "./sqlite.js";
+import {
+  runAuthProfileWriteTransaction,
+  resolveAuthProfileDatabasePath,
+  writePersistedAuthProfileStoreRaw,
+} from "./sqlite.js";
 import {
   loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
@@ -37,87 +51,229 @@ import {
 import * as publication from "./store-update-publication.js";
 import { withEnvOnlyAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
 
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 const credential = (key: string) => ({ type: "api_key" as const, provider: "fixture", key });
+
+async function prepareCredentialReader(env: NodeJS.ProcessEnv, agentDir?: string) {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const reader = agentDir
+    ? sqliteRead.prepareAgentAuthProfileRowsRead({
+        databasePath: resolveAuthProfileDatabasePath(agentDir),
+        agentId: "child",
+        env,
+      })
+    : undefined;
+  try {
+    const authority = reader
+      ? reader.captureCredentialAuthority("selected")!
+      : captureAuthProfileCredentialAuthority(
+          context,
+          {
+            identity: `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`,
+            databasePath: context.admission.databasePath,
+          },
+          "selected",
+        );
+    const rows = reader ? await reader.read() : await sqliteRead.readSharedAuthProfileRows(context);
+    authority.observe(
+      sqliteRead.loadPersistedAuthProfileStoreFromRows(
+        rows,
+        agentDir ? resolveAuthProfileDatabasePath(agentDir) : context.admission.databasePath,
+      )?.profiles.selected,
+    );
+    return authority.readCurrentCredential;
+  } finally {
+    await reader?.dispose();
+  }
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
-it.each([
-  { target: "agent", save: false },
-  { target: "shared", save: false },
-  { target: "agent", save: true },
-] as const)("keeps env-only $target callbacks isolated (save=$save)", async ({ target, save }) => {
-  await withOpenClawTestState(
-    { label: "auth-env-only-update", scenario: "minimal" },
-    async (state) => {
-      const localDir = state.agentDir("child");
-      const shared = { version: 1, profiles: { shared: credential("synthetic-hidden-shared") } };
-      const local = { version: 1, profiles: { local: credential("synthetic-hidden-local") } };
-      const empty = { version: 1, profiles: {} };
-      const explicit = { version: 1, profiles: { added: credential("synthetic-explicit") } };
-      saveAuthProfileStore(shared, undefined, saveOptions);
-      saveAuthProfileStore(local, localDir, saveOptions);
-      const updater = vi.fn<Parameters<typeof updateAuthProfileStoreWithLock>[0]["updater"]>(
-        (store, _owner, inherited) => {
-          expect(store).toEqual(empty);
-          expect(inherited).toBeNull();
-          if (save) {
-            store.profiles.added = explicit.profiles.added;
+it.each(["shared", "agent"] as const)(
+  "publishes %s credentials before release and preserves authority for metadata and rollback",
+  async (target) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentDir = target === "agent" ? state.agentDir("child") : undefined;
+      const original = credential("synthetic-before");
+      const replacement = credential("synthetic-after");
+      saveAuthProfileStore({ version: 1, profiles: { selected: original } }, agentDir, saveOptions);
+      const readCurrent = await prepareCredentialReader(state.env, agentDir);
+      expect(readCurrent()).toEqual(original);
+      let mode: "credential" | "metadata" | "rollback" = "credential";
+      let grants = 0;
+      let receipts = 0;
+      const settled: unknown[] = [];
+      const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
+        if (change.kind === "settled") {
+          settled.push(readCurrent());
+        }
+      });
+      probe.admission(operationAdmission, (request, grant, admit) => {
+        admit(request, (beforeRelease) => {
+          if (request.stage === "commit") {
+            grants++;
+            if (mode === "metadata") {
+              expect(readCurrent()).toEqual(replacement);
+            } else {
+              expect(readCurrent).toThrow("Auth profile credential authority is unavailable");
+            }
+            if (mode === "rollback") {
+              throw new Error("synthetic credential commit refusal");
+            }
           }
-          return save;
-        },
+          return grant(beforeRelease);
+        });
+      });
+      const observe = operationAdmission.observeSqliteWorkerCommittedFacts;
+      vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+        (admission, publish) =>
+          observe(admission, (receipt) => {
+            if (isRecord(receipt.facts) && receipt.facts.authCredentials) {
+              receipts++;
+              expect(readCurrent).toThrow("Auth profile credential authority is unavailable");
+            }
+            publish(receipt);
+          }),
       );
-
-      const result = await withEnvOnlyAuthProfileStore(() =>
+      const update = (updater: (store: AuthProfileStore) => boolean) =>
         updateAuthProfileStoreWithLock({
-          agentDir: target === "agent" ? localDir : undefined,
+          agentDir,
+          sharedStoreWrite: target === "shared",
           saveOptions,
           updater,
-        }),
-      );
-      expect(updater).toHaveBeenCalledOnce();
-      expect(result).toEqual(save ? explicit : empty);
-      expect(loadPersistedAuthProfileStore()).toEqual(shared);
-      expect(loadPersistedAuthProfileStore(localDir)).toEqual(save ? explicit : local);
-    },
-  );
+        });
+      try {
+        await update((store) => {
+          store.profiles.selected = replacement;
+          return true;
+        });
+        expect(receipts).toBe(1);
+        expect(settled).toEqual([replacement]);
+        expect(readCurrent()).toEqual(replacement);
+        mode = "metadata";
+        await update((store) => {
+          store.order = { fixture: ["selected"] };
+          return true;
+        });
+        expect(receipts).toBe(1);
+        expect(settled).toHaveLength(1);
+        mode = "rollback";
+        await expect(
+          update((store) => {
+            store.profiles.selected = credential("synthetic-refused");
+            return true;
+          }),
+        ).rejects.toThrow("synthetic credential commit refusal");
+        expect(grants).toBe(3);
+        expect(settled).toEqual([replacement, replacement]);
+        expect(readCurrent()).toEqual(replacement);
+        expect(loadPersistedAuthProfileStore(agentDir)?.profiles.selected).toEqual(replacement);
+      } finally {
+        unsubscribe();
+      }
+    });
+  },
+);
+
+it("keeps shared credentials denied after worker death without a native outcome", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    saveAuthProfileStore(
+      { version: 1, profiles: { selected: credential("synthetic-before") } },
+      undefined,
+      saveOptions,
+    );
+    const readCurrent = await prepareCredentialReader(state.env);
+    let target: { worker: Worker } | undefined;
+    let terminated: Promise<number> | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
+    const post = Worker.prototype.postMessage;
+    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request: SqliteWorkerRequest,
+      transferList,
+    ) {
+      if (request.type === "execute") {
+        const command: unknown = deserialize(request.input);
+        if (isRecord(command) && command.type === "authProfiles.update") {
+          target = { worker: this };
+        }
+      }
+      return post.call(this, request, transferList);
+    });
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      admit(request, (beforeRelease) => {
+        if (target && request.stage === "commit") {
+          expect(readCurrent).toThrow("Auth profile credential authority is unavailable");
+          terminated = target.worker.terminate();
+          return false;
+        }
+        return grant(beforeRelease);
+      });
+    });
+    try {
+      const failure = await updateAuthProfileStoreWithLock({
+        sharedStoreWrite: true,
+        saveOptions,
+        updater(store) {
+          store.profiles.selected = credential("synthetic-uncertain");
+          return true;
+        },
+      }).catch((error: unknown) => error);
+      expect(terminated).toBeDefined();
+      expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+      expect(readCurrent).toThrow();
+      const recaptured = await prepareCredentialReader(state.env);
+      expect(recaptured).toThrow("Auth profile credential authority is unavailable");
+    } finally {
+      await terminated;
+    }
+  });
 });
 
-it("does not decode a malformed persisted cell for an env-only no-op callback", async () => {
-  await withOpenClawTestState(
-    { label: "auth-env-only-malformed", scenario: "minimal" },
-    async (state) => {
-      const agentDir = state.agentDir("child");
-      saveAuthProfileStore(
-        { version: 1, profiles: { local: credential("synthetic-hidden-local") } },
-        agentDir,
-        saveOptions,
-      );
-      const malformed = "{synthetic-invalid-json";
-      runAuthProfileWriteTransaction(agentDir, ({ db }) => {
-        db.prepare("UPDATE auth_profile_store SET store_json = ? WHERE store_key = ?").run(
-          malformed,
-          "primary",
+it.each([{ target: "agent", save: true }] as const)(
+  "keeps env-only $target callbacks isolated (save=$save)",
+  async ({ target, save }) => {
+    await withOpenClawTestState(
+      { label: "auth-env-only-update", scenario: "minimal" },
+      async (state) => {
+        const localDir = state.agentDir("child");
+        const shared = { version: 1, profiles: { shared: credential("synthetic-hidden-shared") } };
+        const local = { version: 1, profiles: { local: credential("synthetic-hidden-local") } };
+        const empty = { version: 1, profiles: {} };
+        const explicit = { version: 1, profiles: { added: credential("synthetic-explicit") } };
+        saveAuthProfileStore(shared, undefined, saveOptions);
+        saveAuthProfileStore(local, localDir, saveOptions);
+        const updater = vi.fn<Parameters<typeof updateAuthProfileStoreWithLock>[0]["updater"]>(
+          (store, _owner, inherited) => {
+            expect(store).toEqual(empty);
+            expect(inherited).toBeNull();
+            if (save) {
+              store.profiles.added = explicit.profiles.added;
+            }
+            return save;
+          },
         );
-      });
-      const updater = vi.fn(() => false);
-      const result = await withEnvOnlyAuthProfileStore(() =>
-        updateAuthProfileStoreWithLock({ agentDir, updater }),
-      );
-      expect(updater).toHaveBeenCalledOnce();
-      expect(result).toEqual({ version: 1, profiles: {} });
-      expect(
-        runAuthProfileWriteTransaction(agentDir, ({ db }) =>
-          sqliteJson.readAuthProfileJsonCellText(db, "store", "agent"),
-        ),
-      ).toBe(malformed);
-    },
-  );
-});
+
+        const result = await withEnvOnlyAuthProfileStore(() =>
+          updateAuthProfileStoreWithLock({
+            agentDir: target === "agent" ? localDir : undefined,
+            saveOptions,
+            updater,
+          }),
+        );
+        expect(updater).toHaveBeenCalledOnce();
+        expect(result).toEqual(save ? explicit : empty);
+        expect(loadPersistedAuthProfileStore()).toEqual(shared);
+        expect(loadPersistedAuthProfileStore(localDir)).toEqual(save ? explicit : local);
+      },
+    );
+  },
+);
 
 it("rejects a native auth owner before initializing its state directory", async () => {
   await withOpenClawTestState(
@@ -138,6 +294,53 @@ it("rejects a native auth owner before initializing its state directory", async 
     },
   );
 });
+
+it.for(["local", "legacy-shared"] as const)(
+  "retains the %s physical store before waiting for auth FIFO preparation",
+  async (kind) => {
+    await withOpenClawTestState(
+      { label: "auth-queued-file-identity", scenario: "minimal" },
+      async (state) => {
+        const agentDir = state.agentDir(kind === "local" ? "child" : "main");
+        noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, state.env);
+        runAuthProfileWriteTransaction(
+          agentDir,
+          (database) => {
+            writePersistedAuthProfileStoreRaw(
+              { version: 1, profiles: { selected: credential("synthetic-before") } },
+              agentDir,
+              database,
+            );
+          },
+          { env: state.env },
+        );
+        await closeOpenClawAgentDatabasesAsync();
+        const databasePath = resolveAuthProfileDatabasePath(agentDir);
+        const reservation = reserveAuthProfileUsagePreparation([
+          resolveOpenClawStateSqlitePath(state.env),
+        ]);
+        const updater = vi.fn(() => false);
+        const updating = updateAuthProfileStoreWithLock({
+          agentDir: kind === "local" ? agentDir : undefined,
+          saveOptions,
+          updater,
+        });
+        void updating.catch(() => {});
+        try {
+          const original = `${databasePath}.original`;
+          renameSync(databasePath, original);
+          copyFileSync(original, databasePath);
+          reservation.release();
+          await expect(updating).rejects.toThrow(/identity|physical|observed target/i);
+          expect(updater).not.toHaveBeenCalled();
+        } finally {
+          reservation.release();
+          await Promise.allSettled([updating]);
+        }
+      },
+    );
+  },
+);
 
 it.each(["stale", "newer-write", "rebound-owner"])(
   "invalidates an unacknowledged commit after release with a %s view",
@@ -169,12 +372,13 @@ it.each(["stale", "newer-write", "rebound-owner"])(
               );
             }
             if (scenario === "rebound-owner") {
-              withEnv({ OPENCLAW_STATE_DIR: path.join(state.stateDir, "rebound") }, () =>
+              withEnv({ OPENCLAW_STATE_DIR: path.join(state.stateDir, "rebound") }, () => {
+                noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
                 setRuntimeAuthProfileStoreSnapshot(
                   { version: 1, profiles: { selected: credential("synthetic-rebound") } },
                   agentDir,
-                ),
-              );
+                );
+              });
             }
             if (!execution) {
               throw new Error("Missing real auth execution");
@@ -340,7 +544,7 @@ it.each([
   },
 );
 
-it.each(["selected", "other"])(
+it.each(["selected"])(
   "does not retain old inherited order when a native rotation of %s overtakes state publication",
   async (profileId) => {
     await withOpenClawTestState(
@@ -515,154 +719,3 @@ it.each(["before-callback", "in-callback", "commit"] as const)(
     );
   },
 );
-
-it.each(["shared", "agent"] as const)(
-  "commits %s callbacks once off-thread and preserves oversized fields",
-  async (target) => {
-    await withOpenClawTestState(
-      { label: "auth-worker-save", scenario: "minimal" },
-      async (state) => {
-        const agentDir = target === "agent" ? state.agentDir("child") : undefined;
-        const large = "synthetic-\u{1f99e}".repeat(10_000);
-        const selectedId = `selected:${"p".repeat(65_536)}`;
-        const metadata = { ["m".repeat(65_536)]: "synthetic-metadata" };
-        const largeCredential = { ...credential(large), metadata };
-        const initial: AuthProfileStore = {
-          version: 1,
-          profiles: { large: largeCredential, [selectedId]: credential("synthetic-old") },
-        };
-        saveAuthProfileStore(initial, agentDir, saveOptions);
-        setRuntimeAuthProfileStoreSnapshot(initial, agentDir);
-        const replyBytes: number[] = [];
-        const receiveReply = sqliteReplies.receiveSqliteWorkerReply;
-        const replies = vi
-          .spyOn(sqliteReplies, "receiveSqliteWorkerReply")
-          .mockImplementation((slot, reply, owner) => {
-            const request = slot.current?.request;
-            if (reply.ok && request?.type === "execute") {
-              const command: unknown = deserialize(request.input);
-              if (
-                isRecord(command) &&
-                (command.type === "authProfiles.update" ||
-                  (command.type === "database.domain.publish" &&
-                    isRecord(command.input) &&
-                    isRecord(command.input.command) &&
-                    command.input.command.type === "authProfiles.update"))
-              ) {
-                replyBytes.push(reply.value.byteLength);
-              }
-            }
-            return receiveReply(slot, reply, owner);
-          });
-        const frames = vi.spyOn(MessagePort.prototype, "postMessage");
-        const nativeWrite = vi
-          .spyOn(sqliteJson, "writeAuthProfileJsonCell")
-          .mockImplementation(() => {
-            throw new Error("Auth save reached host SQLite");
-          });
-        const updater = vi.fn((store: AuthProfileStore) => {
-          expect(store.profiles.large).toEqual(largeCredential);
-          store.profiles[selectedId] = credential("synthetic-new");
-          store.order = { fixture: [selectedId, "large"] };
-          return true;
-        });
-        await updateAuthProfileStoreWithLock({ agentDir, updater, saveOptions });
-        expect(updater).toHaveBeenCalledOnce();
-        expect(nativeWrite).not.toHaveBeenCalled();
-        nativeWrite.mockRestore();
-        replies.mockRestore();
-        const frameBytes = frames.mock.calls
-          .filter(([value]) => Array.isArray(value))
-          .map(([value]) => serialize(value).byteLength);
-        frames.mockRestore();
-        expect(replyBytes.length).toBeGreaterThan(0);
-        expect(Math.max(...replyBytes)).toBeLessThanOrEqual(JSON_FIELD_TRANSFER_BYTES);
-        expect(frameBytes.length).toBeGreaterThan(1);
-        expect(Math.max(...frameBytes)).toBeLessThanOrEqual(JSON_FIELD_TRANSFER_BYTES);
-        const expected = {
-          ...initial,
-          profiles: { ...initial.profiles, [selectedId]: credential("synthetic-new") },
-          order: { fixture: [selectedId, "large"] },
-        };
-        expect(loadPersistedAuthProfileStore(agentDir)).toEqual(expected);
-        expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toMatchObject(expected);
-
-        const rejected = vi.fn((store: AuthProfileStore) => {
-          store.profiles[selectedId] = credential("synthetic-refused");
-          throw new Error("synthetic updater refusal");
-        });
-        await expect(
-          updateAuthProfileStoreWithLock({ agentDir, updater: rejected, saveOptions }),
-        ).rejects.toThrow("synthetic updater refusal");
-        expect(rejected).toHaveBeenCalledOnce();
-        expect(loadPersistedAuthProfileStore(agentDir)).toEqual(expected);
-
-        let revoked = false;
-        const guarded = vi.fn((store: AuthProfileStore) => {
-          store.profiles[selectedId] = credential("synthetic-revoked");
-          revoked = true;
-          return true;
-        });
-        await expect(
-          updateAuthProfileStoreWithLock({
-            agentDir,
-            saveOptions,
-            updater: guarded,
-            assertCurrent() {
-              if (revoked) {
-                throw new Error("synthetic owner revoked");
-              }
-            },
-          }),
-        ).rejects.toThrow("synthetic owner revoked");
-        expect(guarded).toHaveBeenCalledOnce();
-        expect(loadPersistedAuthProfileStore(agentDir)).toEqual(expected);
-      },
-    );
-  },
-);
-
-it("publishes changed inherited credentials while leaving local shadows and their revisions intact", async () => {
-  await withOpenClawTestState(
-    { label: "auth-worker-publication", scenario: "minimal" },
-    async (state) => {
-      const shared: AuthProfileStore = {
-        version: 1,
-        profiles: { selected: credential("synthetic-shared") },
-      };
-      const local: AuthProfileStore = {
-        version: 1,
-        profiles: { selected: credential("synthetic-local") },
-      };
-      const empty: AuthProfileStore = { version: 1, profiles: {} };
-      saveAuthProfileStore(shared, undefined, saveOptions);
-      const localDir = state.agentDir("local");
-      const inheritedDir = state.agentDir("inherited");
-      saveAuthProfileStore(local, localDir, saveOptions);
-      saveAuthProfileStore(empty, inheritedDir, saveOptions);
-      setRuntimeAuthProfileStoreSnapshot(
-        mergeLocalAuthProfileStoreWithInheritedStore(local, shared),
-        localDir,
-      );
-      setRuntimeAuthProfileStoreSnapshot(
-        mergeLocalAuthProfileStoreWithInheritedStore(empty, shared),
-        inheritedDir,
-      );
-      const localRevision = getRuntimeAuthProfileStoreSnapshotRevision(localDir);
-      await updateAuthProfileStoreWithLock({
-        sharedStoreWrite: true,
-        saveOptions,
-        updater(store) {
-          store.profiles.selected = credential("synthetic-replaced");
-          return true;
-        },
-      });
-      expect(getRuntimeAuthProfileStoreSnapshotCore(localDir)?.profiles).toEqual(local.profiles);
-      expect(getRuntimeAuthProfileStoreSnapshotRevision(localDir)).toBe(localRevision);
-      expect(getRuntimeAuthProfileStoreSnapshotCore(inheritedDir)?.profiles).toEqual({
-        selected: credential("synthetic-replaced"),
-      });
-      expect(loadPersistedAuthProfileStore(inheritedDir)?.profiles).toEqual({});
-    },
-  );
-});

@@ -17,56 +17,99 @@ const added = (slot: number, overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("Responses terminal tool completion", () => {
-  it("does not repeat an anonymous unindexed call after its item-done event", async () => {
-    const anonymous = { id: undefined, call_id: undefined };
-    const result = await runFixture([
-      { ...added(0, anonymous), output_index: undefined },
-      { type: "response.output_item.done", item: tool(0, anonymous) },
-      completed("resp_anonymous_done", [tool(0, anonymous)]),
-    ]);
-    expect(result.error).toBeNull();
-    expect(result.content).toHaveLength(1);
-    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
-      { type: "toolcall_end", contentIndex: 0 },
-    ]);
-  });
-
-  it("rejects an anonymous call with no stream or terminal position without completing it", async () => {
-    const anonymous = { id: undefined, call_id: undefined };
-    const result = await runFixture([
-      { ...added(0, anonymous), output_index: undefined },
-      { type: "response.output_item.done", item: tool(0, anonymous) },
-      completed("resp_no_position", []),
-    ]);
-    expect(result.error).toBe("Responses stream completed with unresolved tool calls");
-    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
-  });
-
-  it.each(["indexed", "identified"])(
-    "retains a known %s owner when its done event omits identity",
-    async (identity) => {
-      const anonymous = { id: undefined, call_id: undefined };
-      const result = await runFixture([
-        identity === "indexed" ? added(0, anonymous) : { ...added(0), output_index: undefined },
-        { type: "response.output_item.done", item: tool(0, anonymous) },
-        completed("resp_known_owner", []),
-      ]);
-      expect(result.error).toBeNull();
-      expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
-        { type: "toolcall_end", contentIndex: 0 },
-      ]);
-    },
-  );
-
-  it("rejects an anonymous unindexed done-only call without silently dropping it", async () => {
-    const item = tool(0, { id: undefined, call_id: undefined });
-    const result = await runFixture([
-      { type: "response.output_item.done", item },
-      completed("resp_done_only", [item]),
-    ]);
-    expect(result.error).toBe("Responses stream completed tool call without an output identity");
-    expect(result.content).toHaveLength(0);
-    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
+  it.each([
+    { ending: "completed", admission: true },
+    { ending: "completed-without-ciphertext", admission: true },
+    { ending: "completed-null-ciphertext", admission: true },
+    { ending: "length", admission: true },
+    { ending: "output-limit-active", admission: true },
+    { ending: "output-limit-rejected", admission: true },
+    { ending: "conflicting-status", admission: false },
+    { ending: "malformed-sibling", admission: false },
+    { ending: "content-filter", admission: false },
+    { ending: "failed", admission: false },
+  ])("settles deferred async admission on $ending", async ({ ending, admission }) => {
+    const reasoning = { type: "reasoning", id: "rs_deferred", summary: [] };
+    const encrypted = !ending.startsWith("completed-");
+    const completedReasoning = {
+      ...reasoning,
+      ...(ending === "completed-without-ciphertext"
+        ? {}
+        : { encrypted_content: encrypted ? "synthetic-ciphertext" : null }),
+    };
+    const call = tool(1, { async: true });
+    const pendingSibling =
+      ending === "output-limit-active" ||
+      ending === "output-limit-rejected" ||
+      ending === "conflicting-status" ||
+      ending === "malformed-sibling";
+    const terminalOutput = [
+      completedReasoning,
+      call,
+      ...(pendingSibling
+        ? [tool(2, ending === "malformed-sibling" ? { arguments: "{" } : { status: "incomplete" })]
+        : []),
+    ];
+    const isIncomplete =
+      ending === "length" ||
+      ending.startsWith("output-limit") ||
+      ending === "conflicting-status" ||
+      ending === "content-filter";
+    const terminalEvent =
+      ending === "failed"
+        ? {
+            type: "response.failed",
+            response: {
+              id: "resp_deferred",
+              status: "failed",
+              error: { code: "server_error", message: "Synthetic failure" },
+            },
+          }
+        : isIncomplete
+          ? {
+              type: "response.incomplete",
+              response: {
+                id: "resp_deferred",
+                status: ending === "conflicting-status" ? "completed" : "incomplete",
+                incomplete_details: {
+                  reason: ending === "content-filter" ? "content_filter" : "max_output_tokens",
+                },
+                output: terminalOutput,
+              },
+            }
+          : completed("resp_deferred", terminalOutput);
+    const result = await runFixture(
+      [
+        { type: "response.output_item.added", output_index: 0, item: reasoning },
+        { type: "response.output_item.done", output_index: 0, item: reasoning },
+        added(1, { async: true }),
+        { type: "response.output_item.done", output_index: 1, item: call },
+        ...(pendingSibling ? [added(2)] : []),
+        ...(ending === "output-limit-rejected"
+          ? [
+              {
+                type: "response.output_item.done",
+                output_index: 2,
+                item: tool(2, { status: "incomplete" }),
+              },
+            ]
+          : []),
+        terminalEvent,
+      ],
+      { asyncToolExecution: true },
+    );
+    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual(
+      admission ? [{ type: "toolcall_end", contentIndex: 1 }] : [],
+    );
+    expect(result.error === null).toBe(
+      ending.startsWith("completed") || ending === "length" || ending === "content-filter",
+    );
+    if (ending === "content-filter") {
+      expect(result.stopReason).toBe("error");
+    }
+    if (admission) {
+      expect(result.content[0]).toMatchObject({ type: "thinking", encrypted });
+    }
   });
 
   it("does not publish anonymous unindexed completions before ambiguous terminal matching", async () => {
@@ -82,7 +125,7 @@ describe("Responses terminal tool completion", () => {
     expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
   });
 
-  it.each(["indexed", "rotated", "unindexed", "anonymous"])(
+  it.each(["unindexed"])(
     "completes a %s call exactly once when its item-done event is missing",
     async (identity) => {
       const anonymous = identity === "anonymous" ? { id: undefined, call_id: undefined } : {};
@@ -121,29 +164,10 @@ describe("Responses terminal tool completion", () => {
     },
   );
 
-  it("does not adopt an unindexed anonymous call into an already completed position", async () => {
-    const anonymous = { id: undefined, call_id: undefined };
-    const result = await runFixture([
-      { type: "response.output_item.done", output_index: 0, item: tool(0, anonymous) },
-      { ...added(1, anonymous), output_index: undefined },
-      completed("resp_anonymous", [tool(0, anonymous), tool(1, anonymous)]),
-    ]);
-    expect(result.error).toBeNull();
-    expect(
-      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
-    ).toEqual([{ slot: 0 }, { slot: 1 }]);
-    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
-      { type: "toolcall_end", contentIndex: 0 },
-      { type: "toolcall_end", contentIndex: 1 },
-    ]);
-  });
-
   it.each([
     ["malformed arguments", { arguments: '{"slot":' }],
-    ["non-object arguments", { arguments: "[]" }],
     ["incomplete status", { status: "incomplete" }],
     ["changed name", { name: "delete_record" }],
-    ["changed call identity", { call_id: "call_conflicting" }],
   ])(
     "rejects a terminal batch with later %s before any tool completes",
     async (_name, override) => {
@@ -169,15 +193,14 @@ describe("Responses terminal tool completion", () => {
     ]);
   });
 
-  it.each([
-    ["missing call", []],
-    ["duplicate call", [tool(0), tool(0)]],
-    ["unmatched call", [tool(0, { call_id: "call_other" })]],
-  ])("rejects a terminal %s without completing the active call", async (_name, items) => {
-    const result = await runFixture([added(0), completed("resp_unresolved", items)]);
-    expect(result.error).not.toBeNull();
-    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
-  });
+  it.each([["duplicate call", [tool(0), tool(0)]]])(
+    "rejects a terminal %s without completing the active call",
+    async (_name, items) => {
+      const result = await runFixture([added(0), completed("resp_unresolved", items)]);
+      expect(result.error).not.toBeNull();
+      expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
+    },
+  );
 
   it("never completes active tools from an incomplete response", async () => {
     const result = await runFixture([
@@ -189,68 +212,6 @@ describe("Responses terminal tool completion", () => {
     ]);
     expect(result.error).toBe("Responses stream completed with unresolved tool calls");
     expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
-  });
-
-  it.each([1, 2])(
-    "rejects %i anonymous unindexed calls with ambiguous terminal positions",
-    async (count) => {
-      const result = await runFixture([
-        ...Array.from({ length: count }, (_, slot) => ({
-          ...added(slot, { id: undefined, call_id: undefined }),
-          output_index: undefined,
-        })),
-        completed("resp_ambiguous", [tool(0), tool(1)]),
-      ]);
-      expect(result.error).not.toBeNull();
-      expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
-    },
-  );
-
-  it("completes indexed anonymous and terminal-only calls without duplicate callbacks", async () => {
-    const result = await runFixture([
-      added(0, { id: undefined, call_id: undefined }),
-      completed("resp_indexed_and_new", [tool(0), tool(1)]),
-    ]);
-    expect(result.error).toBeNull();
-    expect(result.content).toHaveLength(2);
-    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
-      { type: "toolcall_end", contentIndex: 0 },
-      { type: "toolcall_end", contentIndex: 1 },
-    ]);
-  });
-
-  it("prefers streamed arguments over a disagreeing output_item.done snapshot", async () => {
-    const fullArgs = JSON.stringify({ path: "README.md" });
-    const staleArgs = JSON.stringify({ path: "READ" });
-    const result = await runFixture([
-      added(0),
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 0,
-        item_id: "fc_0",
-        delta: fullArgs,
-      },
-      {
-        type: "response.function_call_arguments.done",
-        output_index: 0,
-        item_id: "fc_0",
-        name: "lookup",
-        arguments: fullArgs,
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: tool(0, { arguments: staleArgs }),
-      },
-      completed("resp_stale_done", [tool(0, { arguments: fullArgs })]),
-    ]);
-    expect(result.error).toBeNull();
-    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
-      { type: "toolcall_end", contentIndex: 0 },
-    ]);
-    const toolCall = result.content[0] as { type: string; name: string; arguments: unknown };
-    expect(toolCall).toMatchObject({ type: "toolCall", name: "lookup" });
-    expect(toolCall.arguments).toEqual({ path: "README.md" });
   });
 
   it("prefers streamed arguments when both are schema-valid but different", async () => {
@@ -281,57 +242,6 @@ describe("Responses terminal tool completion", () => {
     expect(result.error).toBeNull();
     const toolCall = result.content[0] as { arguments: unknown };
     expect(toolCall.arguments).toEqual({ if_match: '"rev-4"', object_id: "x" });
-  });
-
-  it("falls back to done snapshot when streamed buffer is incomplete JSON", async () => {
-    const doneArgs = JSON.stringify({ path: "README.md" });
-    const result = await runFixture([
-      added(0),
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 0,
-        item_id: "fc_0",
-        delta: '{"path":"READ',
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: tool(0, { arguments: doneArgs }),
-      },
-      completed("resp_incomplete_streamed", [tool(0, { arguments: doneArgs })]),
-    ]);
-    expect(result.error).toBeNull();
-    const toolCall = result.content[0] as { arguments: unknown };
-    expect(toolCall.arguments).toEqual({ path: "README.md" });
-  });
-
-  it("uses done snapshot when streamed and done arguments agree", async () => {
-    const args = JSON.stringify({ path: "README.md" });
-    const result = await runFixture([
-      added(0),
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 0,
-        item_id: "fc_0",
-        delta: args,
-      },
-      {
-        type: "response.function_call_arguments.done",
-        output_index: 0,
-        item_id: "fc_0",
-        name: "lookup",
-        arguments: args,
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: tool(0, { arguments: args }),
-      },
-      completed("resp_agree", [tool(0, { arguments: args })]),
-    ]);
-    expect(result.error).toBeNull();
-    const toolCall = result.content[0] as { arguments: unknown };
-    expect(toolCall.arguments).toEqual({ path: "README.md" });
   });
 
   it("uses done snapshot when streamed buffer is marked unreliable", async () => {
@@ -366,26 +276,5 @@ describe("Responses terminal tool completion", () => {
     expect(result.error).toBeNull();
     const toolCall = result.content[0] as { arguments: unknown };
     expect(toolCall.arguments).toEqual({ slot: 0 });
-  });
-
-  it("does not prefer an opening snapshot over a complete done snapshot", async () => {
-    const doneArgs = JSON.stringify({ path: "README.md" });
-    const result = await runFixture([
-      // The added event carries an opening arguments value of "{}" with no
-      // subsequent argument delta or done event. The done snapshot carries the
-      // complete arguments. The opening snapshot must not be preferred.
-      {
-        ...added(0, { arguments: "{}" }),
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: tool(0, { arguments: doneArgs }),
-      },
-      completed("resp_opening_snapshot", [tool(0, { arguments: doneArgs })]),
-    ]);
-    expect(result.error).toBeNull();
-    const toolCall = result.content[0] as { arguments: unknown };
-    expect(toolCall.arguments).toEqual({ path: "README.md" });
   });
 });

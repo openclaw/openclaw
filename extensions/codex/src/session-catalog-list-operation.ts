@@ -219,7 +219,6 @@ class CodexCatalogListDriver {
   private nodeHosts: CodexSessionCatalogHost[] | undefined;
   private nodeResults: Array<() => CodexSessionCatalogHost | undefined> = [];
   private readonly nodeSnapshots: CodexCatalogNodeSnapshots;
-  private readonly nodeGeneration: number;
   private nodeDiscoveryFailed = false;
   private readonly nodePublications = { pending: 0 };
   private nodesStarted = false;
@@ -233,7 +232,7 @@ class CodexCatalogListDriver {
   constructor(params: ListParams) {
     this.params = params;
     this.nodeSnapshots = params.nodeSnapshots ?? new CodexCatalogNodeSnapshots();
-    this.nodeGeneration = this.nodeSnapshots.start(params.config);
+    this.nodeSnapshots.start(params.config);
   }
 
   private request(): ListParams {
@@ -421,7 +420,7 @@ class CodexCatalogListDriver {
       return [host];
     }
     params.signal?.throwIfAborted();
-    this.nodeSnapshots.observe(this.nodeGeneration, inventory);
+    this.nodeSnapshots.observe(inventory);
     const { listNodeAdoptedSessionEntries, nodeAdoptedSourceKey } =
       await import("./session-catalog-node-adoption.js");
     const { compareNodeLabels, listPairedNode, nodeLabel } =
@@ -452,7 +451,7 @@ class CodexCatalogListDriver {
         node.commands,
         node.invocableCommands,
       ]);
-      const publication = this.nodeSnapshots.forNode(node, this.nodeGeneration, key);
+      const publication = this.nodeSnapshots.forNode(node, key);
       const { project, publish, publishCached, readPublished } = createNodeHostPublication(
         publication,
         adopted,
@@ -470,7 +469,7 @@ class CodexCatalogListDriver {
           publishCached(latest);
           return project(latest.host);
         }
-        return !partial ? result : publication.valid() ? (readPublished() ?? result) : undefined;
+        return partial ? (readPublished() ?? result) : result;
       });
       if (cached) {
         publishCached(cached);

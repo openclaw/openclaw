@@ -1,9 +1,10 @@
+import type { AgentDeletionSessionStoreAbsentReadOperations } from "../agents/agent-delete-session-store-safety.worker-contract.js";
 import type { createPluginModelCatalogReadOperations } from "../agents/plugin-model-catalog.read-operation.js";
+import type { stateSnapshotReadOperations } from "../state/openclaw-state-read-snapshot.js";
 import {
   createWorkerOperationRegistry,
   type WorkerOperations,
 } from "../state/worker-operation-registry.js";
-import type { TrajectoryRuntimeRetentionReadOperations } from "../trajectory/runtime-retention.contract.js";
 import type { immutableInstallReadOperations } from "./package-update-activation-immutable.js";
 import type { pageCacheReadOperations } from "./sqlite-page-cache.worker.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
@@ -11,20 +12,21 @@ import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation
 export type SqliteReadOnlyOperations = WorkerOperations<
   ReturnType<typeof createPluginModelCatalogReadOperations> &
     typeof immutableInstallReadOperations &
-    typeof pageCacheReadOperations
+    typeof pageCacheReadOperations &
+    typeof stateSnapshotReadOperations
 > &
-  TrajectoryRuntimeRetentionReadOperations;
+  AgentDeletionSessionStoreAbsentReadOperations;
 
 export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   SqliteReadOnlyOperations,
   SqliteReadOnlyOperationContext
 >({
+  agentRetirement: () =>
+    import("../agents/agent-delete-session-store-safety.kernel.js").then(
+      (module) => module.agentDeletionSessionStoreAbsentReadOperations,
+    ),
   pageCache: () =>
     import("./sqlite-page-cache.worker.js").then((module) => module.pageCacheReadOperations),
-  trajectoryRetention: () =>
-    import("../trajectory/runtime-retention.worker.js").then(
-      (module) => module.trajectoryRuntimeRetentionReadOperations,
-    ),
   pluginCatalog: () =>
     import("../agents/plugin-model-catalog.kernel.js").then(
       (module) => module.pluginModelCatalogReadOperations,
@@ -32,5 +34,9 @@ export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   immutableInstall: () =>
     import("./package-update-activation-immutable.js").then(
       (module) => module.immutableInstallReadOperations,
+    ),
+  stateSnapshot: () =>
+    import("../state/openclaw-state-read-snapshot.js").then(
+      (module) => module.stateSnapshotReadOperations,
     ),
 });

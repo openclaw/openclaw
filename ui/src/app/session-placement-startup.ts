@@ -5,7 +5,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   listSessionPlacementRecoveryStorageKeys,
-  sessionPlacementRecoveryExactStorageKey,
+  sessionPlacementRecoveryExactStorageKeys,
 } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type {
   SessionPlacementRecovery,
@@ -29,6 +29,7 @@ import {
 } from "./stale-chunk-reload.ts";
 
 export type ApplicationPlacementStartupStatus = {
+  readonly startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
   readonly sessionKey: string;
   // A restored key holds admission before the lazy runtime validates its target and payload.
   readonly targetKind?: SessionPlacementTarget["kind"];
@@ -251,9 +252,11 @@ export function createApplicationPlacementStartup(
           },
           read: (key) =>
             current() &&
-            keys.includes(
-              sessionPlacementRecoveryExactStorageKey(owner.gatewayUrl, owner.recoveryScope, key),
-            )
+            sessionPlacementRecoveryExactStorageKeys(
+              owner.gatewayUrl,
+              owner.recoveryScope,
+              key,
+            ).some((storageKey) => keys.includes(storageKey))
               ? restored
               : undefined,
         };

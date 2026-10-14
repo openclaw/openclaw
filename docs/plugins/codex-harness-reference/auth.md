@@ -93,7 +93,7 @@ and settled-turn finalization use private temporary homes and OpenClaw auth
 even when ordinary sessions share the user home. A Chat created
 through Codex Sessions uses its private supervision connection instead, which
 preserves the native connection's auth and provider configuration for the
-canonical branch and future resumes. If that supervised turn finishes tool work
+primary branch and future resumes. If that supervised turn finishes tool work
 without a final answer, OpenClaw does not borrow host credentials to generate
 one. It delivers the [settled-tool fallback](/plugins/codex-harness-runtime#final-answers-after-settled-tool-work)
 without repeating completed actions.

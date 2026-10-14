@@ -7,6 +7,27 @@ export function recordMemorySample(
   memory: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>["memory"],
   byteBuckets: number[],
 ): void {
+  for (const message of memory.workerMessages ?? []) {
+    const labels = { kind: message.kind, direction: message.direction };
+    store.counterValue(
+      "openclaw_worker_messages_total",
+      "Messages crossing the Gateway main-thread worker boundary.",
+      labels,
+      message.messages,
+    );
+    store.counterValue(
+      "openclaw_worker_message_payload_bytes_total",
+      "Known worker payload bytes, excluding transport framing and unmeasured object graphs.",
+      labels,
+      message.payloadBytes,
+    );
+    store.counterValue(
+      "openclaw_worker_message_unmeasured_total",
+      "Worker messages without a known payload size; these do not contribute to payload bytes.",
+      labels,
+      message.unmeasuredMessages,
+    );
+  }
   for (const worker of memory.workerLifecycle ?? []) {
     store.counterValue(
       "openclaw_worker_started_total",
@@ -43,6 +64,7 @@ export function recordMemorySample(
     ["openclaw_worker_count", "workerCount"],
     ["openclaw_worker_heap_sampled_count", "workerHeapSampledCount"],
   ] as const) {
+    store.clearGauges(name);
     store.gauge(name, "Worker isolate counts.", {}, numericValue(memory[field]));
   }
   store.clearGauges("openclaw_heap_space_bytes");
@@ -62,20 +84,39 @@ export function recordMemorySample(
     }
   }
   // The resource owner supplies bounded script names and retires stale/exit samples.
-  const workerHeaps = new Map<string, number>();
+  const workers = new Map<
+    string,
+    { count: number; sampled: number; heapUsed: number | undefined }
+  >();
   for (const worker of memory.workerHeaps ?? []) {
+    const totals = workers.get(worker.script) ?? { count: 0, sampled: 0, heapUsed: undefined };
+    totals.count++;
+    totals.sampled++;
     const heapUsed = numericValue(worker.heapUsed);
     if (heapUsed !== undefined) {
-      workerHeaps.set(worker.script, (workerHeaps.get(worker.script) ?? 0) + heapUsed);
+      totals.heapUsed = (totals.heapUsed ?? 0) + heapUsed;
     }
+    workers.set(worker.script, totals);
+  }
+  for (const worker of memory.workerMemoryMissing ?? []) {
+    const totals = workers.get(worker.script) ?? { count: 0, sampled: 0, heapUsed: undefined };
+    totals.count++;
+    workers.set(worker.script, totals);
   }
   store.clearGauges("openclaw_worker_heap_used_bytes");
-  for (const [script, heapUsed] of workerHeaps) {
+  for (const [script, totals] of workers) {
+    store.gauge("openclaw_worker_count", "Worker isolate counts.", { script }, totals.count);
+    store.gauge(
+      "openclaw_worker_heap_sampled_count",
+      "Worker isolate counts.",
+      { script },
+      totals.sampled,
+    );
     store.gauge(
       "openclaw_worker_heap_used_bytes",
       "Latest live Worker heap usage by bounded script basename.",
       { script },
-      heapUsed,
+      totals.heapUsed,
     );
   }
   store.histogram(

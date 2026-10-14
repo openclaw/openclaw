@@ -111,14 +111,6 @@ function resolveRejectedCatalogLookup(
   return lookup;
 }
 
-function resolveRejectedCatalogEntryKey(entry: ChannelPluginCatalogEntry): string | null {
-  const pluginId = entry.pluginId?.trim();
-  if (pluginId) {
-    return `plugin:${entry.origin ?? ""}:${pluginId}`;
-  }
-  return isLocalChannelPluginOrigin(entry.origin) ? `origin:${entry.origin}` : null;
-}
-
 /** Resolve a catalog entry, falling back to non-workspace metadata when workspace entry is untrusted. */
 export function getTrustedChannelPluginCatalogEntry(
   channelId: string,
@@ -127,12 +119,6 @@ export function getTrustedChannelPluginCatalogEntry(
 ): ChannelPluginCatalogEntry | undefined {
   const extraPaths = resolveTrustedCatalogExtraPaths(params.cfg);
   const rejectedEntries = [...rejected];
-  const seenRejectedKeys = new Set(
-    rejectedEntries.flatMap((entry) => {
-      const key = resolveRejectedCatalogEntryKey(entry);
-      return key ? [key] : [];
-    }),
-  );
 
   for (let attempts = 0; attempts <= MAX_TRUSTED_CATALOG_FALLBACKS; attempts += 1) {
     const candidate = getChannelPluginCatalogEntry(channelId, {
@@ -150,15 +136,6 @@ export function getTrustedChannelPluginCatalogEntry(
       return candidate;
     }
 
-    // Malformed discovery can ignore exclusions and resurface the same untrusted
-    // local entry. Stop instead of looping forever while searching for fallback metadata.
-    const rejectedKey = resolveRejectedCatalogEntryKey(candidate);
-    if (rejectedKey && seenRejectedKeys.has(rejectedKey)) {
-      return undefined;
-    }
-    if (rejectedKey) {
-      seenRejectedKeys.add(rejectedKey);
-    }
     rejectedEntries.push(candidate);
   }
   return undefined;

@@ -5,6 +5,7 @@ import { useSqliteWorkerFault } from "../../../../test/helpers/sqlite-worker-fau
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabases } from "../../../state/openclaw-agent-db-lifecycle.js";
 import {
@@ -20,6 +21,7 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../../auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../../auth-profiles/path-resolve.native.js";
 import { loadPersistedAuthProfileStore } from "../../auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -107,6 +109,7 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
   } satisfies OpenClawConfig;
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config, config);
+  prepareSharedAuthStoreOwnershipForNative(state.env);
   let sharedBefore: AuthProfileStore | undefined;
   if (owner === "main-with-shared-base") {
     writeConfigMachineState(
@@ -586,7 +589,9 @@ it.each(["local-agent", "legacy-main"] as const)(
             const revision = original(...args);
             if (args[2]?.databasePath === database.path && args[1].stateChanged) {
               commits++;
-              closing ??= closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+              closing ??= runInDetachedAsyncContext(() =>
+                closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId),
+              );
               void closing.catch(() => {});
             }
             return revision;

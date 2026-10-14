@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import type { LitElement } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow, GatewaySessionRow } from "../api/types.ts";
@@ -11,11 +11,11 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import "./app-host.ts";
-import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { createShellOwner, mountShellView, settleShell } from "./app-host-solid.test-support.ts";
+import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 
 type ShellDocumentTitleState = {
   activeSessionKey: string;
@@ -60,31 +60,27 @@ async function createConnectedSessionShell() {
   const runtime = bootstrapApplication();
   const replace = vi.fn();
   const context = { ...runtime.context, sessions: harness.sessions, replace };
-  const shell = document.createElement("openclaw-app-shell") as LitElement & {
-    runtime: ApplicationRuntime;
-    activeSessionKey: string;
-    routeState: { routeId?: RouteId };
-    render: () => unknown;
-  };
+  const shell = createShellOwner();
   onTestFinished(() => {
-    shell.remove();
+    shell.disconnect();
+    shell.element.remove();
     runtime.stop();
   });
   shell.runtime = { ...runtime, context };
-  document.body.append(shell);
-  await settleLitElement(shell);
+  document.body.append(shell.element);
+  mountShellView(shell);
+  shell.connect();
+  await settleShell(shell);
   shell.routeState = { routeId: "chat" };
   shell.activeSessionKey = active.key;
   await vi.dynamicImportSettled();
-  await settleLitElement(shell);
+  await settleShell(shell);
   return { ...harness, shell, context, active, background, deletion, replace };
 }
 
 describe("OpenClaw shell document title", () => {
   function createShell(context?: ApplicationContext): ShellDocumentTitleState {
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellDocumentTitleState;
+    const shell = createShellOwner() as unknown as ShellDocumentTitleState;
     if (context) {
       shell.runtime = { context };
     }
@@ -95,11 +91,16 @@ describe("OpenClaw shell document title", () => {
     connected?: boolean;
     phase?: ApplicationContext["gateway"]["snapshot"]["phase"];
     approvalCount?: number;
+    brandName?: string;
     agentsList?: AgentsListResult | null;
     assistantAgentId?: string;
     environment?: { label: string; color: "amber" };
     sessions?: GatewaySessionRow[] | null;
   }): ApplicationContext {
+    const previousBranding = currentThemeBranding();
+    const branding = resolveThemeBranding({ brandName: options.brandName });
+    setCurrentThemeBranding(branding);
+    onTestFinished(() => setCurrentThemeBranding(previousBranding));
     return {
       gateway: {
         snapshot: {
@@ -110,6 +111,7 @@ describe("OpenClaw shell document title", () => {
         connection: { gatewayUrl: "ws://gateway.test" },
       },
       config: { current: { environment: options.environment ?? null } },
+      theme: { branding },
       agents: { state: { agentsList: options.agentsList ?? null } },
       overlays: {
         snapshot: { approvalQueue: Array.from({ length: options.approvalCount ?? 0 }) },
@@ -132,16 +134,21 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("Chat — OpenClaw");
   });
 
-  it("appends the configured environment to route and custodian titles", () => {
-    const shell = createShell(createContext({ environment: { label: "edge", color: "amber" } }));
-    shell.routeState = { routeId: "usage" };
-    shell.syncDocumentTitle();
-    expect(document.title).toBe("Usage — OpenClaw · edge");
+  it.each(["OpenClaw", "Northstar"])(
+    "uses %s and the environment in route and custodian titles",
+    (brandName) => {
+      const shell = createShell(
+        createContext({ brandName, environment: { label: "edge", color: "amber" } }),
+      );
+      shell.routeState = { routeId: "usage" };
+      shell.syncDocumentTitle();
+      expect(document.title).toBe(`Usage — ${brandName} · edge`);
 
-    shell.routeState = { routeId: "custodian" };
-    shell.syncDocumentTitle();
-    expect(document.title).toBe("Ask OpenClaw · edge");
-  });
+      shell.routeState = { routeId: "custodian" };
+      shell.syncDocumentTitle();
+      expect(document.title).toBe(`Ask ${brandName} · edge`);
+    },
+  );
 
   it("uses the active session's derived title for a non-main chat", () => {
     const session: GatewaySessionRow = {
@@ -161,7 +168,7 @@ describe("OpenClaw shell document title", () => {
 
   it("updates the active title without rendering the shell for session publications", async () => {
     const { shell, emitEvent, active, background } = await createConnectedSessionShell();
-    const renderShell = vi.spyOn(shell, "render");
+    const renderShell = vi.spyOn(shell, "invalidate");
     for (const session of [
       { ...background, updatedAt: 2, hasActiveRun: true },
       { ...active, updatedAt: 3, derivedTitle: "Revised launch plan" },
@@ -172,7 +179,7 @@ describe("OpenClaw shell document title", () => {
         payload: { sessionKey: session.key, reason: "title", session },
       });
       await vi.advanceTimersByTimeAsync(20);
-      await settleLitElement(shell);
+      await settleShell(shell);
     }
 
     expect(document.title).toBe("Revised launch plan — OpenClaw");
@@ -188,27 +195,30 @@ describe("OpenClaw shell document title", () => {
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
     deletion.resolve({ deleted: false });
     await operation;
-    await settleLitElement(shell);
+    await settleShell(shell);
 
     const replacement = createSessionCapabilityHarness(
       vi.fn(async () => sessionsResult([background], 1)) as GatewayBrowserClient["request"],
     );
     await replacement.sessions.refresh({ force: true });
-    shell.runtime = { ...shell.runtime, context: { ...context, sessions: replacement.sessions } };
+    shell.disconnect();
+    shell.runtime = { ...shell.runtime!, context: { ...context, sessions: replacement.sessions } };
+    shell.connect();
     document.title = "New context is pending";
     sessions.patchRowLocal(background.key, { derivedTitle: "Retired title" });
     expect(document.title).toBe("New context is pending");
-    await settleLitElement(shell);
+    await settleShell(shell);
     shell.routeState = { routeId: "chat" };
     shell.activeSessionKey = background.key;
-    await settleLitElement(shell);
+    await settleShell(shell);
     replacement.sessions.patchRowLocal(background.key, { derivedTitle: "Replacement title" });
     await vi.advanceTimersByTimeAsync(20);
-    await settleLitElement(shell);
+    await settleShell(shell);
     expect(document.title).toBe("Replacement title — OpenClaw");
 
-    shell.remove();
-    await settleLitElement(shell);
+    shell.disconnect();
+    shell.element.remove();
+    await settleShell(shell);
     document.title = "Disconnected shell";
     replacement.sessions.patchRowLocal(background.key, { derivedTitle: "Detached title" });
     await vi.advanceTimersByTimeAsync(20);

@@ -1,11 +1,9 @@
 // Persists the root ownership record for one Claw-created agent and workspace.
 
 import { stableStringify } from "@openclaw/normalization-core";
-import {
-  assertAgentDeletionAllowsMutation,
-  type AgentDeletionOperation,
-} from "../agents/agent-lifecycle-registry.js";
+import { assertAgentDeletionAllowsMutation } from "../agents/agent-lifecycle-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -174,11 +172,10 @@ export function updateClawInstallRecordStatus(
   options: OpenClawStateDatabaseOptions & {
     nowMs?: number;
     expectedStatuses?: ClawInstallStatus[];
-    deletionOperation?: AgentDeletionOperation;
   } = {},
 ): void {
   runOpenClawStateWriteTransaction((database) => {
-    assertAgentDeletionAllowsMutation(database, agentId, options.deletionOperation);
+    assertAgentDeletionAllowsMutation(database, agentId);
     const { db } = database;
     const expectedStatuses = options.expectedStatuses ?? [];
     let query = getNodeSqliteKysely<ClawProvenanceDatabase>(db)
@@ -193,7 +190,6 @@ export function updateClawInstallRecordStatus(
         `Claw install record for agent ${JSON.stringify(agentId)} did not match the expected phase.`,
       );
     }
-    options.deletionOperation?.handoffToRetry(database);
   }, options);
 }
 
@@ -310,6 +306,9 @@ export function persistClawPackageRef(
     updatedAtMs: nowMs,
   };
   runOpenClawStateWriteTransaction(({ db }) => {
+    if (isPostgresSqlConnection(db)) {
+      throw new Error("Claw package provenance requires SQLite named-parameter support.");
+    }
     const existing = db /* sqlite-allow-raw: exact owned package-ref replay lookup. */
       .prepare(
         `SELECT schema_version, agent_id, claw_name, package_kind, package_source,

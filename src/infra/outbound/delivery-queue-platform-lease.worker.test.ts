@@ -12,6 +12,8 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { stateWorkerRegistry } from "../../state/openclaw-state-worker-registry.js";
 import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { deriveDeliveryQueueRetentionColumns } from "../delivery-queue-retention-columns.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
@@ -82,6 +84,9 @@ describe("outbound producer claim worker", () => {
       const database = openOpenClawStateDatabase({ env });
       const context: WorkerWriteOperationContext = {
         open: () => database,
+        writeAdmitted: () => {
+          throw new Error("Outbound mutations retain their custom admission");
+        },
         write: (operation, options) =>
           runOpenClawStateWriteTransaction(operation, { database, env }, options),
         stateOptions: () => ({ path: database.path, env }),
@@ -184,9 +189,11 @@ describe("outbound producer claim worker", () => {
     if (!claimId || !entry) {
       throw new Error("Expected claimed queue custody");
     }
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const db = requireNativeSqliteDatabase(
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }).db,
+    );
     const dispatch = observeRenewalDispatch(id);
     db.exec("BEGIN IMMEDIATE");
     let settled = false;
@@ -203,9 +210,19 @@ describe("outbound producer claim worker", () => {
       await setImmediate();
       expect(settled).toBe(false);
       const expired = { ...entry, availableAt: Date.now() - 1 };
+      const entryJson = JSON.stringify(expired);
       db.prepare(
-        "UPDATE delivery_queue_entries SET entry_json = ? WHERE queue_name = ? AND id = ?",
-      ).run(JSON.stringify(expired), OUTBOUND_DELIVERY_QUEUE_NAME, id);
+        `UPDATE delivery_queue_entries SET entry_json = ?,
+          retention_id_prefix = @retention_id_prefix,
+          retention_max_age_ms = @retention_max_age_ms,
+          retention_max_entries = @retention_max_entries
+          WHERE queue_name = ? AND id = ?`,
+      ).run(
+        deriveDeliveryQueueRetentionColumns(id, entryJson),
+        entryJson,
+        OUTBOUND_DELIVERY_QUEUE_NAME,
+        id,
+      );
       db.exec("COMMIT");
       await expect(renewal).resolves.toBeUndefined();
       expect(await loadPendingDelivery(id, stateDir)).toEqual(expired);

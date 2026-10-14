@@ -1,7 +1,7 @@
-import type { ReactiveController } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -23,7 +23,7 @@ function createBrowser(
   view?: { host: TestReactiveControllerHost; root: HTMLElement },
 ) {
   const host = view?.host ?? new TestReactiveControllerHost();
-  const controllers: ReactiveController[] = [];
+  const controllers: Parameters<ControllerHost["addController"]>[0][] = [];
   vi.spyOn(host, "addController").mockImplementation((controller) => controllers.push(controller));
   const client = {
     request,
@@ -58,11 +58,11 @@ function createBrowser(
         hello,
       },
     },
+    agents: { state: { agentsList: { sessionPlacement: {} } } },
     sessions: {
       state: {
         groupSettings: [{ name: "Client", cwd: "/workspace/client", worktree: false }],
       },
-      groupsGeneration: () => 1,
       groupsStatus: () => "ready",
     },
   } as unknown as ApplicationContext;
@@ -81,6 +81,7 @@ function createBrowser(
       runtimeId: "",
     }),
     {
+      readAgents: () => context.agents,
       requestUpdate: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate,
@@ -176,7 +177,7 @@ describe("DraftPlaceBrowser", () => {
         false,
         { host, root },
       );
-      browser.onPopoverShow("project");
+      browser.popoverCallbacks("project").onPopoverShow();
       browse.focus();
       browser.selectGatewayBrowser("/workspace");
       const path = document.createElement("input");
@@ -215,7 +216,7 @@ describe("DraftPlaceBrowser", () => {
   );
 
   it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
-    const request = vi.fn(async () => ({ projects: [] }));
+    const request = vi.fn(async (_method: string) => ({ projects: [] }));
     const fixture = createBrowser(request);
     await fixture.browser.refreshProjects();
     const reads = request.mock.calls.length;
@@ -226,28 +227,33 @@ describe("DraftPlaceBrowser", () => {
     expect(request).toHaveBeenCalledTimes(reads);
     fixture.update();
     await fixture.browser.refreshProjects();
-    expect(request).toHaveBeenCalledTimes(reads + 1);
+    expect(
+      request.mock.calls
+        .slice(reads)
+        .map(([method]) => method)
+        .toSorted(),
+    ).toEqual(["projects.list"]);
   });
   it("keeps environment search transient and separate from project search", () => {
     const { browser } = createBrowser(async () => ({}));
     const writeStorage = vi.spyOn(Storage.prototype, "setItem");
     onTestFinished(() => writeStorage.mockRestore());
     browser.changeProjectQuery("openclaw");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     browser.changeEnvironmentQuery("runner");
 
     expect(browser.environmentQuery).toBe("runner");
     expect(browser.projectQuery).toBe("openclaw");
     expect(writeStorage).not.toHaveBeenCalled();
 
-    browser.onPopoverHide("where");
+    browser.popoverCallbacks("where").onPopoverHide();
     browser.onPopoverAfterHide("where");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     expect(browser.environmentQuery).toBe("");
     expect(browser.projectQuery).toBe("openclaw");
 
     browser.changeEnvironmentQuery("cloud");
-    browser.onPopoverShow("project");
+    browser.popoverCallbacks("project").onPopoverShow();
     expect(browser.environmentQuery).toBe("cloud");
     browser.disconnect();
     expect(browser.environmentQuery).toBe("");
@@ -448,8 +454,8 @@ describe("DraftPlaceBrowser", () => {
   it("tracks overlapping popover hides independently", () => {
     const { browser } = createBrowser(async () => ({}));
 
-    browser.onPopoverHide("project");
-    browser.onPopoverHide("where");
+    browser.popoverCallbacks("project").onPopoverHide();
+    browser.popoverCallbacks("where").onPopoverHide();
 
     expect(browser.popoverHiding("project")).toBe(true);
     expect(browser.popoverHiding("where")).toBe(true);
@@ -562,6 +568,9 @@ describe("DraftGatewayState", () => {
     fixture.hello.auth.scopes.push("operator.write");
     fixture.browser.browser.setDraft("/draft-folder");
     fixture.update();
+    // Adding write access retires the old policy scope, independently of recovery migration.
+    expect(fixture.onInvalidate).toHaveBeenCalledWith(true, "gateway-changed");
+    fixture.onInvalidate.mockClear();
     await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
     await waitForFast(() => expect(fixture.browser.projects).toHaveLength(1));
     await waitForFast(() => expect(fixture.gateway.cloudProfilesReady).toBe(true));
@@ -588,7 +597,11 @@ describe("DraftGatewayState", () => {
     fixture.client.recoveryScopeReady = true;
     fixture.update();
     expect(fixture.browser.projectId).toBe("project");
-    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(2);
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(
+        2,
+      ),
+    );
 
     fixture.hello.auth.recoveryScope = "principal-b";
     fixture.update();
@@ -603,13 +616,9 @@ describe("DraftGatewayState", () => {
       method === "projects.list" ? { projects: [] } : { machineName: "Visible Gateway" },
     );
     const fixture = createBrowser(request);
-    const task = (
-      fixture.gateway as unknown as { gatewayNameTask: { taskComplete: Promise<unknown> } }
-    ).gatewayNameTask;
     fixture.hello.features.methods.push("system.info");
     fixture.connectHost();
     fixture.update();
-    await task.taskComplete;
     const requestUpdate = vi.spyOn(fixture.host, "requestUpdate");
     expect(fixture.gateway.gatewayName).toBe("");
     expect(request.mock.calls.some(([method]) => method === "system.info")).toBe(false);
@@ -617,8 +626,7 @@ describe("DraftGatewayState", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(requestUpdate).toHaveBeenCalledOnce();
     fixture.queuedUpdate();
-    await task.taskComplete;
-    expect(fixture.gateway.gatewayName).toBe("Visible Gateway");
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Visible Gateway"));
   });
 
   it("ignores a late name from the replaced client", async () => {
@@ -721,8 +729,6 @@ describe("DraftGatewayState", () => {
       groupStatus: "resolved",
       groupCwd: "/workspace/client",
       groupWorktree: false,
-      groupCatalogGeneration: 1,
-      groupDefaultsStatus: "ready",
       catalogLabel: "",
       startTerminal: false,
     });

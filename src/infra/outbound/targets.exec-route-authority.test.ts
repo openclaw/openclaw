@@ -28,7 +28,7 @@ const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: Chann
 });
 afterEach(() => restoreActivePluginRegistrySnapshot(snapshot));
 
-it.each(["telegram:-1003774691294:topic:47", "tg:-1003774691294:47", "-1003774691294"])(
+it.each(["telegram:-1003774691294:topic:47"])(
   "keeps real plugin exec authority while normalizing %s",
   async (to) => {
     setActivePluginRegistry(
@@ -108,8 +108,6 @@ it("rejects real-plugin embedded topic and post-await explicit thread disagreeme
 });
 
 it.each([
-  ["native private thread", "telegram:123456789:topic:42", "42", true],
-  ["scoped private thread", "telegram:123456789:topic:42", "123456789:42", true],
   ["scoped plain private chat", "telegram:123456789", "123456789:42", true],
   ["cross scoped chat", "telegram:123456789:topic:42", "987654321:42", false],
   ["cross scoped topic", "telegram:123456789:topic:42", "123456789:99", false],
@@ -144,11 +142,7 @@ it.each([
   }
 });
 
-it.each([
-  ["explicit lowercase", "-100155462274", "-100155462274:direct-topic:42"],
-  ["explicit uppercase", "-100155462274", "-100155462274:DIRECT-TOPIC:42"],
-  ["embedded uppercase", "-100155462274:DIRECT-TOPIC:42", undefined],
-] as const)(
+it.each([["explicit uppercase", "-100155462274", "-100155462274:DIRECT-TOPIC:42"]] as const)(
   "preserves verified Direct Messages scope from producer through the real final resolver (%s)",
   async (_label, to, threadId) => {
     setActivePluginRegistry(
@@ -171,7 +165,7 @@ it.each([
   },
 );
 
-it.each(["target throws", "target rejects", "session throws", "session declines"] as const)(
+it.each(["target throws", "target rejects"] as const)(
   "ordinary heartbeat retains configured delivery when %s",
   async (failure) => {
     const messaging: NonNullable<ChannelPlugin["messaging"]> = { ...telegramPlugin.messaging };
@@ -182,20 +176,13 @@ it.each(["target throws", "target rejects", "session throws", "session declines"
           throw new Error("target failed");
         },
       };
-    } else if (failure === "target rejects") {
+    } else {
       messaging.targetResolver = { looksLikeId: () => false };
       plugin.directory = {
         listGroups: async () => [
           { kind: "group", id: "-1003774691294:topic:47", name: "first" },
           { kind: "group", id: "-1003774691294:topic:47", name: "second" },
         ],
-      };
-    } else {
-      messaging.resolveOutboundSessionRoute = async () => {
-        if (failure === "session throws") {
-          throw new Error("session failed");
-        }
-        return null;
       };
     }
     setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]));

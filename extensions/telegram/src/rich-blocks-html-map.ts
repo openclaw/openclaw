@@ -117,10 +117,7 @@ function captionFromChildren(
 }
 
 function captionFromFigcaption(nodes: readonly HtmlNode[]): RichBlockCaption | undefined {
-  const figcaption = nodes.find(
-    (node): node is Extract<HtmlNode, { kind: "element" }> =>
-      node.kind === "element" && node.name === "figcaption",
-  );
+  const figcaption = findClosedChild(nodes, "figcaption");
   return figcaption ? captionFromChildren(figcaption.children, true) : undefined;
 }
 
@@ -182,15 +179,12 @@ function listToBlock(
         item.is_checked = true;
       }
     }
-    items.push(item);
+    items.push(node.name === "ol" ? { ...item, value: items.length + 1 } : item);
   }
   if (items.length === 0) {
     return undefined;
   }
-  return {
-    type: "list",
-    items: node.name === "ol" ? items.map((item, index) => ({ ...item, value: index + 1 })) : items,
-  };
+  return { type: "list", items };
 }
 
 function tableCellFromElement(
@@ -252,12 +246,8 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
   let stray = false;
   const visitRows = (parent: Extract<HtmlNode, { kind: "element" }>, inHeader: boolean) => {
     for (const child of parent.children) {
-      if (child.kind !== "element") {
-        stray ||= child.text.trim() !== "";
-        continue;
-      }
-      if (!child.closed) {
-        stray = true;
+      if (child.kind !== "element" || !child.closed) {
+        stray ||= child.kind === "element" || child.text.trim() !== "";
         continue;
       }
       if (child.name === "caption") {

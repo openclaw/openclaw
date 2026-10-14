@@ -72,6 +72,7 @@ function card() {
   return document.querySelector<HTMLElement>(".link-reader-hovercard");
 }
 async function hover(anchor: HTMLAnchorElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
@@ -89,6 +90,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
   afterEach(async () => {
     await i18n.setLocale("en");
     document.body.replaceChildren();
+    await Promise.resolve();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -202,6 +204,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
         metadata: [{ label: "Comments", value: "4" }],
       }),
     );
+    await provider.updateComplete;
     anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
     await vi.advanceTimersByTimeAsync(0);
     expect(card()?.textContent).toContain("Change C42");
@@ -367,12 +370,17 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(2);
     leave(anchor);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(card()).toBeNull();
+    Object.assign(provider.client!, { connected: true });
+    const signal = new AbortController().signal;
+    // Fill the same cache without creating 100 disposable hovercard portals.
     for (let index = 1; index <= 100; index++) {
-      anchor.href = "https://github.com/openclaw/openclaw/issues/" + index;
-      await hover(anchor);
-      leave(anchor);
+      await provider.prefetch(
+        { href: "https://github.com/openclaw/openclaw/issues/" + index, reader: github },
+        signal,
+      );
     }
-    anchor.href = href;
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(103);
   });

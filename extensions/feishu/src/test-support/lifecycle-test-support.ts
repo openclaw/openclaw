@@ -1,5 +1,6 @@
 // Feishu plugin module implements lifecycle test support behavior.
 import { randomUUID } from "node:crypto";
+import { EventDispatcher } from "@larksuiteoapi/node-sdk";
 import {
   createPluginRuntimeMock,
   createTestInboundDebounceFlush,
@@ -9,6 +10,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import { getFeishuLifecycleTestMocks } from "../lifecycle.test-support.js";
+import { createFeishuTestIngressQueue } from "../monitor.test-mocks.js";
 import { getFeishuRuntime, setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
@@ -127,26 +129,17 @@ function installFeishuLifecycleRuntime(params: {
   dispatchReplyFromConfig: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
   withReplyDispatcher: PluginRuntime["channel"]["reply"]["withReplyDispatcher"];
   resolveStorePath: PluginRuntime["channel"]["session"]["resolveStorePath"];
-  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
-  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
-  resolveCommandAuthorizedFromAuthorizers?: PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"];
-  readAllowFromStore?: PluginRuntime["channel"]["pairing"]["readAllowFromStore"];
-  upsertPairingRequest?: PluginRuntime["channel"]["pairing"]["upsertPairingRequest"];
-  buildPairingReply?: PluginRuntime["channel"]["pairing"]["buildPairingReply"];
-  detectMime?: PluginRuntime["media"]["detectMime"];
 }): PluginRuntime {
   const runtime = createPluginRuntimeMock({
+    state: {
+      openChannelIngressQueue: createFeishuTestIngressQueue,
+    },
     channel: {
       debounce: createImmediateInboundDebounce(),
-      text: {
-        hasControlCommand: params.hasControlCommand ?? vi.fn(() => false),
-      },
       routing: {
         resolveAgentRoute: params.resolveAgentRoute,
       },
       reply: {
-        resolveEnvelopeFormatOptions: vi.fn(() => ({})),
-        formatAgentEnvelope: vi.fn((value: { body: string }) => value.body),
         dispatchReplyWithBufferedBlockDispatcher: async ({
           cfg,
           ctx,
@@ -186,22 +179,14 @@ function installFeishuLifecycleRuntime(params: {
         withReplyDispatcher: params.withReplyDispatcher,
       },
       commands: {
-        shouldComputeCommandAuthorized: params.shouldComputeCommandAuthorized ?? vi.fn(() => false),
-        resolveCommandAuthorizedFromAuthorizers:
-          params.resolveCommandAuthorizedFromAuthorizers ?? vi.fn(() => false),
+        shouldComputeCommandAuthorized: vi.fn(() => false),
       },
       session: {
-        readSessionUpdatedAtAsync: vi.fn(async () => undefined),
         resolveStorePath: params.resolveStorePath,
       },
       pairing: {
-        readAllowFromStore: params.readAllowFromStore ?? vi.fn().mockResolvedValue([]),
-        upsertPairingRequest: params.upsertPairingRequest ?? vi.fn(),
-        buildPairingReply: params.buildPairingReply ?? vi.fn(),
+        upsertPairingRequest: vi.fn(),
       },
-    },
-    media: {
-      detectMime: params.detectMime ?? vi.fn(async () => "text/plain"),
     },
   }) as unknown as PluginRuntime;
   setFeishuRuntime(runtime);
@@ -478,7 +463,6 @@ export async function setupFeishuLifecycleHandler(params: {
     mockReturnValue: (value: unknown) => unknown;
     mockReturnValueOnce: (value: unknown) => unknown;
   };
-  onRegister: (registered: Record<string, (data: unknown) => Promise<void>>) => void;
   runtime: RuntimeEnv;
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
@@ -486,13 +470,12 @@ export async function setupFeishuLifecycleHandler(params: {
   missingHandlerMessage: string;
   once?: boolean;
 }): Promise<(data: unknown) => Promise<void>> {
-  const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
-    params.onRegister(registered);
-  });
+  const dispatcher = new EventDispatcher({});
+  const register = vi.spyOn(dispatcher, "register");
   if (params.once) {
-    params.createEventDispatcherMock.mockReturnValueOnce({ register });
+    params.createEventDispatcherMock.mockReturnValueOnce(dispatcher);
   } else {
-    params.createEventDispatcherMock.mockReturnValue({ register });
+    params.createEventDispatcherMock.mockReturnValue(dispatcher);
   }
   getFeishuRuntime().config.current = vi.fn(
     () => params.cfg,

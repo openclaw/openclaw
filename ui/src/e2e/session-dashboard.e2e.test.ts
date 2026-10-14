@@ -1,4 +1,3 @@
-// Control UI E2E covers the real session-dashboard provider and transcript bridge.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
@@ -8,6 +7,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -25,6 +25,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { assertDashboardToolPresentation } from "./dashboard-presentation.test-support.ts";
 import {
   boardSnapshot,
+  captureWidgetDetailsPlacement,
   pinnedBoardSnapshot,
   pinnedMcpAppBoardSnapshot,
   pluginWidgetBoardSnapshot,
@@ -320,7 +321,7 @@ suite.define(() => {
       .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
     await page.keyboard.press("Enter");
-    await expect.poll(() => preview.locator("wa-dropdown[open]").count()).toBe(1);
+    await expect.poll(() => preview.locator(".oc-menu:popover-open").count()).toBe(1);
     await page.keyboard.press("Escape");
     for (const width of [796, 794, 390]) {
       await page.setViewportSize({ width, height: 900 });
@@ -396,7 +397,7 @@ suite.define(() => {
     await restoreChatAsMain(page);
     await focusChatSidePanel(page);
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-    await page.getByRole("button", { name: "Restore split", exact: true }).click();
+    await selectChatLayoutAction(page, "Restore split");
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
     await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect
@@ -410,7 +411,7 @@ suite.define(() => {
       });
     }
     await restoreChatAsMain(page);
-    await page.locator('[data-region-header="side"] .side-panel__minimize').click();
+    await selectChatLayoutAction(page, "Minimize side panel");
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
     await page.locator(".chat-thread").waitFor();
     if (recordProof) {
@@ -457,8 +458,9 @@ suite.define(() => {
         },
       ],
       methodResponses: {
+        // Pin failure does not depend on widget scripting; keep the visible preview deterministic.
         "canvas.document.view": canvasView(
-          buildWidgetDocument("Stale release status", "<p>Stale release status</p>"),
+          "<!doctype html><html><body><p>Stale release status</p></body></html>",
         ),
         "board.get": boardSnapshot,
         "board.widget.put": {
@@ -491,7 +493,25 @@ suite.define(() => {
         }),
       )
       .toBe(true);
+    const detailsToggle = page.getByRole("button", { name: "Details", exact: true });
+    await captureWidgetDetailsPlacement(page, suite.artifactDir, [preview, pin, detailsToggle]);
+    const detailsBox = (await detailsToggle.boundingBox())!;
+    const pinBox = (await pin.boundingBox())!;
+    expect(
+      pinBox.x + pinBox.width <= detailsBox.x ||
+        pinBox.x >= detailsBox.x + detailsBox.width ||
+        pinBox.y + pinBox.height <= detailsBox.y ||
+        pinBox.y >= detailsBox.y + detailsBox.height,
+    ).toBe(true);
     await pin.focus();
+    expect(
+      await pin.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return element.contains(
+          document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+        );
+      }),
+    ).toBe(true);
     await pin.click();
 
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
@@ -502,8 +522,8 @@ suite.define(() => {
     await page.mouse.move(0, 0);
     await pin.focus();
     await pin.hover();
-    const hint = page.locator("wa-tooltip[open]");
-    await hint.locator('[part="body"]').waitFor({ state: "visible" });
+    const hint = page.locator(".tooltip-surface[popover]:popover-open");
+    await hint.locator(".tooltip-content").waitFor({ state: "visible" });
     expect(await hint.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await page.getByText("internal path detail", { exact: false }).count()).toBe(0);
     if (recordProof) {
@@ -689,10 +709,10 @@ suite.define(() => {
       };
       await focusChatSidePanel(page);
       await expectRetainedCardView(true);
-      await page.getByRole("button", { name: "Restore split", exact: true }).click();
+      await selectChatLayoutAction(page, "Restore split");
       await restoreChatAsMain(page);
       const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
-      await page.locator('[data-region-header="side"] .side-panel__minimize').click();
+      await selectChatLayoutAction(page, "Minimize side panel");
       await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
       await expectRetainedCardView(false);
       await gateway.setMethodResponse(

@@ -29,7 +29,7 @@ export function readSessionBranchSummaries(
   const db = getSessionKysely(database.db);
   const navigationQuery = db
     .selectFrom("transcript_events")
-    .select(["seq", transcriptEventNavigationSql().as("event_json")])
+    .select(["seq", transcriptEventNavigationSql(database.db).as("event_json")])
     .select((eb) =>
       eb
         .selectFrom("transcript_event_identities")
@@ -65,6 +65,7 @@ export function readSessionBranchSummaries(
   const active = previous?.branches.find((branch) => branch.active);
   if (previous?.appendSafe && previous.maxSeq !== null && active) {
     let tail = { ...active };
+    let candidate: HeadlineCandidate | undefined;
     let appendSafe = true;
     for (const row of iterateSqliteQuerySync(
       database.db,
@@ -83,15 +84,19 @@ export function readSessionBranchSummaries(
         appendSafe = false;
         break;
       }
+      if (entry.headlineCandidate) {
+        candidate = { seq: row.seq, previous: candidate };
+      }
       tail = {
         leafEntryId: entry.id,
-        headline: (entry.headlineCandidate ? readHeadline(row.seq) : undefined) ?? tail.headline,
+        headline: tail.headline,
         messageCount: tail.messageCount + Number(entry.type === "message"),
         ...(typeof entry.timestamp === "string" ? { updatedAt: entry.timestamp } : {}),
         active: true,
       };
     }
     if (appendSafe) {
+      tail.headline = resolveBranchHeadline(candidate, new Map(), readHeadline) || tail.headline;
       return {
         branches: [tail, ...previous.branches.filter((branch) => !branch.active)],
         appendSafe,

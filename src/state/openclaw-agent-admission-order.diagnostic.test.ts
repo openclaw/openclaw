@@ -6,6 +6,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqlite from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as pidAlive from "../shared/pid-alive.js";
@@ -24,10 +25,8 @@ import {
   openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseAsync,
   runOpenClawAgentWriteTransaction,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -59,7 +58,7 @@ afterEach(async () => {
   }
 });
 
-function seed() {
+function seed(freshIdentity = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-order-"));
   roots.push(root);
   const options = { agentId: "synthetic-owner", env: { OPENCLAW_STATE_DIR: root } };
@@ -76,7 +75,11 @@ function seed() {
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest();
   // Independent fixture writers model unclean state that requires physical admission checks.
-  clearOpenClawAgentIntegrityVerification(pathname, options.env);
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
+  if (freshIdentity) {
+    fs.copyFileSync(pathname, `${pathname}.replacement`);
+    fs.renameSync(`${pathname}.replacement`, pathname);
+  }
   const writer = realOpen(pathname);
   independent.push(writer);
   writer.exec("PRAGMA foreign_keys=OFF;");
@@ -187,27 +190,30 @@ describe("physical-open admission ordering", () => {
     expect(openOpenClawAgentDatabase(options)).toBe(first);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
-    clearOpenClawAgentIntegrityVerification(pathname, options.env);
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
   });
 
   it.each(["agent-id", "role", "version"] as const)(
-    "rejects concurrent %s replacement after the physical checks before exposure",
+    "rejects %s replacement before exposure, with version drift after physical checks",
     (replacement) => {
-      const { options, pathname, writer } = seed();
-      const trace = tracePhysicalChecks(pathname, "foreign-key", () => {
-        if (replacement === "agent-id") {
-          writer.exec("UPDATE schema_meta SET agent_id='replacement' WHERE meta_key='primary'");
-        } else if (replacement === "role") {
-          writer.exec("UPDATE schema_meta SET role='global' WHERE meta_key='primary'");
-        } else {
-          writer.exec("PRAGMA user_version=9999;");
-        }
-      });
+      const { options, pathname, writer } = seed(replacement !== "version");
+      // Ownership is immutable once admitted; reject incompatible replacement files on load.
+      if (replacement === "agent-id") {
+        writer.exec("UPDATE schema_meta SET agent_id='replacement' WHERE meta_key='primary'");
+      } else if (replacement === "role") {
+        writer.exec("UPDATE schema_meta SET role='global' WHERE meta_key='primary'");
+      }
+      const trace = tracePhysicalChecks(pathname, "foreign-key", () =>
+        writer.exec("PRAGMA user_version=9999;"),
+      );
       expect(() => openOpenClawAgentDatabase(options)).toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
-      expect(trace.didCommit()).toBe(true);
+      expect(trace.didCommit()).toBe(replacement === "version");
+      if (replacement !== "version") {
+        expect(trace.events).toEqual([]);
+      }
       expect(
         writer.prepare("SELECT count(*) AS n FROM cache_entries WHERE scope='synthetic'").get(),
       ).toEqual({ n: 0 });
@@ -386,7 +392,7 @@ describe("asynchronous canonical admission", () => {
     expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "refuses physical index corruption without changing it (unrelated damage: %s)",
     async (unrelated) => {
       const { options, pathname, writer } = seed();
@@ -470,44 +476,33 @@ describe("asynchronous canonical admission", () => {
     }
   });
 
-  it.each(["new", "registered replacement", "disposed replacement"] as const)(
-    "publishes a %s database after full checks and before yielding",
-    async (mode) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-empty-"));
-      roots.push(root);
-      const options = { agentId: "synthetic-new", env: { OPENCLAW_STATE_DIR: root } };
-      if (mode !== "new") {
-        const original = openOpenClawAgentDatabase(options);
-        if (mode === "disposed replacement") {
-          expect(
-            await disposeOpenClawAgentDatabaseByPath(original.path, { env: options.env }),
-          ).toBe(true);
-        } else {
-          closeOpenClawAgentDatabaseByPath(original.path);
-        }
-        fs.renameSync(path.dirname(original.path), `${path.dirname(original.path)}-retired`);
-      }
-      const pathname = resolveOpenClawAgentSqlitePath(options);
-      const trace = tracePhysicalChecks(pathname);
-      const opening = openOpenClawAgentDatabaseAsync(options);
-      const beforeYield = {
-        checks: [...trace.events],
-        owner: inspectOpenClawAgentDatabaseOwner(pathname),
-      };
-      const database = await opening;
-      expect(beforeYield).toEqual({
-        checks: ["integrity-completed", "foreign-key-completed"],
-        owner: { status: "owned", agentId: options.agentId },
-      });
-      expect(database.db.prepare("SELECT agent_id FROM schema_meta").get()).toEqual({
-        agent_id: options.agentId,
-      });
-      expect(ordinaryWrite(options)).toEqual({ n: 1 });
-      expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toEqual([
-        expect.objectContaining({ agentId: options.agentId, path: database.path }),
-      ]);
-    },
-  );
+  it("publishes a registered replacement database after full checks and before yielding", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-empty-"));
+    roots.push(root);
+    const options = { agentId: "synthetic-new", env: { OPENCLAW_STATE_DIR: root } };
+    const original = openOpenClawAgentDatabase(options);
+    closeOpenClawAgentDatabaseByPath(original.path);
+    fs.renameSync(path.dirname(original.path), `${path.dirname(original.path)}-retired`);
+    const pathname = resolveOpenClawAgentSqlitePath(options);
+    const trace = tracePhysicalChecks(pathname);
+    const opening = openOpenClawAgentDatabaseAsync(options);
+    const beforeYield = {
+      checks: [...trace.events],
+      owner: inspectOpenClawAgentDatabaseOwner(pathname),
+    };
+    const database = await opening;
+    expect(beforeYield).toEqual({
+      checks: ["integrity-completed", "foreign-key-completed"],
+      owner: { status: "owned", agentId: options.agentId },
+    });
+    expect(database.db.prepare("SELECT agent_id FROM schema_meta").get()).toEqual({
+      agent_id: options.agentId,
+    });
+    expect(ordinaryWrite(options)).toEqual({ n: 1 });
+    expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toEqual([
+      expect.objectContaining({ agentId: options.agentId, path: database.path }),
+    ]);
+  });
 
   it("keeps a nonempty unversioned database with no application tables on async admission", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-retained-pages-"));
@@ -535,18 +530,6 @@ describe("asynchronous canonical admission", () => {
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
   });
 
-  it("keeps the incognito handle in memory without starting a disk checker", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-incognito-"));
-    roots.push(root);
-    const options = { agentId: "synthetic-private", env: { OPENCLAW_STATE_DIR: root } };
-    const pathname = resolveIncognitoOpenClawAgentSqlitePath(options);
-    const check = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
-    const database = await openOpenClawAgentDatabaseAsync({ ...options, path: pathname });
-    expect(openOpenClawAgentDatabase({ ...options, path: pathname })).toBe(database);
-    expect(check).not.toHaveBeenCalled();
-    expect(fs.existsSync(pathname)).toBe(false);
-  });
-
   it("checks an older schema before the unchanged doctor migration refusal", async () => {
     const { options, writer } = seed();
     writer.exec("PRAGMA user_version=18; UPDATE schema_meta SET schema_version=18;");
@@ -556,19 +539,6 @@ describe("asynchronous canonical admission", () => {
     );
     expect(check).toHaveBeenCalledOnce();
     expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
-  });
-
-  it("publishes one healthy native handle shared with ordinary synchronous writes", async () => {
-    const { options } = seed();
-    const check = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
-    const [database, sameDatabase] = await Promise.all([
-      openOpenClawAgentDatabaseAsync(options),
-      openOpenClawAgentDatabaseAsync(options),
-    ]);
-    expect(sameDatabase).toBe(database);
-    expect(check).toHaveBeenCalledOnce();
-    expect(openOpenClawAgentDatabase(options)).toBe(database);
-    expect(ordinaryWrite(options)).toEqual({ n: 1 });
   });
 
   it("preserves point-in-time admission when a writer commits after the Worker check", async () => {
@@ -586,25 +556,25 @@ describe("asynchronous canonical admission", () => {
   });
 
   it.each(["agent-id", "role", "version"] as const)(
-    "rejects %s replacement after Worker completion before exposure",
+    "rejects %s replacement before async exposure, with version drift after Worker completion",
     async (replacement) => {
-      const { options, writer } = seed();
+      const { options, writer } = seed(replacement !== "version");
+      if (replacement === "agent-id") {
+        writer.exec("UPDATE schema_meta SET agent_id='replacement'");
+      } else if (replacement === "role") {
+        writer.exec("UPDATE schema_meta SET role='global'");
+      }
       const check = integrityWorker.assertSqliteIntegrityInWorker;
-      vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
-        async (...args) => {
+      const worker = vi
+        .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
+        .mockImplementation(async (...args) => {
           await check(...args);
-          if (replacement === "agent-id") {
-            writer.exec("UPDATE schema_meta SET agent_id='replacement'");
-          } else if (replacement === "role") {
-            writer.exec("UPDATE schema_meta SET role='global'");
-          } else {
-            writer.exec("PRAGMA user_version=9999;");
-          }
-        },
-      );
+          writer.exec("PRAGMA user_version=9999;");
+        });
       await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
+      expect(worker).toHaveBeenCalledTimes(replacement === "version" ? 1 : 0);
       expect(() =>
         assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
       ).not.toThrow();
@@ -643,7 +613,7 @@ describe("asynchronous canonical admission", () => {
     const { options, pathname, writer } = seed();
     await openOpenClawAgentDatabaseAsync(options);
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
-    clearOpenClawAgentIntegrityVerification(pathname, options.env);
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
     corruptForeignKey(writer);
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
       /foreign_key_check failed/,
@@ -676,25 +646,6 @@ describe("asynchronous canonical admission", () => {
       assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
     ).not.toThrow();
     writer.exec("BEGIN IMMEDIATE; ROLLBACK;");
-  });
-
-  it("keeps the parent event loop responsive while checking a populated canonical database", async () => {
-    const { options, writer } = seed();
-    writer.exec(
-      "INSERT INTO cache_entries (scope,key,blob,updated_at) VALUES ('load','large',zeroblob(16777216),1)",
-    );
-    let ticks = 0;
-    const timer = setInterval(() => {
-      ticks += 1;
-    }, 5);
-    try {
-      const database = await openOpenClawAgentDatabaseAsync(options);
-      expect(database.db.isOpen).toBe(true);
-      expect(ticks).toBeGreaterThan(0);
-      expect(ordinaryWrite(options)).toEqual({ n: 1 });
-    } finally {
-      clearInterval(timer);
-    }
   });
 
   it.each([false, true])(

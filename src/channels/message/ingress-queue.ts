@@ -6,6 +6,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { resolveChannelIngressStateEnv } from "./ingress-queue-client.js";
+import { invalidateChannelIngressHealth } from "./ingress-queue-health-cache.js";
 import {
   baseRecord,
   claimedRecord,
@@ -161,7 +162,16 @@ export function createChannelIngressQueue<
               }
             : createSqliteWorkerWriteAdmission(assertActive, [context.admission.databasePath]),
       },
-    );
+    ).finally(() => {
+      if (
+        type !== "channelIngress.list" &&
+        type !== "channelIngress.claimSnapshot" &&
+        type !== "channelIngress.staleClaims"
+      ) {
+        // A failed reply may follow a committed write; refresh diagnostic facts either way.
+        invalidateChannelIngressHealth(context);
+      }
+    });
     // Mutations settle under their commit grant; prepared facts still need a live reader.
     if (
       type === "channelIngress.list" ||

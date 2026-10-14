@@ -22,7 +22,7 @@ import {
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { copyChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
@@ -149,19 +149,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     elevatedAllowed,
   } = params;
 
-  const runHasStoredSessionModelOverride = Boolean(
-    preparedSessionState.sessionEntry?.modelOverrideSource !== "default" &&
-    (normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
-      normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride)),
-  );
+  const runModelOverrideSource = preparedSessionState.sessionEntry?.modelOverrideSource;
   const runHasSessionModelOverride =
-    runHasStoredSessionModelOverride &&
+    runModelOverrideSource !== "default" &&
+    Boolean(
+      normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
+      normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
+    ) &&
     !hasLegacyAutoFallbackWithoutOrigin(preparedSessionState.sessionEntry);
-  const runModelOverrideSource = runHasSessionModelOverride
-    ? preparedSessionState.sessionEntry?.modelOverrideSource === "default"
-      ? undefined
-      : preparedSessionState.sessionEntry?.modelOverrideSource
-    : undefined;
   const runHasAutoFallbackProvenance =
     runHasSessionModelOverride &&
     hasSessionAutoModelFallbackProvenance(preparedSessionState.sessionEntry);
@@ -296,20 +291,13 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     normalizeOptionalString(conversationIdentity?.channel) ??
     normalizeOptionalString(sessionCtx.OriginatingChannel) ??
     normalizeOptionalString(sessionCtx.Provider);
-  const transport =
-    conversationRef ||
-    sourceMessageId ||
-    transportReplyToId ||
-    transportThreadId ||
-    transportChannel
-      ? {
-          ...(transportChannel ? { channel: transportChannel } : {}),
-          ...(conversationRef ? { conversationRef } : {}),
-          ...(sourceMessageId ? { messageId: sourceMessageId } : {}),
-          ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
-          ...(transportThreadId ? { threadId: transportThreadId } : {}),
-        }
-      : undefined;
+  const transport = {
+    ...(transportChannel ? { channel: transportChannel } : {}),
+    ...(conversationRef ? { conversationRef } : {}),
+    ...(sourceMessageId ? { messageId: sourceMessageId } : {}),
+    ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
+    ...(transportThreadId ? { threadId: transportThreadId } : {}),
+  };
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
@@ -325,7 +313,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
                 }).provenance,
               }
             : {}),
-          ...(transport ? { transport } : {}),
+          ...(Object.keys(transport).length > 0 ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
           ...(mediaImageLayout ? { mediaImageLayout } : {}),
           // Persist the message's own arrival timestamp so the single
@@ -406,11 +394,15 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     runObservers: {
+      awaitSessionDiffBaseline: opts?.awaitSessionDiffBaseline,
       onAgentRunStart: opts?.onAgentRunStart,
+      onPreparedAgentRunStart: opts?.onPreparedAgentRunStart,
       onAgentRunTerminalOutcome: opts?.onAgentRunTerminalOutcome,
       onModelSelected: opts?.onModelSelected,
       prepareAssistantTranscriptMessage: opts?.prepareAssistantTranscriptMessage,
       resolveReplyDelivery: opts?.resolveReplyDelivery,
+      resolveReplyDeliveryFacts: opts?.resolveReplyDeliveryFacts,
+      onDeliberateSilentTerminalReply: opts?.onDeliberateSilentTerminalReply,
     },
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
@@ -448,6 +440,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
+      internalEventExecution: opts?.internalEventExecution,
       providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId,
       agentDir,
@@ -502,7 +495,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       requestedRouteResolution,
       modelSelectionLocked: preparedSessionState.sessionEntry?.modelSelectionLocked === true,
       hasSessionModelOverride: runHasSessionModelOverride,
-      modelOverrideSource: runModelOverrideSource,
+      modelOverrideSource: runHasSessionModelOverride ? runModelOverrideSource : undefined,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
       // Visible spawn children keep dashboard keys; declared spawn lineage routes
       // them to the subagent fallback ladder like hidden subagent sessions.
@@ -512,6 +505,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       authProfileIdSource,
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
+      thinkingExplicit: params.thinkingExplicit,
       thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {
@@ -650,7 +644,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       shouldFollowup,
       hasQueuedFollowups,
       isActive,
-      isRunActive: () => {
+      isRunActive: async () => {
         const latestSessionState = resolvePreparedSessionState();
         const latestActiveSessionId =
           resolveActiveEmbeddedSessionId(latestSessionState.sessionFile) ??

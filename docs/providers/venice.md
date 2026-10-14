@@ -158,6 +158,16 @@ separate from the native DeepSeek provider's own thinking controls.
 | Vision/Images    | Models marked "Vision" above                           |
 | JSON mode        | Via `response_format`                                  |
 
+## Prompt caching
+
+For the native `https://api.venice.ai/api/v1` endpoint, OpenClaw sends a stable
+`prompt_cache_key` for related requests to improve cache affinity. An explicit
+request cache key takes precedence over the session ID. Setting
+`cacheRetention: "none"` suppresses this routing hint; it does not disable
+Venice's automatic cache. Custom endpoints retain their configured behavior.
+Venice manages provider-specific caching, including Claude cache markers. See
+[Venice prompt caching](https://docs.venice.ai/guides/features/prompt-caching).
+
 ## Pricing
 
 Venice uses a credit-based system. Anonymized models cost roughly the same as

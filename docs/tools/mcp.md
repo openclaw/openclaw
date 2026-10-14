@@ -31,10 +31,17 @@ openclaw mcp doctor <name> --probe
 
 Saving a definition proves nothing about reachability — the check does. With Gateway hot reload enabled, changed or removed servers retire immediately and the next turn's discovery uses the new definition. Unchanged servers keep their connections and cached tools, including for runs already in progress. Requester sign-in tools refresh on the next message after runtime replacement.
 
-If a connected server exits or its connection must be replaced, its tools,
-resource utilities, and prompt utilities disappear from new discovery until
-reconnection and catalog loading succeed. Healthy servers remain available
-while the failed server recovers in the background.
+If a connected server exits or its connection must be replaced, OpenClaw keeps
+its last successfully listed tools and utilities in the session's model-facing
+catalog while recovery runs in the background. Connection diagnostics and tool
+call errors still report unavailability; retained schemas do not grant execution
+access. A successful listing replaces the catalog, including tools removed by
+the server. Explicit config changes, removals, and plugin reloads retire the
+changed runtime immediately; unchanged servers keep their catalogs.
+
+For legacy SSE servers, reconnecting to the same session endpoint preserves the
+session. If the server announces a new endpoint, OpenClaw reconnects and
+initializes a fresh session before sending further tool calls.
 
 When OpenClaw's built-in MCP client cannot start a server, new runtimes skip it during an exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory shows the server as unavailable, with that runtime's next retry time and a reachability check as the next step. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
 
@@ -136,6 +143,8 @@ Confirm the `command` resolves in the Gateway process environment and that `cwd`
 For servers launched by OpenClaw's built-in MCP client, debug logs prefix stderr diagnostics with `bundle-mcp:<name>:`. Unicode characters survive split writes, and shutdown diagnostics are retained. Output without a newline is briefly buffered for up to 250 ms before being logged as progress fragments; this does not wait for the server to stop writing. A diagnostic exceeding the 8 KiB buffer retains its Unicode-safe tail with a `[stderr line truncated]` marker.
 
 ### An HTTP server needs authorization
+
+If a Streamable HTTP server refuses initialization with HTTP 401, its startup log and catalog diagnostic report `authentication refused (401)` alongside the configured server name. Check the credentials for that entry under `mcp.servers`, or sign in again if it uses OAuth. Response bodies and header values remain redacted; the diagnostic does not expose the server's raw error message.
 
 Set `auth: "oauth"` plus any required `oauth` metadata. In **Settings → MCP**, an administrator can select **Sign in** for an enabled HTTP server that uses shared native OAuth credentials. Approve access in the browser, then return to Settings. If the browser blocks the new tab, use the sign-in link in the dialog.
 

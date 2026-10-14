@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { decodeRun, hasStoredUpdateRecovery } from "./update-run-read.kernel.js";
 import type {
@@ -15,7 +15,7 @@ type LedgerDatabase = Pick<DB, "update_runs">;
 
 // The standalone state reader bundles dynamic imports too; keep write-side dependencies out.
 export function inspectUpdateRunReconciliation(
-  db: DatabaseSync,
+  db: EngineConnection,
   record: UpdateRunRecord,
   input: UpdateRunReconciliationInput,
 ): UpdateRunReconciliationCandidate {
@@ -28,7 +28,7 @@ export function inspectUpdateRunReconciliation(
 }
 
 export function readUpdateRunReconciliationCandidates(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: UpdateRunReconciliationInput,
 ): UpdateRunReconciliationCandidate[] {
   if (!tableExists(db, "update_runs")) {

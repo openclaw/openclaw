@@ -92,8 +92,11 @@ async function startGatewayServerWithRuntime(
     const { withAgentDatabaseStartupAdmission } =
       await import("../state/agent-database-startup.js");
     try {
-      const server = await readOnlyWorkers.run(() =>
-        withAgentDatabaseStartupAdmission(
+      const { bindAuthProfileFileObservationReaders } =
+        await import("../agents/auth-profiles/file-state.js");
+      const server = await readOnlyWorkers.run(() => {
+        bindAuthProfileFileObservationReaders();
+        return withAgentDatabaseStartupAdmission(
           async (admission) => {
             stopDatabaseAdmission = () => admission.stop();
             const mod = await loadServerStart();
@@ -101,8 +104,8 @@ async function startGatewayServerWithRuntime(
             return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
           },
           { deferInspections: !opts.updateCanary },
-        ),
-      );
+        );
+      });
       return {
         ...server,
         close: (closeOptions: Parameters<typeof server.close>[0]) =>
@@ -142,7 +145,14 @@ async function startGatewayServerWithRuntime(
   const closeBroker = async () => {
     // A failed required core join can stop before the admission sidecar runs.
     await stopDatabaseAdmission?.();
-    await broker.close();
+    try {
+      const { closeSqliteReadOnlyWorkersForBroker } =
+        await import("../infra/sqlite-readonly-worker.js");
+      await closeSqliteReadOnlyWorkersForBroker(broker);
+    } finally {
+      // Readers that did not close remain attached children for broker termination.
+      await broker.close();
+    }
   };
   try {
     const { createSubsystemLogger } = await import("../logging/subsystem.js");

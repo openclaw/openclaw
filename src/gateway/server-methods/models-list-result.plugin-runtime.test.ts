@@ -235,9 +235,8 @@ describe("models.list plugin metadata handoff", () => {
         });
         await projector.projectCatalog();
 
-        let currentConfig = cfg;
         const context = {
-          getRuntimeConfig: () => currentConfig,
+          getRuntimeConfig: () => cfg,
           loadGatewayModelCatalogSnapshot: vi.fn(),
           logGateway: { debug: vi.fn() },
         } as unknown as GatewayRequestContext;
@@ -256,8 +255,6 @@ describe("models.list plugin metadata handoff", () => {
             .toSorted(),
         ).toEqual(["another", "modern"]);
         expect(prepared.isCurrent()).toBe(true);
-        currentConfig = { ...cfg };
-        expect(prepared.isCurrent()).toBe(false);
       },
     );
   });

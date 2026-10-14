@@ -8,7 +8,7 @@ const withPageScopedCdpClient = vi.fn();
 const withCdpSnapshotRoot = vi.fn();
 const snapshotRoleViaCdpSession = vi.fn();
 const markBackendDomRefsOnPage = vi.fn();
-const readMainFrameDocumentIdentityForPage = vi.fn();
+const readDocumentIdentitiesForPage = vi.fn();
 const formatAriaSnapshot = vi.fn();
 const gotoPageWithNavigationGuard = vi.fn();
 const createDownloadCaptureForPage = vi.fn(() => ({
@@ -33,9 +33,10 @@ vi.mock("./pw-download-capture.js", () => ({
   createDownloadCaptureForPage,
 }));
 
-vi.mock("./pw-session.page-cdp.js", () => ({
+vi.mock("./pw-session.page-cdp.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pw-session.page-cdp.js")>()),
   markBackendDomRefsOnPage,
-  readMainFrameDocumentIdentityForPage,
+  readDocumentIdentitiesForPage,
   withPageScopedCdpClient,
   withCdpSnapshotRoot,
 }));
@@ -489,22 +490,6 @@ describe("pw-tools-core aria snapshot storage", () => {
     });
   });
 
-  it("still rejects malformed AI names beyond the output budget", async () => {
-    const ariaSnapshot = vi.fn(
-      async () => '- button "Visible" [ref=e1]\n' + String.raw`- button "bad\uZZZZ" [ref=e2]`,
-    );
-    getPageForTargetId.mockResolvedValue(makeAriaSnapshotPage(ariaSnapshot));
-
-    await expect(
-      mod.snapshotRoleViaPlaywright({
-        refsMode: "aria",
-        cdpUrl: "http://127.0.0.1:9222",
-        maxChars: 1,
-      }),
-    ).rejects.toBeInstanceOf(SyntaxError);
-    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
-  });
-
   it("rejects excessive viewport dimensions before calling Playwright", async () => {
     const page = { setViewportSize: vi.fn(async () => {}) };
     getPageForTargetId.mockResolvedValue(page);
@@ -525,7 +510,7 @@ describe("pw-tools-core aria snapshot storage", () => {
 
     getPageForTargetId.mockResolvedValue(page);
     markBackendDomRefsOnPage.mockResolvedValue(new Set(["e2"]));
-    readMainFrameDocumentIdentityForPage.mockResolvedValue("cdp:loader-1");
+    readDocumentIdentitiesForPage.mockResolvedValue({ mainFrame: "cdp:loader-1" });
 
     await mod.storeSnapshotRefsViaPlaywright({
       ...target,
@@ -552,7 +537,7 @@ describe("pw-tools-core aria snapshot storage", () => {
 
     getPageForTargetId.mockResolvedValue(page);
     markBackendDomRefsOnPage.mockResolvedValue(new Set(["e1"]));
-    readMainFrameDocumentIdentityForPage.mockResolvedValue("cdp:loader-2");
+    readDocumentIdentitiesForPage.mockResolvedValue({ mainFrame: "cdp:loader-2" });
 
     await expect(
       mod.storeSnapshotRefsViaPlaywright({

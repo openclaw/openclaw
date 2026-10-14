@@ -232,13 +232,12 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     timeoutPhase === "provider" ||
     timeoutPhase === "post_turn" ||
     result.providerStarted === true;
-  if (hasTerminalTimeoutMetadata) {
-    return new Error(message || "OpenClaw tool call timed out");
-  }
-  return undefined;
+  return hasTerminalTimeoutMetadata
+    ? new Error(message || "OpenClaw tool call timed out")
+    : undefined;
 }
 
-function waitForChatResult(params: {
+export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
   timeoutMs: number;
@@ -266,7 +265,12 @@ function waitForChatResult(params: {
         return;
       }
       settled = true;
-      cleanup();
+      window.clearTimeout(timer);
+      if (emptyFinalFallbackTimer !== undefined) {
+        window.clearTimeout(emptyFinalFallbackTimer);
+      }
+      params.signal?.removeEventListener("abort", onAbort);
+      unsubscribe();
       if (typeof result === "string") {
         resolve(result);
       } else {
@@ -327,14 +331,6 @@ function waitForChatResult(params: {
         settle(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
       }
     });
-    function cleanup() {
-      window.clearTimeout(timer);
-      if (emptyFinalFallbackTimer !== undefined) {
-        window.clearTimeout(emptyFinalFallbackTimer);
-      }
-      params.signal?.removeEventListener("abort", onAbort);
-      unsubscribe();
-    }
   });
 }
 
@@ -526,7 +522,8 @@ export async function submitRealtimeTalkConsult(params: {
   };
   const abortRun = () => {
     aborted = true;
-    if (run) {
+    // Relay lifetimes belong to the Gateway; aborting this browser wait must not cancel them.
+    if (run && !params.relaySessionId) {
       void ctx.client.request("chat.abort", {
         sessionKey: run.agentSessionKey,
         agentId: run.agentId,
@@ -548,7 +545,7 @@ export async function submitRealtimeTalkConsult(params: {
       return;
     }
     // Cancellation must not hide the acknowledgement that owns the Gateway run.
-    // Once the run id arrives, abortRun() can cancel the exact started consult.
+    // Once the run id arrives, direct transports can cancel the exact started consult.
     run = await ctx.client.request<TalkClientToolCallResult>("talk.client.toolCall", {
       sessionKey: ctx.sessionKey,
       ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),

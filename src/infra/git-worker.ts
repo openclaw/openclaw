@@ -30,12 +30,8 @@ import { WorkerTaskError, WorkerTaskPool, type WorkerTaskResponse } from "./work
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 type GitPool = WorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>;
-type GitWorkerRuntime = {
-  reads?: GitPool;
-  content?: GitPool;
-  workspace?: GitPool;
-  worktrees?: GitPool;
-  worktreeMaintenance?: GitPool;
+const POOL_OWNERS = ["reads", "content", "workspace", "worktrees", "worktreeMaintenance"] as const;
+type GitWorkerRuntime = Partial<Record<(typeof POOL_OWNERS)[number], GitPool>> & {
   pending: Set<Promise<unknown>>;
   closing?: Promise<void>;
 };
@@ -83,26 +79,24 @@ const SPAWN_OPERATIONS = {
   "workspace.reconcile.preflight": "workspace.manifest",
 } satisfies Record<keyof GitWorkerOperations, GitProcessOperation>;
 
+function trackPending<T>(pending: Set<Promise<T>>, operation: Promise<T>): void {
+  pending.add(operation);
+  const settled = () => pending.delete(operation);
+  void operation.then(settled, settled);
+}
+
 function runtime(): GitWorkerRuntime {
   return resolveGlobalSingleton<GitWorkerRuntime>(
     Symbol.for("openclaw.gitOperations"),
     () => ({ pending: new Set() }),
     (state) => {
       state.closing ??= (async () => {
-        await Promise.all([
-          state.reads?.close(),
-          state.content?.close(),
-          state.workspace?.close(),
-          state.worktrees?.close(),
-          state.worktreeMaintenance?.close(),
-        ]);
+        await Promise.all(POOL_OWNERS.map((owner) => state[owner]?.close() ?? Promise.resolve()));
         // Worker termination alone does not settle its parent-owned Git processes.
         await Promise.allSettled(state.pending);
-        state.reads = undefined;
-        state.content = undefined;
-        state.workspace = undefined;
-        state.worktrees = undefined;
-        state.worktreeMaintenance = undefined;
+        for (const owner of POOL_OWNERS) {
+          state[owner] = undefined;
+        }
       })().finally(() => {
         state.closing = undefined;
       });
@@ -215,11 +209,7 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     ...options,
     git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,
   });
-  state.pending.add(operation);
-  void operation.then(
-    () => state.pending.delete(operation),
-    () => state.pending.delete(operation),
-  );
+  trackPending(state.pending, operation);
   // SAFETY: Private typed workers bind the operation discriminant to this result contract.
   return operation as Promise<GitWorkerOperations[Command["type"]]["output"]>;
 }
@@ -237,10 +227,14 @@ async function executeOperation(
         ? command.input.root
         : undefined;
   const contentRead = contentRoot !== undefined;
-  const contentGit =
-    contentRead ||
-    command.type === "worktree.snapshot" ||
-    command.type === "worktree.snapshot-verify-exact";
+  const snapshot =
+    command.type === "worktree.snapshot" || command.type === "worktree.snapshot-verify-exact";
+  const contentGit = contentRead || snapshot;
+  if (snapshot) {
+    // Missing snapshot objects must preserve the checkout, never start a promisor fetch.
+    baseEnv.GIT_NO_LAZY_FETCH = "1";
+    baseEnv.GIT_ALLOW_PROTOCOL = "";
+  }
   let gitCommandCount = 0;
   let summedGitWallMs = 0;
   let summedGitQueueWaitMs = 0;
@@ -431,11 +425,7 @@ async function executeOperation(
           transferList: [...new Set(replies.flatMap((response) => response.transferList ?? []))],
           timeoutMs: WORKER_PHASE_TIMEOUT_MS,
         }));
-        hostWork.add(pending);
-        void pending.then(
-          () => hostWork.delete(pending),
-          () => hostWork.delete(pending),
-        );
+        trackPending(hostWork, pending);
         return pending;
       },
     });

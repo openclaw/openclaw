@@ -1,7 +1,6 @@
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import {
   createMessageInjectionAuthority,
-  createLegacyMessageInjectionAuthority,
   enqueueMessageInjection,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import {
@@ -31,6 +30,7 @@ import {
 } from "../../logging/diagnostic-runtime.js";
 import { bindWorkerToolPreparation } from "../harness/host-private-capabilities.js";
 import {
+  bindMessageInjectionV2,
   bindPreparedToolAuthority,
   createLegacyToolAuthorityQueuePreflight,
 } from "../harness/tool-authority-preparation.js";
@@ -331,10 +331,7 @@ export async function prepareEmbeddedInjectionAuthority(
   };
 }
 
-type EmbeddedMessageInjection = Pick<
-  EmbeddedAgentQueueHandle,
-  "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
-> & { prepareQueueMessage?: () => Promise<void> };
+type EmbeddedMessageInjection = ReturnType<typeof bindMessageInjectionV2>;
 
 function bindEmbeddedMessageInjection(
   sessionId: string,
@@ -349,6 +346,7 @@ function bindEmbeddedMessageInjection(
   const ownedOperation =
     operation && getAttachedBackend(operation) === handle ? operation : undefined;
   const assertCurrent = createMessageInjectionAuthority(() => {
+    options?.assertCurrent?.();
     preparation?.assertCurrent();
     preparation?.compatAssertCurrent?.();
     if (sourceCanInject && !sourceCanInject()) {
@@ -380,52 +378,21 @@ function bindEmbeddedMessageInjection(
     preparation &&
     bindPreparedToolAuthority({
       ...preparation,
+      assertCurrent,
       compatAssertCurrent: assertCurrent,
     });
   const legacy =
     prepared && !guarded.queueMessageAsync
       ? createLegacyToolAuthorityQueuePreflight(prepared)
       : undefined;
-  const assertFinalCurrent = legacy
-    ? createLegacyMessageInjectionAuthority(assertCurrent, legacy.assertQueueCurrent)
-    : assertCurrent;
   return guarded.isAvailable()
-    ? {
-        prepareQueueMessage: legacy?.prepareQueueMessage,
-        queueMessage: (text, injectionOptions) => {
-          if (prepared && guarded.queueMessageAsync) {
-            return guarded.queueMessageAsync(text, injectionOptions, prepared, authorityKind);
-          }
-          legacy?.assertQueueCurrent();
-          return guarded.queueMessage(text, injectionOptions, assertFinalCurrent, authorityKind);
-        },
-        claimPendingUserInputAnswer:
-          prepared && guarded.claimPendingUserInputAnswerAsync
-            ? (text, injectionOptions) =>
-                guarded.claimPendingUserInputAnswerAsync!(
-                  text,
-                  injectionOptions,
-                  prepared,
-                  authorityKind,
-                )
-            : guarded.claimPendingUserInputAnswer
-              ? (text, injectionOptions) =>
-                  guarded.claimPendingUserInputAnswer!(
-                    text,
-                    injectionOptions,
-                    assertCurrent,
-                    authorityKind,
-                  )
-              : undefined,
-        cancelPendingUserInput:
-          prepared && guarded.cancelPendingUserInputAsync
-            ? (resolvedBy) =>
-                guarded.cancelPendingUserInputAsync!(resolvedBy, prepared, authorityKind)
-            : guarded.cancelPendingUserInput
-              ? (resolvedBy) =>
-                  guarded.cancelPendingUserInput!(resolvedBy, assertCurrent, authorityKind)
-              : undefined,
-      }
+    ? bindMessageInjectionV2(
+        guarded,
+        assertCurrent,
+        authorityKind,
+        prepared && (() => prepared),
+        legacy,
+      )
     : undefined;
 }
 
@@ -472,6 +439,7 @@ export function resolveEmbeddedInjection(
           prepareQueueMessage: legacy?.prepareQueueMessage,
           queueMessage: (text, options) => {
             legacy?.assertQueueCurrent();
+            injectionOptions?.assertCurrent?.();
             return target.queueMessage(text, options);
           },
           claimPendingUserInputAnswer: handle.claimPendingUserInputAnswer?.bind(handle),

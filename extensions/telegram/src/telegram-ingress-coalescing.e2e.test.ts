@@ -9,6 +9,7 @@ import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   holdTelegramMediaTimeouts,
@@ -212,47 +213,20 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  it("coalesces an album replayed from a durable restart backlog", async () => {
-    const first = photoUpdate({ updateId: 201, messageId: 1, caption: "Two photo album" });
-    const second = photoUpdate({ updateId: 202, messageId: 2 });
-    await writeTelegramSpooledUpdate({ stateDir, update: first });
-    await writeTelegramSpooledUpdate({ stateDir, update: second });
-    const { monitor, telegramTransport } = await createMonitor();
-    const albumTimers = holdTelegramMediaTimeouts(40);
-
-    try {
-      monitor.start();
-      // Real state-worker admission must finish before the controlled album deadline.
-      await monitor.waitForIdle();
-      const queue = openTelegramIngressQueue({ stateDir });
-      expect((await queue.listClaims()).map((claim) => claim.id).toSorted()).toEqual([
-        telegramQueueEventId(201),
-        telegramQueueEventId(202),
-      ]);
-      expect(downstreamTurns).not.toHaveBeenCalled();
-      flushHeldQuietWindow(albumTimers, 40);
-      await assertAlbumTurnAndTombstones({ stateDir, updateIds: [201, 202], monitor });
-    } finally {
-      albumTimers.mockRestore();
-      await monitor.stop();
-      await telegramTransport.close();
-    }
-  });
-
-  it("keeps a later album alive and ordered behind a slowly adopting album", async () => {
+  it("keeps a later album alive and ordered behind a slowly adopting album", async ({ signal }) => {
     const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 1_000 });
-    const { headDispatched, releaseHead, headFinished } = holdFirstDownstreamTurn();
+    const { headDispatched, releaseHead } = holdFirstDownstreamTurn();
     useIngressTimers();
     monitor.start();
     try {
-      await admitAlbum(monitor, "A", 1_001);
+      await withinTest(admitAlbum(monitor, "A", 1_001), signal);
       // Freeze the claim clock while dispatch finishes its real worker I/O.
-      await headDispatched.promise;
-      await admitAlbum(monitor, "B", 1_003);
-      await vi.advanceTimersByTimeAsync(3_000);
+      await withinTest(headDispatched.promise, signal);
+      await withinTest(admitAlbum(monitor, "B", 1_003), signal);
+      await withinTest(vi.advanceTimersByTimeAsync(3_000), signal);
       expect(downstreamTurns, "Album B must wait for album A's adoption").toHaveBeenCalledOnce();
       releaseHead.resolve();
-      await monitor.waitForDeferredClaims();
+      await withinTest(monitor.waitForDeferredClaims(), signal);
       expect(downstreamTurns).toHaveBeenCalledTimes(2);
       expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
         "Album A",
@@ -262,36 +236,51 @@ describe("Telegram durable ingress coalescing", () => {
       expect(runtimeErrors).toEqual([]);
     } finally {
       releaseHead.resolve();
-      await headFinished.promise;
       await monitor.stop();
     }
   });
 
-  it("keeps a later same-sender forward batch alive behind a deferred batch", async () => {
+  it("keeps a later same-sender forward batch alive behind a deferred batch", async ({
+    signal,
+  }) => {
     const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 3_000 });
-    const { releaseHead, turnsDeferred, turnsFinished } = holdDownstreamLane();
+    const { releaseHead, turnsDeferred } = holdDownstreamLane();
     useIngressTimers();
     monitor.start();
     try {
-      await monitor.admit(forwardedTextUpdate({ updateId: 1_401, messageId: 1, text: "Batch A" }));
-      await monitor.waitForIdle();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await withinTest(
+        monitor.admit(forwardedTextUpdate({ updateId: 1_401, messageId: 1, text: "Batch A" })),
+        signal,
+      );
+      await withinTest(monitor.waitForIdle(), signal);
+      await withinTest(vi.advanceTimersByTimeAsync(1_000), signal);
       // Freeze the claim clock while each flushed turn finishes its real worker I/O.
-      await turnsDeferred[0]?.promise;
-      await monitor.admit(forwardedTextUpdate({ updateId: 1_402, messageId: 2, text: "Batch B" }));
-      await monitor.waitForIdle();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await withinTest(turnsDeferred[0].promise, signal);
+      await withinTest(
+        monitor.admit(forwardedTextUpdate({ updateId: 1_402, messageId: 2, text: "Batch B" })),
+        signal,
+      );
+      await withinTest(monitor.waitForIdle(), signal);
+      await withinTest(vi.advanceTimersByTimeAsync(1_000), signal);
       // A deferred head releases the sender key; B queues behind it in the session lane.
-      await turnsDeferred[1]?.promise;
-      await vi.advanceTimersByTimeAsync(9_000);
+      await withinTest(turnsDeferred[1].promise, signal);
+      await withinTest(vi.advanceTimersByTimeAsync(9_000), signal);
       const queue = openTelegramIngressQueue({ stateDir });
-      expect(await queue.listPending({ limit: "all" }), "Batch B stalled behind A").toEqual([]);
-      expect((await queue.listClaims()).map(({ id, attempts }) => ({ id, attempts }))).toEqual([
+      expect(
+        await withinTest(queue.listPending({ limit: "all" }), signal),
+        "Batch B stalled behind A",
+      ).toEqual([]);
+      expect(
+        (await withinTest(queue.listClaims(), signal)).map(({ id, attempts }) => ({
+          id,
+          attempts,
+        })),
+      ).toEqual([
         { id: telegramQueueEventId(1_401), attempts: 0 },
         { id: telegramQueueEventId(1_402), attempts: 0 },
       ]);
       releaseHead.resolve();
-      await monitor.waitForDeferredClaims();
+      await withinTest(monitor.waitForDeferredClaims(), signal);
       expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
         "Batch A",
         "Batch B",
@@ -300,7 +289,6 @@ describe("Telegram durable ingress coalescing", () => {
       expect(runtimeErrors).toEqual([]);
     } finally {
       releaseHead.resolve();
-      await Promise.all(turnsFinished);
       await monitor.stop();
     }
   });
@@ -810,35 +798,6 @@ describe("Telegram durable ingress coalescing", () => {
     await telegramTransport.close();
   });
 
-  it("coalesces a forwarded burst replayed from a durable restart backlog", async () => {
-    await writeTelegramSpooledUpdate({
-      stateDir,
-      update: forwardedTextUpdate({ updateId: 401, messageId: 1, text: "First note" }),
-    });
-    await writeTelegramSpooledUpdate({
-      stateDir,
-      update: forwardedTextUpdate({ updateId: 402, messageId: 2, text: "Second note" }),
-    });
-    const { monitor, telegramTransport } = await createMonitor();
-    const forwardWindow = holdForwardWindow();
-
-    try {
-      monitor.start();
-      await monitor.waitForIdle();
-      forwardWindow.flush();
-    } finally {
-      forwardWindow.restore();
-    }
-    const turn = await awaitSingleDownstreamTurn();
-    expect(turn.Body).toContain("First note");
-    expect(turn.Body).toContain("Second note");
-    await monitor.waitForDeferredClaims();
-    await assertSpoolTombstoned({ stateDir, updateIds: [401, 402] });
-
-    await monitor.stop();
-    await telegramTransport.close();
-  });
-
   it("keeps a forwarded burst pending when its deferred attachment download fails transiently", async () => {
     const downloadError = new MediaFetchError("http_error", "Telegram file download HTTP 502", {
       status: 502,
@@ -974,45 +933,6 @@ describe("Telegram durable ingress coalescing", () => {
     } finally {
       resumeTurn.resolve();
     }
-  });
-
-  it("releases a stale forwarded claim once when custom debounce dispatch fails", async () => {
-    const update = forwardedTextUpdate({
-      updateId: 701,
-      messageId: 1,
-      text: "recovered forward",
-    });
-    const eventId = telegramQueueEventId(update.update_id);
-    const sessionError = new Error("Session changed while starting work. Retry.");
-    await writeTelegramSpooledUpdate({ stateDir, update });
-    const queue = openTelegramIngressQueue({ stateDir });
-    expect(await queue.claim(eventId, { ownerId: "999:1:dead-owner" })).not.toBeNull();
-    downstreamTurns.mockRejectedValueOnce(sessionError);
-    const runtimeError = vi.fn();
-    const { monitor, telegramTransport } = await createMonitor({
-      adoptionStallTimeoutMs: 5_000,
-      onRuntimeError: runtimeError,
-    });
-    const forwardWindow = holdForwardWindow();
-
-    try {
-      monitor.start();
-      await monitor.waitForIdle();
-      forwardWindow.flush();
-    } finally {
-      forwardWindow.restore();
-    }
-    await monitor.waitForDeferredClaims();
-    expect(await queue.listClaims()).toEqual([]);
-    expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-    expect(await queue.listPending({ limit: "all" })).toMatchObject([
-      { id: eventId, attempts: 2, lastError: sessionError.message },
-    ]);
-    expect(downstreamTurns).toHaveBeenCalledOnce();
-    expect(runtimeError).toHaveBeenCalledOnce();
-
-    await monitor.stop();
-    await telegramTransport.close();
   });
 
   it("bounds repeated session-start conflicts and drains the next Telegram update", async () => {

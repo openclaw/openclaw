@@ -8,6 +8,7 @@ import {
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
+  windowsAgentTurnScript,
   windowsOpenClawResolver,
   windowsScopedEnvFunction,
 } from "./powershell.ts";
@@ -228,30 +229,42 @@ $sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\pa
 Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
-$agentOk = $false
-for ($attempt = 1; $attempt -le 2; $attempt++) {
-  $sessionId = if ($attempt -eq 1) { 'parallels-npm-update-windows' } else { "parallels-npm-update-windows-retry-$attempt" }
-  $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
-  $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
-  Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
-  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1
-  $agentExitCode = $LASTEXITCODE
-  if ($null -ne $output) { $output | ForEach-Object { $_ } }
-  if ($agentExitCode -eq 0 -and ($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
-    $agentOk = $true
-    break
-  }
-  if ($agentExitCode -ne 0 -and $attempt -lt 2 -and (Repair-MissingCodexPlatformPackage -Output $output)) {
-    Write-Host "agent turn attempt $attempt hit a missing Codex platform package; retrying"
-    continue
-  }
-  if ($attempt -lt 2) {
-    Write-Host "agent turn attempt $attempt finished without OK response; retrying"
-    Start-Sleep -Seconds 3
-  }
-  if ($agentExitCode -ne 0) { throw "agent failed with exit code $agentExitCode" }
+${windowsAgentTurnScript({
+  command: `  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1`,
+  sessionId: "parallels-npm-update-windows",
+  retryOnCommandFailure: false,
+})}`;
 }
-if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
+
+function posixUpdateAndVerifyScript(
+  input: NpmUpdateScriptInput,
+  platform: "macos" | "linux",
+  command: string,
+  startGateway: string,
+): string {
+  return String.raw`gateway_log=/tmp/openclaw-parallels-${platform}-gateway.log
+rm -f "$gateway_log"
+touch "$gateway_log"
+gateway_pid=
+gateway_launch_log_offset=0
+gateway_restart_count=0
+start_openclaw_gateway() {
+${startGateway}
+}
+${posixWaitForGatewayScript(command)}
+scrub_future_plugin_entries
+stop_openclaw_gateway_processes
+${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 ${command} update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+${posixVersionCheck(command, input.expectedNeedle)}
+start_openclaw_gateway
+wait_for_gateway
+${posixStopGatewayScript()}
+${command} models set ${shellQuote(input.auth.modelId)}
+${posixModelProviderConfigCommands(command, input.auth.modelId, platform)}
+${command} config set agents.defaults.skipBootstrap true --strict-json
+${command} config set tools.profile minimal
+${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
+${posixAssertAgentOkScript(command, input, platform, `parallels-npm-update-${platform}`)}`;
 }
 
 export function macosUpdateScript(input: NpmUpdateScriptInput): string {
@@ -303,34 +316,17 @@ stop_openclaw_gateway_processes() {
     fi
   fi
 }
-gateway_log=/tmp/openclaw-parallels-macos-gateway.log
-rm -f "$gateway_log"
-touch "$gateway_log"
-gateway_pid=
-gateway_launch_log_offset=0
-gateway_restart_count=0
-start_openclaw_gateway() {
-  stop_openclaw_gateway_processes
+${posixUpdateAndVerifyScript(
+  input,
+  "macos",
+  macosOpenClawCommand,
+  String.raw`  stop_openclaw_gateway_processes
   gateway_launch_log_offset="$(wc -c <"$gateway_log" 2>/dev/null | tr -d '[:space:]' || echo 0)"
   trap '' HUP
   with_provider_api_key /usr/bin/env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" "$OPENCLAW_BIN" gateway run --bind loopback --port 18789 --force >>"$gateway_log" 2>&1 </dev/null &
   gateway_pid=$!
-  sleep 1
-}
-${posixWaitForGatewayScript(macosOpenClawCommand)}
-scrub_future_plugin_entries
-stop_openclaw_gateway_processes
-${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 "$OPENCLAW_BIN" update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
-${posixVersionCheck(macosOpenClawCommand, input.expectedNeedle)}
-start_openclaw_gateway
-wait_for_gateway
-${posixStopGatewayScript()}
-"$OPENCLAW_BIN" models set ${shellQuote(input.auth.modelId)}
-${posixModelProviderConfigCommands(macosOpenClawCommand, input.auth.modelId, "macos")}
-"$OPENCLAW_BIN" config set agents.defaults.skipBootstrap true --strict-json
-"$OPENCLAW_BIN" config set tools.profile minimal
-${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript(macosOpenClawCommand, input, "macos", "parallels-npm-update-macos")}`;
+  sleep 1`,
+)}`;
 }
 
 export function windowsUpdateScript(input: NpmUpdateScriptInput): string {
@@ -440,34 +436,17 @@ stop_openclaw_gateway_processes() {
   OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop || true
   pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
 }
-gateway_log=/tmp/openclaw-parallels-linux-gateway.log
-rm -f "$gateway_log"
-touch "$gateway_log"
-gateway_pid=
-gateway_launch_log_offset=0
-gateway_restart_count=0
-start_openclaw_gateway() {
-  pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
+${posixUpdateAndVerifyScript(
+  input,
+  "linux",
+  "openclaw",
+  String.raw`  pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
   gateway_launch_log_offset="$(wc -c <"$gateway_log" 2>/dev/null | tr -d '[:space:]' || echo 0)"
   with_provider_api_key setsid sh -lc ${shellQuote(
     "exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_DISABLE_BONJOUR=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway run --bind loopback --port 18789 --force >>/tmp/openclaw-parallels-linux-gateway.log 2>&1",
   )} >/dev/null 2>&1 < /dev/null &
-  gateway_pid=$!
-}
-${posixWaitForGatewayScript("openclaw")}
-scrub_future_plugin_entries
-stop_openclaw_gateway_processes
-${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
-${posixVersionCheck("openclaw", input.expectedNeedle)}
-start_openclaw_gateway
-wait_for_gateway
-${posixStopGatewayScript()}
-openclaw models set ${shellQuote(input.auth.modelId)}
-${posixModelProviderConfigCommands("openclaw", input.auth.modelId, "linux")}
-openclaw config set agents.defaults.skipBootstrap true --strict-json
-openclaw config set tools.profile minimal
-${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript("openclaw", input, "linux", "parallels-npm-update-linux")}`;
+  gateway_pid=$!`,
+)}`;
 }
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {

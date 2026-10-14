@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isSessionNodePayloadSelect,
   trackSqliteStatementExecutions,
@@ -13,6 +13,8 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -26,6 +28,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
@@ -58,12 +61,17 @@ function clearRegisteredAgentDatabases(env: NodeJS.ProcessEnv): void {
   openOpenClawStateDatabase({ env }).db.prepare("DELETE FROM agent_databases").run();
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("session accessor readonly listing", () => {
@@ -134,7 +142,7 @@ describe("session accessor readonly listing", () => {
     replaceSessionEntrySync({ ...scope, sessionKey }, entry);
     closeOpenClawAgentDatabasesForTest();
 
-    const peer = new DatabaseSync(storePath);
+    const peer = openNodeSqliteDatabase(storePath);
     try {
       withSessionEntryReadOnlyScope(scope, () => {
         expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("shared");
@@ -314,17 +322,19 @@ describe("session accessor readonly listing", () => {
     listSessionEntriesReadOnly(scope);
     const database = openOpenClawAgentDatabase(scope);
     const update = database.db.prepare(
-      "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
+      "UPDATE session_nodes SET entry_json = ?, updated_at = ?, current_session_id = ?, entry_valid = 0 WHERE session_key = ?",
     );
     update.run(
-      JSON.stringify({ sessionId: "pending-updated", updatedAt: 30, label: "fresh" }),
+      JSON.stringify({ sessionId: "pending", updatedAt: 30, label: "fresh" }),
       30,
+      "pending",
       "agent:main:pending",
     );
-    update.run("{", 40, "agent:main:bad-json");
+    update.run("{", 40, "bad-json", "agent:main:bad-json");
     update.run(
       JSON.stringify({ sessionId: "bad-timestamp", updatedAt: 99 }),
       50,
+      "bad-timestamp",
       "agent:main:bad-timestamp",
     );
     const expectedKeys = [
@@ -349,7 +359,7 @@ describe("session accessor readonly listing", () => {
     expect(summary.count).toBe(7);
     expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(expectedKeys.slice(0, 3));
     expect(summary.recent[0]?.entry).toMatchObject({
-      sessionId: "pending-updated",
+      sessionId: "pending",
       label: "fresh",
     });
     expectDefined(summary.recent[0], "recent pending session").entry.label = "caller-owned";
@@ -367,7 +377,11 @@ describe("session accessor readonly listing", () => {
     };
     for (const projection of ["full", "list"] as const) {
       expect(loadExactSessionEntryReadOnly({ ...retainedScope, projection })).toBeUndefined();
-      for (const key of ["pending", "bad-json", "bad-timestamp"]) {
+      expect(
+        loadExactSessionEntryReadOnly({ ...scope, sessionKey: "agent:main:pending", projection })
+          ?.entry,
+      ).toMatchObject({ sessionId: "pending", updatedAt: 30, label: "fresh" });
+      for (const key of ["bad-json", "bad-timestamp"]) {
         expect(() =>
           loadExactSessionEntryReadOnly({ ...scope, sessionKey: `agent:main:${key}`, projection }),
         ).toThrow("openclaw doctor --fix");
@@ -393,7 +407,12 @@ describe("session accessor readonly listing", () => {
           ok: true,
           value: [{ sessionKey: "agent:main:tie-b", entry: { sessionId: "tie-b" } }],
         },
-        exactReadFailure,
+        {
+          ok: true,
+          value: [
+            { sessionKey: "agent:main:pending", entry: { sessionId: "pending", label: "fresh" } },
+          ],
+        },
         exactReadFailure,
         exactReadFailure,
         { ok: true, value: [{ sessionKey: "agent:main:tie-a", entry: { sessionId: "tie-a" } }] },
@@ -403,6 +422,7 @@ describe("session accessor readonly listing", () => {
     update.run(
       JSON.stringify({ skillsSnapshot: { prompt: "invalid prompt-only row" } }),
       2000,
+      "retained",
       retainedScope.sessionKey,
     );
     expect(() => loadExactSessionEntryReadOnly({ ...retainedScope, projection: "list" })).toThrow(
@@ -410,6 +430,7 @@ describe("session accessor readonly listing", () => {
     );
 
     closeOpenClawAgentDatabasesForTest();
+    revokeSqliteDatabaseAdmissionsForPath(database.path);
     expect(() => readSessionStoreSummaryReadOnly(scope, options)).toThrow("openclaw doctor --fix");
     expect(
       loadExactSessionEntryCandidatesReadOnlyBatch(

@@ -28,9 +28,9 @@ import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 
@@ -46,6 +46,7 @@ export interface CreateAgentSessionOptions extends Omit<
   model: Model;
   /** Admitted thinking level, clamped to the selected model capabilities. */
   thinkingLevel: ThinkingLevel;
+  thinkingExplicit?: boolean;
 
   /** Runtime-owned allowlist; extensions cannot expand it. */
   tools: string[];
@@ -215,7 +216,6 @@ export async function createAgentSession(
       ? await options.withSessionWriteSettlement(run)
       : await run();
 
-  assertInitialSessionCurrent();
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
@@ -235,8 +235,9 @@ export async function createAgentSession(
       optionsLocal?.signal?.throwIfAborted();
       const providerRetrySettings = settingsManager.getProviderRetrySettings();
       const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
+      const providerOptions = {
         ...optionsLocal,
+        openclawThinkingExplicit: options.thinkingExplicit,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
         maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
@@ -244,7 +245,8 @@ export async function createAgentSession(
           attributionHeaders || auth.headers || optionsLocal?.headers
             ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
             : undefined,
-      });
+      };
+      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
     },
     onPayload: async (payload) => {
       const runner = extensionRunnerRef.current;
@@ -306,7 +308,7 @@ export async function createAgentSession(
     if (hasExistingSession && hasThinkingEntry) {
       return Promise.resolve();
     }
-    return withSessionManagerWrite(sessionManager, async () => {
+    return withSessionManagerAppend(sessionManager, async () => {
       assertInitialSessionCurrent();
       if (!hasExistingSession) {
         await appendInitialMetadata(

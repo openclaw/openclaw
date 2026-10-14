@@ -3,8 +3,7 @@ import * as ts from "typescript/unstable/ast";
 import { expectDefined } from "../../../packages/normalization-core/src/expect.js";
 import {
   canonicalSymbolInfo,
-  countIdentifierUsages,
-  countNamespacePropertyUsages,
+  countImportUsages,
   createProgramContext,
   getRepoRevision,
 } from "./context.js";
@@ -213,7 +212,7 @@ function collectConsumers(
           recordConsumer(
             record,
             bucket,
-            countIdentifierUsages(context, sourceFile, localSymbol, element.name.text),
+            countImportUsages(context, sourceFile, localSymbol, element.name.text, "identifier"),
             relPath,
           );
         }
@@ -226,11 +225,12 @@ function collectConsumers(
           continue;
         }
         for (const [exportedName, record] of recordMap.entries()) {
-          const usageCount = countNamespacePropertyUsages(
+          const usageCount = countImportUsages(
             context,
             sourceFile,
             namespaceSymbol,
             exportedName,
+            "namespace",
           );
           if (usageCount <= 0) {
             continue;

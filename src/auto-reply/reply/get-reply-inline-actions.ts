@@ -1,8 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeNullableString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
@@ -23,10 +20,12 @@ import {
   skillCommandsToExplicitSelections as toSelections,
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection } from "../../skills/types.js";
+import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
   markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { ElevatedLevel, VerboseLevel } from "../thinking.js";
@@ -38,6 +37,7 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
+import { resolveSlashCommandName } from "./commands-slash-parse.js";
 import type { CommandDispatchParams } from "./commands-types.js";
 import type { buildStatusReply } from "./commands.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
@@ -73,11 +73,6 @@ function getBuiltinSlashCommands(): Set<string> {
   ]));
 }
 
-function resolveSlashCommandName(commandBodyNormalized: string): string | null {
-  const match = commandBodyNormalized.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
-  return normalizeOptionalLowercaseString(match?.[1]) ?? null;
-}
-
 function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefined): boolean {
   if (wasMentioned !== true) {
     return false;
@@ -95,7 +90,6 @@ type InlineActionResult =
       kind: "continue";
       directives: InlineDirectives;
       abortedLastRun: boolean;
-      cleanedBody: string;
       queueModeOverride?: QueueMode;
       explicitSkillSelections?: ExplicitSkillSelection[];
     };
@@ -136,34 +130,8 @@ export async function handleInlineActions(
     skillFilter?: string[];
   },
 ): Promise<InlineActionResult> {
-  const commandParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    command: params.command,
-    initialSessionEntry: params.initialSessionEntry,
-    allowCreateSessionEntry: params.allowCreateSessionEntry,
-    previousSessionEntry: params.previousSessionEntry,
-    previousSessionMemory: params.previousSessionMemory,
-    previousSessionResetMessages: params.previousSessionResetMessages,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    sessionScope: params.sessionScope,
-    workspaceDir: params.workspaceDir,
-    opts: params.opts,
-    thinkingCatalog: params.thinkingCatalog,
-    resolveModelLevels: params.resolveModelLevels,
-    resolvedElevatedLevel: params.resolvedElevatedLevel,
-    blockReplyChunking: params.blockReplyChunking,
-    resolvedBlockStreamingBreak: params.resolvedBlockStreamingBreak,
-    resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-    provider: params.provider,
-    model: params.model,
-    contextTokens: params.contextTokens,
-    isGroup: params.isGroup,
-    typing: params.typing,
-  };
+  // Native directive results also carry turn-local fast mode; commands resolve their own status.
+  const commandParams = { ...params, resolvedFastMode: undefined };
   const {
     ctx,
     sessionCtx,
@@ -210,12 +178,11 @@ export async function handleInlineActions(
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
   const updateAgentBody = (body: string) => {
-    ctx.Body = body;
-    ctx.agentText = body;
-    ctx.BodyForAgent = body;
-    sessionCtx.Body = body;
-    sessionCtx.agentText = body;
-    sessionCtx.BodyForAgent = body;
+    for (const target of [ctx, sessionCtx]) {
+      target.Body = body;
+      target.agentText = body;
+      target.BodyForAgent = body;
+    }
     sessionCtx.BodyStripped = body;
     cleanedBody = body;
   };
@@ -330,7 +297,7 @@ export async function handleInlineActions(
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const dependencies = await import("../../agents/openclaw-tools.js");
+      const { createOpenClawToolsAsync } = await import("../../agents/openclaw-tools.js");
       const { hasAnyAuthProfileStoreSourceAsync } =
         await import("../../agents/auth-profiles/source-check.js");
       const authSourceAgentDir = agentDir?.trim();
@@ -378,7 +345,7 @@ export async function handleInlineActions(
             toolName: dispatch.toolName,
           },
         },
-        dependencies,
+        { createOpenClawToolsAsync },
       );
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
@@ -396,7 +363,7 @@ export async function handleInlineActions(
         opts?.abortSignal?.throwIfAborted();
         if (opts?.runId) {
           const transcriptStart =
-            opts.onAgentRunStart && params.sessionEntry?.sessionId
+            (opts.onPreparedAgentRunStart || opts.onAgentRunStart) && params.sessionEntry?.sessionId
               ? await (
                   await import("../../config/sessions/session-transcript-watermark.js")
                 ).readSessionTranscriptStartAsync({
@@ -412,18 +379,20 @@ export async function handleInlineActions(
               : null;
           opts.abortSignal?.throwIfAborted();
           // Tool commands leave transcript persistence with ordinary reply dispatch.
-          opts.onAgentRunStart?.(
-            opts.runId,
-            undefined,
-            {
+          notifyPreparedAgentRunStart(opts, {
+            runId: opts.runId,
+            options: {
               completionSource: "reply-dispatch",
               getResult: () => ({}),
             },
             transcriptStart,
-          );
+          });
         }
         // The execution owner can observe revocation while arming cancellation.
+        await opts?.awaitSessionDiffBaseline?.();
         opts?.abortSignal?.throwIfAborted();
+        opts?.operatorAuthority?.assertCurrent();
+        command.assertOwnerCurrent?.();
         const result = asOptionalObjectRecord(
           await tool.execute(toolCallId, toolArgs, opts?.abortSignal),
         );
@@ -471,14 +440,14 @@ export async function handleInlineActions(
     if (!reply || !opts?.onBlockReply) {
       return;
     }
-    await opts.onBlockReply(
-      markReplyPayloadForSourceSuppressionDelivery(
-        copyReplyPayloadMetadata(reply, {
-          ...reply,
-          isStatusNotice: true,
-        }),
-      ),
+    const payload = markReplyPayloadForSourceSuppressionDelivery(
+      copyReplyPayloadMetadata(reply, {
+        ...reply,
+        isStatusNotice: true,
+      }),
     );
+    setReplyPayloadMetadata(payload, { inlineCommandReply: true });
+    await opts.onBlockReply(payload);
   };
 
   // Standalone commands use ordinary dispatch even when the prompt contains extra context.
@@ -512,7 +481,6 @@ export async function handleInlineActions(
       isGroup,
     }) &&
     inlineStatusRequested;
-  let didSendInlineStatus = false;
   let queueModeOverride: QueueMode | undefined;
   if (handleInlineStatus) {
     const { buildStatusReply } = await commandsRuntimeLoader.load();
@@ -526,13 +494,16 @@ export async function handleInlineActions(
       mediaDecisions: ctx.MediaUnderstandingDecisions,
     });
     await sendInlineReply(inlineStatusReply);
-    didSendInlineStatus = true;
     directives = { ...directives, hasStatusDirective: false };
   }
 
   const runCommands = async (commandInput: typeof command) => {
     const { handleCommands } = await commandsRuntimeLoader.load();
-    return handleCommands({
+    await opts?.awaitSessionDiffBaseline?.();
+    opts?.abortSignal?.throwIfAborted();
+    opts?.operatorAuthority?.assertCurrent();
+    commandInput.assertOwnerCurrent?.();
+    const result = await handleCommands({
       ...commandParams,
       // Command handlers mutate the continuation context and retain the dispatch context.
       ctx: sessionCtx,
@@ -553,6 +524,10 @@ export async function handleInlineActions(
         skillFilter,
       }),
     });
+    queueModeOverride = result.queueModeOverride ?? queueModeOverride;
+    skillSelections = mergeSelections(skillSelections, result.explicitSkillSelections);
+    notifyInlineCommandSessionMetadataChanges();
+    return result;
   };
 
   if (inlineCommand) {
@@ -562,9 +537,6 @@ export async function handleInlineActions(
       commandBodyNormalized: inlineCommand,
     };
     const inlineResult = await runCommands(inlineCommandContext);
-    queueModeOverride = inlineResult.queueModeOverride;
-    skillSelections = mergeSelections(skillSelections, inlineResult.explicitSkillSelections);
-    notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!cleanedBody) {
         return finishCommand(inlineResult.reply);
@@ -588,42 +560,22 @@ export async function handleInlineActions(
       directiveAck !== undefined ||
       inlineStatusRequested ||
       command.commandBodyNormalized.trim().startsWith("/"));
-  if (!shouldRunCommandHandlers) {
-    return {
-      kind: "continue",
-      directives,
-      abortedLastRun,
-      cleanedBody,
-      ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
-    };
-  }
-  const strippedBody = stripStructuralPrefixes(cleanedBody);
-  const remainingBodyAfterInlineStatus = (
-    isGroup ? stripMentions(strippedBody, ctx, cfg, agentId) : strippedBody
-  ).trim();
-  if (
-    didSendInlineStatus &&
-    (remainingBodyAfterInlineStatus.length === 0 ||
-      isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
-  ) {
-    return finishCommand();
-  }
+  if (shouldRunCommandHandlers) {
+    const strippedBody = stripStructuralPrefixes(cleanedBody);
+    const remainingBodyAfterInlineStatus = (
+      isGroup ? stripMentions(strippedBody, ctx, cfg, agentId) : strippedBody
+    ).trim();
+    if (
+      handleInlineStatus &&
+      (remainingBodyAfterInlineStatus.length === 0 ||
+        isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
+    ) {
+      return finishCommand();
+    }
 
-  const commandBodyBeforeRun = command.commandBodyNormalized;
-  const bodyBeforeRun = sessionCtx.agentText;
-  const commandResult = await runCommands(command);
-  queueModeOverride = commandResult.queueModeOverride ?? queueModeOverride;
-  skillSelections = mergeSelections(skillSelections, commandResult.explicitSkillSelections);
-  notifyInlineCommandSessionMetadataChanges();
-  if (!commandResult.shouldContinue) {
-    return finishCommand(commandResult.reply);
-  }
-  if (command.commandBodyNormalized !== commandBodyBeforeRun) {
-    cleanedBody = command.commandBodyNormalized;
-  } else {
-    const bodyAfterRun = sessionCtx.agentText;
-    if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
-      cleanedBody = bodyAfterRun;
+    const commandResult = await runCommands(command);
+    if (!commandResult.shouldContinue) {
+      return finishCommand(commandResult.reply);
     }
   }
 
@@ -631,7 +583,6 @@ export async function handleInlineActions(
     kind: "continue",
     directives,
     abortedLastRun,
-    cleanedBody,
     ...(queueModeOverride ? { queueModeOverride } : {}),
     ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
   };

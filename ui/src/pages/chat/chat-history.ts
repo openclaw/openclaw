@@ -7,6 +7,7 @@ import {
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
@@ -16,7 +17,6 @@ import {
   chatHistoryRequests,
   getChatHistoryLoadState,
   setChatHistoryLoad,
-  waitForInitialChatSnapshot,
 } from "./chat-history-state.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
@@ -35,7 +35,7 @@ export async function loadChatHistory(
   state: ChatHistoryHost,
   opts: LoadChatHistoryOptions = {},
 ): Promise<ObservedChatHistoryResult | undefined> {
-  let sessionKey = state.sessionKey;
+  const sessionKey = state.sessionKey;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
@@ -54,44 +54,11 @@ export async function loadChatHistory(
   const client = state.client;
   const sessions = state.sessions;
   const connectionEpoch = state.connectionEpoch;
-  const hydration = startup ? waitForInitialChatSnapshot(state) : undefined;
-  if (hydration) {
-    const version = requests.historyVersion;
-    state.chatLoading = true;
-    state.requestUpdate?.();
-    const current = await hydration;
-    if (
-      !current ||
-      !state.connected ||
-      state.client !== client ||
-      state.sessions !== sessions ||
-      state.connectionEpoch !== connectionEpoch ||
-      !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-      (isUiSelectedGlobalSessionKey(state, sessionKey) &&
-        resolveUiSelectedSessionAgentId(state) !== requestAgentId)
-    ) {
-      return undefined;
-    }
-    sessionKey = state.sessionKey;
-    if (requests.historyVersion !== version) {
-      const active = requests.historyLoad;
-      if (active.phase === "idle") {
-        return undefined;
-      }
-      if (
-        active.phase === "in-flight" &&
-        opts.supersedeInFlight !== true &&
-        active.startup &&
-        active.client === client &&
-        active.sessions === sessions &&
-        active.connectionEpoch === connectionEpoch &&
-        active.sessionKey === sessionKey &&
-        active.requestAgentId === requestAgentId
-      ) {
-        return active.promise;
-      }
-    }
-  }
+  const ownsConnection = captureChatConnectionOwner(state);
+  const connectionIsCurrent = () => ownsConnection() && state.sessions === sessions;
+  const agentIsCurrent = () =>
+    !isUiSelectedGlobalSessionKey(state, sessionKey) ||
+    resolveUiSelectedSessionAgentId(state) === requestAgentId;
   const deltaCursor = readChatHistoryCursor(state);
   const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
   const inputRunIds = readChatInputRunIds(state);
@@ -132,13 +99,9 @@ export async function loadChatHistory(
     refresh.promise = inFlight.promise.then(() => {
       if (
         requests.historyVersion !== version ||
-        !state.connected ||
-        state.client !== client ||
-        state.sessions !== sessions ||
-        state.connectionEpoch !== connectionEpoch ||
+        !connectionIsCurrent() ||
         state.sessionKey !== sessionKey ||
-        (isUiSelectedGlobalSessionKey(state, sessionKey) &&
-          resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+        !agentIsCurrent()
       ) {
         return undefined;
       }
@@ -184,8 +147,7 @@ export async function loadChatHistory(
         });
       } else if (
         state.sessionKey === sessionKey &&
-        (!isUiSelectedGlobalSessionKey(state, sessionKey) ||
-          resolveUiSelectedSessionAgentId(state) === requestAgentId) &&
+        agentIsCurrent() &&
         (!state.connected ||
           current.client !== state.client ||
           current.sessions !== state.sessions ||

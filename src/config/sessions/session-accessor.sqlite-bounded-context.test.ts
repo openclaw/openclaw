@@ -7,6 +7,7 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.j
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -48,6 +49,7 @@ async function withBoundedContextScope(
   }) => Promise<void>,
 ): Promise<void> {
   await withOpenClawTestState({ label: "bounded-transcript-context" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionId: "bounded-context",
@@ -123,6 +125,56 @@ function countAcquiredTranscriptPayloadBytes(
   }
   return acquiredBytes;
 }
+
+it("skips sizing an empty transcript and reads its first committed turn", async () => {
+  await withBoundedContextScope(async (scope) => {
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const counter = trackSqliteStatementExecutions(db, ["sizing"], (sql) =>
+      sql.includes("serialized_bytes") ? "sizing" : null,
+    );
+    const onRead = vi.fn();
+    try {
+      const empty = readSessionTranscriptBoundedActiveContextCore(scope, {
+        maxBytes: 1024,
+        maxEvents: 10,
+        onRead,
+      });
+      expect(empty).toMatchObject({
+        version: { rawSeq: null },
+        activeLeafEntryId: null,
+        events: [],
+        serializedBytes: 0,
+        totalEvents: 0,
+        boundaryCount: 0,
+        truncated: false,
+        completeActivePath: true,
+      });
+      expect(onRead).toHaveBeenCalledExactlyOnceWith(expect.anything(), []);
+      expect(counter.counts.sizing).toBe(0);
+
+      await persistSessionTranscriptTurn(scope, {
+        messages: [transcriptMessage("first", null, { role: "user", content: "first turn" })],
+        touchSessionEntry: false,
+      });
+      const populated = readSessionTranscriptBoundedActiveContextCore(scope, {
+        maxBytes: 1024,
+        maxEvents: 10,
+      });
+      expect(populated).toMatchObject({
+        activeLeafEntryId: "first",
+        events: [
+          { type: "session", id: scope.sessionId },
+          { id: "first", message: { role: "user", content: "first turn" } },
+        ],
+        totalEvents: 1,
+        truncated: false,
+        completeActivePath: true,
+      });
+    } finally {
+      counter.restore();
+    }
+  });
+});
 
 it("enforces context count and byte budgets and releases rejected reads for later appends", async () => {
   await withBoundedContextScope(async (scope) => {
@@ -342,6 +394,12 @@ it("retains the latest boundary and counts earlier resets before a truncated tai
       "new",
     ]);
     expect(context.events.at(-1)).toMatchObject({ parentId: "middle" });
+    expect(context.parents).toEqual(
+      new Map([
+        ["summary", "prior-reset"],
+        ["new", "middle"],
+      ]),
+    );
     expect(context.opaqueParents.get("middle")).toBe("summary");
     expect(context.boundaryCount).toBe(2);
   });

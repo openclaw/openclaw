@@ -28,6 +28,33 @@ export function isXaiFrontierModelId(id: string): boolean {
   return isXaiGrokReleaseAtLeast(id, [4, 5]);
 }
 
+// Ascending strength; "none" means the model can turn reasoning off.
+export const XAI_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type XaiReasoningEffort = (typeof XAI_REASONING_EFFORTS)[number];
+
+/** Keep the efforts xAI defines, in ascending strength. */
+export function normalizeXaiReasoningEfforts(values: readonly unknown[]): XaiReasoningEffort[] {
+  return XAI_REASONING_EFFORTS.filter((effort) => values.includes(effort));
+}
+
+export function isXaiGrok43ModelId(id: string): boolean {
+  return id === "grok-latest" || id === "grok-4.3" || id.startsWith("grok-4.3-");
+}
+
+/** Efforts the model-ID rules grant a reasoning model, for rows without a listing. */
+export function resolveXaiIdReasoningEfforts(id: string): XaiReasoningEffort[] {
+  if (!isXaiGrok43ModelId(id) && !isXaiFrontierModelId(id)) {
+    return [];
+  }
+  return [
+    ...(isXaiGrok43ModelId(id) ? (["none"] as const) : []),
+    "low",
+    "medium",
+    "high",
+    ...(isXaiXhighModelId(id) ? (["xhigh"] as const) : []),
+  ];
+}
+
 export function normalizeXaiModelId(id: string): string {
   if (id === "grok-4.3-latest") {
     return "grok-4.3";

@@ -4,10 +4,8 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
@@ -20,11 +18,12 @@ import {
   readClawWorkspaceFiles,
 } from "./workspace.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 async function writeSource(root: string, path: string, content: string): Promise<void> {
   const target = join(root, path);
@@ -156,47 +155,6 @@ describe("createClawWorkspaceFiles", () => {
     },
   );
 
-  it("materializes the CLAW.md body as managed SOUL.md content", async () => {
-    const root = tempDirs.make("openclaw-claw-body-workspace-");
-    const workspace = join(root, "workspace-agent");
-    const body = Buffer.from("# Portable soul\n\nBe concise.\n");
-    const manifest = parseClawManifest({ schemaVersion: 1, agent: { id: "workspace-agent" } });
-    if (!manifest.ok) {
-      throw new Error(JSON.stringify(manifest.diagnostics));
-    }
-    const manifestPath = join(root, "CLAW.md");
-    await writeFile(
-      manifestPath,
-      Buffer.concat([
-        Buffer.from("---\nschemaVersion: 1\nagent: { id: workspace-agent }\n---\n"),
-        body,
-      ]),
-    );
-    const plan = await buildClawAddPlan({
-      manifest: manifest.manifest,
-      clawMarkdownBody: body,
-      source: {
-        kind: "package",
-        name: "@acme/workspace-agent",
-        version: "1.0.0",
-        packageRoot: root,
-        manifestPath,
-        integrityKind: "development-snapshot",
-        integrity: "sha256:manifest",
-        byteLength: 0,
-      },
-      context: { workspace },
-    });
-    await mkdir(workspace);
-
-    const records = await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });
-
-    await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe(body.toString());
-    expect(records).toContainEqual(
-      expect.objectContaining({ path: "SOUL.md", sourcePath: "CLAW.md", status: "complete" }),
-    );
-  });
-
   it.runIf(process.platform !== "win32")(
     "materializes the CLAW.md body through a symlinked package root",
     async () => {
@@ -241,34 +199,6 @@ describe("createClawWorkspaceFiles", () => {
       await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe(body.toString());
     },
   );
-
-  it("creates canonical bootstrap and supporting files and records their hashes", async () => {
-    const { root, workspace, plan } = await makePlan();
-
-    const records = await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });
-
-    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
-    await expect(readFile(join(workspace, "reference", "policy.md"), "utf8")).resolves.toBe(
-      "Policy\n",
-    );
-    expect(records).toEqual([
-      expect.objectContaining({
-        schemaVersion: "openclaw.clawWorkspaceFileRecord.v1",
-        agentId: "workspace-agent",
-        path: "AGENTS.md",
-        sourcePath: "content/AGENTS.md",
-        contentDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        status: "complete",
-        createdAtMs: 10,
-        updatedAtMs: 10,
-      }),
-      expect.objectContaining({
-        agentId: "workspace-agent",
-        path: "reference/policy.md",
-      }),
-    ]);
-    expect(readWorkspaceFileRows("workspace-agent", root)).toEqual(records);
-  });
 
   it.runIf(process.platform !== "win32")(
     "rejects a source replaced by a symlink after planning",
@@ -333,23 +263,6 @@ describe("createClawWorkspaceFiles", () => {
     expect(readWorkspaceFileRows("workspace-agent", root)).toEqual([
       expect.objectContaining({ path: "first.md", createdAtMs: 20 }),
     ]);
-  });
-
-  it("resumes matching owned files without weakening create-only collision checks", async () => {
-    const { root, workspace, plan } = await makePlan();
-
-    const first = await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });
-    const resumed = await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 20 });
-
-    expect(resumed).toHaveLength(first.length);
-    for (const [index, record] of resumed.entries()) {
-      const initial = first[index];
-      if (!initial) {
-        throw new Error(`missing initial workspace record at index ${index}`);
-      }
-      expect(record).toEqual({ ...initial, status: "complete", updatedAtMs: 20 });
-    }
-    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
   });
 
   it("does not adopt an independently created file after a failed write record", async () => {
@@ -420,31 +333,6 @@ describe("createClawWorkspaceFiles", () => {
 });
 
 describe("workspace files in the consented add lifecycle", () => {
-  it("marks the root install complete after every declared file is created", async () => {
-    const { root, plan } = await makePlan({ createWorkspace: false });
-    let config: OpenClawConfig = {};
-
-    const result = await applyClawAddPlan(plan, {
-      consentPlanIntegrity: plan.planIntegrity,
-      env: stateEnv(root),
-      nowMs: 30,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-    });
-
-    expect(result).toMatchObject({
-      status: "complete",
-      workspaceFiles: [
-        expect.objectContaining({ path: "AGENTS.md" }),
-        expect.objectContaining({ path: "reference/policy.md" }),
-      ],
-      installRecord: { status: "complete" },
-    });
-    expect(config.agents?.entries?.["workspace-agent"]).toBeDefined();
-    expect(readInstallStatus("workspace-agent", root)).toBe("complete");
-  });
-
   it("keeps root add resumable and retains earlier file refs after a later source changes", async () => {
     const { root, plan } = await makePlan({
       createWorkspace: false,

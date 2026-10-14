@@ -2,6 +2,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
@@ -58,6 +62,19 @@ function mirror(fields: Record<string, unknown> = {}) {
 const payloadFor = (message: unknown) =>
   projectSessionMessagePayload({ sessionKey: "agent:main:main", message }).payload;
 
+it("correlates queued deliveries with earlier source rows rather than the adjacent reply", () => {
+  const first = assistant();
+  const user = { role: "user", content: "And the next train?" };
+  const second = assistant({
+    __openclaw: { id: "second-answer" },
+    content: [text("The next train leaves at two.")],
+  });
+  const secondMirror = mirror({
+    content: second.content,
+    openclawDeliveryMirror: { kind: "channel-final", sourceAssistantMessageId: "second-answer" },
+  });
+  expect(project([first, user, second, mirror(), secondMirror])).toEqual([first, user, second]);
+});
 it("caps commentary captions across an intervening image as one message", () => {
   const caption = (letter: string) => phased(letter.repeat(20), "commentary", "progress-caption");
   const source = { role: "assistant", content: [caption("A"), image, caption("B")] };
@@ -119,7 +136,11 @@ it("preserves error-turn media after a later reply", () => {
     __openclaw: { runId: "run-retry", media },
   });
   const recovered = assistant({ stopReason: "stop", __openclaw: { runId: "run-retry" } });
-  expect(project([user, failed, recovered])).toEqual([user, { ...failed, content: [] }, recovered]);
+  expect(project([user, failed, recovered])).toEqual([
+    user,
+    { role: "assistant", content: [], __openclaw: { runId: "run-retry", media } },
+    recovered,
+  ]);
 });
 
 const managedUrl = "./attachment-catalog-tiny/demo.jpg";
@@ -159,6 +180,7 @@ describe("correlated channel mirrors in Gateway history", () => {
   let scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "openclaw-mirror-history-", applyEnv: false });
+    setRuntimeConfigSnapshot({});
     scope = {
       agentId: "main",
       sessionId: "mirror-history-session",
@@ -170,6 +192,7 @@ describe("correlated channel mirrors in Gateway history", () => {
   afterEach(async () => {
     closeOpenClawAgentDatabasesForTest();
     await state.cleanup();
+    clearRuntimeConfigSnapshot();
   });
   const append = (eventId: string, message: Record<string, unknown>) =>
     appendSessionTranscriptMessageByIdentity({ ...scope, eventId, message });
@@ -258,7 +281,6 @@ describe("channel mirror display controls", () => {
   const fieldless = mirror({
     openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "existing-delivery" },
   });
-  const visiblePair = [{ role: "assistant" }, { model: "delivery-mirror" }];
   const withTool = { content: expect.arrayContaining([tool]) };
   const withAttachment = { content: expect.arrayContaining([document]) };
   type Control = [string, unknown[], unknown[]];
@@ -266,7 +288,11 @@ describe("channel mirror display controls", () => {
     ["different source despite mirrorIdentity", [otherSource, mirror()], [{}, {}]],
     ["different visible text", [assistant(), otherText], [{}, {}]],
     ["another delivery mirror", [earlierMirror, mirror()], [{}, {}]],
-    ["filtered user turn", [assistant(), { role: "user", content: "" }, mirror()], visiblePair],
+    [
+      "filtered user turn",
+      [assistant(), { role: "user", content: "" }, mirror()],
+      [{ role: "assistant" }],
+    ],
     ["canonical tool call", [canonicalTool, mirror()], [withTool, {}]],
     ["mirror attachment", [assistant(), attachedMirror], [{}, withAttachment]],
     ["assistant media facts", [assistantMedia, mirror()], [withMedia, {}]],

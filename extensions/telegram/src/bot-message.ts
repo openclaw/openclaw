@@ -12,6 +12,7 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
@@ -28,6 +29,7 @@ import {
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
+import type { TelegramTransport } from "./fetch.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { resolveTelegramRichMessages } from "./rich-messages-config.js";
@@ -61,9 +63,11 @@ type TelegramMessageProcessorDeps = Omit<
   runtime: RuntimeEnv;
   telegramDeps: TelegramBotDeps;
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  telegramTransport?: TelegramTransport;
   opts: Pick<
     TelegramBotOptions,
     | "token"
+    | "fetchAbortSignal"
     | "ownerAgentId"
     | "allowFrom"
     | "groupAllowFrom"
@@ -117,19 +121,8 @@ export function resolveTelegramMessageTurnSettings(params: {
 export const createTelegramMessageProcessor = (
   deps: TelegramMessageProcessorDeps,
 ): RegisterTelegramHandlerParams["processMessage"] => {
-  const {
-    bot,
-    account,
-    logger,
-    resolveGroupActivation,
-    resolveGroupRequireMention,
-    resolveTelegramGroupConfig,
-    sendChatActionHandler,
-    runtime,
-    telegramDeps,
-    buildContext,
-    opts,
-  } = deps;
+  const { runtime, telegramDeps, buildContext, opts, ...contextOptions } = deps;
+  const { bot, account } = contextOptions;
   const sessionRuntime = {
     ...((buildContext ?? telegramDeps.buildChannelInboundEventContext)
       ? {
@@ -140,8 +133,8 @@ export const createTelegramMessageProcessor = (
     ...(telegramDeps.readSessionUpdatedAtAsync
       ? { readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync }
       : {}),
-    ...(telegramDeps.readAmbientTranscriptWatermark
-      ? { readAmbientTranscriptWatermark: telegramDeps.readAmbientTranscriptWatermark }
+    ...(telegramDeps.readAmbientTranscriptWatermarkAsync
+      ? { readAmbientTranscriptWatermarkAsync: telegramDeps.readAmbientTranscriptWatermarkAsync }
       : {}),
     ...(telegramDeps.recordInboundSession
       ? { recordInboundSession: telegramDeps.recordInboundSession }
@@ -159,6 +152,13 @@ export const createTelegramMessageProcessor = (
       : {}),
     resolveStorePath: telegramDeps.resolveStorePath,
   };
+  const resolveDirectAvatar = createTelegramDirectAvatarResolver({
+    api: bot.api,
+    abortSignal: opts.fetchAbortSignal,
+    accountId: account.accountId,
+    token: opts.token,
+    transport: deps.telegramTransport,
+  });
   const contextRuntime = telegramDeps.recordChannelActivity
     ? { recordChannelActivity: telegramDeps.recordChannelActivity }
     : undefined;
@@ -189,6 +189,8 @@ export const createTelegramMessageProcessor = (
     const ingressDebugEnabled = shouldLogVerbose();
     const ingressContextStartMs = ingressReceivedAtMs ? Date.now() : undefined;
     const context = await buildTelegramMessageContext({
+      ...contextOptions,
+      resolveDirectAvatar,
       nativeCommandNames: deps.nativeCommandNames,
       primaryCtx,
       allMedia,
@@ -197,21 +199,9 @@ export const createTelegramMessageProcessor = (
       promptContext,
       storeAllowFrom,
       options,
-      bot,
       cfg: turnCfg,
-      account,
       ownerAgentId: opts.ownerAgentId,
-      historyLimit: turnSettings.historyLimit,
-      dmHistoryLimit: turnSettings.dmHistoryLimit,
-      dmPolicy: turnSettings.dmPolicy,
-      allowFrom: turnSettings.allowFrom,
-      groupAllowFrom: turnSettings.groupAllowFrom,
-      ackReactionScope: turnSettings.ackReactionScope,
-      logger,
-      resolveGroupActivation,
-      resolveGroupRequireMention,
-      resolveTelegramGroupConfig,
-      sendChatActionHandler,
+      ...turnSettings,
       runtime: contextRuntime,
       sessionRuntime,
       upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
@@ -253,9 +243,9 @@ export const createTelegramMessageProcessor = (
     if (!spooledReplay) {
       await turnContext.onDispatchStart?.();
     }
-    const runTelegramDispatch = async (params: {
-      turnAdoptionLifecycle?: GetReplyOptions["turnAdoptionLifecycle"];
-    }): Promise<TelegramMessageProcessingResult> => {
+    const runTelegramDispatch = async (
+      turnAdoptionLifecycle?: GetReplyOptions["turnAdoptionLifecycle"],
+    ): Promise<TelegramMessageProcessingResult> => {
       try {
         const dispatchResult = await dispatchTelegramMessage({
           context,
@@ -270,7 +260,7 @@ export const createTelegramMessageProcessor = (
           opts,
           retryDispatchErrors: spooledReplay,
           suppressFailureFallback: spooledReplay,
-          turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+          turnAdoptionLifecycle,
         });
         if (dispatchResult?.kind === "failed-retryable") {
           return {
@@ -372,49 +362,47 @@ export const createTelegramMessageProcessor = (
         const drainLifecycle = getTelegramSpooledReplayLifecycle();
         // Participant always owns an AbortSignal on the spooled-replay path;
         // merge optional drain/context signals without widening to undefined.
-        const turnAbortSignal: AbortSignal = (() => {
-          const extras = [turnContext.spooledReplayAbortSignal, drainLifecycle?.abortSignal].filter(
-            (signal): signal is AbortSignal => signal !== undefined,
-          );
-          if (extras.length === 0) {
-            return participant.abortSignal;
-          }
-          return AbortSignal.any([participant.abortSignal, ...extras]);
-        })();
+        const turnAbortSignals = [
+          participant.abortSignal,
+          turnContext.spooledReplayAbortSignal,
+          drainLifecycle?.abortSignal,
+        ].filter((signal): signal is AbortSignal => signal !== undefined);
+        const turnAbortSignal =
+          turnAbortSignals.length === 1
+            ? participant.abortSignal
+            : AbortSignal.any(turnAbortSignals);
         const result = await runTelegramDispatch({
-          turnAdoptionLifecycle: {
-            admission: "exclusive",
-            abortSignal: turnAbortSignal,
-            onAdopted: async () => {
-              if (adopted) {
-                return;
-              }
-              adoptionAttempted = true;
-              const adoptedResult = await settle({ kind: "completed" }, "adopted");
-              if (adoptedResult.kind !== "completed") {
-                adoptionFinalizationError =
-                  adoptedResult.kind === "failed-retryable"
-                    ? adoptedResult.error
-                    : new Error("telegram spooled turn adoption was not completed");
-                throw adoptionFinalizationError;
-              }
-              await drainLifecycle?.onAdopted();
-            },
-            onDeferred: () => {
-              deferred = true;
-              drainLifecycle?.onDeferred();
-              turnContext.onTurnDeferred?.();
-            },
-            onDeferredHeartbeat: () => participant.heartbeat(),
-            deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
-            onAbandoned: () => {
-              if (!adopted) {
-                void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
-              }
-              // Generic reply abandonment is synchronous; Telegram has no
-              // owner-local resource teardown gated on core claim release.
-              void drainLifecycle?.onAbandoned();
-            },
+          admission: "exclusive",
+          abortSignal: turnAbortSignal,
+          onAdopted: async () => {
+            if (adopted) {
+              return;
+            }
+            adoptionAttempted = true;
+            const adoptedResult = await settle({ kind: "completed" }, "adopted");
+            if (adoptedResult.kind !== "completed") {
+              adoptionFinalizationError =
+                adoptedResult.kind === "failed-retryable"
+                  ? adoptedResult.error
+                  : new Error("telegram spooled turn adoption was not completed");
+              throw adoptionFinalizationError;
+            }
+            await drainLifecycle?.onAdopted();
+          },
+          onDeferred: () => {
+            deferred = true;
+            drainLifecycle?.onDeferred();
+            turnContext.onTurnDeferred?.();
+          },
+          onDeferredHeartbeat: () => participant.heartbeat(),
+          deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
+          onAbandoned: () => {
+            if (!adopted) {
+              void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
+            }
+            // Generic reply abandonment is synchronous; Telegram has no
+            // owner-local resource teardown gated on core claim release.
+            void drainLifecycle?.onAbandoned();
           },
         });
         if (adopted) {
@@ -491,6 +479,6 @@ export const createTelegramMessageProcessor = (
       return await participant.task;
     }
 
-    return await runTelegramDispatch({});
+    return await runTelegramDispatch();
   };
 };

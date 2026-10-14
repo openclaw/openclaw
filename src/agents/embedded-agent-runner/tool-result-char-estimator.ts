@@ -15,12 +15,6 @@ export const TOOL_IMAGE_CHARS = IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKE
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
-function isImageBlock(block: unknown): boolean {
-  return (
-    Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
-  );
-}
-
 function estimateUnknownChars(value: unknown): number {
   if (typeof value === "string") {
     return value.length;
@@ -58,7 +52,11 @@ function estimateContentBlockChars(content: unknown[], toolResult = false): numb
       chars += toolResult
         ? prepareToolResultTextChars(block, block.text, weight)
         : block.text.length;
-    } else if (isImageBlock(block)) {
+    } else if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "image"
+    ) {
       chars += IMAGE_CHAR_ESTIMATE * weight;
     } else {
       chars += estimateUnknownChars(block) * weight;

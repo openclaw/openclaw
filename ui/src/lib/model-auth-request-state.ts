@@ -19,10 +19,10 @@ export const authReads = new WeakMap<GatewayBrowserClient, ModelAuthRequestState
 export function modelAuthEventInvalidates(
   event: Pick<GatewayEventFrame, "event" | "payload">,
 ): boolean {
+  // Config commits precede prepared auth publication; only its committed facts retire reads.
   return (
-    event.event === "config.changed" ||
-    (event.event === "chat.metadata.changed" &&
-      asNullableRecord(event.payload)?.authChanged !== false)
+    event.event === "chat.metadata.changed" &&
+    asNullableRecord(event.payload)?.authChanged !== false
   );
 }
 

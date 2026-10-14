@@ -62,15 +62,14 @@ export function hasVideoMediaFileExtension(value: string): boolean {
   return extension !== undefined && VIDEO_MEDIA_FILE_EXTENSIONS.has(extension);
 }
 
+function normalizeMediaType(mediaType: unknown): string {
+  return typeof mediaType === "string" ? mediaType.trim().toLowerCase() : "";
+}
+
 export function isImageMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim()) {
-    const normalized = mediaType.trim().toLowerCase();
-    if (normalized.startsWith("image/")) {
-      return true;
-    }
-    if (normalized !== "application/octet-stream") {
-      return false;
-    }
+  const normalized = normalizeMediaType(mediaType);
+  if (normalized && normalized !== "application/octet-stream") {
+    return normalized.startsWith("image/");
   }
   const ext = getMediaFileExtension(path);
   return (
@@ -86,7 +85,7 @@ export function isSvgImageMediaPath(path: string, mediaType: unknown): boolean {
 }
 
 export function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("audio/")) {
+  if (normalizeMediaType(mediaType).startsWith("audio/")) {
     return true;
   }
   const ext = getMediaFileExtension(path);
@@ -97,10 +96,7 @@ export function isAudioTranscriptMediaPath(path: string, mediaType: unknown): bo
 }
 
 export function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
-    return true;
-  }
-  return hasVideoMediaFileExtension(path);
+  return normalizeMediaType(mediaType).startsWith("video/") || hasVideoMediaFileExtension(path);
 }
 
 // Collision-safe managed inbound URIs store the original filename plus a

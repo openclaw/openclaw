@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { applyRemoteModelCatalogUpdate } from "../agents/prepared-model-runtime.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -9,6 +12,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
+
+vi.mock("../agents/prepared-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-runtime.js")>()),
+  applyRemoteModelCatalogUpdate: vi.fn(),
+}));
 
 type UpdateCheckStartupParams = Parameters<typeof createDeferredGatewayUpdateCheck>[0];
 type UpdateCheck = Awaited<ReturnType<UpdateCheckStartupParams["createUpdateCheck"]>>;
@@ -52,6 +60,7 @@ describe("deferred Gateway update-check lifecycle", () => {
       scheduler,
       createUpdateCheck: () => defaultUpdateCheck,
       getConfig: () => ({}),
+      getPluginRegistry: () => undefined,
       log: { info: vi.fn(), warn: vi.fn() },
       isNixMode: false,
       broadcastToConnIds: vi.fn(),
@@ -100,95 +109,118 @@ describe("deferred Gateway update-check lifecycle", () => {
     expect(scheduler.nextWakeAtMs).toBeNull();
   });
 
-  it("scopes detailed update broadcasts to read-capable operator clients", async () => {
-    const clients = [
-      {
-        connId: "pairing",
-        connect: { role: "operator", scopes: ["operator.pairing"] },
-      },
-      { connId: "node", connect: { role: "node", scopes: ["node.read"] } },
-      {
-        connId: "operator-read",
-        connect: { role: "operator", scopes: ["operator.read"] },
-      },
-    ];
-    const broadcastToConnIds = vi.fn();
-    const getClientConnIds: UpdateCheckStartupParams["getClientConnIds"] = (filter) =>
-      new Set(
-        clients
-          .filter((client) => !filter || filter(client as never))
-          .map((client) => client.connId),
-      );
-    const createGatewayUpdateCheck = vi.fn<UpdateCheckStartupParams["createUpdateCheck"]>(
-      () => defaultUpdateCheck,
-    );
-
-    const result = await startUpdateCheck({
-      broadcastToConnIds,
-      getClientConnIds,
-      createUpdateCheck: createGatewayUpdateCheck,
-    });
-    await waitForGatewayTestState(() => {
-      expect(createGatewayUpdateCheck).toHaveBeenCalledTimes(1);
-    });
-
-    const updateCheckParams = createGatewayUpdateCheck.mock.calls[0]![0];
-    const updateAvailable = {
-      currentVersion: "2026.8.7",
-      latestVersion: "2026.8.8",
-      channel: "dev" as const,
-      currentSha: "1111111111111111111111111111111111111111",
-      upstreamRef: "origin/main",
-      upstreamSha: "2222222222222222222222222222222222222222",
-      commitsBehind: 1,
-      commits: [{ sha: "2222222", subject: "Detailed commit subject" }],
-    };
-    const schedule = {
-      channel: "dev" as const,
-      autoEnabled: true,
-      install: { kind: "git" as const },
-      target: {
-        kind: "git" as const,
-        currentSha: updateAvailable.currentSha,
-        upstreamRef: updateAvailable.upstreamRef,
-        upstreamSha: updateAvailable.upstreamSha,
-        commitsBehind: updateAvailable.commitsBehind,
-        commits: updateAvailable.commits,
-      },
-    };
-
-    updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
-    updateCheckParams.onUpdateScheduleChange?.(schedule);
-
-    const legacyBroadcast = [
-      "update.available",
-      {
-        updateAvailable: {
-          currentVersion: updateAvailable.currentVersion,
-          latestVersion: updateAvailable.latestVersion,
-          channel: updateAvailable.channel,
+  it.each(["background", "early manual"])(
+    "scopes %s update broadcasts to read-capable operator clients",
+    async (source) => {
+      const clients = [
+        {
+          connId: "pairing",
+          connect: { role: "operator", scopes: ["operator.pairing"] },
         },
-      },
-      new Set(["pairing", "node"]),
-      { dropIfSlow: true },
-    ];
-    expect(broadcastToConnIds.mock.calls).toEqual([
-      ["update.available", { updateAvailable }, new Set(["operator-read"]), { dropIfSlow: true }],
-      legacyBroadcast,
-      [
-        "update.available",
-        { updateAvailable, schedule },
-        new Set(["operator-read"]),
-        { dropIfSlow: true },
-      ],
-      legacyBroadcast,
-    ]);
-    await result.stop();
-    broadcastToConnIds.mockClear();
-    updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
-    updateCheckParams.onUpdateScheduleChange?.(schedule);
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-  });
+        { connId: "node", connect: { role: "node", scopes: ["node.read"] } },
+        {
+          connId: "operator-read",
+          connect: { role: "operator", scopes: ["operator.read"] },
+        },
+      ];
+      const broadcastToConnIds = vi.fn();
+      const getClientConnIds: UpdateCheckStartupParams["getClientConnIds"] = (filter) =>
+        new Set(
+          clients
+            .filter((client) => !filter || filter(client as never))
+            .map((client) => client.connId),
+        );
+      const createGatewayUpdateCheck = vi.fn<UpdateCheckStartupParams["createUpdateCheck"]>(
+        () => defaultUpdateCheck,
+      );
+
+      const ready = createDeferred();
+      const result = await startUpdateCheck({
+        ...(source === "early manual" ? { waitForPostReadyWork: () => ready.promise } : {}),
+        broadcastToConnIds,
+        getClientConnIds,
+        createUpdateCheck: createGatewayUpdateCheck,
+      });
+      if (source === "background") {
+        await waitForGatewayTestState(() => {
+          expect(createGatewayUpdateCheck).toHaveBeenCalledTimes(1);
+        });
+      } else {
+        expect(createGatewayUpdateCheck).not.toHaveBeenCalled();
+      }
+
+      const updateCheckParams =
+        source === "background"
+          ? createGatewayUpdateCheck.mock.calls[0]![0]
+          : currentUpdateCheckLifecycle();
+      const updateAvailable = {
+        currentVersion: "2026.8.7",
+        latestVersion: "2026.8.8",
+        channel: "dev" as const,
+        currentSha: "1111111111111111111111111111111111111111",
+        upstreamRef: "origin/main",
+        upstreamSha: "2222222222222222222222222222222222222222",
+        commitsBehind: 1,
+        commits: [{ sha: "2222222", subject: "Detailed commit subject" }],
+      };
+      const schedule = {
+        channel: "dev" as const,
+        autoEnabled: true,
+        install: { kind: "git" as const },
+        target: {
+          kind: "git" as const,
+          currentSha: updateAvailable.currentSha,
+          upstreamRef: updateAvailable.upstreamRef,
+          upstreamSha: updateAvailable.upstreamSha,
+          commitsBehind: updateAvailable.commitsBehind,
+          commits: updateAvailable.commits,
+        },
+      };
+
+      updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
+      updateCheckParams.onUpdateScheduleChange?.(schedule);
+
+      expect(broadcastToConnIds.mock.calls).toEqual([
+        ["update.available", { updateAvailable }, new Set(["operator-read"]), { dropIfSlow: true }],
+        [
+          "update.available",
+          {
+            updateAvailable: {
+              currentVersion: updateAvailable.currentVersion,
+              latestVersion: updateAvailable.latestVersion,
+              channel: updateAvailable.channel,
+            },
+          },
+          new Set(["pairing", "node"]),
+          { dropIfSlow: true },
+        ],
+        [
+          "update.available",
+          { updateAvailable, schedule },
+          new Set(["operator-read"]),
+          { dropIfSlow: true },
+        ],
+        [
+          "update.available",
+          {
+            updateAvailable: {
+              currentVersion: updateAvailable.currentVersion,
+              latestVersion: updateAvailable.latestVersion,
+              channel: updateAvailable.channel,
+            },
+          },
+          new Set(["pairing", "node"]),
+          { dropIfSlow: true },
+        ],
+      ]);
+      await result.stop();
+      ready.resolve();
+      broadcastToConnIds.mockClear();
+      updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
+      updateCheckParams.onUpdateScheduleChange?.(schedule);
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    },
+  );
 
   it("joins a late update-check factory and its cleanup when close wins startup", async () => {
     const factory = createDeferred<UpdateCheck>();
@@ -306,5 +338,30 @@ describe("deferred Gateway update-check lifecycle", () => {
       initialization.resolve(await defaultUpdateCheck.initialize());
       await (stopping ?? result.stop());
     }
+  });
+
+  it("adopts scheduled remote catalogs inside the live Gateway registry scope", async () => {
+    // Prepared rebuilds borrow unchanged plugin instances only from this scope's registry;
+    // without it every external plugin is captured again after startup.
+    const gatewayRegistry = createEmptyPluginRegistry();
+    let adoptedIn: unknown;
+    vi.mocked(applyRemoteModelCatalogUpdate).mockImplementation(async () => {
+      adoptedIn = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      return "published";
+    });
+    let applyRemoteCatalogUpdate: ((signal: AbortSignal) => Promise<unknown>) | undefined;
+    await startUpdateCheck({
+      getPluginRegistry: () => gatewayRegistry,
+      createUpdateCheck: (params) => {
+        applyRemoteCatalogUpdate = params.applyRemoteCatalogUpdate;
+        return defaultUpdateCheck;
+      },
+    });
+    await waitForGatewayTestState(() => expect(applyRemoteCatalogUpdate).toBeDefined());
+
+    await expect(applyRemoteCatalogUpdate!(new AbortController().signal)).resolves.toBe(
+      "published",
+    );
+    expect(adoptedIn).toBe(gatewayRegistry);
   });
 });

@@ -18,6 +18,11 @@ import {
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
+import {
+  assertDatabasePortRecoveryAllowed,
+  assertDatabasePortStartupAllowed,
+  DatabasePortRecoveryError,
+} from "./database-port-recovery.js";
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
@@ -25,7 +30,6 @@ import {
   describeGatewayLockHolder,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   GatewayLockNamespaceError,
-  type GatewayLockRole,
   type LockPayload,
   parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
@@ -34,13 +38,14 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
+import type { GatewayLockHandle, GatewayLockOptions } from "./gateway-lock.types.js";
 import {
   acquireGatewayOwnerLease,
   assertGatewayOwnerLeaseStopped,
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
-import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
+import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
 import {
   acquireGatewayStateOwner,
   createGatewayStateProjection,
@@ -50,20 +55,10 @@ import {
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
 
+export type { GatewayLockHandle, GatewayLockOptions } from "./gateway-lock.types.js";
+
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
 const log = createSubsystemLogger("gateway");
-
-export type GatewayLockHandle = {
-  lockPath: string;
-  stateLockPath: string;
-  stateDir: string;
-  assertCurrent(this: void, assertPolicy?: () => void, access?: "read"): void;
-  assertDatabaseAccess(this: void, databasePath: string): void;
-  retainProjection: () => GatewayStateProjection;
-  releaseInTree: () => Promise<void>;
-  release: () => Promise<void>;
-  run<T>(operation: () => T): T;
-};
 
 export type GatewayLockIdentity = {
   pid: number;
@@ -87,31 +82,6 @@ export function isSameGatewayLockIdentity(
     previous.startTime === current.startTime
   );
 }
-
-export type GatewayLockOptions = {
-  env?: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-  lifecycleDeadlineMs?: number;
-  pollIntervalMs?: number;
-  staleMs?: number;
-  allowInTests?: boolean;
-  platform?: NodeJS.Platform;
-  port?: number;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-  lockDir?: string;
-  role?: GatewayLockRole;
-  assertCurrent?: () => void;
-  onWait?: (message: string) => void;
-  /** Transfer a relocated Doctor root only after the target exclusion is held. */
-  relocatedMaintenanceOwner?: GatewayLockHandle;
-  listenerMode?: "foreground" | "supervised";
-  supervisor?: GatewayOwnerSupervisor | null;
-  /** Override process command-line reader (testing seam). */
-  readProcessCmdline?: (pid: number) => string[] | null;
-  /** Override process start-identity reader (testing seam). */
-  readProcessStartTime?: (pid: number) => number | null;
-};
 
 export class GatewayLockError extends Error {
   constructor(
@@ -511,6 +481,7 @@ export async function acquireGatewayLock(
     pid: process.pid,
     ownerId: randomUUID(),
     createdAt: resolveTimestampMsToIsoString(Date.now()),
+    ...(role === "gateway" ? { startupPhase: "starting" as const } : {}),
     configPath: paths.configPath,
     stateDir: paths.stateDir,
     role,
@@ -544,6 +515,7 @@ export async function acquireGatewayLock(
         sleep: opts.sleep,
         acquire: async () => {
           opts.assertCurrent?.();
+          payload.createdAt = resolveTimestampMsToIsoString(Date.now());
           const owner = acquireGatewayStateOwner({
             databasePath,
             payload,
@@ -551,16 +523,23 @@ export async function acquireGatewayLock(
             getProjection: () => projection,
           });
           try {
+            if (opts.databasePortRecovery) {
+              if (role !== "agent-embedded") {
+                throw new Error("Database port recovery requires exclusive offline ownership");
+              }
+              assertDatabasePortRecoveryAllowed(paths.stateDir, opts.databasePortRecovery);
+            } else {
+              assertDatabasePortStartupAllowed(paths.stateDir);
+            }
             if (previousOwner) {
               projection = previousOwner.retainProjection();
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
-            await owner.run(() =>
-              assertGatewayOwnerLeaseStopped(
-                env,
-                role === "sqlite-maintenance" ? owner : undefined,
-              ),
-            );
+            if (!opts.databasePortRecovery) {
+              await owner.run(() =>
+                assertGatewayOwnerLeaseStopped(env, owner, role === "sqlite-maintenance"),
+              );
+            }
             if (previousOwner) {
               // Policy reads borrow the newly acquired custody before releasing the old root.
               owner.run(() => opts.assertCurrent?.());
@@ -611,10 +590,12 @@ export async function acquireGatewayLock(
     const message = `failed to acquire gateway state ownership${waited ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership` : ""}`;
     const detail =
       error instanceof GatewayStateOwnerContentionError
-        ? `${message}: ${error.message}. Stop the Gateway or wait for the current OpenClaw operation to finish, then retry.`
+        ? `${message}: ${error.message}. ${captureStalledGatewayStartup(env)?.description ?? "Stop the Gateway or wait for the current OpenClaw operation to finish"}. Run \`openclaw gateway stop\`, then retry.`
         : error instanceof GatewayLockNamespaceError
           ? error.message
-          : message;
+          : error instanceof DatabasePortRecoveryError
+            ? `${message}: ${error.message}`
+            : message;
     throw new GatewayLockError(detail, error);
   }
   if (waited && role === "gateway") {
@@ -713,6 +694,15 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     assertCurrent: assertStateOwnerCurrent,
     assertDatabaseAccess,
+    markListening: () => {
+      assertStateOwnerCurrent();
+      try {
+        ownerLease?.markListening();
+      } catch {
+        assertStateOwnerCurrent();
+        log.warn("Gateway listener bound, but startup readiness could not be recorded");
+      }
+    },
     run: (operation) => {
       if (resources) {
         // Reenter held custody before policy reads inspect this scope's database handles.

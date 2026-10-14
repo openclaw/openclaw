@@ -19,10 +19,10 @@ import {
   type ToolContentBlock,
 } from "../../chat/tool-content.js";
 import {
-  readSessionTranscriptBoundedMessageTailPage,
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -139,12 +139,22 @@ export async function sessionTranscriptHasContent(
   if (!target) {
     return false;
   }
-  await waitForSessionTranscriptProjection(target, abortSignal);
-  const { events } = readSessionTranscriptBoundedMessageTailPage(target, {
-    maxBytes: 5 * 1024 * 1024,
-    maxMessages: 500,
-    offset: 0,
+  abortSignal?.throwIfAborted();
+  const source = captureSessionActorStorageOwner(target, {
+    assertCurrent() {
+      abortSignal?.throwIfAborted();
+    },
+    authorize() {},
   });
+  const capturedTarget = { ...target, ...(source ? { storePath: source.path } : {}) };
+  await waitForSessionTranscriptProjection(capturedTarget, abortSignal);
+  const { readSessionTranscriptBoundedMessageTailPageAsync } =
+    await import("../../gateway/session-transcript-readers.js");
+  const { events } = await readSessionTranscriptBoundedMessageTailPageAsync(
+    capturedTarget,
+    { maxBytes: 5 * 1024 * 1024, maxMessages: 500, offset: 0 },
+    abortSignal,
+  );
   return events.some(
     ({ event }) =>
       isRecord(event) &&
@@ -366,16 +376,19 @@ function formatFallbackTurns(
 }
 
 /** Prefer the harvested summary, then retain recent turns within the fallback prompt budget. */
-export function buildClaudeCliFallbackContextPrelude(params: {
+export async function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;
   homeDir?: string;
   charBudget?: number;
-}): string {
+}): Promise<string> {
   const sessionId = params.cliSessionId?.trim();
   if (!sessionId) {
     return "";
   }
-  const seed = readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir: params.homeDir });
+  const seed = await readClaudeCliFallbackSeed({
+    cliSessionId: sessionId,
+    homeDir: params.homeDir,
+  });
   if (!seed) {
     return "";
   }

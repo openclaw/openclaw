@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  loadTranscriptEvents,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   exportTrajectoryForCommand,

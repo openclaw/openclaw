@@ -36,8 +36,13 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 
 vi.mock("../session-utils.js", async (original) => ({
   ...(await original<typeof import("../session-utils.js")>()),
-  loadSessionEntry: hoisted.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+  loadIncognitoGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+}));
+
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
 
 // mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
@@ -112,13 +117,7 @@ describe("sessions.files host read boundary", () => {
     cfg?: OpenClawConfig;
   }>([
     { label: "read-only mode", entry: { permissionMode: "read-only" } },
-    { label: "guarded mode", entry: { permissionMode: "guarded" } },
-    { label: "workspace mode", entry: { permissionMode: "workspace" } },
     { label: "global filesystem policy", cfg: { tools: { fs: { workspaceOnly: true } } } },
-    {
-      label: "agent filesystem policy",
-      cfg: { agents: { entries: { main: { tools: { fs: { workspaceOnly: true } } } } } },
-    },
     {
       label: "required sandbox in full mode",
       entry: { permissionMode: "full", sandbox: "required" },

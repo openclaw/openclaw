@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentSchemaContains } from "../../state/openclaw-agent-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -15,22 +15,21 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
+import { replaceTranscriptSuffixEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
-  replaceTranscriptEvents,
-  replaceTranscriptSuffixEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
-import {
-  listSessionReactions,
   SessionReactionLimitError,
   SessionReactionMessageMissingError,
   setSessionReactionAsync,
 } from "./session-reaction-store.js";
+import { setSessionReactionInDatabase } from "./session-reaction-store.kernel.js";
+import { listSessionReactions } from "./session-reaction-store.test-support.js";
 
 let root: string;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -39,6 +38,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawAgentDatabasesForTest();
     await closeStateDatabaseForTest();
     cleanup();
+    clearRuntimeConfigSnapshot();
   }),
 );
 let scope: { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string; storePath?: string };
@@ -102,6 +102,7 @@ beforeEach(async () => {
     env: { ...process.env, OPENCLAW_STATE_DIR: root },
     sessionKey: `agent:main:reaction-${sessionIndex++}`,
   };
+  setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
   await seedMessages("session-a", ["message-a", "message-b", "overflow", "replacement"]);
 });
@@ -109,25 +110,21 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("session reaction store", () => {
-  it.each(["default", "shared", "incognito"] as const)(
+  it.each(["default", "shared"] as const)(
     "writes %s reactions through their database owner",
     async (store) => {
       if (store !== "default") {
         scope = {
           ...scope,
-          ...(store === "shared"
-            ? { storePath: path.join(root, "shared-reactions.sqlite") }
-            : { sessionKey: `agent:main:dashboard:incognito-reaction-${sessionIndex}` }),
+          storePath: path.join(root, "shared-reactions.sqlite"),
         };
         await upsertSessionEntryCore(scope, {
           sessionId: "session-a",
           updatedAt: 1,
-          ...(store === "incognito" ? { incognito: true } : {}),
         });
         await seedMessages("session-a", [reaction.messageId]);
       }
-      const admitted = vi.spyOn(admission, "createSqliteWorkerOperationAdmission");
-      const methods = store === "incognito" ? [] : observeCallerSql();
+      const methods = observeCallerSql();
       try {
         expect(await setSessionReactionAsync(scope, reaction)).toEqual({
           reactions: [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
@@ -145,25 +142,17 @@ describe("session reaction store", () => {
       expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual([
         { emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] },
       ]);
-      if (store === "incognito") {
-        expect(admitted).not.toHaveBeenCalled();
-        expect(existsSync(resolveIncognitoOpenClawAgentSqlitePath(scope))).toBe(false);
-      }
     },
   );
 
   it("rolls back a reaction when the caller's authority expires at commit admission", async () => {
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        current = false;
+      }
+      return callback(request, grant);
+    });
     await expect(
       setSessionReactionAsync(scope, {
         ...reaction,
@@ -220,6 +209,37 @@ describe("session reaction store", () => {
     expect(listSessionReactions(scope, { sessionId: "session-b" })).toEqual({});
   });
 
+  it("returns committed reaction rows in SQLite order when timestamps tie", () => {
+    vi.spyOn(Date, "now").mockReturnValue(400);
+    const set = (params: typeof reaction) =>
+      runOpenClawAgentWriteTransaction(
+        (database) => setSessionReactionInDatabase(database, scope.sessionKey, params),
+        scope,
+      );
+    set({ ...reaction, emoji: "😀", identityId: "😀" });
+    set({ ...reaction, emoji: "\uE000", identityId: "\uE000" });
+    const result = set({
+      ...reaction,
+      emoji: "😀",
+      identityId: "\uE000",
+    });
+    const expected = [
+      { emoji: "\uE000", count: 1, identities: [{ id: "\uE000", label: "Alice" }] },
+      {
+        emoji: "😀",
+        count: 2,
+        identities: [
+          { id: "\uE000", label: "Alice" },
+          { id: "😀", label: "Alice" },
+        ],
+      },
+    ];
+    expect(result).toEqual({ reactions: expected, newestRemainingEmoji: "😀", changed: true });
+    expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual(
+      expected,
+    );
+  });
+
   it.each([
     {
       name: "removing 🚀 after Alice 👍, Alice 🎉, Bob 👍, then 🚀",
@@ -257,6 +277,9 @@ describe("session reaction store", () => {
     const result = await setSessionReactionAsync(scope, removal);
     expect(result).toMatchObject({ changed: true, newestRemainingEmoji: scenario.expected });
     expect(result.reactions.map(({ emoji }) => emoji)).toEqual(["👍", "🎉"]);
+    expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual(
+      result.reactions,
+    );
     expect(await setSessionReactionAsync(scope, removal)).toMatchObject({
       changed: false,
       newestRemainingEmoji: scenario.expected,

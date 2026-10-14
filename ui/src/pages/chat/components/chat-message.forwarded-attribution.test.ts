@@ -10,21 +10,24 @@ import {
 } from "../../../components/markdown-file-links.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 let container: HTMLDivElement;
 
 beforeEach(() => {
-  container = document.createElement("div");
+  container = document.body.appendChild(document.createElement("div"));
 });
 
 afterEach(async () => {
   await vi.dynamicImportSettled();
   render(null, container);
+  container.remove();
   vi.restoreAllMocks();
 });
 
@@ -97,7 +100,7 @@ describe("forwarded message attribution", () => {
 
   it.each([false, true])(
     "opens nested tool activity files in the sending session (frame=%s)",
-    (frame) => {
+    async (frame) => {
       const sessionKey = "agent:research:report";
       const onOpenWorkspaceFile = vi.fn();
       const group = createGroup(
@@ -128,8 +131,8 @@ describe("forwarded message attribution", () => {
         isToolExpanded: () => true,
       };
       const content = frame
-        ? renderAgentRunFrame(
-            {
+        ? solidContent(AgentRunFrame, {
+            frame: {
               kind: "agent-run-frame",
               key: "forwarded-frame",
               runId: "forwarded-tools",
@@ -137,15 +140,16 @@ describe("forwarded message attribution", () => {
               outcome: { kind: "completed", actionOwner: null },
               parts: [group],
             },
-            {
+            options: {
               streamOptions: {},
               renderGroupOptions: () => options,
               isWorkExpanded: () => true,
               onToggleWork: () => {},
             },
-          )
+          })
         : renderTestMessageGroup(group, options);
       render(content, container);
+      await settleToolBridges(container);
       const links = container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__file-link");
       expect(links).toHaveLength(2);
       for (const link of links) {
@@ -197,11 +201,14 @@ describe("forwarded message attribution", () => {
       throw new Error("Expected the narrated tool to join its completed run frame");
     }
     render(
-      renderAgentRunFrame(frame, {
-        streamOptions: {},
-        renderGroupOptions: () => ({ showReasoning: true }),
-        isWorkExpanded: () => true,
-        onToggleWork: () => {},
+      solidContent(AgentRunFrame, {
+        frame,
+        options: {
+          streamOptions: {},
+          renderGroupOptions: () => ({ showReasoning: true }),
+          isWorkExpanded: () => true,
+          onToggleWork: () => {},
+        },
       }),
       container,
     );

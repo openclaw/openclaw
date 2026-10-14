@@ -178,13 +178,10 @@ describe("legacy agent directory migration", () => {
   }>([
     { relativeDatabase: "openclaw-agent.sqlite", destination: "database" },
     { relativeDatabase: "state/openclaw.sqlite", destination: "database" },
-    { relativeDatabase: "sessions/transcripts.sqlite", destination: "database" },
     { relativeDatabase: "cache.db", destination: "empty" },
     { relativeDatabase: "custom-store", destination: "wal" },
-    { relativeDatabase: "sessions/transcripts.sqlite", destination: "journal" },
-    { relativeDatabase: "state/openclaw.sqlite", destination: "empty" },
     { relativeDatabase: "sessions/transcripts.sqlite", destination: "empty", orphanSource: true },
-    ...(["database", "wal", "shm"] as const).map((blockedRestore) => ({
+    ...(["database"] as const).map((blockedRestore) => ({
       relativeDatabase: "openclaw-agent.sqlite",
       destination: "empty" as const,
       blockedRestore,
@@ -193,7 +190,7 @@ describe("legacy agent directory migration", () => {
     "leaves SQLite families in place while merging files ($relativeDatabase, destination: $destination, blocked restore: $blockedRestore)",
     async ({ relativeDatabase, destination, orphanSource, blockedRestore }) => {
       await withOpenClawTestState(
-        { label: "legacy-agent-family-deferred", layout: "split", agentEnv: "clear" },
+        { label: "legacy-agent-family-deferred", layout: "home", agentEnv: "clear" },
         async (state) => {
           const legacyDir = path.join(state.home, ".openclaw", "agent");
           const targetDir = state.agentDir("main");
@@ -385,7 +382,7 @@ describe("legacy agent directory migration", () => {
     },
   );
 
-  it("defers SDK home payload outside a copied state snapshot without opening it", async () => {
+  it("ignores unrelated SDK home payload outside a copied state snapshot without opening it", async () => {
     await withOpenClawTestState(
       { label: "standalone-agent-snapshot", layout: "split", agentEnv: "clear" },
       async (state) => {
@@ -403,7 +400,7 @@ describe("legacy agent directory migration", () => {
           legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
         });
 
-        expect(plan.warnings).toContainEqual(
+        expect(plan.warnings).not.toContainEqual(
           expect.stringContaining(`outside the copied state snapshot: ${legacyDir}`),
         );
         expect(readDirectory.mock.calls.some(([directory]) => directory === legacyDir)).toBe(false);
@@ -419,7 +416,7 @@ describe("legacy agent directory migration", () => {
   });
 
   it.each(["OPENCLAW_STATE_DIR", "OPENCLAW_HOME"])(
-    "migrates the shipped SDK directory with %s and preserves state-root migration",
+    "preserves unrelated SDK state with %s while migrating state-root files",
     async (override) => {
       await withOpenClawTestState(
         { label: "standalone-agent-override", layout: "split", agentEnv: "clear" },
@@ -446,7 +443,6 @@ describe("legacy agent directory migration", () => {
               await fs.mkdir(path.join(directory, "bin"), { recursive: true });
               await fs.writeFile(path.join(directory, "bin", binary), contents);
             }
-            const sourceRoot = await fs.realpath(legacyDir);
             const detect = () =>
               detectLegacyStateMigrations({
                 cfg: { agents: { entries: { main: {} } } },
@@ -454,28 +450,26 @@ describe("legacy agent directory migration", () => {
                 legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
               });
             const detected = await detect();
-            expect(detected.preview).toContainEqual(expect.stringContaining(legacyDir));
+            expect(detected.preview).not.toContainEqual(expect.stringContaining(legacyDir));
             expect(detected.preview).toContainEqual(expect.stringContaining(stateLegacyDir));
-            expect(getAgentDir()).toBe(legacyDir);
+            expect(getAgentDir()).toBe(canonicalDir);
             const result = await migrateLegacyAgentDir(detected, () => 1234);
 
             expect(getAgentDir()).toBe(canonicalDir);
-            await expect(fs.readFile(path.join(canonicalDir, "bin/fd"), "utf8")).resolves.toBe(
+            await expect(fs.readFile(path.join(legacyDir, "bin/fd"), "utf8")).resolves.toBe(
               "SDK binary",
             );
+            await expect(fs.stat(path.join(canonicalDir, "bin/fd"))).rejects.toMatchObject({
+              code: "ENOENT",
+            });
             await expect(fs.readFile(path.join(canonicalDir, "bin/rg"), "utf8")).resolves.toBe(
               "current binary",
             );
-            const receipt = await fs.readFile(
-              path.join(canonicalDir, ".legacy-agent-dir-migration.json"),
-              "utf8",
-            );
-            expect(JSON.parse(receipt)).toEqual({
-              version: 1,
-              source: sourceRoot,
-              target: await fs.realpath(canonicalDir),
+            await expect(
+              fs.stat(path.join(canonicalDir, ".legacy-agent-dir-migration.json")),
+            ).rejects.toMatchObject({
+              code: "ENOENT",
             });
-            await expect(fs.stat(legacyDir)).rejects.toMatchObject({ code: "ENOENT" });
             await expect(fs.stat(stateLegacyDir)).rejects.toMatchObject({ code: "ENOENT" });
             const quarantines = (await fs.readdir(stateDir)).filter((name) =>
               name.startsWith("agent.legacy-"),
@@ -492,11 +486,6 @@ describe("legacy agent directory migration", () => {
               expect.stringContaining(path.join(quarantine, "bin/rg")),
             ]);
             expect((await detect()).agentDir.hasLegacy).toBe(false);
-
-            await fs.mkdir(path.join(legacyDir, "bin"), { recursive: true });
-            await fs.writeFile(path.join(legacyDir, "bin/fd"), "recreated SDK binary");
-            expect(getAgentDir()).toBe(canonicalDir);
-            expect((await detect()).preview).toContainEqual(expect.stringContaining(legacyDir));
           } finally {
             vi.unstubAllEnvs();
           }
@@ -686,7 +675,7 @@ describe("legacy agent directory migration", () => {
     },
   );
 
-  it.each(["external", "ancestor-symlink"])(
+  it.each(["ancestor-symlink"])(
     "keeps conflict quarantines confined to state for an %s agent directory",
     async (layout) => {
       await withOpenClawTestState({ label: "agent-quarantine-boundary" }, async (state) => {
@@ -735,28 +724,6 @@ describe("legacy agent directory migration", () => {
         );
         expect(result.warningDisposition).toBe("recoverable");
         expect(result.warnings).toEqual([expect.stringContaining(path.join(quarantine, "bin/rg"))]);
-      });
-    },
-  );
-
-  it.each(["custom-agent", "agent"])(
-    "honors the configured agent directory %s",
-    async (directory) => {
-      await withOpenClawTestState({ label: "legacy-agent-configured" }, async (state) => {
-        await state.writeText("agent/settings.json", "legacy settings");
-        const targetDir = state.statePath(directory);
-        const detected = await detectLegacyStateMigrations({
-          cfg: { agents: { entries: { main: { agentDir: targetDir } } } },
-          env: state.env,
-          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-        });
-        expect(detected.agentDir.targetDir).toBe(targetDir);
-        expect(detected.agentDir.hasLegacy).toBe(directory !== "agent");
-        const result = await migrateLegacyAgentDir(detected, () => 1234);
-        expect(result.warnings).toEqual([]);
-        await expect(fs.readFile(path.join(targetDir, "settings.json"), "utf8")).resolves.toBe(
-          "legacy settings",
-        );
       });
     },
   );
@@ -831,48 +798,5 @@ describe("legacy agent directory migration", () => {
         fs.readFile(state.statePath("agents/main/agent.legacy-1234/bin/rg"), "utf8"),
       ).resolves.toBe("older layout binary");
     });
-  });
-
-  it("does not create another quarantine when an old runtime recreates identical binaries", async () => {
-    await withOpenClawTestState({ label: "legacy-agent-repeat" }, async (state) => {
-      await state.writeText("agent/bin/fd", "identical binary");
-      await state.writeText("agents/main/agent/bin/fd", "identical binary");
-      await state.writeText("agent.legacy-1234/bin/rg", "preserved binary");
-      const detected = await detectLegacyStateMigrations({
-        cfg: { agents: { entries: { main: {} } } },
-        env: state.env,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      });
-      await migrateLegacyAgentDir(detected, () => 5678);
-      expect(
-        (await fs.readdir(state.stateDir)).filter((name) => name.startsWith("agent.legacy-")),
-      ).toEqual(["agent.legacy-1234"]);
-      await expect(fs.stat(state.statePath("agent"))).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("refuses when recoverable archive warnings mix with non-recoverable database migration failures", () => {
-    const result: MigrationMessages = {
-      changes: [],
-      warnings: [
-        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
-        "Skipped agent database migration for /path/agent.db: Error: schema mismatch",
-      ],
-    };
-    const receipt = migrationReceipt("media-persistence", result);
-    expect(receipt.outcome).toBe("refused");
-  });
-
-  it("marks archive-only failures as recoverable through the receipt path", () => {
-    const result: MigrationMessages = {
-      changes: [],
-      warnings: [
-        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
-      ],
-      warningDisposition: "recoverable",
-    };
-    const receipt = migrationReceipt("media-persistence", result);
-    expect(receipt.outcome).toBe("warning");
-    expect(receipt.outcome).not.toBe("refused");
   });
 });

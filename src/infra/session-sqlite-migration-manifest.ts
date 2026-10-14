@@ -484,7 +484,9 @@ function isRestoreMoveWithinTarget(
     return (
       sourcePath === storePath &&
       archivePath.startsWith(`${sourcePath}.pre-startup-migration-`) &&
-      /^[a-f0-9-]{36}\.bak$/.test(archivePath.slice(`${sourcePath}.pre-startup-migration-`.length))
+      /^[a-f0-9-]{36}(?:\.scoped)?\.bak$/.test(
+        archivePath.slice(`${sourcePath}.pre-startup-migration-`.length),
+      )
     );
   }
   const sessionsDir = path.dirname(storePath);
@@ -532,11 +534,7 @@ function hasUnsupportedV1DirectorySymlink(manifest: SessionSqliteMigrationManife
   const directoryPaths = manifest.targets.flatMap((target) => [
     path.dirname(target.sqlitePath),
     path.dirname(target.storePath),
-    ...target.plannedMoves.flatMap((move) => [
-      path.dirname(move.archivePath),
-      path.dirname(move.sourcePath),
-    ]),
-    ...target.completedMoves.flatMap((move) => [
+    ...[...target.plannedMoves, ...target.completedMoves].flatMap((move) => [
       path.dirname(move.archivePath),
       path.dirname(move.sourcePath),
     ]),

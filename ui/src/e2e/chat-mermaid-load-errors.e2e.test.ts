@@ -26,7 +26,7 @@ suite.define(() => {
         const blockedScript =
           asset === "frame"
             ? controlUiE2eBuiltAssetRequest("packages/mermaid-renderer/src/frame.js")
-            : controlUiE2eBuiltModuleRequest("ui/src/components/markdown-mermaid.ts");
+            : controlUiE2eBuiltModuleRequest("ui/src/components/markdown-mermaid.tsx");
         let blocked = 0;
         await page.route(blockedScript, (route) => {
           blocked += 1;

@@ -18,6 +18,7 @@ import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type PreparedEmbeddedRunInput = {
+  modelCallSequence?: { value: number };
   /** Retain lazy-writer cleanup with this prepared runtime after its logical result. */
   onInitialWriterPrepared: (resource: AsyncDisposable) => void;
   preReplyGeneration?: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
@@ -51,12 +52,10 @@ export type PreparedEmbeddedRunInput = {
 export type PreparedEmbeddedAttemptDispatchInput = {
   runInput: PreparedEmbeddedRunInput;
   preparedRuntime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
-  contextEngine: ContextEngine;
+  contextEngine?: ContextEngine;
   sessionPromptState: Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
   terminalRetryState: ReturnType<typeof createEmbeddedRunTerminalRetryState>;
   replayState: EmbeddedRunReplayState;
-  provider: string;
-  modelId: string;
   startupStagesEmitted: boolean;
   bootstrapPromptWarningSignaturesSeen: string[];
   resolveRuntimeFallbackReason: () => string | null;

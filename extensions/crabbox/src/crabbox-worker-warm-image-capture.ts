@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  CRABBOX_NONBLOCKING_CAPTURE_VERSION,
+  isCrabboxVersionAtLeast,
+} from "./crabbox-managed-binary.js";
 import { leaseRunArgs } from "./crabbox-worker-command.js";
 import {
   resolveCrabboxWarmImageProfileKey,
@@ -24,6 +28,7 @@ import {
   clearCrabboxWarmImageCapture,
   crabboxCaptureUnsupportedSentence,
   crabboxWarmImageRecoveryHint,
+  isCrabboxCaptureRefusalRetained,
   sameCrabboxWarmImageGeneration,
   withoutCrabboxWarmImageOperation,
   type openCrabboxWarmImageStore,
@@ -65,27 +70,34 @@ export function createCrabboxWarmImageCapture(dependencies: {
   const warnUnsupported = (message: string) =>
     warnOnce(
       "capture unsupported",
-      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile use an existing compatible snapshot when one is available and otherwise provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
+      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile use an existing compatible snapshot when one is available and otherwise provision cold; capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal. Set settings.warmImage: false on the profile to stop capture attempts.`,
       false,
     );
 
   return async function capture(
     context: LeaseContext & {
       profile: CrabboxProfile;
+      cliVersion?: string;
+      teardown?: true;
       forkedCheckpointId?: string;
       projectCaptureRequired?: true;
       projectCaptureReplay?: true;
+      onCaptureStart?: () => void;
+      onCaptureEnd?: () => void;
     },
     prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
-  ): Promise<boolean> {
+  ): Promise<boolean | "source-running"> {
     assertCurrent(context);
     const captureId = randomUUID();
     const owner = await lookupLease(context.id);
+    if (owner?.captureSkipped) {
+      return false;
+    }
     const key = owner?.key;
     let claimed = false;
     let creating = false;
     let preparing = false;
-    let captured = false;
+    let captured: boolean | "source-running" = false;
     let captureError: string | undefined;
     const attemptCapture = async () => {
       try {
@@ -113,6 +125,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         let existing = (await openStore().lookup(key))!;
         if (existing.operation) {
+          return;
+        }
+        if (isCrabboxCaptureRefusalRetained(existing, dependencies.policy.refreshAfterMs)) {
           return;
         }
         if (existing.image?.pinned && existing.previous?.pinned) {
@@ -151,8 +166,8 @@ export function createCrabboxWarmImageCapture(dependencies: {
             context.forkedCheckpointId === existing.image.checkpointId
               ? "available"
               : await verifyImage(context, existing.image.checkpointId);
-          // Foreground sessions use the refreshed checkout immediately. A reserve
-          // can publish that commit without making the session wait for a snapshot.
+          // Foreground forks top up runtime and checkout without a fresh capture.
+          // Age refresh and interrupted preparation retain their capture boundary.
           if (
             state === "available" &&
             owner.purpose === "session" &&
@@ -164,11 +179,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
               Date.now() - existing.image.createdAtMs < dependencies.policy.refreshAfterMs) &&
             owner.cacheKey !== null &&
             existing.image.cacheKey === owner.cacheKey &&
-            runtimeMatches &&
-            existing.image.preparationKey !== owner.preparationKey &&
-            existing.image.baseCommit &&
-            owner.baseCommit &&
-            existing.image.baseCommit !== owner.baseCommit
+            (!context.projectCaptureRequired ||
+              (existing.image.baseCommit &&
+                owner.baseCommit &&
+                existing.image.baseCommit !== owner.baseCommit))
           ) {
             return;
           }
@@ -195,6 +209,15 @@ export function createCrabboxWarmImageCapture(dependencies: {
             return;
           }
         }
+        const nonBlocking = Boolean(
+          context.provider === "aws" &&
+          !context.teardown &&
+          owner.projectKey &&
+          owner.purpose !== "reserve" &&
+          !existing.image &&
+          !existing.previous &&
+          isCrabboxVersionAtLeast(context.cliVersion ?? "", CRABBOX_NONBLOCKING_CAPTURE_VERSION),
+        );
         const now = Date.now();
         assertCurrent(context);
         claimed = await openStore().update(key, (current) => {
@@ -221,6 +244,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
         if (!claimed) {
           return;
         }
+        context.onCaptureStart?.();
         // Runtime preparation belongs only to a claimed capture. Scrub its forwarded
         // credential artifacts afterward, before any native image can include them.
         assertCurrent(context);
@@ -269,11 +293,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
               context.id,
               "--mode",
               "native",
-              // Crabbox owns pending capture recovery; wait for the exact checkpoint
-              // before enrollment. Reserve command overhead and separate source recovery too.
-              "--wait",
-              "--wait-timeout",
-              `${WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS}ms`,
+              ...(nonBlocking
+                ? ["--wait=false"]
+                : ["--wait", "--wait-timeout", `${WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS}ms`]),
               "--json",
               // Daytona and direct Azure snapshots require explicit permission to stop the
               // scrubbed source for capture. Both owners restore or retire it afterward.
@@ -283,8 +305,15 @@ export function createCrabboxWarmImageCapture(dependencies: {
             resolveCrabboxCheckpointCaptureTimeoutMs(context.provider),
           ),
           context.id,
+          nonBlocking,
         );
-        captured = true;
+        if (!nonBlocking && created.state === "pending") {
+          if ((await verifyImage(context, created.checkpointId)) !== "available") {
+            throw new Error("Crabbox waited checkpoint is not available");
+          }
+          created.state = "available";
+        }
+        captured = nonBlocking ? "source-running" : true;
         const published = await openStore().update(key, (current) => {
           if (current?.operation?.type !== "capture" || current.operation.id !== captureId) {
             return undefined;
@@ -329,6 +358,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
             ...next,
             image: {
               ...created,
+              state: nonBlocking ? "pending" : created.state,
               createdAtMs: now,
               preparationKey: owner.preparationKey,
               cacheKey: owner.cacheKey,
@@ -356,6 +386,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         creating = false;
         claimed = false;
+        context.onCaptureEnd?.();
         const replacement = await openStore().lookup(key);
         if (replacement) {
           await retireImage(context, key, replacement);
@@ -415,15 +446,21 @@ export function createCrabboxWarmImageCapture(dependencies: {
     };
     await attemptCapture();
     const operation =
-      key && owner?.projectKey ? (await openStore().lookup(key))?.operation : undefined;
+      !context.teardown && key && owner?.projectKey
+        ? (await openStore().lookup(key))?.operation
+        : undefined;
     // A native create may still be running after a lost response. Enrollment must
     // never introduce node credentials into that source until capture has settled.
+    // Teardown only stops the source; the retained claim already pauses capture retries.
     if (operation?.type === "capture" && operation.leaseId === context.id) {
       throw new Error(
         `${captureError ? `${captureError}. ` : ""}Crabbox project image capture is unresolved. ${crabboxWarmImageRecoveryHint(operation.id)}`,
       );
     }
     assertCurrent(context);
+    if (claimed) {
+      context.onCaptureEnd?.();
+    }
     return captured;
   };
 }

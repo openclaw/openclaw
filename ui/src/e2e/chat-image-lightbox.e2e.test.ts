@@ -144,7 +144,7 @@ suite.define(() => {
       await expect.poll(() => openOriginal.getAttribute("href")).toMatch(/^blob:/);
       const readControlContrast = () =>
         page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
-          const root = lightbox.shadowRoot!;
+          const root = lightbox;
           return [".open-original", ".close", '[aria-label="Zoom in"]'].map((selector) => {
             const style = getComputedStyle(root.querySelector(selector)!);
             return {
@@ -203,7 +203,7 @@ suite.define(() => {
         )
         .toBeGreaterThan(0);
       await page
-        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .locator("openclaw-image-lightbox openclaw-modal-dialog > dialog")
         .evaluate(finishElementAnimations);
       const desktopBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       const viewport = page.viewportSize();
@@ -269,7 +269,7 @@ suite.define(() => {
       await sidebarTrigger.click();
       await sidebarDialog.waitFor({ state: "visible" });
       await page
-        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .locator("openclaw-image-lightbox openclaw-modal-dialog > dialog")
         .evaluate(finishElementAnimations);
       await page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
         lightbox.style.setProperty("--safe-area-top", "18px");
@@ -294,10 +294,10 @@ suite.define(() => {
       const mobileImage = page.locator("openclaw-image-lightbox .image");
       const readMobileLayout = () =>
         page.locator("openclaw-image-lightbox .stage").evaluate((stage) => {
-          const root = stage.getRootNode();
+          const root = stage.closest("openclaw-image-lightbox");
           const image = stage.querySelector("img");
-          const header = root instanceof ShadowRoot ? root.querySelector(".header") : null;
-          const controls = root instanceof ShadowRoot ? root.querySelector(".zoom-controls") : null;
+          const header = root?.querySelector(".header");
+          const controls = root?.querySelector(".zoom-controls");
           if (!image || !header || !controls) {
             throw new Error("missing lightbox geometry");
           }
@@ -448,7 +448,7 @@ suite.define(() => {
         )
         .toBe(true);
       if (captureUiProofEnabled && !reloaded) {
-        await lightbox.locator("wa-dialog dialog").evaluate(finishElementAnimations);
+        await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
         await writeFile(
           path.join(proofDir, "media-gallery-open.png"),
           await takeControlUiViewportScreenshot(page, image, [image]),
@@ -513,7 +513,7 @@ suite.define(() => {
         expect(await previous.isDisabled()).toBe(true);
         await page.keyboard.press("ArrowLeft");
         expect((await counter.textContent())?.trim()).toBe(`1 / ${count}`);
-        await lightbox.locator("wa-dialog dialog").evaluate(finishElementAnimations);
+        await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
         const stageBox = await lightbox.locator(".stage").boundingBox();
         for (let index = 2; index <= count; index++) {
           if (index === 2) {
@@ -567,7 +567,7 @@ suite.define(() => {
     await expect
       .poll(() => lightbox.getByRole("button", { name: "Zoom in", exact: true }).isEnabled())
       .toBe(true);
-    await lightbox.locator("wa-dialog dialog").evaluate(finishElementAnimations);
+    await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
     const touch = await context.newCDPSession(page);
     const readSlideOffset = () =>
       lightbox
@@ -648,10 +648,8 @@ suite.define(() => {
     });
     const headerOverlaps = () =>
       lightbox.evaluate((element) => {
-        const counterBounds = element
-          .shadowRoot!.querySelector(".gallery-counter")!
-          .getBoundingClientRect();
-        const actions = element.shadowRoot!.querySelector(".actions")!.getBoundingClientRect();
+        const counterBounds = element.querySelector(".gallery-counter")!.getBoundingClientRect();
+        const actions = element.querySelector(".actions")!.getBoundingClientRect();
         return (
           Math.min(counterBounds.right, actions.right) >
             Math.max(counterBounds.left, actions.left) &&

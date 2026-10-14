@@ -38,7 +38,9 @@ Status starts one monotonic check deadline when the command begins. Local readin
 
 When no matching Gateway service or live foreground owner exists and its port is
 free, status checks directly instead of waiting for a Gateway startup. Local-only
-agent environments therefore report an unavailable Gateway promptly. Observed startup
+agent environments therefore report an unavailable Gateway promptly. A listener positively
+identified as another process reports a port conflict with diagnostic guidance instead
+of waiting for the readiness budget. Unknown listener attribution keeps startup grace. Observed startup
 migrations retain startup grace across the handoff to Gateway ownership; unverifiable
 ownership also retains that grace. Lock and native process inspection consume the
 same remaining check allowance.
@@ -57,7 +59,17 @@ build, or unknown identity keeps the warning and its recorded failure details,
 with the serving and target versions when known. Rollback and recovery observations
 cannot by themselves establish the intended candidate identity. A
 same-version rollback stays warned when the intended candidate build cannot be
-verified. Status does not rewrite the failed run or claim the update succeeded.
+verified. A failed run that never selected a target, such as a preflight refusal
+that recorded no target version, SHA, tag, or post-update identity, is also
+labeled as historical once the Gateway serves a different version or build than
+the running Gateway observation saved with that failure: `Last update run failed
+(preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving
+identity was 2026.9.4.` The installed package identity alone cannot establish this
+change: it may already have been ahead of the running Gateway when the update
+failed. A recovery check matching the old installed package does not establish
+an update target. Without a saved serving identity, the warning remains. A run with an
+explicit target keeps the rules above.
+Status does not rewrite the failed run or claim the update succeeded.
 Starting, unreachable, degraded, and
 remote Gateways do not qualify for this note. Use
 `openclaw update status` to inspect the saved verification failure.

@@ -15,6 +15,7 @@ import {
   type AssistantMessageExpansionState,
 } from "./chat-message-recovery.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
+import { activeChatReasoning } from "./chat-reasoning.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
@@ -92,9 +93,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
-    previous.senderSession?.sessionKey === next.senderSession?.sessionKey &&
-    previous.senderSession?.agentId === next.senderSession?.agentId &&
-    previous.senderSession?.label === next.senderSession?.label &&
+    sameFields(previous.senderSession, next.senderSession, CHAT_ITEM_FIELDS.senderSession) &&
     messageClientSourcesKey(previous.sourceClients ?? []) ===
       messageClientSourcesKey(next.sourceClients ?? []) &&
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
@@ -121,6 +120,22 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   );
 }
 
+const CHAT_ITEM_FIELDS = {
+  message: ["message", "duplicateCount"],
+  notice: ["text", "label", "handoffBoundary", "startsTurn", "boundaryId", "timestamp"],
+  divider: ["compaction", "compactionId", "label", "metric", "description", "timestamp"],
+  question: ["questionId", "startedAt"],
+  senderSession: ["sessionKey", "agentId", "label"],
+} as const;
+
+function sameFields<T extends object>(
+  previous: T | null | undefined,
+  next: T | null | undefined,
+  fields: readonly (keyof T)[],
+): boolean {
+  return fields.every((field) => previous?.[field] === next?.[field]);
+}
+
 function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
   if (previous.kind !== next.kind || previous.key !== next.key) {
     return false;
@@ -129,35 +144,16 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
     case "group":
       return previous.kind === "group" && sameMessageGroup(previous, next);
     case "message":
-      return (
-        previous.kind === "message" &&
-        previous.message === next.message &&
-        previous.duplicateCount === next.duplicateCount
-      );
+      return previous.kind === "message" && sameFields(previous, next, CHAT_ITEM_FIELDS.message);
     case "notice":
-      return (
-        previous.kind === "notice" &&
-        previous.text === next.text &&
-        previous.label === next.label &&
-        previous.handoffBoundary === next.handoffBoundary &&
-        previous.startsTurn === next.startsTurn &&
-        previous.boundaryId === next.boundaryId &&
-        previous.timestamp === next.timestamp
-      );
+      return previous.kind === "notice" && sameFields(previous, next, CHAT_ITEM_FIELDS.notice);
     case "divider":
-      return (
-        previous.kind === "divider" &&
-        previous.compaction === next.compaction &&
-        previous.compactionId === next.compactionId &&
-        previous.label === next.label &&
-        previous.metric === next.metric &&
-        previous.description === next.description &&
-        previous.timestamp === next.timestamp
-      );
+      return previous.kind === "divider" && sameFields(previous, next, CHAT_ITEM_FIELDS.divider);
     case "stream":
       return (
         previous.kind === "stream" &&
         previous.text === next.text &&
+        previous.thinking === next.thinking &&
         previous.startedAt === next.startedAt &&
         previous.isStreaming === next.isStreaming &&
         JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
@@ -176,11 +172,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.boundaryId === next.boundaryId
       );
     case "question":
-      return (
-        previous.kind === "question" &&
-        previous.questionId === next.questionId &&
-        previous.startedAt === next.startedAt
-      );
+      return previous.kind === "question" && sameFields(previous, next, CHAT_ITEM_FIELDS.question);
   }
   return false;
 }
@@ -237,9 +229,7 @@ function stabilizeChatItems(
         prior.role !== item.role ||
         prior.runId !== item.runId ||
         prior.senderLabel !== item.senderLabel ||
-        prior.senderSession?.sessionKey !== item.senderSession?.sessionKey ||
-        prior.senderSession?.agentId !== item.senderSession?.agentId ||
-        prior.senderSession?.label !== item.senderSession?.label ||
+        !sameFields(prior.senderSession, item.senderSession, CHAT_ITEM_FIELDS.senderSession) ||
         messageClientSourcesKey(prior.sourceClients ?? []) !==
           messageClientSourcesKey(item.sourceClients ?? []) ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
@@ -293,6 +283,10 @@ function sameChatItemsStructuralInput(
   previous: BuildChatItemsProps,
   next: BuildChatItemsProps,
 ): boolean {
+  const previousReasoning = previous.reasoning?.items;
+  const nextReasoning = next.reasoning?.items;
+  const previousActive = activeChatReasoning(previous.reasoning);
+  const nextActive = activeChatReasoning(next.reasoning);
   return (
     previous.sessionKey === next.sessionKey &&
     previous.archiveNotice?.key === next.archiveNotice?.key &&
@@ -305,6 +299,17 @@ function sameChatItemsStructuralInput(
     previous.guardianNotices === next.guardianNotices &&
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
+    previous.reasoning?.runId === next.reasoning?.runId &&
+    previous.showReasoning === next.showReasoning &&
+    previousReasoning?.length === nextReasoning?.length &&
+    (previousReasoning?.every(
+      (item, index) =>
+        item === nextReasoning?.[index] ||
+        (item === previousActive &&
+          nextReasoning?.[index] === nextActive &&
+          sameFields(previousActive, nextActive, ["itemId", "startedAt"])),
+    ) ??
+      true) &&
     previous.queue === next.queue &&
     previous.initialTurnId === next.initialTurnId &&
     // renderChat derives this list of immutable Gateway records on every render,
@@ -336,10 +341,11 @@ function liveStreamIdentity(input: BuildChatItemsProps): string {
 }
 
 function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsProps): boolean {
+  const reasoning = activeChatReasoning(input.reasoning);
   const live = cached.liveStream;
   const item = live ? cached.items[live.index] : undefined;
   if (
-    input.stream === null ||
+    (input.stream === null && !reasoning) ||
     !live ||
     item?.kind !== "stream" ||
     !item.isStreaming ||
@@ -347,11 +353,11 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   ) {
     return false;
   }
-  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream), live.prefix);
-  if (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip) {
+  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix);
+  if (!reasoning && (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip)) {
     return false;
   }
-  cached.items[live.index] = { ...item, text };
+  cached.items[live.index] = { ...item, text, thinking: reasoning?.text };
   return true;
 }
 
@@ -399,10 +405,14 @@ export function buildCachedChatItems(
   // Keep stream-only updates off the loaded-history path; structural changes
   // still use the full builder.
   if (cached.input && sameChatItemsStructuralInput(cached.input, input)) {
-    if (cached.input.stream === input.stream) {
+    if (
+      cached.input.stream === input.stream &&
+      activeChatReasoning(cached.input.reasoning)?.text ===
+        activeChatReasoning(input.reasoning)?.text
+    ) {
       return cached.items;
     }
-    if (cached.input.stream !== null && updateCachedLiveStream(cached, input)) {
+    if (updateCachedLiveStream(cached, input)) {
       cached.input = input;
       return cached.items;
     }

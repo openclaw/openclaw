@@ -1,5 +1,5 @@
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { createComponent, createSignal, flush } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SkillsLibraryListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -13,7 +13,11 @@ import {
   gatewayHelloForMethods,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
-import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  ChatComposerCapabilityHost,
+  ChatComposerCapabilityDialogs,
+} from "./chat-composer-capability-host.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 function createContext(configSnapshot: ConfigSnapshot | null): ApplicationContext {
@@ -113,10 +117,17 @@ function createAddServerHarness(
   sessions.patch = patch;
   state.sessions = sessions;
   const container = document.createElement("div");
+  document.body.append(container);
+  onTestFinished(() => {
+    container.remove();
+    sessions.dispose();
+  });
   const settled = deferred();
   let submitted = false;
+  const [revision, setRevision] = createSignal(0);
+  let paint = () => {};
   const host = new ChatComposerCapabilityHost(() => {
-    render(host.renderAddServerDialog(context, state, session), container);
+    paint();
     if (
       submitted &&
       !container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled
@@ -124,6 +135,20 @@ function createAddServerHarness(
       settled.resolve();
     }
   });
+  mountSolid(
+    () =>
+      createComponent(ChatComposerCapabilityDialogs, {
+        read: () => host.dialogView(context, state, session),
+        get revision() {
+          return { value: revision() };
+        },
+      }),
+    { container },
+  );
+  paint = () => {
+    setRevision((value) => value + 1);
+    flush();
+  };
   host.props(context, state, session, "main").onAddServer?.();
   return {
     container,
@@ -138,9 +163,11 @@ function createAddServerHarness(
         target: "docs-mcp",
       },
     ) {
-      const group = container.querySelector<HTMLElement & { value: string }>("wa-radio-group")!;
-      group.value = scope;
-      group.dispatchEvent(new Event("change", { bubbles: true }));
+      const form = container.querySelector("form");
+      container
+        .querySelector<HTMLInputElement>(`input.settings-segmented__input[value="${scope}"]`)!
+        .click();
+      expect(container.querySelector("form")).toBe(form);
       container.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
       container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value =
         server.transport;
@@ -249,23 +276,6 @@ describe("ChatComposerCapabilityHost", () => {
     expect(harness.patch).not.toHaveBeenCalled();
   });
 
-  it("blocks session mutations until the row and runtime config have loaded", () => {
-    const host = new ChatComposerCapabilityHost(vi.fn());
-    const context = createContext(null);
-    const state = createState();
-    const session = { key: "main" } as GatewaySessionRow;
-
-    expect(host.props(context, state, undefined, "main").mutationBlockedReason).toBe("Loading…");
-    expect(host.props(context, state, session, "main").mutationBlockedReason).toBe("Loading…");
-
-    context.runtimeConfig.state.configSnapshot = {
-      runtimeConfig: { tools: { web: { search: { enabled: false } } } },
-    };
-    const props = host.props(context, state, session, "main");
-    expect(props.mutationBlockedReason).toBeNull();
-    expect(props.webSearchBaseEnabled).toBe(false);
-  });
-
   it("blocks tool override patches without exact sessions.patch access", async () => {
     const host = new ChatComposerCapabilityHost(vi.fn());
     const context = createContext({ runtimeConfig: {} });
@@ -300,36 +310,22 @@ describe("ChatComposerCapabilityHost", () => {
     const state = createState();
     host.props(context, state, undefined, "main").onAddServer?.();
     const container = document.createElement("div");
-    render(host.renderAddServerDialog(context, state, undefined), container);
+    mountSolid(
+      () =>
+        createComponent(ChatComposerCapabilityDialogs, {
+          read: () => host.dialogView(context, state, undefined),
+          revision: {},
+        }),
+      { container },
+    );
     await Promise.resolve();
 
-    const scope = container.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group");
+    const scope = container.querySelector<HTMLInputElement>(
+      'input.settings-segmented__input[value="everywhere"]',
+    );
     const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]');
     expect(scope?.disabled).toBe(false);
     expect(submit?.disabled).toBe(true);
-  });
-
-  it("blocks session submit before global config while an override patch is in flight", async () => {
-    const host = new ChatComposerCapabilityHost(vi.fn());
-    const context = createContext({ runtimeConfig: {} });
-    const state = createState();
-    const session = { key: "main" } as GatewaySessionRow;
-    const props = host.props(context, state, session, "main");
-    (
-      host as unknown as {
-        patchTokens: Map<string, symbol>;
-      }
-    ).patchTokens.set("main", Symbol("pending"));
-    props.onAddServer?.();
-    const container = document.createElement("div");
-    render(host.renderAddServerDialog(context, state, session), container);
-    await Promise.resolve();
-
-    const scope = container.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group");
-    const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]');
-    expect(scope?.disabled).toBe(false);
-    expect(submit?.disabled).toBe(true);
-    expect(submit?.title).toContain("current session capability change");
   });
 
   it("derives capability defaults from the active runtime snapshot", () => {

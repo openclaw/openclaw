@@ -2,6 +2,10 @@ import type { SessionGitHubPublicationResult } from "../../packages/gateway-prot
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { GitHubPublicationCoordinator } from "./github-publication.js";
 
 const GITHUB_PUBLICATION_RESPONSE_PREFIX = "github-publication:";
@@ -31,9 +35,9 @@ function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): 
 export async function reportGitHubPublicationTranscript(
   loadSessionRuntime: () => Promise<{
     resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
-    resolveGatewaySessionStoreTargetWithStore: typeof import("./session-utils.js").resolveGatewaySessionStoreTargetWithStore;
+    resolveGatewaySessionStoreTargetInWorker: typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker;
   }>,
-  coordinator: Pick<GitHubPublicationCoordinator, "markReported">,
+  coordinator: Pick<GitHubPublicationCoordinator, "markReportedAsync">,
   params: {
     sessionId: string;
     sessionKey: string;
@@ -41,14 +45,32 @@ export async function reportGitHubPublicationTranscript(
     result: SessionGitHubPublicationResult;
   },
 ): Promise<void> {
-  const runtime = await loadSessionRuntime();
-  const target = runtime.resolveGatewaySessionStoreTargetWithStore({
-    cfg: getRuntimeConfig(),
-    key: params.sessionKey,
-    agentId: params.agentId,
-    clone: false,
+  const memory = captureSessionActorStorageOwner(params, {
+    assertCurrent() {},
+    authorize() {},
   });
-  const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
+  const selected = memory
+    ? {
+        target: {
+          agentId: memory.agentId,
+          canonicalKey: params.sessionKey,
+          storePath: memory.path,
+        },
+        entry: readCapturedSessionActorEntry(memory, params.sessionKey),
+      }
+    : await (async () => {
+        const runtime = await loadSessionRuntime();
+        const target = await runtime.resolveGatewaySessionStoreTargetInWorker({
+          cfg: getRuntimeConfig(),
+          key: params.sessionKey,
+          agentId: params.agentId,
+        });
+        return {
+          target,
+          entry: runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys),
+        };
+      })();
+  const { target, entry } = selected;
   if (entry?.sessionId !== params.sessionId || target.canonicalKey !== params.sessionKey) {
     throw new Error("GitHub publication transcript owner changed");
   }
@@ -77,5 +99,5 @@ export async function reportGitHubPublicationTranscript(
   if (!appended.ok) {
     throw new Error("GitHub publication transcript owner changed", { cause: appended.error });
   }
-  coordinator.markReported(params.result.requestId);
+  await coordinator.markReportedAsync(params.result.requestId);
 }

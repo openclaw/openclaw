@@ -669,6 +669,7 @@ export async function reviewDependencyChanges(
       owner,
       repo,
       labelNames: new Set(labels.map((label) => label.name)),
+      recoverCommentWrites: mode === "enforce",
     });
   // Consolidate the former awareness and enforcement comments into one notice.
   await deleteCommentIfPresent(findComment(dependencyChangeMarker));

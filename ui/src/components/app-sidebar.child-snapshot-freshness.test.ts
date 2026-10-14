@@ -17,7 +17,7 @@ import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const parentKey = "agent:main:parent";
 const childKey = "agent:worker:child";
@@ -212,9 +212,9 @@ describe("sidebar child snapshot freshness", () => {
       }
       await waitForFast(() => expect(sidebar.textContent).toContain("Original child"));
       expect(childList).toHaveBeenCalledTimes(1);
-      // The initial selected descriptor is a fresh read and still invalidates membership.
+      // The newer child list already covers the initial selected descriptor.
       await vi.advanceTimersByTimeAsync(5_000);
-      const initialReads = 2;
+      const initialReads = 1;
       expect(childList).toHaveBeenCalledTimes(initialReads);
       await settleLitElement(sidebar);
       const childScope = sidebar.sessionData.childSessionScope;
@@ -234,17 +234,6 @@ describe("sidebar child snapshot freshness", () => {
       expect(sidebar.querySelector(`[data-session-key="${queryChildKey}"]`)?.textContent).toContain(
         "Original child",
       );
-
-      const reconcileHistory = sessions.captureReconcile();
-      reconcileHistory({
-        key: "agent:main:unrelated-chat",
-        sessionId: "unrelated-session",
-        kind: "direct",
-        label: "Unrelated history",
-        updatedAt: 30,
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(childList).toHaveBeenCalledTimes(initialReads);
 
       currentChild = { ...currentChild, label: "Changed child", updatedAt: 20 };
       gatewayHarness.publishEvent("sessions.changed", {
@@ -292,8 +281,7 @@ describe("sidebar child snapshot freshness", () => {
       harness.publishList({
         result: result([{ ...parentRow, hasActiveSubagentRun: false }]),
       });
-      await sidebar.updateComplete;
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(sidebar.sessionData.loadingChildSessionKeys.has(parentKey)).toBe(false);
       expect(
         sidebar

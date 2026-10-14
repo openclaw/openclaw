@@ -1,23 +1,30 @@
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
 } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import {
+  acquireOpenClawStateLeaseInTransaction,
+  releaseOpenClawStateLeaseInTransaction,
+} from "../../state/openclaw-state-lease-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import type { WorkerTurnClaimInput } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -28,6 +35,7 @@ import {
 } from "./placement-test-fixtures.js";
 import { ActiveTurnClaimError, createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { PERSONAL_SCOPE } from "./placement-workspace-reservation.kernel.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { executeLocalTurn } from "./worker-turn-admission.js";
 
@@ -60,6 +68,7 @@ beforeAll(async () => {
   await placements.releaseTurn(warm);
 });
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => vi.restoreAllMocks());
 
 async function workerClaim(name: string) {
@@ -79,6 +88,9 @@ async function workerClaim(name: string) {
 
 function losePlacementReply(sessionId: string, outcome: "committed" | "unknown") {
   if (outcome === "unknown") {
+    vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
+      () => {},
+    );
     const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
       (admit, attachment) => {
@@ -179,10 +191,14 @@ it("transitions, drains and settles terminal placement failure without caller-th
 it.each(["delivered", "committed", "unknown"] as const)(
   "settles %s terminal-result failure before observers without caller-thread SQL",
   async (outcome) => {
-    const claim = await workerClaim(`terminal-failure-boundary-${outcome}`);
+    const name = `terminal-failure-boundary-${outcome}`;
+    const requested = input(name);
+    const claim = await workerClaim(name);
     await placements.markWorkspaceResultPending(claim);
     const [pending] = await placements.listPendingWorkspaceResultsAsync(claim.sessionId);
     const authority = await placements.prepareTurnClaimAuthority(claim);
+    const changes: Array<{ sessionId: string; sessionKey: string; agentId: string }> = [];
+    const stopChanges = placements.subscribeChanges((placement) => changes.push(placement));
     const closed: Array<{ claimId: string; current: boolean; pending: boolean }> = [];
     const stop = placements.registerTurnClaimClosedHandler((released) => {
       closed.push({
@@ -214,9 +230,17 @@ it.each(["delivered", "committed", "unknown"] as const)(
       if (corrupted) {
         expect(corrupted()).toBe(1);
       }
+      expect(changes).toEqual([
+        {
+          sessionId: requested.sessionId,
+          sessionKey: requested.sessionKey,
+          agentId: requested.agentId,
+        },
+      ]);
       expect(queries.queries).toEqual([]);
     } finally {
       stop();
+      stopChanges();
       authority.release();
       queries.restore();
     }
@@ -303,6 +327,25 @@ it("checks claim-free reclaim, activity and the exact terminal turn inside drain
 it("persists monotonic ACKs and their terminal fence through the gate without host SQLite", async () => {
   const claim = await workerClaim("ack-cursors");
   const gate = createWorkerSessionPlacementGate(placements);
+  const retained = await placements.prepareSessionPlacement(claim.sessionId);
+  let observedCommit = false;
+  const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+    admit(request, () => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.placement) &&
+        request.facts.placement.sessionId === claim.sessionId
+      ) {
+        observedCommit = true;
+        expect(retained.current()).toMatchObject({
+          state: "active",
+          turnClaim: { claimId: claim.claimId },
+        });
+      }
+      return grant();
+    });
+  });
   const queries = observeHostDataSql();
   try {
     await gate.updateAckCursors({ claim, transcriptSeq: 4 });
@@ -310,10 +353,17 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
     await gate.updateAckCursors({ claim, liveSeq: 9 });
     await gate.updateAckCursors({ claim, transcriptSeq: 3, liveSeq: 8 });
     await gate.updateAckCursors({ claim, transcriptSeq: 4, liveSeq: 9 });
+    expect(retained.current()).toMatchObject({
+      lastTranscriptAckCursor: 4,
+      lastLiveEventAckCursor: 9,
+    });
     expect(queries.queries).toEqual([]);
   } finally {
     queries.restore();
+    admission.mockRestore();
+    retained.release();
   }
+  expect(observedCommit).toBe(true);
   expect(placements.get(claim.sessionId)).toMatchObject({
     generation: claim.placementGeneration,
     lastTranscriptAckCursor: 4,
@@ -338,6 +388,54 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
   await expect(gate.updateAckCursors({ claim, liveSeq: 10 })).rejects.toThrow("stale worker turn");
   expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
   expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBe(9);
+});
+
+it("keeps the maintenance inventory usable across non-local turn bookkeeping", async () => {
+  const requested = input("maintenance-bookkeeping");
+  const active = await advancePlacementFixtureToActive(placements, database, requested, {
+    environmentId: "maintenance-bookkeeping-environment",
+  });
+  const inventory = await placements.prepareMaintenancePlacements();
+  const turn = {
+    ...requested,
+    owner: {
+      kind: "worker" as const,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    },
+  };
+  let pendingChecks = 0;
+  const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+    admit(request, () => {
+      if (request.stage === "commit") {
+        inventory.assertCurrent();
+        pendingChecks += 1;
+      }
+      return grant();
+    });
+  });
+  const queries = observeHostDataSql();
+  try {
+    await placements.releaseTurn(await placements.claimTurn(turn));
+    const claim = await placements.claimTurn(turn);
+    await placements.updateAckCursors({ claim, liveEvent: 9 });
+    await placements.acceptWorkspaceResult(claim);
+    await placements.completeWorkspaceResultAndReleaseTurn(claim);
+    inventory.assertCurrent();
+    expect(pendingChecks).toBe(6);
+    expect(inventory.placements).toContainEqual({ ...active, lastLiveEventAckCursor: 9 });
+    const current = await placements.prepareMaintenancePlacements();
+    try {
+      expect(current.placements).toContainEqual({ ...active, lastLiveEventAckCursor: 9 });
+    } finally {
+      current.release();
+    }
+    expect(queries.queries).toEqual([]);
+  } finally {
+    queries.restore();
+    admission.mockRestore();
+    inventory.release();
+  }
 });
 
 it.each(["placement", "caller"] as const)(
@@ -389,7 +487,10 @@ it.each(["committed", "unknown"] as const)(
       await expect(ack).rejects.toThrow();
     }
     expect(corrupted()).toBe(1);
-    expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBe(1);
+    if (outcome === "unknown") {
+      expect(() => placements.get(claim.sessionId)).toThrow("Await getAsync");
+    }
+    expect((await placements.getAsync(claim.sessionId))?.lastLiveEventAckCursor).toBe(1);
     expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
       { claimId: claim.claimId, gatewayInstanceId: placements.workspaceResultInstanceId() },
     ]);
@@ -424,6 +525,109 @@ it("claims and strictly releases durable turns without host SQLite", async () =>
   expect(placements.get("placement-worker-sql-free")?.turnClaim).toBeNull();
 });
 
+it.each(["committed", "unknown"] as const)(
+  "certifies local projection facts across %s claim settlement",
+  async (outcome) => {
+    const requested = input(`projection-${outcome}`);
+    // The fault belongs to the claim admission, not the worker's first open admission.
+    await placements.releaseTurn(await placements.claimTurn(requested));
+    await placements.readProjection([requested.sessionId]);
+    const snapshots: ReturnType<typeof placements.readPublishedProjection>[] = [];
+    const changes: SessionRowChange[] = [];
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === requested.sessionKey) {
+        changes.push(change);
+        snapshots.push(placements.readPublishedProjection(change));
+      }
+    });
+    const corrupted = losePlacementReply(requested.sessionId, outcome);
+    try {
+      const claim = await placements.claimTurn(requested);
+      expect(corrupted()).toBe(1);
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]?.placements.get(requested.sessionId)?.turnClaim?.claimId).toBe(
+        requested.claimId,
+      );
+      expect(
+        changes.every((change) => placements.readPublishedProjection(change) === undefined),
+      ).toBe(true);
+      stop();
+      await placements.releaseTurn(claim);
+    } finally {
+      stop();
+    }
+  },
+);
+
+it("replays the same local claim without replacing its identity or a successor", async () => {
+  const requested = input("idempotent");
+  const claim = await placements.claimTurn(requested);
+  const replay = await placements.claimTurn(requested);
+  expect(replay).toEqual(claim);
+  await expect(placements.claimTurn({ ...requested, agentId: "another-agent" })).rejects.toThrow(
+    "placement identity changed",
+  );
+  await expect(placements.claimTurn({ ...requested, runId: "another-run" })).rejects.toBeInstanceOf(
+    ActiveTurnClaimError,
+  );
+  expect(placements.get(requested.sessionId)?.turnClaim).toMatchObject({
+    claimId: requested.claimId,
+    runId: requested.runId,
+  });
+  await placements.releaseTurn(replay);
+  const successor = await placements.claimTurn({ ...requested, claimId: "successor" });
+  await placements.releaseTurnIfOwned(claim);
+  expect(placements.get(requested.sessionId)?.turnClaim?.claimId).toBe("successor");
+  await placements.releaseTurn(successor);
+});
+
+it.each(["new local", "existing local", "worker"] as const)(
+  "checks live publication exclusion in the %s claim write",
+  async (kind) => {
+    let requested: WorkerTurnClaimInput = input(
+      `publication-exclusion-${kind.replaceAll(" ", "-")}`,
+    );
+    if (kind === "existing local") {
+      await placements.releaseTurn(await placements.claimTurn(requested));
+    } else if (kind === "worker") {
+      const active = await advancePlacementFixtureToActive(placements, database, requested, {
+        environmentId: "publication-exclusion-environment",
+      });
+      requested = {
+        ...requested,
+        owner: {
+          kind: "worker",
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+      };
+    }
+    const lease = { scope: PERSONAL_SCOPE, key: requested.sessionId, owner: "publisher" };
+    runOpenClawStateWriteTransaction(
+      ({ db }) => acquireOpenClawStateLeaseInTransaction(db, lease, 60_000),
+      { database },
+    );
+    await expect(placements.claimTurn(requested)).rejects.toThrow(
+      "The session workspace is being published",
+    );
+    expect((await placements.getAsync(requested.sessionId))?.turnClaim ?? null).toBeNull();
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        releaseOpenClawStateLeaseInTransaction(db, lease);
+        acquireOpenClawStateLeaseInTransaction(db, lease, 60_000, null, Date.now() - 120_000);
+      },
+      { database },
+    );
+    const claimed = await placements.claimTurn(requested);
+    expect(claimed.claimId).toBe(requested.claimId);
+    await placements.releaseTurn(claimed);
+    runOpenClawStateWriteTransaction(
+      ({ db }) => releaseOpenClawStateLeaseInTransaction(db, lease),
+      { database },
+    );
+  },
+);
+
 it("preserves same-session FIFO and cannot conditionally release a successor", async () => {
   const first = input("fifo");
   const successor = { ...first, claimId: "claim-fifo-next", runId: "run-fifo-next" };
@@ -446,16 +650,12 @@ it("preserves same-session FIFO and cannot conditionally release a successor", a
 
 it("rolls back claim admission when live authority is revoked at commit", async () => {
   let revoked = false;
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          revoked = true;
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(operationAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      revoked = true;
+    }
+    admit(request, grant);
+  });
   await expect(
     placements.claimTurn(input("refused"), () => {
       if (revoked) {
@@ -464,7 +664,7 @@ it("rolls back claim admission when live authority is revoked at commit", async 
     }),
   ).rejects.toThrow("synthetic placement admission revoked");
   expect(revoked).toBe(true);
-  expect(placements.get("placement-worker-refused")).toBeUndefined();
+  expect(await placements.getAsync("placement-worker-refused")).toBeUndefined();
 });
 
 it("fences retained authority before release commit and closes observers after settlement", async () => {
@@ -474,21 +674,17 @@ it("fences retained authority before release commit and closes observers after s
   const closed = vi.fn();
   const unsubscribe = placements.registerTurnClaimClosedHandler(closed);
   authority.onRevoked(revoked);
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
   let commitObservation: { current: boolean; revoked: number; closed: number } | undefined;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        admit(request, grant);
-        if (request.stage === "commit") {
-          commitObservation = {
-            current: authority.isCurrent(),
-            revoked: revoked.mock.calls.length,
-            closed: closed.mock.calls.length,
-          };
-        }
-      }, attachment),
-  );
+  probe.admission(operationAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    if (request.stage === "commit") {
+      commitObservation = {
+        current: authority.isCurrent(),
+        revoked: revoked.mock.calls.length,
+        closed: closed.mock.calls.length,
+      };
+    }
+  });
   try {
     const released = placements.waitForTurnClaimRelease(claim.sessionId, {});
     await placements.releaseTurn(claim);
@@ -621,7 +817,7 @@ it("keeps a later same-byte native claim authoritative when the old release repl
       write: (operation) =>
         runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
     });
-    const replacement = native.claimTurn(requested);
+    const replacement = native.claimTurn(requested).claim;
     next = await placements.prepareTurnClaimAuthority(replacement);
     expect(next.isCurrent()).toBe(true);
     delivered = true;

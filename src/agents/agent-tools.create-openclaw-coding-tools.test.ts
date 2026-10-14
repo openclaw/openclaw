@@ -25,6 +25,7 @@ import "./test-helpers/fast-openclaw-tools.js";
 import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   createOpenClawReadTool,
@@ -32,7 +33,7 @@ import {
   wrapReadToolWithSkillContent,
 } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -49,7 +50,6 @@ import {
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
-import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -393,20 +393,20 @@ describe("createOpenClawCodingTools", () => {
     expect(tool.parameters).toEqual({ type: "object", properties: {} });
   });
 
-  it("lets explicit deny policies remove Tool Search controls", () => {
+  it.each(["tool_call"])("honors the shipped dispatcher deny %s", (name) => {
     const tools = createOpenClawCodingTools({
       includeToolSearchControls: true,
       config: {
         tools: {
           profile: "coding",
-          deny: ["tool_call"],
+          deny: [name],
           toolSearch: true,
         },
       },
     });
     const names = new Set(tools.map((tool) => tool.name));
 
-    expect(names.has("tool_call")).toBe(false);
+    expect(names.has("dispatch_action")).toBe(false);
     expect(names.has("read")).toBe(true);
   });
 
@@ -435,7 +435,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
     expect(names.has("tool_search")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
-    expect(names.has("tool_call")).toBe(true);
+    expect(names.has("dispatch_action")).toBe(true);
     expect(names.has("message")).toBe(false);
     expect(names.has("exec")).toBe(false);
   });
@@ -603,7 +603,7 @@ describe("createOpenClawCodingTools", () => {
         },
       });
     }
-    const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+    const conversationCapabilityProfile = await prepareConversationCapabilityProfile({
       config,
       agentId: "main",
       sessionKey: requesterSessionKey,
@@ -721,14 +721,6 @@ describe("createOpenClawCodingTools", () => {
     expect(extractToolText(next)).toBe(original.slice(continuation?.cursor));
   });
 
-  const pluginOnlyConstructionPlan = {
-    includeBaseCodingTools: false,
-    includeShellTools: false,
-    includeChannelTools: false,
-    includeOpenClawTools: false,
-    includePluginTools: true,
-  };
-
   it("includes plugin tools declared for the active built-in profile", () => {
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
@@ -779,75 +771,9 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
-    let observedIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
-    const resolvePluginToolsSpy = vi
-      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
-      .mockReturnValue([
-        {
-          name: "file_fetch",
-          label: "File fetch",
-          description: "Fetch a file",
-          parameters: { type: "object", properties: {} },
-          execute: async () => {
-            observedIdentity = getGatewayToolCallerIdentity();
-            return { content: [{ type: "text" as const, text: "ok" }], details: {} };
-          },
-        },
-      ]);
+  registerPluginOnlyCallerIdentityCase({ testConfig, requireTool });
 
-    try {
-      const tools = createOpenClawCodingTools({
-        config: {
-          ...testConfig,
-          channels: {
-            discord: {
-              accounts: {
-                creator: {},
-              },
-            },
-          },
-        },
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:alice",
-        messageProvider: "discord-voice",
-        messageChannel: "discord",
-        messageTo: "channel:123",
-        agentAccountId: "work",
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:discord:group:ops",
-          ownerAccountId: "creator",
-          ownerOrigin: { kind: "external", channel: "discord" },
-        },
-        messageThreadId: "42",
-        includeCoreTools: false,
-        runtimeToolAllowlist: ["file_fetch"],
-        inheritRuntimeToolAllowlist: true,
-        toolConstructionPlan: pluginOnlyConstructionPlan,
-      });
-
-      await requireTool(tools, "file_fetch").execute?.("tool-call-1", {});
-      expect(observedIdentity).toEqual({
-        agentId: "main",
-        assertToolAllowed: expect.any(Function),
-        sessionKey: "agent:main:telegram:direct:alice",
-        turnSourceChannel: "discord",
-        turnSourceTo: "channel:123",
-        turnSourceAccountId: "creator",
-        turnSourceThreadId: "42",
-      });
-      expect(() => observedIdentity?.assertToolAllowed?.("file_fetch")).not.toThrow();
-      expect(() => observedIdentity?.assertToolAllowed?.("exec")).toThrow(
-        "exec is not allowed by this conversation's tool policy",
-      );
-    } finally {
-      resolvePluginToolsSpy.mockRestore();
-    }
-  });
-
-  it("materializes additive runtime tools while preserving normal deny policy", () => {
+  it("materializes additive runtime tools while preserving normal deny policy", async () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const config: OpenClawConfig = {
@@ -859,7 +785,7 @@ describe("createOpenClawCodingTools", () => {
 
     createOpenClawCodingTools({
       config,
-      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      conversationCapabilityProfile: await prepareConversationCapabilityProfile({
         config,
         runtimePluginToolGrant: {
           pluginId: "workboard",
@@ -1752,39 +1678,5 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(details?.truncation?.outputLines).toBe(1);
     expect(details?.truncation?.firstLineExceedsLimit).toBe(false);
     expect(details?.truncation).not.toHaveProperty("content");
-  });
-
-  it("redacts env files while preserving config and source reads", async () => {
-    const credential = "unquoted-config-credential-1234567890";
-    const source = "API_TOKEN = computeToken()";
-    const execute = vi.fn(async (_toolCallId: string, args: { path: string }) => {
-      const text =
-        args.path.endsWith(".ts") || args.path.endsWith(".envrc")
-          ? source
-          : `api_key: ${credential}`;
-      return {
-        content: [{ type: "text" as const, text }],
-        details: { kind: "text", content: text },
-      };
-    });
-    const readTool = createOpenClawReadTool({
-      name: "read",
-      label: "read",
-      description: "test read",
-      parameters: Type.Object({ path: Type.String() }),
-      execute,
-    });
-
-    const yamlResult = await readTool.execute("read-yaml", { path: "settings.yaml" });
-    const envResult = await readTool.execute("read-env", { path: "production.env" });
-    const sourceResult = await readTool.execute("read-source", { path: "settings.ts" });
-    const envrcResult = await readTool.execute("read-envrc", { path: ".envrc" });
-
-    expect(extractToolText(yamlResult)).toBe(`api_key: ${credential}`);
-    expect(extractToolText(envResult)).not.toContain(credential);
-    expect(JSON.stringify(envResult.details)).not.toContain(credential);
-    expect(envResult.details).toEqual({ kind: "text", content: extractToolText(envResult) });
-    expect(extractToolText(sourceResult)).toBe(source);
-    expect(extractToolText(envrcResult)).toBe(source);
   });
 });

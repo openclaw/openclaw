@@ -48,7 +48,8 @@ export function buildLoginProviders({
     if (providers && !providers.includes(capability.provider)) {
       continue;
     }
-    for (const option of capability.loginOptions ?? []) {
+    const loginOptions = capability.loginOptions ?? [];
+    for (const option of loginOptions) {
       const group = ensureGroup(option.brandId, capability.provider);
       group.label ||= option.groupLabel?.trim() ?? "";
       if (!choices.has(option.id)) {
@@ -59,8 +60,8 @@ export function buildLoginProviders({
     // Quick-key support is independent of wizard choices. Keep the exact
     // capability owner for the key form even when its login brand is an alias.
     if (capability.quickApiKeySetup && allowQuickApiKey) {
-      const brands = capability.loginOptions?.length
-        ? capability.loginOptions.map((option) => option.brandId)
+      const brands = loginOptions.length
+        ? loginOptions.map((option) => option.brandId)
         : [capability.provider];
       for (const id of new Set(brands)) {
         const group = ensureGroup(id, capability.provider);
@@ -68,29 +69,27 @@ export function buildLoginProviders({
       }
     }
   }
-  if (manualProviders) {
-    for (const option of manualProviders) {
-      const id = option.brandId ?? option.id;
-      if (choices.has(option.id) || (providers && !providers.includes(id))) {
-        continue;
-      }
-      const group = ensureGroup(id, id);
-      group.label ||= option.groupLabel?.trim() || option.label;
-      const duplicateLabel = group.choices.some((choice) => choice.label === option.label);
-      group.choices.push({
-        ...option,
-        brandId: id,
-        kind: "setup-secret",
-        featured: false,
-        ...(duplicateLabel
-          ? {
-              label: t("modelSetup.manual.accessValueFor", { provider: option.label }),
-              hint: t("modelSetup.manual.accessValuePlaceholder"),
-            }
-          : {}),
-      });
-      choices.add(option.id);
+  for (const option of manualProviders ?? []) {
+    const id = option.brandId ?? option.id;
+    if (choices.has(option.id) || (providers && !providers.includes(id))) {
+      continue;
     }
+    const group = ensureGroup(id, id);
+    group.label ||= option.groupLabel?.trim() || option.label;
+    const duplicateLabel = group.choices.some((choice) => choice.label === option.label);
+    group.choices.push({
+      ...option,
+      brandId: id,
+      kind: "setup-secret",
+      featured: false,
+      ...(duplicateLabel
+        ? {
+            label: t("modelSetup.manual.accessValueFor", { provider: option.label }),
+            hint: t("modelSetup.manual.accessValuePlaceholder"),
+          }
+        : {}),
+    });
+    choices.add(option.id);
   }
   for (const group of groups.values()) {
     group.label ||= providerDisplayLabel(group.id);

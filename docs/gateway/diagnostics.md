@@ -137,6 +137,23 @@ and does not change admission, ordering, or warning thresholds.
 The Gateway records a bounded, payload-free stability stream by default when
 diagnostics are enabled. It captures operational facts, not content.
 
+Child-process spawn samples use bounded command families and operation labels.
+Known owners distinguish agent exec launches (`agent.exec`), shell environment
+snapshots (`shell.snapshot`), and service relay helpers (`service.relay`).
+Additional owners distinguish CLI backends (`agent.cli`), isolated file reads
+(`agent.file-read`), service-manager commands (`service.manager`), native worktree
+writes (`worktree.filesystem`), retired checkout deletion (`worktree.cleanup`),
+and temporary pack cleanup (`worktree.maintenance`).
+Relays launched for agent exec retain `agent.exec` as their owner.
+Native PTY exec launches use the same counter after successful admission.
+Windows PTYs publish their PID asynchronously, so attribution waits for the first
+output or exit without delaying the terminal.
+Unscoped launches use fixed classifications such as `unscoped.shell-command`,
+`unscoped.runtime`, or `unscoped.gh`; arguments, script text,
+and paths never become labels. Linux OOM-protection exec wrappers report the
+logical target command, since the spawn broker can omit the wrapper shell.
+Counts represent successful admitted launches, not a census of grandchildren.
+
 Gateway RPC diagnostics retain exact core and registered plugin method names,
 including `node.invoke.result` and `workboard.cards.list`; unregistered request
 names fold into `other` (dedicated worker ingress uses `unknown`). The method
@@ -151,6 +168,17 @@ pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
 (or `none` when no wake is pending). Overdue diagnostic heartbeats run once after sleep;
 the scheduler does not replay missed ticks.
 
+Best-effort maintenance shares a ten-second phase. Its first pass may run up to
+ten seconds early; later passes stay on nominal slots instead of drifting with
+callback duration. Healthy idle event-loop sampling joins this phase, while active
+or degraded sampling keeps its one-second cadence. Expiry, retry, lease, and
+transport-liveness deadlines retain their own timing.
+
+Healthy native directory watches use a five-minute recovery sweep for missed
+events. Missing directories, ancestor watches, and failed watches retry within
+30 seconds. Auth, database-identity, and session-source observers retain their
+30-second recovery bound; delivered native events still invalidate immediately.
+
 The same heartbeat also samples liveness when the event loop or CPU looks
 saturated, emitting `diagnostic.liveness.warning` events with event-loop delay,
 event-loop utilization, CPU-core ratio, active/waiting/queued session counts,
@@ -161,6 +189,21 @@ delay, or when the Gateway reports at least 60 seconds of persistent degradation
 otherwise they log at `debug`. Persistent Gateway degradation can warn even when
 no tracked work is active. Other idle liveness samples remain diagnostic events
 without escalating to a warning.
+
+The Gateway also emits an always-on `main-thread stall` warning after a synchronous
+callback blocks for more than one second. Each line names the longest-running
+known task segment from scheduled jobs, diagnostic phases, timeline spans, or
+worker message handling, with elapsed and task milliseconds. Time awaiting I/O
+does not count as task execution. A task label expires when its callback returns
+or its returned promise settles; detached work does not retain a completed startup
+phase's label. Unknown callbacks use `task=unattributed`;
+process suspension can also produce an unattributed delay. Reporting is bounded
+to eight pending stalls, with an omitted count if that limit is exceeded. This
+requires neither an inspector connection nor a sampling profiler.
+
+Detailed attribution of asynchronous continuations requires Node's `async_hooks`
+callback boundaries. Bun currently reports explicit synchronous task scopes and
+otherwise retains unattributed delay warnings.
 
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
 whole-process CPU timing, including worker and native threads. Phase CPU can
@@ -209,10 +252,16 @@ Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
 `kind=sandbox` covers a managed guest projection through backend readiness,
 including workspace/skill layout and container provisioning. `durationMs` measures
-the whole operation. `phaseDurationsMs` attributes allocation admission, checkout,
-setup execution, template preparation and application, snapshot capture, synchronization in each
-direction, workspace layout, and container startup. Phases include nested work
-and asynchronous waits, so do not add them to the total. Unentered phases are
+the whole operation. `phaseDurationsMs` separates repository and source preparation,
+allocation and checkout-lease waits and release, slot reservation, base resolution, checkout
+registration, disk admission, ignored-file provisioning, source-custody release, and registry publication.
+Base resolution distinguishes the shared remote refresh, object hydration, local
+fast-forward, and each caller's wait for that preparation. Template preparation
+and application, index refresh, setup execution, snapshot capture, synchronization
+in each direction, workspace layout, and container startup have their own phases.
+Phases include nested work and asynchronous waits, so do not add them to the
+total. `unattributedMs` measures elapsed time outside all recorded phases without
+double-counting overlaps. Unentered phases are
 absent. `template` is `warm`, `cold`, `unavailable`, or `reused` for an existing
 projection; records contain no repository paths, session keys, or setup output.
 With diagnostics enabled, the same observation feeds the
@@ -246,6 +295,31 @@ the warning's `pid` and `workerThreadId` to an agent-database-open warning's
 `pid` and `threadId` to identify the awaited Worker. This establishes association,
 not CPU attribution or a breakdown of the Worker's lifetime. A missing Worker
 ID does not establish that work ran on the main thread.
+
+From a source checkout, summarize an existing JSONL file without contacting the
+Gateway or opening its databases:
+
+```bash
+node scripts/diagnostic-writer-occupancy.mts gateway.log --json \
+  --from 2026-10-13T14:10:00Z --until 2026-10-13T15:50:00Z
+```
+
+The report splits observed reservation and queue-wait intervals into UTC minutes,
+ranks operation categories, and lists the longest observed reservations. Native
+transaction phases appear separately: `hostAdmissionWaitMs` measures time awaiting
+the host, while `sqlMs` is the remaining execution time, including JavaScript
+processing. Do not add transaction time to enclosing reservation time.
+
+This is a warning census, not complete writer utilization. Fast operations are
+absent, `direct` reservations do not identify their underlying command, and logs
+do not record physical queue depth. The maximum overlap of observed waits is
+scoped to a process/thread but can span different databases; it does not identify
+which holder blocked a particular waiter. Reentrant and session-lifecycle queue
+records are excluded from reservation totals. Interval reconstruction uses log
+emission time as a completion proxy and clips to the requested window, so include
+records emitted just after the window too. Supply each event once from one host,
+including rotated files through stdin when needed. Output retains fixed operation
+categories and numeric timing only, without paths, session identities, or content.
 
 Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
@@ -307,16 +381,36 @@ response limit does not bound the runtime's internal allocation during that dela
 samples describe this isolate, not all process threads, and are not exact
 per-function CPU accounting.
 
-On Node, starting a CPU profile synchronously scans V8's heap to build its code map. On a
-large Gateway this can block the main event loop for seconds on every capture
-(about 3.5 seconds has been observed with a 3 GB heap),
-before regular sampling begins. Keeping the inspector domain enabled or sending
-the request from a Worker does not avoid that main-isolate work.
+On Node, CPU captures share the native profiler with the Gateway's stall flight
+recorder. While that recorder is active on Node 26, starting an operator capture
+reuses its code map without scanning the heap again. If no native profile is
+already active, starting a CPU profile synchronously scans V8's heap to build
+the code map. On a large Gateway this can block the main event loop for seconds
+(about 3.5 seconds has been observed with a 3 GB heap). Bun uses its inspector
+profiler. Keeping an inspector domain enabled or sending a request from a Worker
+does not avoid V8's main-isolate scan.
 `startBlockedMs` measures the synchronous start call with a monotonic clock,
 excluding promise waits, setup, sampling time, and stop/cleanup. Use it to
 attribute capture-induced stalls when analyzing an individual capture; it cannot
 be subtracted from aggregate event-loop maxima or percentiles. The measurement
 reports the cost; it does not prevent or interrupt the native stall.
+
+From a source checkout, attribute native self samples to their nearest JavaScript
+parent with:
+
+```bash
+node scripts/diagnostic-cpu-native-parents.mts cpu-1.json cpu-2.json
+```
+
+The script accepts saved RPC results or raw V8 profiles and prints the top 20
+parents for each capture. Add `--json` for all parent rows. Percentages use elapsed
+profile time, including idle and garbage collection, rather than active CPU time.
+Signed sample deltas remain intact. For RPC results, it separately reports a first
+native sample under the diagnostic profiler's inspector start call and shows
+workload percentages with that sample and its duration excluded. This prevents a
+large profiler-start sample from being mistaken for steady application work;
+it does not remove the actual stall or alter the saved profile. Raw profiles lack
+the `startBlockedMs` metadata and retain every sample in workload percentages.
 
 The RPC refuses a known active inspector listener, profiling flags, coverage
 collection, or any active Node tracing, including non-CPU categories. Stop tracing
@@ -367,53 +461,75 @@ messages. Keep them on the host, review any transfer separately, and delete them
 manually after analysis. Successful snapshots are retained until removed; there
 is no automatic snapshot collection or retention job.
 
-RPC snapshots reset object IDs after each capture. Inspect their retaining paths
-individually; do not correlate their object IDs or use them as inputs to the
-identity-based diff below. For an identity-based comparison, capture two points
-through the same continuously attached debugger on an isolated analysis process,
-then compare them from a source checkout:
+RPC snapshots reset object IDs after each capture. Compare standalone RPC
+snapshots with independent object-ID spaces:
 
 ```bash
-node scripts/heap-snapshot-diff.mjs before.heapsnapshot after.heapsnapshot
+node scripts/heap-snapshot-diff.mjs before.heapsnapshot after.heapsnapshot --independent-ids
 ```
 
-The tool reports retained bytes by constructor/class and the largest changes by
-dominator (the object through which all strong root paths pass). It streams input
-and analyzes snapshots sequentially, but still needs memory proportional to the
-object graph; run large diffs on a separate analysis host with enough memory.
-Weak and shortcut edges are excluded. Class totals count nested instances of the
-same class once; totals across different classes can overlap. Object IDs match
-only while the same isolate's object-ID map remains active. Use Chrome DevTools for interactive retaining
-paths and V8-specific weak/ephemeron semantics; the script is a strong-edge graph
-summary. `--json` produces machine-readable output. Treat diff output as sensitive
-too: it contains unredacted heap names.
+This mode compares retained bytes by constructor/class and reports the largest
+retained objects and their paths separately for each snapshot. Object IDs belong
+to one snapshot: equal IDs do not establish that an object survived between
+captures. With `--json`, `before` and `after` each contain their own `dominators`
+and `retainers`; `classes` contains the cross-snapshot totals.
 
-Add `--top 40 --max-depth 60` to include named strong retaining paths and
-dominator chains for the largest growers. `--node <id>` selects a particular
-object in the later snapshot. A shortest root path shows reachability;
-the separate dominator chain identifies exclusive retention in that graph.
+For two captures from the same continuously attached debugger on an isolated
+analysis process, omit `--independent-ids`. This preserves object-ID matching and
+reports individual dominator changes. A dominator is an object through which all
+strong root paths pass. This comparison requires the same isolate's object-ID
+map to remain active between captures.
 
-From a built source checkout, an isolated synthetic workload can collect a
-pair of standalone RPC snapshots without connecting to an existing Gateway:
+The tool streams input and needs memory proportional to the object graphs; run
+large comparisons on an analysis host with enough memory. Weak and shortcut edges
+are excluded. Class totals count nested instances of the same class once; totals
+across different classes can overlap. Use Chrome DevTools for interactive
+retaining paths and V8-specific weak/ephemeron semantics; the script is a
+strong-edge graph summary. Treat output as sensitive: it contains unredacted
+heap names.
+
+Use `--top 40 --max-depth 60` to adjust the number of reported objects and path
+depth. `--node <id>` selects a particular object in the later snapshot in either
+mode. A shortest root path shows reachability; the separate dominator chain
+identifies exclusive retention in that graph.
+
+From a built source checkout, an isolated synthetic workload can collect a pair
+of standalone RPC snapshots without connecting to an existing Gateway:
 
 ```bash
-node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90
+node --import ./scripts/tsx.mjs scripts/gateway-heap-rig.mjs \
+  --root ../heap-rig/baseline --minutes 180 --snapshot-minutes 60,180 \
+  --rpc-interval-ms 440 --turn-interval-ms 5000
 ```
 
 Run this on a dedicated host with enough memory for snapshots. It starts the
 dist Gateway and local mock model servers on loopback ports 19548–19550,
-seeds 2,000 sessions across two agents, and drives ten reconnecting Control UI
-WebSocket clients plus mock model, Code Mode, and subagent turns. A synthetic
-catalog plugin exercises Gateway projection and publication ownership; it does
-not emulate a native provider's caches or remote-node transport.
-The root must be new. All state, logs, minute samples, and snapshots stay there.
-The rig stops its children on completion or interruption and retains evidence.
-Successful RPC counts and any retried refusals are recorded separately. If
-`projects.list` refuses a read because access facts changed, the rig retries it
-once; a second refusal or another error stops the run.
+seeds 2,000 sessions with 32 KiB histories across two agents, and drives ten
+reconnecting Control UI WebSocket clients. The workload polls session, history,
+model, and cron APIs and sends mock `chat.send` turns with 8 KiB replies, Code
+Mode calls, subagents, uploaded artifact previews, and manually triggered cron
+jobs. Terminal receipts, persisted replies, artifact previews, and cron history
+must match the synthetic fixtures. A synthetic catalog plugin exercises Gateway
+projection and publication ownership; it does not emulate a native provider's
+caches or remote-node transport.
+
+Eight text sessions retain conversation history. Tool sessions rotate through
+32 slots, and the archive cohort retains at most 64 churn sessions. Lifecycle
+mutations use the observed session IDs. The evidence records these populations
+and turn counts so intentional history growth can be distinguished from leaked
+state. Snapshots wait for admitted turns and RPCs to settle and keep the same
+clients connected for both captures.
+
+The root must be new. Each synthetic workspace has its own empty Git repository,
+keeping Git baseline discovery away from the rig's live SQLite files. State,
+logs, ten-second samples, ten-minute heap minima, and snapshots stay under the
+root. The rig records successful RPC counts and stops its children on completion,
+interruption, or a failed workload check. Evidence remains for analysis.
+
 Use the same script and settings with another Node binary for a runtime control;
-choose another root and three-port block for each run. Raw minute samples include
+choose another root and three-port block for each run. Raw samples include
 allocation churn; compare the snapshot `heapUsedAfter` anchors for post-GC growth.
+Use `--independent-ids` when analyzing the rig's RPC snapshot pair.
 
 ## Sampling heap profile
 
@@ -423,7 +539,7 @@ JavaScript isolate without taking a whole-heap snapshot:
 ```bash
 openclaw gateway call diagnostics.heapProfile --params '{}' --timeout 30000 --json
 openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"samplingIntervalBytes":32768}' --timeout 45000 --json
-openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollectedByMajorGC":true,"includeObjectsCollectedByMinorGC":true}' --timeout 30000 --json
+openclaw gateway call diagnostics.heapProfile --params '{"includeCollected":true}' --timeout 30000 --json
 ```
 
 The RPC supports Node and OpenClaw's Bun runtime. It defaults to five seconds and an average sampling interval of
@@ -435,7 +551,8 @@ collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
 
-The optional booleans `includeObjectsCollectedByMajorGC` and
+`includeCollected: true` enables both collected-object flags. Explicit per-GC
+flags override the shorthand. The optional booleans `includeObjectsCollectedByMajorGC` and
 `includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
 samples of objects collected during the window and attribute transient allocation
 churn. Retaining collected samples can increase profiler memory use.
@@ -604,6 +721,18 @@ Worker for five minutes, reusing it only when its runtime entry and heap limit
 match. Warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
+
+## Garbage collection metrics
+
+The [GC histogram](/gateway/prometheus#garbage-collection-duration) separates minor
+scavenges, major mark/sweep/compact collections, incremental work, and weak-reference
+processing. Counts and elapsed durations are grouped by main thread or bounded
+worker script kind, without per-GC log lines. Instrumented workers use their
+existing memory telemetry port and observe GC only while an exporter is interested.
+Worker GC batches ride the next heap sample (normally every 30 seconds), with a
+flush after 256 pending samples or on orderly worker shutdown. Individual collection counts and durations
+are preserved; worker histogram updates can lag by one sampling interval.
+Workers without that port are not covered; a missing series does not mean zero GC.
 
 ## RPC response size and heap changes
 

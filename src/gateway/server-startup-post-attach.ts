@@ -5,7 +5,7 @@ import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveInternalHookSelection } from "../hooks/configured.js";
+import { type InternalHookSelection, resolveInternalHookSelection } from "../hooks/configured.js";
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
@@ -20,6 +20,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import {
   getGatewayContextLifetime,
   withPluginRuntimeRegistryScope,
@@ -29,7 +30,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
@@ -140,18 +141,35 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
   startupOutcomes?: GatewayStartupOutcomeRecorder;
+  internalHookSelection?: InternalHookSelection;
   waitForPostReadyWork?: () => Promise<void>;
 }) {
   const restartSentinelContext =
     params.restartSentinelContext ?? captureDeliveryQueueStateContext();
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
+  const scheduleSidecar = (
+    task: Pick<Parameters<typeof schedulePostReadySidecarTask>[0], "name" | "run" | "stop">,
+  ) => {
+    postReadySidecars.push(
+      schedulePostReadySidecarTask({
+        startupTrace: params.startupTrace,
+        log: params.log,
+        waitForPostReadyWork: params.waitForPostReadyWork,
+        shouldRun: params.shouldCreatePostReadySidecars,
+        ...task,
+      }),
+    );
+  };
 
-  const internalHooksConfigured = resolveInternalHookSelection(params.cfg).configured;
-  await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
+  const internalHookSelection =
+    params.internalHookSelection ?? (await resolveInternalHookSelection(params.cfg));
+  const internalHooksConfigured = internalHookSelection.configured;
+  const internalHooks = measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
     try {
       const { prepareInternalHooks } = await import("../hooks/loader.js");
       const prepared = await prepareInternalHooks(params.cfg, params.defaultWorkspaceDir, {
         failureMode: "best-effort",
+        selection: internalHookSelection,
       });
       if (
         params.shouldCreatePostReadySidecars?.() === false ||
@@ -192,36 +210,50 @@ export async function startGatewaySidecars(params: {
 
   const skipChannels = isChannelStartupSuppressedByEnvironment();
   const getModelRuntimeConfig = params.getModelRuntimeConfig ?? (() => params.cfg);
-  // Agent RPC remains available when transports are disabled. Publish configured/static facts before
-  // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
-  if ((await params.pluginRuntimeClaim?.waitForUnblocked()) !== false) {
-    await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
-      withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
-        publishConfiguredModelRuntimeSnapshots({
-          cfg: params.cfg,
-          getConfig: () =>
-            measureStartup(params.startupTrace, "sidecars.model-auth", () =>
-              hydrateConfiguredExternalCliAuth({
-                getConfig: getModelRuntimeConfig,
-                log: params.log,
-              }),
-            ),
-          isCurrent: params.pluginRuntimeClaim?.isCurrent,
-          ...(params.pluginMetadataSnapshot
-            ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-            : {}),
-          workspaceDir: params.defaultWorkspaceDir,
-          startupTrace: params.startupTrace,
-        }),
-      ),
-    );
+  // Join independent preparation even after a failure so startup cleanup retains every import.
+  const prepared = await Promise.allSettled([
+    internalHooks,
+    (async () => {
+      // Agent RPC remains available when transports are disabled. Publish configured/static facts
+      // before accepting work; live provider catalogs remain advisory.
+      if ((await params.pluginRuntimeClaim?.waitForUnblocked()) !== false) {
+        await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
+          withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
+            publishConfiguredModelRuntimeSnapshots({
+              cfg: params.cfg,
+              getConfig: () =>
+                measureStartup(params.startupTrace, "sidecars.model-auth", () =>
+                  hydrateConfiguredExternalCliAuth({
+                    getConfig: getModelRuntimeConfig,
+                    log: params.log,
+                  }),
+                ),
+              isCurrent: params.pluginRuntimeClaim?.isCurrent,
+              ...(params.pluginMetadataSnapshot
+                ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+                : {}),
+              workspaceDir: params.defaultWorkspaceDir,
+              startupTrace: params.startupTrace,
+            }),
+          ),
+        );
+      }
+    })(),
+    // Readiness owns process-stable request imports so the first turn and connection do not.
+    measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
+      const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
+      await prewarmConfigDrivenReplyRuntime();
+    }),
+    measureStartup(
+      params.startupTrace,
+      "sidecars.connection-runtime",
+      () => import("./server/ws-connection/message-handler.js"),
+    ),
+  ]);
+  const failed = prepared.find((outcome) => outcome.status === "rejected");
+  if (failed?.status === "rejected") {
+    throw failed.reason;
   }
-  // Gateway readiness owns process-stable reply module activation so the first operator turn
-  // does not become the module loader under contention.
-  await measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
-    const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
-    await prewarmConfigDrivenReplyRuntime();
-  });
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });
@@ -401,124 +433,105 @@ export async function startGatewaySidecars(params: {
   }
 
   let restartSentinelWake: GatewayPostReadySidecarHandle | undefined;
-  postReadySidecars.push(
-    schedulePostReadySidecarTask({
-      startupTrace: params.startupTrace,
-      name: "sidecars.restart-sentinel",
-      log: params.log,
-      waitForPostReadyWork: params.waitForPostReadyWork,
-      shouldRun: params.shouldCreatePostReadySidecars,
-      run: async (isStopped) => {
-        if (process.env.VITEST || process.env.NODE_ENV === "test" || isStopped()) {
-          return;
-        }
-        if (!(await hasRestartSentinel(restartSentinelContext.workerContext.environment))) {
-          const { assertNoRetiredRestartSentinelFiles } =
-            await import("../infra/state-migrations.restart-sentinel.js");
-          assertNoRetiredRestartSentinelFiles(restartSentinelContext.stateDir);
-          return;
-        }
+  scheduleSidecar({
+    name: "sidecars.restart-sentinel",
+    run: async (isStopped) => {
+      if (process.env.VITEST || process.env.NODE_ENV === "test" || isStopped()) {
+        return;
+      }
+      if (!(await hasRestartSentinel(restartSentinelContext.workerContext.environment))) {
+        const { assertNoRetiredRestartSentinelFiles } =
+          await import("../infra/state-migrations.restart-sentinel.js");
+        assertNoRetiredRestartSentinelFiles(restartSentinelContext.stateDir);
+        return;
+      }
+      if (isStopped()) {
+        return;
+      }
+      restartSentinelWake = scheduleRestartSentinelWakeAfterReady({
+        scheduler: params.scheduler,
+        context: restartSentinelContext,
+        deps: params.deps,
+        log: params.log,
+        shouldRun: params.shouldCreatePostReadySidecars,
+      });
+    },
+    stop: async () => {
+      await restartSentinelWake?.stop();
+    },
+  });
+
+  if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
+    scheduleSidecar({
+      name: "sidecars.gmail-watch",
+      run: async (isStopped, signal) => {
+        const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
         if (isStopped()) {
           return;
         }
-        restartSentinelWake = scheduleRestartSentinelWakeAfterReady({
+        await startGmailWatcherWithLogs({
+          cfg: params.cfg,
+          log: params.logHooks,
+          signal,
           scheduler: params.scheduler,
-          context: restartSentinelContext,
-          deps: params.deps,
-          log: params.log,
-          shouldRun: params.shouldCreatePostReadySidecars,
         });
       },
-      stop: async () => {
-        await restartSentinelWake?.stop();
-      },
-    }),
-  );
-
-  if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
-    postReadySidecars.push(
-      schedulePostReadySidecarTask({
-        startupTrace: params.startupTrace,
-        name: "sidecars.gmail-watch",
-        log: params.log,
-        waitForPostReadyWork: params.waitForPostReadyWork,
-        shouldRun: params.shouldCreatePostReadySidecars,
-        run: async (isStopped, signal) => {
-          const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
-          if (isStopped()) {
-            return;
-          }
-          await startGmailWatcherWithLogs({
-            cfg: params.cfg,
-            log: params.logHooks,
-            signal,
-            scheduler: params.scheduler,
-          });
-        },
-      }),
-    );
+    });
   }
 
   if (params.cfg.hooks?.gmail?.model) {
-    postReadySidecars.push(
-      schedulePostReadySidecarTask({
-        startupTrace: params.startupTrace,
-        name: "sidecars.gmail-model",
-        log: params.log,
-        waitForPostReadyWork: params.waitForPostReadyWork,
-        shouldRun: params.shouldCreatePostReadySidecars,
-        run: async (isStopped) => {
-          const [
-            { DEFAULT_MODEL, DEFAULT_PROVIDER },
-            { readPreparedModelCatalog },
-            { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
-          ] = await Promise.all([
-            loadAgentDefaultsModule(),
-            import("../agents/prepared-model-catalog.js"),
-            loadAgentModelSelectionModule(),
-          ]);
+    scheduleSidecar({
+      name: "sidecars.gmail-model",
+      run: async (isStopped) => {
+        const [
+          { DEFAULT_MODEL, DEFAULT_PROVIDER },
+          { loadPreparedModelCatalogOwnerSnapshot },
+          { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
+        ] = await Promise.all([
+          loadAgentDefaultsModule(),
+          import("../agents/prepared-model-catalog.js"),
+          loadAgentModelSelectionModule(),
+        ]);
+        if (isStopped()) {
+          return;
+        }
+        const hooksModelRef = resolveHooksGmailModel({
+          cfg: params.cfg,
+          defaultProvider: DEFAULT_PROVIDER,
+        });
+        if (hooksModelRef) {
+          const { provider: resolvedDefaultProvider, model: defaultModel } =
+            resolveConfiguredModelRef({
+              cfg: params.cfg,
+              defaultProvider: DEFAULT_PROVIDER,
+              defaultModel: DEFAULT_MODEL,
+            });
+          const catalog = (
+            await loadPreparedModelCatalogOwnerSnapshot({ config: params.cfg, readOnly: true })
+          ).modelCatalog.entries;
           if (isStopped()) {
             return;
           }
-          const hooksModelRef = resolveHooksGmailModel({
+          const status = getModelRefStatus({
             cfg: params.cfg,
-            defaultProvider: DEFAULT_PROVIDER,
+            catalog,
+            ref: hooksModelRef,
+            defaultProvider: resolvedDefaultProvider,
+            defaultModel: { provider: resolvedDefaultProvider, model: defaultModel },
           });
-          if (hooksModelRef) {
-            const { provider: resolvedDefaultProvider, model: defaultModel } =
-              resolveConfiguredModelRef({
-                cfg: params.cfg,
-                defaultProvider: DEFAULT_PROVIDER,
-                defaultModel: DEFAULT_MODEL,
-              });
-            const catalog = await readPreparedModelCatalog({
-              config: params.cfg,
-              readOnly: true,
-            });
-            if (isStopped()) {
-              return;
-            }
-            const status = getModelRefStatus({
-              cfg: params.cfg,
-              catalog,
-              ref: hooksModelRef,
-              defaultProvider: resolvedDefaultProvider,
-              defaultModel: { provider: resolvedDefaultProvider, model: defaultModel },
-            });
-            if (!status.allowed) {
-              params.logHooks.warn(
-                `hooks.gmail.model "${status.key}" not allowed by agents.defaults.modelPolicy.allow (will use primary instead)`,
-              );
-            }
-            if (!status.inCatalog) {
-              params.logHooks.warn(
-                `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
-              );
-            }
+          if (!status.allowed) {
+            params.logHooks.warn(
+              `hooks.gmail.model "${status.key}" not allowed by agents.defaults.modelPolicy.allow (will use primary instead)`,
+            );
           }
-        },
-      }),
-    );
+          if (!status.inCatalog) {
+            params.logHooks.warn(
+              `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
+            );
+          }
+        }
+      },
+    });
   }
 
   // These handles schedule later tasks but do not yield after creation. Transfer
@@ -576,6 +589,7 @@ export async function startGatewayPostAttachRuntime(
     isNixMode: boolean;
     startupStartedAt?: number;
     broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+    broadcast?: GatewayBroadcastFn;
     getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
     controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
@@ -707,6 +721,11 @@ export async function startGatewayPostAttachRuntime(
       return await disposeUnattached();
     }
     pluginRegistry = loaded.pluginRegistry;
+    params.broadcast?.(
+      "plugins.changed",
+      { generation: getPluginRegistryVersion(pluginRegistry) },
+      { dropIfSlow: true },
+    );
     params.startupTrace?.detail("plugins.runtime-post-bind", [
       [
         "loadedPluginCount",
@@ -770,6 +789,7 @@ export async function startGatewayPostAttachRuntime(
     startupTrace: params.startupTrace,
     createUpdateCheck: runtimeDeps.createGatewayUpdateCheck,
     getConfig: params.getConfig,
+    getPluginRegistry: () => params.getCurrentPluginRegistry?.() ?? pluginRegistry,
     log: params.log,
     isNixMode: params.isNixMode,
     broadcastToConnIds: params.broadcastToConnIds,
@@ -828,8 +848,12 @@ export async function startGatewayPostAttachRuntime(
             logGatewayReady(params, "candidate gateway ready; autonomous sidecars suppressed");
             return pluginRegistry;
           }
+          const internalHookSelection = await resolveInternalHookSelection(
+            params.gatewayPluginConfigAtStart,
+          );
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
+            internalHooksConfigured: internalHookSelection.configured,
             gatewayStartHooks: pluginRegistry.typedHooks.some(
               (hook) => hook.hookName === "gateway_start",
             ),
@@ -886,6 +910,7 @@ export async function startGatewayPostAttachRuntime(
                     : {}),
                   broadcastPluginEvent: params.broadcastPluginEvent,
                   startupOutcomes,
+                  internalHookSelection,
                   waitForPostReadyWork: params.waitForPostReadyWork,
                 }),
               );

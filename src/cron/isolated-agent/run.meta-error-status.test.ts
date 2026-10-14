@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
+import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   callGatewayMock,
   dispatchCronDeliveryMock,
+  listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
   resolveCronDeliveryPlanMock,
   resolveCronPayloadOutcomeMock,
@@ -13,6 +16,11 @@ import {
   resolveDeliveryTargetMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
+
+// mock-isolation: Keep the database-backed descendant registry outside the fixed child-run fixture.
+vi.mock("./delivery-subagent-registry.runtime.js", () => ({
+  hasUnsettledCronDescendants: async () => false,
+}));
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const runTurn = (overrides = {}) =>
@@ -82,6 +90,47 @@ async function useRealOutcome() {
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
+  it.each([false, true])(
+    "keeps delivery target failure separate from execution (agent failed: %s)",
+    async (agentFailed) => {
+      await useRealOutcome();
+      const reply = agentFailed ? "Task blocked" : "REPORT_COMPLETE";
+      mockAgentRun({
+        payloads: [{ text: reply, ...(agentFailed ? { isError: true } : {}) }],
+        meta: { finalAssistantVisibleText: reply },
+      });
+      const deliveryError = "Channel is required (no configured channels detected).";
+      dispatchCronDeliveryMock.mockResolvedValueOnce({
+        disposition: { kind: "error", errorKind: "delivery-target", error: deliveryError },
+        delivered: false,
+        deliveryAttempted: false,
+        deliveryError,
+        deliveryState: {
+          status: "not-delivered",
+          delivered: false,
+          error: deliveryError,
+          failureNotification: { status: "not-requested" },
+        },
+        summary: reply,
+        outputText: reply,
+        deliveryPayloads: [{ text: reply }],
+      });
+      const result = await runTurn();
+      expectObjectFields(result, {
+        status: agentFailed ? "error" : "ok",
+        error: agentFailed ? "Task blocked" : undefined,
+        delivered: false,
+      });
+      if (!agentFailed) {
+        expectObjectFields(result, {
+          summary: "REPORT_COMPLETE",
+          outputText: "REPORT_COMPLETE",
+          deliveryError,
+        });
+      }
+    },
+  );
+
   it("preserves a run-level error with partial text when delivery is pending", async () => {
     mockAgentRun({
       ...failedRun,
@@ -148,22 +197,21 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   });
 
   it.each([
-    {
-      // Transient-looking prose must not turn the agent's verdict into a scheduler retry.
-      reply: "AUTOMATION_FAILED\nNetwork timeout: no shell tool is available in this run.",
-      expected: {
-        status: "error",
-        error: "Network timeout: no shell tool is available in this run.",
-        errorClassification: { kind: "permanent", reportedByAgent: true },
-      },
-    },
-  ])("settles the run from a reported failure line: $expected.status", async (testCase) => {
+    "AUTOMATION_FAILED\nNetwork timeout: no shell tool is available in this run.",
+    "Task blocked: no shell tool is available in this run.",
+  ])("keeps task-failure prose as ordinary successful output: %s", async (reply) => {
     await useRealOutcome();
     mockAgentRun({
-      payloads: [{ text: testCase.reply }],
-      meta: { finalAssistantVisibleText: testCase.reply },
+      payloads: [{ text: reply }],
+      meta: { finalAssistantVisibleText: reply },
     });
-    expectObjectFields(await runTurn(), testCase.expected);
+    expectObjectFields(await runTurn(), {
+      status: "ok",
+      error: undefined,
+      errorClassification: undefined,
+      summary: reply,
+      outputText: reply,
+    });
   });
 
   it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
@@ -188,6 +236,34 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.outputText).not.toBe(heartbeatPayload.text);
   });
 
+  it("records the child result after a no-delivery parent returns only a heartbeat", async () => {
+    await useRealOutcome();
+    const reply = "Finished the delegated report";
+    mockChildRun([{ text: "HEARTBEAT_OK" }]);
+    resolveCronDeliveryPlanMock.mockReturnValue({ mode: "none", requested: false });
+    listDescendantRunsForRequesterMock.mockResolvedValue([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:default:child",
+        requesterSessionKey: "agent:default:cron:test",
+        requesterDisplayKey: "agent:default:cron:test",
+        createdAt: Date.now(),
+        task: "delegated report",
+        cleanup: "keep",
+        execution: { status: "terminal", endedAt: Date.now() + 1_000, outcome: { status: "ok" } },
+        completion: { required: true, terminalReply: { disposition: "visible", text: reply } },
+      },
+    ]);
+    dispatchCronDeliveryMock.mockImplementation(dispatchCronDelivery);
+
+    const result = await runTurn({
+      job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" } }),
+    });
+
+    expectObjectFields(result, { status: "ok", outputText: reply });
+    expect(result.deliveryState?.status).toBe("not-requested");
+  });
+
   it("preserves structured-parent delivery failures after accepting a child", async () => {
     const mediaPayload = { mediaUrl: "https://example.invalid/chart.png" };
     const error = "Structured message failed";
@@ -206,7 +282,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       deliveryPayloads: [mediaPayload],
     });
     const result = await runTurn();
-    expectDispatch({ spawnOnlyHandoff: false, deliveryPayloadHasStructuredContent: true });
+    expectDispatch({ spawnOnlyHandoff: false });
     expectObjectFields(result, { status: "ok", deliveryError: error });
   });
 
@@ -272,9 +348,11 @@ describe("delivered report outcome", () => {
       },
     });
 
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
-      cfg: {},
+      cfg,
       deps: {} as never,
       job: {
         id: "delivered-report",

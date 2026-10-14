@@ -60,7 +60,7 @@ describe("zalouser setup wizard", () => {
   function createQuickstartPrompter(params?: {
     note?: ReturnType<typeof createTestWizardPrompter>["note"];
     seen?: string[];
-    dmPolicy?: "pairing" | "allowlist";
+    dmPolicy?: "pairing" | "allowlist" | "open";
     groupAccess?: boolean;
     groupPolicy?: "allowlist";
     textByMessage?: Record<string, string>;
@@ -296,32 +296,6 @@ describe("zalouser setup wizard", () => {
     });
   });
 
-  it("preserves non-quickstart forceAllowFrom behavior", async () => {
-    const note = vi.fn(async (_message: string, _title?: string) => {});
-    const seen: string[] = [];
-    const prompter = createTestWizardPrompter({
-      note,
-      confirm: vi.fn(async ({ message }: { message: string }) => {
-        seen.push(message);
-        return false;
-      }),
-      text: vi.fn(async ({ message }: { message: string }) => {
-        seen.push(message);
-        return "";
-      }) as ReturnType<typeof createTestWizardPrompter>["text"],
-    });
-
-    const result = await runSetup({ prompter, forceAllowFrom: true });
-
-    expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.zalouser?.allowFrom).toStrictEqual([]);
-    expect(seen).not.toContain("Zalo Personal DM policy");
-    expect(seen).toContain("Zalouser allowFrom (name or user id)");
-    expect(
-      note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
-    ).toBe(true);
-  });
-
   it("allowlists the plugin when a plugin allowlist already exists", async () => {
     const prompter = createTestWizardPrompter({
       confirm: vi.fn(async () => false),
@@ -354,35 +328,44 @@ describe("zalouser setup wizard", () => {
     ],
   });
 
-  it("shows the account-scoped current DM policy in quickstart notes", async () => {
-    const note = vi.fn(async (_message: string, _title?: string) => {});
-    const prompter = createQuickstartPrompter({ note, dmPolicy: "pairing" });
+  it.each(["pairing", "open"] as const)(
+    "sets %s policy on the quickstart account",
+    async (policy) => {
+      const note = vi.fn(async (_message: string, _title?: string) => {});
+      const prompter = createQuickstartPrompter({ note, dmPolicy: policy });
 
-    await runSetupWizardConfigure({
-      configure: zalouserConfigure,
-      cfg: {
-        channels: {
-          zalouser: {
-            dmPolicy: "disabled",
-            accounts: {
-              work: {
-                profile: "work",
-                dmPolicy: "allowlist",
-                allowFrom: ["123456789"],
+      const result = await runSetupWizardConfigure({
+        configure: zalouserConfigure,
+        cfg: {
+          channels: {
+            zalouser: {
+              dmPolicy: "disabled",
+              accounts: {
+                default: { profile: "default", dmPolicy: "disabled" },
+                work: {
+                  profile: "work",
+                  dmPolicy: "allowlist",
+                  allowFrom: ["123456789"],
+                },
               },
             },
           },
-        },
-      } as OpenClawConfig,
-      prompter,
-      options: { quickstartDefaults: true },
-      accountOverrides: { zalouser: "work" },
-    });
+        } as OpenClawConfig,
+        prompter,
+        options: { quickstartDefaults: true },
+        accountOverrides: { zalouser: "work" },
+      });
 
-    expect(
-      note.mock.calls.some(([message]) =>
-        message.includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
-      ),
-    ).toBe(true);
-  });
+      expect(
+        note.mock.calls.some(([message]) =>
+          message.includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
+        ),
+      ).toBe(true);
+      expect(result.cfg.channels?.zalouser?.accounts?.default?.dmPolicy).toBe("disabled");
+      expect(result.cfg.channels?.zalouser?.accounts?.work).toMatchObject({
+        dmPolicy: policy,
+        allowFrom: policy === "open" ? ["123456789", "*"] : ["123456789"],
+      });
+    },
+  );
 });

@@ -5,7 +5,6 @@ import {
   createReplyDispatchEvent,
 } from "./dispatch-from-config.events.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
-import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
 export function runReplyDispatchHook(
   state: PrepareDispatchOperationReadyState,
@@ -65,13 +64,18 @@ export function runReplyDispatchHook(
                 abortSignal: state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                 onReplyStart: params.replyOptions?.onReplyStart,
                 onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                onPreparedAgentRunStart: params.replyOptions?.onPreparedAgentRunStart,
+                turnAdoption: state.turnAdoption,
                 userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                 prepareAssistantTranscriptMessage:
                   params.replyOptions?.prepareAssistantTranscriptMessage,
                 recordProcessed: state.recordProcessed,
                 markIdle: state.markIdle,
               },
-              options.isTailDispatch ? undefined : { prepare: state.assertCurrentBindingRoute },
+              {
+                ...(!options.isTailDispatch ? { prepare: state.assertCurrentBindingRoute } : {}),
+                assertCurrent: state.turnAdoption?.assertCurrent,
+              },
             ),
           );
         },
@@ -79,27 +83,4 @@ export function runReplyDispatchHook(
       );
     });
   return options.isTailDispatch ? run() : state.traceReplyPhase("reply.reply_dispatch_hooks", run);
-}
-
-export async function runReplyDispatchTakeover(
-  state: PrepareDispatchOperationReadyState,
-  shouldSendToolSummaries: () => boolean,
-  shouldSendToolSummariesAsync: () => Promise<boolean>,
-): Promise<{ status: "complete"; result: DispatchFromConfigResult } | undefined> {
-  const result = await runReplyDispatchHook(state, {
-    shouldSendToolSummaries,
-    shouldSendToolSummariesAsync,
-  });
-  if (!result?.handled) {
-    return undefined;
-  }
-  state.commitInboundDedupeIfClaimed();
-  state.completeDispatchReplyOperation();
-  return {
-    status: "complete",
-    result: state.attachSourceReplyDeliveryMode({
-      queuedFinal: result.queuedFinal,
-      counts: result.counts,
-    }),
-  };
 }

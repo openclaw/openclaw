@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { ApplicationContext } from "../app/context.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   createControlUiMockBootstrapConfig,
   controlUiSessionUrl,
@@ -53,19 +55,18 @@ async function traceInviteMounts(page: Page) {
 }
 
 async function waitForInvitePolicy(page: Page, enabled: boolean) {
-  await page.waitForFunction((expected) => {
-    const app = document.querySelector("openclaw-app") as
-      | (HTMLElement & {
-          runtime?: {
-            context: {
-              config: { current: { serverVersion: string | null; communityInvite: boolean } };
-            };
-          };
-        })
-      | null;
-    const config = app?.runtime?.context.config.current;
-    return config?.serverVersion != null && config.communityInvite === expected;
-  }, enabled);
+  const application = await getControlUiContextHandle(page);
+  try {
+    await page.waitForFunction(
+      ({ context, expected }) => {
+        const config = context.config.current;
+        return config.serverVersion != null && config.communityInvite === expected;
+      },
+      { context: application, expected: enabled },
+    );
+  } finally {
+    await application.dispose();
+  }
 }
 
 async function settleSidebarIdleWork(page: Page) {
@@ -94,17 +95,21 @@ suite.define(() => {
     const page = await context.newPage();
     await page.addInitScript(() => {
       const observer = new MutationObserver(() => {
-        const app = document.querySelector("openclaw-app") as
-          | (HTMLElement & {
-              runtime?: { context: { config: { current: { communityInvite: boolean } } } };
-            })
-          | null;
+        const application: { current?: ApplicationContext } = {};
+        document.querySelector("openclaw-app")?.firstElementChild?.dispatchEvent(
+          Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+            context: "openclaw.application",
+            callback(value: ApplicationContext) {
+              application.current = value;
+            },
+          }),
+        );
         const sidebar = document.querySelector("openclaw-app-sidebar") as
           | (HTMLElement & { updateComplete: Promise<unknown> })
           | null;
         const row = sidebar?.querySelector(".sidebar-recent-session__link");
         if (
-          !app?.runtime?.context.config.current.communityInvite ||
+          !application.current?.config.current.communityInvite ||
           !sidebar ||
           !row?.getBoundingClientRect().height
         ) {
@@ -320,7 +325,7 @@ suite.define(() => {
                 await row.click({ button: "right" });
               }
               await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
-              await page.locator("openclaw-session-menu wa-dropdown-item:focus").waitFor();
+              await page.locator('openclaw-session-menu [role^="menuitem"]:focus').waitFor();
               // A background render must not admit new geometry while a popover owns focus.
               await gateway.emitGatewayEvent("presence", { presence: [] });
               await settleSidebarIdleWork(page);
@@ -406,7 +411,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat/main`);
-      await page.locator(".sidebar-shell__footer").waitFor();
+      await page.locator("openclaw-app-sidebar").waitFor();
       const card = page.locator(".community-invite-card");
       await settleSidebarIdleWork(page);
       expect(await card.count()).toBe(0);
@@ -438,7 +443,7 @@ suite.define(() => {
         communityInvite = enabled;
         await page.reload();
         await waitForInvitePolicy(page, enabled);
-        await page.locator(".sidebar-shell__footer").waitFor();
+        await page.locator("openclaw-app-sidebar").waitFor();
         await settleSidebarIdleWork(page);
         expect(await card.count()).toBe(0);
         expect(await mountedInvites()).toBe(0);
@@ -570,7 +575,7 @@ suite.define(() => {
       await page.keyboard.press("Control+Shift+,");
       await waitForControlUiSettingsTakeover(page);
       await page.keyboard.press("Escape");
-      await page.locator(".sidebar-shell__footer").waitFor();
+      await page.locator("openclaw-app-sidebar").waitFor();
       await settleSidebarIdleWork(page);
       expect(await card.count()).toBe(0);
       expect(await mountedInvites()).toBe(1);

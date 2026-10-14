@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { PluginHookReplyPayloadSendingEvent } from "openclaw/plugin-sdk/core";
 import {
   addTestHook,
@@ -8,6 +9,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
@@ -17,9 +19,7 @@ import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies, deliverStructuredReplies } from "./bot/delivery.replies.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
 
-const DELIVERY_WARNING =
-  "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
-const DELIVERY_WARNING_PREFIX = "I couldn't confirm the reply reached Telegram.";
+const DELIVERY_WARNING = "I couldn't deliver my reply. Please ask again.";
 
 describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   const http = createTelegramDispatchHttpFixture();
@@ -33,6 +33,36 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     waitForBotApiCall,
   } = http;
   afterEach(() => vi.restoreAllMocks());
+
+  it("reports an owner rejection silently without claiming a network failure", async () => {
+    await dispatchProgressTurn(async () => {}, {
+      mode: "off",
+      toolProgress: false,
+      cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+      telegramCfg: { silentErrorReplies: true },
+      finalReply: { text: "The requested answer." },
+      allowErrors: true,
+    });
+    const db = openNodeSqliteDatabase(path.join(http.state.stateDir, "state", "openclaw.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      expect(
+        db
+          .prepare(
+            "SELECT id FROM delivery_queue_entries WHERE json_extract(entry_json, '$.recoveryState') IN ('send_attempt_started', 'unknown_after_send')",
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      db.close();
+    }
+    expect([...visibleMessages.values()]).toEqual([DELIVERY_WARNING]);
+    const notice = calls.find((call) => call.fields.text === DELIVERY_WARNING);
+    expect(notice?.fields.reply_markup).toBeUndefined();
+    expect(notice?.fields.disable_notification).toBe(true);
+    expect(JSON.stringify(calls)).not.toContain("network problem");
+  });
 
   it.each(["rejected", "no-message-id", "stopped", "media", "buttons"] as const)(
     "delivers the continuation instead of adopting a %s progress card",
@@ -155,8 +185,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       expect(
         calls.filter(
           (call) =>
-            call.method === "sendMessage" &&
-            String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX),
+            call.method === "sendMessage" && String(call.fields.text).startsWith(DELIVERY_WARNING),
         ),
       ).toHaveLength(outcome === "empty-hook" ? 0 : 1);
       if (outcome === "empty-hook") {
@@ -206,9 +235,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     expect(floodedAt).toHaveLength(3);
     expect(floodedAt[2]! - floodedAt[0]!).toBeGreaterThanOrEqual(10_000);
     expect([...visibleMessages.values()]).toEqual(["The command failed."]);
-    expect(calls.some((call) => String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX))).toBe(
-      false,
-    );
+    expect(calls.some((call) => String(call.fields.text).startsWith(DELIVERY_WARNING))).toBe(false);
   });
 
   it("preserves a post-progress error final when Telegram rejects cleanup", async () => {

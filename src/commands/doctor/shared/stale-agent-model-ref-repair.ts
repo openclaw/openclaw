@@ -205,10 +205,8 @@ function firstExplicitModelRef(cfg: OpenClawConfig): string | undefined {
 }
 
 function modelPrimaryRef(model: unknown): string | undefined {
-  if (typeof model === "string") {
-    return model;
-  }
-  return isRecord(model) && typeof model.primary === "string" ? model.primary : undefined;
+  const primary = typeof model === "string" ? model : asOptionalRecord(model)?.primary;
+  return typeof primary === "string" ? primary : undefined;
 }
 
 export function repairStaleAgentModelRefs(

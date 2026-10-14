@@ -20,6 +20,7 @@ import {
 } from "./modules/relay-core.js";
 import { createRelayDebugger } from "./modules/relay-debugger.js";
 import { isTabSelected } from "./modules/relay-tab-groups.js";
+import { createSerialQueue } from "./modules/serial-queue.js";
 import { registerTabAccessEvents } from "./modules/tab-access-events.js";
 import { createTabAccessPolicy } from "./modules/tab-access.js";
 
@@ -53,7 +54,7 @@ let nativeBootstrap = null;
 let retiredCopilotCustodyBlocked = true;
 /** Debounce handle for tab-list refreshes. */
 let tabsSyncTimer = null;
-let accessMutationChain = Promise.resolve();
+const runAccessMutation = createSerialQueue();
 const pairingConfigStore = createPairingConfigStore(chrome.storage.local);
 const tabAccessPolicy = createTabAccessPolicy({
   isSelectedTab: isTabSelected,
@@ -143,12 +144,6 @@ async function getConfig() {
     relayStatusHint = config.pairingStatusHint;
   }
   return config;
-}
-
-function runAccessMutation(task) {
-  const pending = accessMutationChain.then(task, task);
-  accessMutationChain = pending.catch(() => undefined);
-  return pending;
 }
 
 async function focusWindowForTab(tab) {

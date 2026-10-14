@@ -633,7 +633,12 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
           intervalMs,
           delayMaxMs,
         });
-        emitInternalDiagnosticEventForTest({ type: "diagnostic.gc", durationMs: delayMaxMs });
+        emitInternalDiagnosticEventForTest({
+          type: "diagnostic.gc",
+          kind: "scavenge",
+          thread: "main",
+          durationMs: delayMaxMs,
+        });
         await waitForDiagnosticEventsDrained();
       });
       await meterProvider.forceFlush();
@@ -648,7 +653,12 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
         },
         "openclaw.gc.duration_ms": {
           unit: "ms",
-          points: [{ attributes: {}, value: { count, sum } }],
+          points: [
+            {
+              attributes: { "openclaw.gc.kind": "scavenge", "openclaw.gc.thread": "main" },
+              value: { count, sum },
+            },
+          ],
         },
       });
     }
@@ -666,7 +676,13 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
       Object.values(sampleMetrics()).flatMap((metric) =>
         metric.points.map(({ attributes }) => attributes),
       ),
-    ).toEqual([{}, {}, {}]);
+    ).toEqual(
+      expect.arrayContaining([
+        {},
+        {},
+        { "openclaw.gc.kind": "scavenge", "openclaw.gc.thread": "main" },
+      ]),
+    );
     expect(deliveredSamples).toBe(6);
     expect(observedParents).toEqual([
       undefined,

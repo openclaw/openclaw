@@ -3,7 +3,9 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -13,6 +15,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
@@ -23,13 +26,19 @@ import {
   type FollowupRunnerParams,
 } from "./followup-turn-admission.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
+import { enqueueGoalContinuation } from "./goal-continuation.js";
 import {
   completeFollowupRunLifecycle,
   FollowupRunDeferredError,
   type FollowupRun,
 } from "./queue.js";
+import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import {
+  getReplyOperationSessionReader,
+  retainReplyOperationUntilComplete,
+} from "./reply-run-registry.state.js";
 import {
   isReplyOperationStalledBeforeOutput,
   STALLED_TURN_NOTICE_TEXT,
@@ -90,12 +99,19 @@ export function createFollowupRunner(
     ? initialDefaults.resolveGatewayContext
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const defaults = { ...initialDefaults, resolveGatewayContext };
-  // Every queue handoff, including delivery retries, retains this host owner
-  // without borrowing the invoking turn's request-local authority.
+  // Follow-ups retain the host owner, never the invoking turn's transcript or request scope.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
-    withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () => executeFollowup(queued), {
-      inheritRequestScope: false,
-    });
+    withoutSessionTranscriptReadFence(() =>
+      runWithAgentWorkspaceReadiness(undefined, () =>
+        withPluginRuntimeGatewayContextResolver(
+          resolveGatewayContext,
+          () => executeFollowup(queued),
+          {
+            inheritRequestScope: false,
+          },
+        ),
+      ),
+    );
   const deliverProgress = async (
     turn: AdmittedFollowupTurn,
     payloads: ReplyPayload[],
@@ -159,6 +175,8 @@ export function createFollowupRunner(
       const turn: AdmittedFollowupTurn = admission.turn;
       admittedTurn = turn;
       operation = turn.operation;
+      const initialGoalId = turn.session.current()?.goal?.id;
+      retainReplyOperationUntilComplete(operation);
       const execution = await executeFollowupTurn({
         turn,
         defaults,
@@ -202,18 +220,43 @@ export function createFollowupRunner(
       ) {
         await defaults.opts?.onObservedReplyDelivery?.();
       }
-      const accounting = await accountFollowupTurn({ turn, defaults, execution });
       const deliveryOpts = {
         ...defaults.opts,
+        sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
         resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
+        resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
-      const decision = await resolveFollowupDeliveryDecision({
-        turn,
-        execution: execution.execution,
-        accounting,
-        opts: deliveryOpts,
-      });
+      const { decision, accounting: completedAccounting } = await withAgentTurnCompletion(
+        {
+          agentId: turn.queued.run.agentId,
+          storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+          sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+          entry: turn.session.current(),
+          writer:
+            execution.execution.outcome.kind === "settled"
+              ? execution.execution.outcome.sessionWriter
+              : undefined,
+          operation: turn.operation,
+          publish: (entry) => turn.session.publish(entry),
+        },
+        async (turnCompletion) => {
+          const accounting = await accountFollowupTurn({
+            turn,
+            defaults,
+            execution,
+            completion: turnCompletion,
+          });
+          const resolved = await resolveFollowupDeliveryDecision({
+            turn,
+            execution: execution.execution,
+            accounting,
+            opts: deliveryOpts,
+          });
+          await turnCompletion?.complete();
+          return { decision: resolved, accounting };
+        },
+      );
       if (decision.kind === "deliver") {
         for (const payload of decision.payloads) {
           progressContinuation = getReplyPayloadMetadata(payload)?.progressContinuation;
@@ -238,6 +281,33 @@ export function createFollowupRunner(
       });
       // Source recovery has its own queued callback; this execution still closes once.
       terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
+      // Gateway final batches are returned above, not delivered: their one-shot
+      // source owner settles in finally. Allocate its successor before that boundary.
+      if (
+        completion.kind === "completed" &&
+        completedAccounting?.activeSessionEntry?.goal?.status === "active" &&
+        turn.session.kind === "session" &&
+        turn.session.storePath
+      ) {
+        await enqueueGoalContinuation({
+          base: turn.queued,
+          result: completedAccounting.runResult,
+          initialGoalId: turn.queued.goalContinuation?.goalId ?? initialGoalId,
+          expectedSession: completedAccounting.expectedSession,
+          sessionKey: turn.session.key,
+          storePath: turn.session.storePath,
+          reader: getReplyOperationSessionReader(turn.operation),
+          queueKey: turn.queued.run.sessionKey ?? turn.session.key,
+          settings: resolveQueueSettings({
+            cfg: turn.config,
+            sessionEntry: turn.session.current(),
+            channel: turn.queued.originatingChannel,
+          }),
+          sourceRunId: turn.runId,
+          operation: turn.operation,
+          runFollowup,
+        });
+      }
     } catch (error) {
       let operatorAuthorityLost = false;
       try {
@@ -253,11 +323,14 @@ export function createFollowupRunner(
       } else if (error instanceof FollowupRunDeferredError) {
         disposition = { kind: "deferred", reason: error.message };
       } else if (
-        operation?.result?.kind === "aborted" &&
-        operation.result.code === "aborted_by_user"
+        queued.run.internalEventExecution ||
+        (operation?.result?.kind === "aborted" && operation.result.code === "aborted_by_user")
       ) {
         disposition = { kind: "consumed" };
-        completion = resolveFollowupCompletion({ kind: "aborted", reason: "user" });
+        queued.run.internalEventExecution?.onFailed?.(error);
+        completion = queued.run.internalEventExecution
+          ? { kind: "failed", error: formatErrorMessage(error) }
+          : resolveFollowupCompletion({ kind: "aborted", reason: "user" });
       } else if (disposition.kind === "consumed") {
         completion = { kind: "failed", error: formatErrorMessage(error) };
         defaultRuntime.error?.(
@@ -307,6 +380,13 @@ export function createFollowupRunner(
       }
       if (disposition.kind === "consumed") {
         completeFollowupRunLifecycle(queued);
+      }
+      try {
+        await admittedTurn?.restartRecovery?.clear();
+      } catch (error) {
+        defaultRuntime.error?.(
+          `followup queue: recovery settlement failed: ${formatErrorMessage(error)}`,
+        );
       }
       if (disposition.kind !== "deferred" && admittedTurn?.runId) {
         clearAgentRunContext(admittedTurn.runId);

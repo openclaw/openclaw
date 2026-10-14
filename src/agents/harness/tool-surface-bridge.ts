@@ -55,6 +55,8 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     prompt?: string;
     runId?: string;
     runtimeToolAllowlist?: readonly string[];
+    /** Owner-prepared policy projection for async tool-surface construction. */
+    preparedToolOverrideAllowlist?: readonly string[];
     sessionId?: string;
     scheduledToolPolicy?: ScheduledToolPolicyContext;
     sourceReplyDeliveryMode?: string;
@@ -69,19 +71,21 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     : input;
   const forceDirectMessageTool =
     presentation?.forceDirectMessageTool ?? messageToolOwnsVisibleReply(params);
-  const plan = presentation
-    ? {
-        codeModeControlsEnabled: presentation.codeMode.enabled,
-        toolSearchControlsEnabled: presentation.toolSearch.enabled,
-        toolSearchConfig: presentation.toolSearch,
-        toolSearchRuntimeConfig: params.config,
-      }
-    : resolveAgentToolSurfacePlan({
-        ...params,
-        forceDirectMessageTool,
-        toolsEnabled: params.modelToolsEnabled,
-        isRawModelRun: params.isRawModelRun === true,
-      });
+  // Placement facts cannot restore general execution on a persistence-only turn.
+  const plan =
+    presentation && params.trigger !== "memory"
+      ? {
+          codeModeControlsEnabled: presentation.codeMode.enabled,
+          toolSearchControlsEnabled: presentation.toolSearch.enabled,
+          toolSearchConfig: presentation.toolSearch,
+          toolSearchRuntimeConfig: params.config,
+        }
+      : resolveAgentToolSurfacePlan({
+          ...params,
+          forceDirectMessageTool,
+          toolsEnabled: params.modelToolsEnabled,
+          isRawModelRun: params.isRawModelRun === true,
+        });
   if (params.supportsDeferredToolCalls === false && plan.toolSearchConfig.mode === "directory") {
     plan.toolSearchConfig = { ...plan.toolSearchConfig, mode: "tools" };
     plan.toolSearchRuntimeConfig = {
@@ -111,15 +115,17 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
   let runtimePreserveToolNames: string[] | undefined;
   const preserveRuntimeTools = () =>
     (runtimePreserveToolNames ??= resolveLocalModelLeanPreserveToolNames({
-      toolNames: resolveConversationCapabilityProfile({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        modelProvider: params.modelProvider,
-        modelId: params.modelId,
-        runtimeToolAllowlist,
-        scheduledToolPolicy: params.scheduledToolPolicy,
-      }).policy.explicitToolOverrideAllowlist,
+      toolNames: params.preparedToolOverrideAllowlist
+        ? [...params.preparedToolOverrideAllowlist, ...(runtimeToolAllowlist ?? [])]
+        : resolveConversationCapabilityProfile({
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            modelProvider: params.modelProvider,
+            modelId: params.modelId,
+            runtimeToolAllowlist,
+            scheduledToolPolicy: params.scheduledToolPolicy,
+          }).policy.explicitToolOverrideAllowlist,
       forceMessageTool: params.forceMessageTool,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     }));
@@ -174,7 +180,6 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
       toolSearchRuntimeConfig,
       codeModeControlsEnabled,
       toolSearchConfig,
-      forceDirectMessageTool,
       catalogRef: toolSearchCatalogRef,
       toolHookContext: options.hookContext,
       toolExecutionAllow: prepared?.toolExecutionAllow,
@@ -205,12 +210,16 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
         tools: effectiveTools,
         catalogRef: toolSearchCatalogRef,
         codeModeControlsEnabled,
-        toolSearchPrompt: toolSearchControlsEnabled
-          ? {
-              config: toolSearchRuntimeConfig,
-              contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
-            }
-          : undefined,
+        catalogPrompt:
+          toolSearchControlsEnabled || codeModeControlsEnabled
+            ? {
+                config: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
+                toolSearchDirectoryLean: presentation?.toolSearchDirectoryLean,
+                agentId: params.agentId,
+                sessionKey: params.sessionKey,
+                contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
+              }
+            : undefined,
       }),
     };
   };

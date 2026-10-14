@@ -55,20 +55,12 @@ export async function captureRealtimeTalkVideoFrame(
 async function waitForRealtimeTalkVideoData(video: HTMLVideoElement): Promise<void> {
   const ready = Promise.withResolvers<void>();
   const onData = () => ready.resolve();
+  video.addEventListener("loadeddata", onData);
+  // If a native readiness event is missed, the deadline reports the failure.
   try {
-    await raceWithTimeout(
-      () => {
-        video.addEventListener("loadeddata", onData);
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          ready.resolve();
-        }
-        return ready.promise;
-      },
-      5_000,
-      () => {
-        throw new Error("Camera preview did not become ready");
-      },
-    );
+    await raceWithTimeout(ready.promise, 5_000, () => {
+      throw new Error("Camera preview did not become ready");
+    });
   } finally {
     video.removeEventListener("loadeddata", onData);
   }

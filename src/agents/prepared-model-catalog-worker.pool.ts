@@ -20,13 +20,11 @@ const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
  * while no task is waiting. It reports its first close so the owner can tell that from its own.
  */
 export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, Output> {
-  private readonly onClose: ((error?: Error) => void) | undefined;
-
   constructor(
     env: NodeJS.ProcessEnv,
     validateResult: (result: Output) => void,
     assertCurrent?: () => void,
-    onClose?: (error?: Error) => void,
+    private readonly onClose?: (error?: Error) => void,
   ) {
     super({
       workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
@@ -56,7 +54,6 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
       },
       validateResult,
     });
-    this.onClose = onClose;
   }
 
   override close(error?: Error): Promise<void> {

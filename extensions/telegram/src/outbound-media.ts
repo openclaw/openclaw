@@ -1,10 +1,11 @@
 import { InputFile } from "grammy";
 import type { Message } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
-import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { isGifMedia, kindFromMime, runFfprobe } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import type { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramPlainCaption, splitTelegramCaption } from "./caption.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
@@ -24,43 +25,44 @@ const MEDIA_SEND_METHODS = {
   document: "sendDocument",
 } as const;
 
+const DEFAULT_MEDIA_EXTENSIONS = { image: ".jpg", video: ".mp4", audio: ".ogg", file: ".bin" };
+
 type TelegramOutboundMediaKind = keyof typeof MEDIA_SEND_METHODS;
+
+async function probeAudioDurationMs(buffer: Buffer): Promise<number | undefined> {
+  try {
+    return await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "telegram-audio-" },
+      async (workspace) => {
+        const file = await workspace.write("audio", buffer);
+        const duration = Number(
+          await runFfprobe([
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            "file",
+            "-format_whitelist",
+            "ogg,mp3,mov",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            file,
+          ]),
+        );
+        return Number.isFinite(duration) && duration > 0 ? duration * 1000 : undefined;
+      },
+    );
+  } catch {
+    return undefined;
+  }
+}
 
 export type TelegramOutboundMediaSender = {
   label: TelegramOutboundMediaKind;
   operation: string;
   send: (effectiveParams: Record<string, unknown>) => Promise<Message>;
 };
-
-function resolveTelegramOutboundMediaFilename(params: {
-  fileName?: string;
-  contentType?: string;
-  kind?: MediaKind;
-  isGif: boolean;
-}): string {
-  if (params.fileName) {
-    return params.fileName;
-  }
-  if (params.isGif) {
-    return "animation.gif";
-  }
-
-  // Telegram receives only the multipart filename, so preserve the detected
-  // MIME extension instead of labeling every anonymous upload as another format.
-  const basename =
-    params.kind === "image" || params.kind === "video" || params.kind === "audio"
-      ? params.kind
-      : "file";
-  const defaultExtension =
-    params.kind === "image"
-      ? ".jpg"
-      : params.kind === "video"
-        ? ".mp4"
-        : params.kind === "audio"
-          ? ".ogg"
-          : ".bin";
-  return `${basename}${extensionForMime(params.contentType) ?? defaultExtension}`;
-}
 
 export function prepareTelegramOutboundMedia(params: {
   media: TelegramLoadedMedia;
@@ -82,12 +84,13 @@ export function prepareTelegramOutboundMedia(params: {
     throw new Error("Telegram video notes require video media.");
   }
   const isVideoNote = deliveryKind === "video" && params.asVideoNote === true;
-  const fileName = resolveTelegramOutboundMediaFilename({
-    fileName: params.media.fileName,
-    contentType: params.media.contentType,
-    kind,
-    isGif,
-  });
+  const basename = kind === "image" || kind === "video" || kind === "audio" ? kind : "file";
+  // Telegram receives only the multipart filename; retain the detected MIME extension.
+  const fileName =
+    params.media.fileName ||
+    (isGif
+      ? "animation.gif"
+      : `${basename}${extensionForMime(params.media.contentType) ?? DEFAULT_MEDIA_EXTENSIONS[basename]}`);
   const text = params.text;
   const trimmedText = text?.trim();
   const renderedCaption =
@@ -97,6 +100,7 @@ export function prepareTelegramOutboundMedia(params: {
         : renderTelegramHtmlText(trimmedText, {
             textMode: params.textMode ?? "markdown",
             tableMode: params.tableMode,
+            downgradeRichPromptTags: true,
           })
       : undefined;
   const { caption, followUpText } = isVideoNote
@@ -129,6 +133,7 @@ export function resolveTelegramOutboundMediaSenders(params: {
   asVoice?: boolean;
   sendImageAsPhoto?: boolean;
 }): { sender: TelegramOutboundMediaSender; documentSender: TelegramOutboundMediaSender } {
+  let audioDurationMsPromise: Promise<number | undefined> | undefined;
   const createSender = (label: TelegramOutboundMediaKind): TelegramOutboundMediaSender => {
     const operation = MEDIA_SEND_METHODS[label];
     const method: (
@@ -139,15 +144,20 @@ export function resolveTelegramOutboundMediaSenders(params: {
     return {
       label,
       operation,
-      send: (effectiveParams) =>
-        method.call(
-          params.api,
-          params.chatId,
-          params.plan.file,
-          label === "document" && params.forceDocument
-            ? { ...effectiveParams, disable_content_type_detection: true }
-            : effectiveParams,
-        ),
+      send: async (effectiveParams) => {
+        // Telegram shows 0:00 for some voice/audio uploads unless duration is explicit.
+        const durationMs =
+          label === "voice" || label === "audio"
+            ? await (audioDurationMsPromise ??= probeAudioDurationMs(params.media.buffer))
+            : undefined;
+        return await method.call(params.api, params.chatId, params.plan.file, {
+          ...effectiveParams,
+          ...(durationMs ? { duration: Math.max(1, Math.round(durationMs / 1000)) } : {}),
+          ...(label === "document" && params.forceDocument
+            ? { disable_content_type_detection: true }
+            : {}),
+        });
+      },
     };
   };
   const documentSender = createSender("document");

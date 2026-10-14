@@ -1,11 +1,15 @@
 // Render contract between the transcript projection and the per-session
 // virtualizer host owned by ChatTranscriptController.
 import type { Virtualizer } from "@tanstack/virtual-core";
-import type { ReactiveController, ReactiveControllerHost, TemplateResult } from "lit";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
+import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
@@ -19,8 +23,8 @@ export type ChatTranscriptPendingScrollOffset = {
 };
 
 export type TranscriptCallbacks = {
-  /** Retained panes can remain measurable while visually hidden. */
-  visuallyPresented?: () => boolean;
+  /** Sidebar commits originate on the pane element, separate from its state owner. */
+  geometryEventTarget?: HTMLElement;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
@@ -29,8 +33,6 @@ export type TranscriptCallbacks = {
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
 export const CHAT_TRANSCRIPT_OVERSCAN = 6;
-// A row can contain a whole assistant turn; keep the first presented commit small.
-const CHAT_TRANSCRIPT_INITIAL_OVERSCAN = 2;
 // Initial virtual rows can correct their estimates for several frames. Observe
 // the range for ~200ms before accepting a saved offset that remains unreachable.
 export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
@@ -57,8 +59,9 @@ export type ChatTranscriptSession = {
     announce: boolean,
     overlay?: unknown,
     header?: TranscriptHeader | null,
-    navigationPending?: boolean,
-  ): TemplateResult;
+    presented?: PresentationValue,
+    applicationContext?: ApplicationContext,
+  ): HTMLDivElement;
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
@@ -82,109 +85,47 @@ export type TranscriptRenderSnapshot<T> = {
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;
   entryKeys: ChatMessageEntryAnimations["projectedKeys"];
+  presented: PresentationValue;
+  applicationContext?: ApplicationContext;
 };
 
-/** Session-owned frame work for presentation and deferred row measurement. */
+/** Session-owned deferred measurements after width changes and smooth scrolling. */
 export class TranscriptPresentation implements ReactiveController {
-  private presented = false;
-  private renderedRows = false;
-  private overscanFrame: number | null = null;
-  private measureFrame: number | null = null;
-
   constructor(
     private readonly host: ReactiveControllerHost & {
-      readonly connected: boolean;
       readonly scrollElement: HTMLDivElement | null;
     },
     private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-    private readonly callbacks: TranscriptCallbacks,
-    private readonly measureConnectedRows: () => boolean,
+    private readonly beforeMeasure: () => void,
   ) {
     host.addController(this);
   }
 
-  prepare(requiresFullBuffer = false): void {
-    const presented = this.host.connected && (this.callbacks.visuallyPresented?.() ?? true);
-    if (
-      presented === this.presented &&
-      (!requiresFullBuffer || this.virtualizer.options.overscan === CHAT_TRANSCRIPT_OVERSCAN)
-    ) {
-      return;
-    }
-    this.presented = presented;
-    if (this.overscanFrame !== null) {
-      cancelAnimationFrame(this.overscanFrame);
-      this.overscanFrame = null;
-    }
-    if (presented) {
-      this.virtualizer.setOptions({
-        ...this.virtualizer.options,
-        // Navigation can need neighboring controls before its target is revealed.
-        overscan: requiresFullBuffer ? CHAT_TRANSCRIPT_OVERSCAN : CHAT_TRANSCRIPT_INITIAL_OVERSCAN,
-      });
-    }
+  private readConnectedRows(): (() => boolean) | null {
+    const apply = readConnectedTranscriptRows(this.host.scrollElement, this.virtualizer);
+    return apply
+      ? () => {
+          this.beforeMeasure();
+          return apply();
+        }
+      : null;
   }
 
-  didRenderRows(count: number): void {
-    this.renderedRows = count > 0;
-  }
-
-  hostUpdated(): void {
-    // A detached render can connect at commit. Its full first frame has already
-    // rendered; starting the reduced phase now would shrink a presented range.
-    this.prepare(this.renderedRows && !this.presented);
-    const renderedRows = this.renderedRows;
-    this.renderedRows = false;
-    const element = this.host.scrollElement;
-    if (
-      !renderedRows ||
-      !this.presented ||
-      !element ||
-      this.virtualizer.options.overscan !== CHAT_TRANSCRIPT_INITIAL_OVERSCAN ||
-      this.overscanFrame !== null
-    ) {
-      return;
-    }
-    this.overscanFrame = requestAnimationFrame(() => {
-      this.overscanFrame = null;
-      this.prepare();
-      if (this.presented && element === this.host.scrollElement) {
-        this.virtualizer.setOptions({
-          ...this.virtualizer.options,
-          overscan: CHAT_TRANSCRIPT_OVERSCAN,
-        });
-        this.host.requestUpdate();
-      }
-    });
+  measureRows(): boolean {
+    return this.readConnectedRows()?.() ?? false;
   }
 
   queueRowMeasure(): void {
-    if (this.measureFrame !== null) {
-      return;
-    }
     const element = this.host.scrollElement;
-    this.measureFrame = requestAnimationFrame(() => {
-      this.measureFrame = null;
+    scheduleLayout(this, () => {
       if (element === this.host.scrollElement) {
-        this.measureConnectedRows();
+        return this.readConnectedRows() ?? undefined;
       }
+      return undefined;
     });
   }
 
   hostDisconnected(): void {
-    if (this.overscanFrame !== null) {
-      cancelAnimationFrame(this.overscanFrame);
-      this.overscanFrame = null;
-    }
-    if (this.measureFrame !== null) {
-      cancelAnimationFrame(this.measureFrame);
-      this.measureFrame = null;
-    }
-    this.presented = false;
-    this.renderedRows = false;
-    this.virtualizer.setOptions({
-      ...this.virtualizer.options,
-      overscan: CHAT_TRANSCRIPT_OVERSCAN,
-    });
+    cancelLayout(this);
   }
 }

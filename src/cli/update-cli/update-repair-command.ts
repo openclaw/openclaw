@@ -57,9 +57,15 @@ import {
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import { updateMaintenanceError } from "./update-maintenance-error.js";
 
-/** Public repair can clear a stale ledger without entering post-core maintenance. */
-export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
+export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  return repairUpdate(opts).catch((error: unknown) => {
+    throw updateMaintenanceError(error);
+  });
+}
+
+async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   // Recovery refusal precedes discovery; later mutation checks still revalidate.
   await assertUpdateRecoveryAdmission({ env: process.env });
   const discoveredRoot = await resolveUpdateRoot();
@@ -81,30 +87,35 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     throw new Error(admission.message);
   }
   if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
-    const settled = await settlePendingPackageActivation(resolveUpdateInstallRoot(discoveredRoot));
-    if (settled) {
-      defaultRuntime.error(
-        `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
-          settled.retained
-            ? `Recovery evidence retained at ${settled.retained}.`
-            : "The original package and launchers remain unchanged."
-        }${settled.detail ? ` ${settled.detail}` : ""}`,
-      );
-      if (settled.detail) {
-        // The operation UUID identifies this repair receipt, not the original failed run.
-        // Replaying it after interrupted reporting preserves the original update outcome.
-        createUpdateRun(
-          {
-            runId: settled.operationId,
-            trigger: "cli",
-            settlement: {
-              reason: settled.reason,
-              detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
-            },
-          },
-          options,
+    const settlement = await settlePendingPackageActivation(
+      resolveUpdateInstallRoot(discoveredRoot),
+      (settled) => {
+        defaultRuntime.error(
+          `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+            settled.retained
+              ? `Recovery evidence retained at ${settled.retained}.`
+              : "The original package and launchers remain unchanged."
+          }${settled.detail ? ` ${settled.detail}` : ""}`,
         );
-      }
+        if (settled.detail) {
+          // The operation UUID identifies this repair receipt, not the original failed run.
+          // Replaying it after interrupted reporting preserves the original update outcome.
+          createUpdateRun(
+            {
+              runId: settled.operationId,
+              trigger: "cli",
+              settlement: {
+                reason: settled.reason,
+                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+              },
+            },
+            options,
+          );
+        }
+      },
+    );
+    if (settlement?.warning) {
+      defaultRuntime.error(`Warning: ${settlement.warning}`);
     }
   }
   using handoff =
@@ -217,7 +228,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
       config: context.config,
       port,
       attempts: 1,
-      deadlineAt: Date.now() + Math.min(timeoutMs ?? 3_000, 3_000),
+      deadlineAt: performance.now() + Math.min(timeoutMs ?? 3_000, 3_000),
       delayMs: 0,
     }),
     readPackageVersion(root),

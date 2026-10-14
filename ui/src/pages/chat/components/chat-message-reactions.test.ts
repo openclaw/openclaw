@@ -1,9 +1,10 @@
-/* @vitest-environment jsdom */
-import type { LitElement } from "lit";
 import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
-import { renderMessageGroup } from "./chat-message-group.ts";
+/* @vitest-environment jsdom */
+import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 
 const reactions: MessageReactionSummary[] = [
@@ -61,13 +62,15 @@ function show(
   );
   return {
     onReact,
-    pickers: [...host.querySelectorAll<LitElement>("openclaw-message-reaction-picker")],
+    pickers: [
+      ...host.querySelectorAll<SolidBridgeElement<object>>("openclaw-message-reaction-picker"),
+    ],
   };
 }
 
-function shadowButton(picker: LitElement, label: string) {
-  // JSDOM's selector engine misses non-BMP attribute values in a shadow root.
-  return [...picker.shadowRoot!.querySelectorAll<HTMLButtonElement>("button")].find(
+function pickerButton(picker: SolidBridgeElement<object>, label: string) {
+  // Compare emoji labels directly; JSDOM selectors do not reliably match non-BMP values.
+  return [...picker.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.getAttribute("aria-label") === label,
   );
 }
@@ -76,9 +79,10 @@ async function customEntry() {
   const { pickers, onReact } = show();
   const picker = pickers[0]!;
   await picker.updateComplete;
-  const root = picker.shadowRoot!;
+  const root = picker;
+  root.querySelector<HTMLButtonElement>(".trigger")!.click();
   root.querySelector<HTMLButtonElement>(".more")!.click();
-  await picker.updateComplete;
+  flush();
   return {
     picker,
     root,
@@ -125,20 +129,20 @@ describe("transcript message reactions", () => {
     expect(onReact).toHaveBeenCalledWith("message-1", "🎉", false);
     const picker = pickers[0]!;
     await picker.updateComplete;
-    const pressed = shadowButton(picker, "👍")!;
+    const pressed = pickerButton(picker, "👍")!;
     expect(pressed.getAttribute("aria-pressed")).toBe("true");
     pressed.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "👍", true);
-    shadowButton(picker, "🚀")!.click();
+    pickerButton(picker, "🚀")!.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "🚀", false);
   });
 
   it.each(["abc", "👍👀"])("rejects custom input %s and accepts a single emoji", async (value) => {
-    const { picker, root, onReact, input } = await customEntry();
+    const { root, onReact, input } = await customEntry();
     input.value = value;
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await picker.updateComplete;
+    flush();
     expect(onReact).not.toHaveBeenCalled();
     expect(input.value).toBe(value);
     expect(input.getAttribute("aria-invalid")).toBe("true");
@@ -159,10 +163,27 @@ describe("transcript message reactions", () => {
   });
 
   it("returns from the custom entry to the palette on backspace", async () => {
-    const { picker, root, input } = await customEntry();
+    const { root, input } = await customEntry();
+    expect(document.activeElement).toBe(input);
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
-    await picker.updateComplete;
+    flush();
     expect(root.querySelector("input")).toBeNull();
     expect(root.querySelector(".palette")).not.toBeNull();
+    expect(document.activeElement).toBe(pickerButton(root, "👍"));
+  });
+
+  it("resets a closed custom picker without moving focus into its hidden palette", async () => {
+    const { root } = await customEntry();
+    const nextControl = host.appendChild(document.createElement("button"));
+    const hidden = new Promise<void>((resolve) => {
+      root
+        .querySelector(".chat-reaction-picker")!
+        .addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
+    nextControl.focus();
+    await hidden;
+    flush();
+    expect(root.querySelector("input")).toBeNull();
+    expect(document.activeElement).toBe(nextControl);
   });
 });

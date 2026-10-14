@@ -39,21 +39,6 @@ function pruneAccumulatedStreamSegments(
   });
 }
 
-export function discardStreamSegmentIndexes(
-  state: StreamCausalBoundaryState,
-  discardedIndexes: readonly number[],
-): void {
-  if (!state.chatStreamSegments || discardedIndexes.length === 0) {
-    return;
-  }
-  const discarded = new Set(discardedIndexes);
-  state.chatStreamSegments = pruneAccumulatedStreamSegments(
-    state.chatStreamSegments,
-    state.chatRunId,
-    (_segment, index) => discarded.has(index),
-  );
-}
-
 /** A durable commentary row immediately replaces its keyed live projection.
  * Waiting for terminal cleanup renders both copies throughout the active run. */
 export function prunePersistedAssistantStreamSegments(
@@ -64,14 +49,16 @@ export function prunePersistedAssistantStreamSegments(
   if (!identity || !state.chatStreamSegments) {
     return;
   }
-  const replacedIndexes = state.chatStreamSegments.flatMap((segment, index) => {
+  const segments = state.chatStreamSegments.filter((segment) => {
     const runId = normalizeOptionalString(segment.runId);
     // Client-materialized commentary can be untagged; known run ownership
     // must still prevent a reused item id from pruning a sibling run.
     const sameRun = !identity.runId || !runId || identity.runId === runId;
-    return normalizeOptionalString(segment.itemId) === identity.itemId && sameRun ? [index] : [];
+    return normalizeOptionalString(segment.itemId) !== identity.itemId || !sameRun;
   });
-  discardStreamSegmentIndexes(state, replacedIndexes);
+  if (segments.length !== state.chatStreamSegments.length) {
+    state.chatStreamSegments = segments;
+  }
 }
 
 export function pruneHistoryReplacedStreamSegments(

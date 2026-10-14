@@ -1,5 +1,6 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import "../lib/toast-host.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import "../styles/base.css";
@@ -37,7 +38,7 @@ describe("file path tooltip", () => {
     expect(card()?.textContent?.trim()).toBe(filePath);
     await copyButton().hover();
     await Promise.all([
-      expect.element(page.getByRole("status")).toHaveTextContent("Copied!"),
+      expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied!"),
       copyButton().click(),
     ]);
     expect(write).toHaveBeenCalledWith(filePath);
@@ -47,7 +48,7 @@ describe("file path tooltip", () => {
     await userEvent.keyboard("{Escape}");
     await page.elementLocator(anchor()).hover();
     await expect.element(copyButton()).toBeVisible();
-    expect(card()?.textContent).not.toContain("Copied!");
+    await expect.poll(() => card()?.textContent?.trim()).toBe(filePath);
     await page.elementLocator(anchor()).click();
     expect(open).toHaveBeenCalledOnce();
     expect(card()).toBeNull();
@@ -120,6 +121,7 @@ describe("file path tooltip", () => {
       if (dismissal === "reopen") {
         await page.elementLocator(anchor()).hover();
         await expect.element(copyButton()).toBeVisible();
+        await expect.poll(card).not.toBeNull();
       }
       reject(new Error("Denied"));
       await new Promise<void>((resolve) => {

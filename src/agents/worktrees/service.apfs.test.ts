@@ -101,8 +101,8 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     await execFileAsync("/bin/chmod", ["+a", "everyone allow read", parent]);
     const third = await service.create({ repoRoot: repo, name: "third", baseRef: "HEAD" });
     expect(await readAcl(path.join(third.path, "README.md"))).toEqual([]);
-    expect(getApfsCloneId(path.join(third.path, "README.md"))).toBe(
-      getApfsCloneId(path.join(template.path, "README.md")),
+    expect(await getApfsCloneId(path.join(third.path, "README.md"))).toBe(
+      await getApfsCloneId(path.join(template.path, "README.md")),
     );
   });
 
@@ -163,7 +163,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     const root = tempDirs.make("openclaw-service-apfs-acl-unavailable-");
     const repo = await initializeRepository(root);
     const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
-    vi.spyOn(apfsFilesystem, "readDirectoryAcl").mockReturnValue(undefined);
+    vi.spyOn(apfsFilesystem, "readDirectoryAcl").mockResolvedValue(undefined);
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
     const created = await service.create({ repoRoot: repo, name: "unavailable", baseRef: "HEAD" });
@@ -202,8 +202,8 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     const second = await service.create({ repoRoot: repo, name: "second", baseRef: "HEAD" });
     expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
     for (const record of [first, second]) {
-      expect(getApfsCloneId(path.join(record.path, "payload"))).toBe(
-        getApfsCloneId(path.join(template.path, "payload")),
+      expect(await getApfsCloneId(path.join(record.path, "payload"))).toBe(
+        await getApfsCloneId(path.join(template.path, "payload")),
       );
       expect(await git(record.path, "status", "--porcelain")).toBe("");
       expect(await git(record.path, "symbolic-ref", "--short", "HEAD")).toBe(record.branch);

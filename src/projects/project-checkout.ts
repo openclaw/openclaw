@@ -49,18 +49,24 @@ export async function resolveProjectCheckout(projectPath: string) {
   if (!insideGitCheckout(requested)) {
     throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);
   }
-  const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"]);
+  const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"], {
+    operation: "project.checkout",
+  });
   if (rootResult.code !== 0) {
     throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);
   }
   const repoRoot = await fs.realpath(rootResult.stdout.trim()).catch(() => {
     throw new ProjectCheckoutError(`project checkout root is unavailable: ${projectPath}`);
   });
-  const headResult = await runGit(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const headResult = await runGit(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"], {
+    operation: "project.checkout",
+  });
   if (headResult.code !== 0) {
     throw new ProjectCheckoutError(`project checkout has no commits: ${projectPath}`);
   }
-  const originResult = await runGit(repoRoot, ["config", "--get", "remote.origin.url"]);
+  const originResult = await runGit(repoRoot, ["config", "--get", "remote.origin.url"], {
+    operation: "project.checkout",
+  });
   const originUrl = originResult.code === 0 ? originResult.stdout.trim() : "";
   return { path: requested, repoRoot, ...(originUrl ? { originUrl } : {}) };
 }

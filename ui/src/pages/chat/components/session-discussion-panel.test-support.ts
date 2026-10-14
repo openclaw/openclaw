@@ -1,6 +1,6 @@
 import { vi } from "vitest";
-import type { SessionDiscussionPanelConfig } from "./session-discussion-panel.ts";
-import "./session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./session-discussion-panel.tsx";
+import "./session-discussion-panel.tsx";
 
 export type SessionDiscussionInfoLoader = SessionDiscussionPanelConfig["loadInfo"];
 export type SessionDiscussionOpener = SessionDiscussionPanelConfig["openDiscussion"];

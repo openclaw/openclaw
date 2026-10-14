@@ -1,9 +1,11 @@
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
   AuthProfileStoreOwner,
-  UserModelAuthProfile,
+  OAuthCredential,
+  SharedAuthStoreOwnership,
 } from "./types.js";
 import type {
   PersonalAuthProfileUsageReduction,
@@ -54,40 +56,22 @@ export type AuthStoreUpdateInput = {
   owner: AuthProfileStoreOwner;
   agentDir?: string;
   envOnly: boolean;
+  peerGeneration?: { profileId: string; generation: OAuthCredential };
 };
 
-export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"] & {
-  oauthRefreshClaimIds: ReadonlyMap<string, string | undefined>;
-};
+export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"];
 
 export type AuthStoreUpdateOperations = {
-  "authProfiles.update": { input: AuthStoreUpdateInput; output: void };
+  "authProfiles.update": { input: AuthStoreUpdateInput; output: boolean };
 };
 
-export type AuthProfileWorkerOperations = AuthStoreUpdateOperations & {
-  "authProfiles.personalAccept": {
-    input: { profileId: string; credential: AuthProfileCredential };
-    output: boolean;
-  };
-  "authProfiles.personalReplace": {
-    input: { profileId: string; expected: UserModelAuthProfile; next: UserModelAuthProfile };
-    output: UserModelAuthProfile | undefined;
-  };
-  "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
-  "authProfiles.personalUsage": {
-    input: { profileId: string; reduction: PersonalAuthProfileUsageReduction };
-    output: PersonalAuthProfileUsageResult | undefined;
-  };
-  "authProfiles.read": {
-    input: { artifactPreserving: boolean };
-    output: void;
-  };
-  "authProfiles.sharedOwnership": {
-    input: { artifactPreserving: boolean };
-    output: unknown;
-  };
-  "authProfiles.personal": {
-    input: { profileId: string; artifactPreserving: boolean };
-    output: UserModelAuthProfile | undefined;
-  };
+export type AuthProfileBootstrapInput = {
+  sourcePath: string;
+  sourceIdentity?: DatabasePathIdentity;
+  legacySourcePaths: string[];
+};
+
+export type AuthProfileBootstrapResult = {
+  ownership: SharedAuthStoreOwnership;
+  relocated: boolean;
 };

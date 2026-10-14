@@ -1,38 +1,28 @@
-import type { DatabaseSync } from "node:sqlite";
-import type { configHealthReadOperations } from "../config/io.health-state.kernel.js";
-import type { MentionReadOperations } from "../gateway/mention-inbox.worker-contract.js";
-import type { localWorkspaceReadOperations } from "../gateway/worker-environments/local-workspace-store.kernel.js";
-import type { DeferredPluginMigrationReadOperations } from "../infra/deferred-plugin-migrations.contract.js";
-import type { gatewayBootReadOperations } from "../infra/gateway-boot-lifecycle.kernel.js";
-import type { RestartSentinelReadOperations } from "../infra/restart-sentinel.read.worker-contract.js";
-import type { DiagnosticReadOperations } from "../infra/sqlite-audit-record.read-contract.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import type { GeneratedHtmlProvenanceReadOperations } from "../media/generated-html-provenance.worker-contract.js";
-import type { PairingReadOperations } from "../pairing/pairing-store.types.js";
-import type { SecretStoreReadOperations } from "../secrets/store/secret-store.types.js";
-import type { SessionStateReadOperations } from "../sessions/session-state-events.read.worker-contract.js";
-import type { SkillLibraryReadOperations } from "../skills/library/read.contract.js";
+import { sessionUpstreamReadOperations } from "../sessions/session-upstream-links.kernel.js";
 import {
   createWorkerOperationRegistry,
-  type WorkerOperations,
+  type WorkerOperationsFromLoaders,
 } from "./worker-operation-registry.js";
 
-type Operations = WorkerOperations<typeof localWorkspaceReadOperations> &
-  WorkerOperations<typeof gatewayBootReadOperations> &
-  DiagnosticReadOperations &
-  GeneratedHtmlProvenanceReadOperations &
-  PairingReadOperations &
-  MentionReadOperations &
-  SkillLibraryReadOperations &
-  RestartSentinelReadOperations &
-  SessionStateReadOperations &
-  SecretStoreReadOperations &
-  WorkerOperations<typeof configHealthReadOperations> &
-  DeferredPluginMigrationReadOperations;
-export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
-export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
-
-export const stateReadRegistry = createWorkerOperationRegistry<Operations, DatabaseSync>({
+const loaders = {
+  machineState: () =>
+    import("./config-machine-state.read.worker.js").then((m) => m.machineStateReadOperations),
+  projects: () =>
+    import("../projects/project-registry.kernel.js").then((m) => m.projectRegistryReadOperations),
+  agentDeletion: () =>
+    import("../agents/agent-delete-session-store-safety.kernel.js").then(
+      (m) => m.agentDeletionSessionStoreReadOperations,
+    ),
+  agentLifecycle: () =>
+    import("./agent-lifecycle-read.worker.js").then((m) => m.agentLifecycleReadOperations),
+  agentRecovery: () =>
+    import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryReadOperations),
+  legacySessionMigration: () =>
+    import("../config/sessions/legacy-main-session-ledger.read.worker.js").then(
+      (m) => m.legacySessionMigrationReadOperations,
+    ),
   gatewayBoot: () =>
     import("../infra/gateway-boot-lifecycle.kernel.js").then((m) => m.gatewayBootReadOperations),
   localWorkspace: () =>
@@ -41,10 +31,20 @@ export const stateReadRegistry = createWorkerOperationRegistry<Operations, Datab
     ),
   config: () =>
     import("../config/io.health-state.kernel.js").then((m) => m.configHealthReadOperations),
-  plugins: () =>
-    import("../infra/deferred-plugin-migrations.js").then(
-      (m) => m.deferredPluginMigrationReadOperations,
-    ),
+  plugins: async () => {
+    const [migrations, metadata] = await Promise.all([
+      import("../infra/deferred-plugin-migrations.js").then(
+        (m) => m.deferredPluginMigrationReadOperations,
+      ),
+      import("../plugins/plugin-metadata-state.read.worker.js").then(
+        (m) => m.pluginMetadataReadOperations,
+      ),
+    ]);
+    return {
+      ...migrations,
+      ...metadata,
+    };
+  },
   generatedHtmlProvenance: () =>
     import("../media/generated-html-provenance.worker.js").then(
       (m) => m.generatedHtmlProvenanceReadOperations,
@@ -61,8 +61,20 @@ export const stateReadRegistry = createWorkerOperationRegistry<Operations, Datab
     import("../sessions/session-state-events.read.worker.js").then(
       (m) => m.sessionStateReadOperations,
     ),
+  // Session-state handlers also require this kernel in the same lazy read-worker graph.
+  sessionUpstream: async () => sessionUpstreamReadOperations,
   diagnostic: () =>
     import("../infra/sqlite-audit-record.kernel.js").then((m) => m.diagnosticReadOperations),
+  restartLifecycle: () =>
+    import("../infra/restart-handoff.read.worker.js").then((m) => m.restartHandoffReadOperations),
   restartSentinel: () =>
     import("../infra/restart-sentinel.read.worker.js").then((m) => m.restartSentinelReadOperations),
-});
+};
+
+type Operations = WorkerOperationsFromLoaders<typeof loaders>;
+export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
+export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
+
+export const stateReadRegistry = createWorkerOperationRegistry<Operations, EngineConnection>(
+  loaders,
+);

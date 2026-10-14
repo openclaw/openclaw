@@ -30,6 +30,8 @@ import {
 } from "./deliver.js";
 import type { ConversationDeliveryTarget } from "./delivery-completion.js";
 import {
+  loadMessageGatewayRuntime,
+  resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,
 } from "./message-gateway-options.js";
@@ -47,12 +49,6 @@ const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
 
 const loadMessageConfigRuntime = createLazyRuntimeModule(
   () => import("./message.config.runtime.js"),
-);
-
-// Keep config/runtime loading lazy so importing message helpers does not
-// bootstrap plugin registries or gateway clients.
-const loadMessageGatewayRuntime = createLazyRuntimeModule(
-  () => import("./message.gateway.runtime.js"),
 );
 
 type MessageSendParams = Pick<
@@ -234,21 +230,13 @@ async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfi
   return getRuntimeConfig();
 }
 
-async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
-  if (idempotencyKey) {
-    return idempotencyKey;
-  }
-  const { randomIdempotencyKey } = await loadMessageGatewayRuntime();
-  return randomIdempotencyKey();
-}
-
-function resolveDirectMessageTarget(
+async function resolveDirectMessageTarget(
   params: Pick<MessageSendParams, "to" | "accountId">,
   cfg: OpenClawConfig,
   channel: ChannelPlugin["id"],
   plugin: ChannelPlugin,
 ) {
-  const target = resolveOutboundTarget({
+  const target = await resolveOutboundTarget({
     channel,
     plugin,
     to: params.to,
@@ -307,7 +295,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const resolvedTarget = resolveDirectMessageTarget(params, cfg, channel, plugin);
+    const resolvedTarget = await resolveDirectMessageTarget(params, cfg, channel, plugin);
 
     const outboundSession = buildOutboundSessionContext({
       cfg,
@@ -516,7 +504,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const resolvedTarget = resolveDirectMessageTarget(params, cfg, channel, plugin);
+    const resolvedTarget = await resolveDirectMessageTarget(params, cfg, channel, plugin);
 
     params.assertDirectAdapterHandoff?.();
     const result = await outbound.sendPoll({

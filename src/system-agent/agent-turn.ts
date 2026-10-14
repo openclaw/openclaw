@@ -1,4 +1,3 @@
-// OpenClaw agent turns run the real embedded agent loop with the ring-zero tool.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,14 +7,6 @@ import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
 import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  PreparedModelRuntimePublicationSupersededError,
-} from "../agents/prepared-model-runtime.errors.js";
-import {
-  AGENT_RUN_SUPERSEDED_STOP_REASON,
-  isAgentRunSupersededAbortReason,
-} from "../agents/run-termination.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -27,6 +18,10 @@ import { buildSystemAgentSystemPrompt } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import {
+  systemAgentRuntimeFailureGuidance,
+  systemAgentTerminalFailureGuidance,
+} from "./inference-run-errors.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
@@ -396,12 +391,7 @@ async function runSystemAgentTurnWithDeps(
     // Failed runs can retain partial text; it must not publish a reply or a tool directive.
     const terminalError = extractAgentRunTerminalError(result);
     if (terminalError) {
-      failureGuidance =
-        result.meta?.stopReason === "timeout" || result.meta?.timeoutPhase
-          ? "timeout"
-          : result.meta?.stopReason === AGENT_RUN_SUPERSEDED_STOP_REASON
-            ? "superseded"
-            : "retry";
+      failureGuidance = systemAgentTerminalFailureGuidance(result);
       throw new Error(terminalError);
     }
     failureGuidance = "route-changed";
@@ -428,13 +418,7 @@ async function runSystemAgentTurnWithDeps(
     // before rejecting. Neither is safe to arm or resume on a later attempt.
     const failures =
       error instanceof SystemAgentInferenceUnavailableError ? [...error.failures] : [error];
-    const guidance =
-      isAgentRunSupersededAbortReason(error) ||
-      error instanceof PreparedModelRuntimePublicationSupersededError
-        ? "superseded"
-        : error instanceof PreparedModelRuntimeOwnerNotPublishedError
-          ? "runtime-unavailable"
-          : failureGuidance;
+    const guidance = systemAgentRuntimeFailureGuidance(error) ?? failureGuidance;
     return throwSystemAgentInferenceUnavailable({ session: params.session, failures, guidance });
   } finally {
     preparedRunAdmission.close();

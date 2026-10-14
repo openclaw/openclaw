@@ -1,3 +1,4 @@
+import { logWarn } from "../../../logger.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
@@ -22,6 +23,7 @@ export type RequesterSettleWakeBatchCallbacks = {
 };
 
 const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
+const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
 
 /** Reads stay independent; the first prepared decision owns mutation and delivery. */
 export function createRequesterSettleBatchClaim(
@@ -80,6 +82,7 @@ export function startRequesterSettleWakeAttempt(
     status: "dispatching",
     attemptCount: state.attemptCount + 1,
     batchRunIds,
+    deferralCount: state.deferralCount,
     ...retainedYieldIdentity(state),
     ...admissionMarker,
   };
@@ -89,6 +92,67 @@ export function deferRequesterSettleWakePreparation(
   state: RequesterSettleWakeBatchState,
 ): RequesterSettleWakeBatchState {
   return { ...state, nextAttemptAt: Date.now() + 30_000 };
+}
+
+/** Returns true when the stale-descendant wait is spent and this batch may dispatch. */
+export function createRequesterSettleBatchDeferral(params: {
+  readDescendants: () => Promise<{ active: number } | undefined>;
+  claimCurrentBatch: () => boolean;
+  readState: () => RequesterSettleWakeBatchState;
+  transitionBatch: (state: RequesterSettleWakeBatchState) => Promise<void>;
+  batchRunIds: RequesterSettleWakeBatchState["batchRunIds"];
+  retryDelayMs: number;
+}) {
+  return async (
+    overrides: Partial<Pick<RequesterSettleWakeBatchState, "status" | "lastError">> = {},
+    countTowardsLimitOverride?: boolean,
+  ): Promise<boolean> => {
+    let countTowardsLimit = countTowardsLimitOverride;
+    if (countTowardsLimit === undefined) {
+      const descendants = await params.readDescendants();
+      if (!descendants) {
+        return false;
+      }
+      countTowardsLimit = descendants.active === 0;
+    }
+    if (!params.claimCurrentBatch()) {
+      return false;
+    }
+    const state = { ...params.readState(), ...overrides };
+    const now = Date.now();
+    if ((state.nextAttemptAt ?? 0) > now) {
+      return false;
+    }
+    // Active work still defers delivery, but cannot recharge a spent wait.
+    const deferralCount =
+      (state.deferralCount ?? 0) >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS
+        ? REQUESTER_SETTLE_WAKE_MAX_DEFERRALS
+        : countTowardsLimit
+          ? (state.deferralCount ?? 0) + 1
+          : 0;
+    if (countTowardsLimit && deferralCount >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS) {
+      if (state.deferralCount !== deferralCount) {
+        await params.transitionBatch({ ...state, deferralCount });
+      }
+      // An ended descendant whose own delivery never settles must not cost
+      // this batch its completed results: stop waiting and deliver them.
+      logWarn(
+        `requester settle wake stopped waiting for unsettled descendants after ${deferralCount} deferrals; delivering the drained batch`,
+      );
+      return true;
+    }
+    await params.transitionBatch({
+      status: state.status,
+      attemptCount: state.attemptCount,
+      ...(state.replayCount !== undefined ? { replayCount: state.replayCount } : {}),
+      nextAttemptAt: Math.max(state.nextAttemptAt ?? 0, now + params.retryDelayMs),
+      batchRunIds: params.batchRunIds,
+      ...retainedYieldIdentity(state),
+      ...(state.lastError !== undefined ? { lastError: state.lastError } : {}),
+      deferralCount,
+    });
+    return false;
+  };
 }
 
 export function readSharedBatchState(
@@ -144,11 +208,12 @@ export function captureRequesterRunOwner(requesterRun: SubagentRunRecord | null 
  * policy is fixed when the yield writes the batch: a batch without the marker came
  * from an earlier build and stays private, so an upgrade cannot republish its input.
  */
-export function resolvePrivateSettlePolicy(
+export function resolveRequesterSettlePolicy(
   completionRows: readonly SubagentRunRecord[],
   requesterYielded: boolean,
   state: RequesterSettleWakeBatchState,
   requester: { sessionId: string; lifecycleRevision?: string },
+  completionRowsMatchRequester: boolean,
 ) {
   // One private result makes the aggregate private; public siblings keep their own route.
   const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
@@ -156,10 +221,13 @@ export function resolvePrivateSettlePolicy(
   const yieldedFinalDeliverable =
     hasPrivateRows && requesterYielded && state.yieldedFinalDeliverable === true;
   const parentOnly = hasPrivateRows && !yieldedFinalDeliverable;
-  // Private findings stay bound to the requester incarnation that produced them.
-  const privateBinding = {
+  // Retained public history keeps its existing admission; it cannot mint a new
+  // own-session alternative from a later reread of the requester key.
+  const bindRequester =
+    hasPrivateRows || (completionRows.length > 0 && completionRowsMatchRequester);
+  const requesterBinding = {
     ...(parentOnly ? { completionTarget: "parent" as const } : {}),
-    ...(hasPrivateRows
+    ...(bindRequester
       ? {
           completionRequesterSessionId: requester.sessionId,
           completionRequesterLifecycleRevision: requester.lifecycleRevision,
@@ -170,5 +238,5 @@ export function resolvePrivateSettlePolicy(
   // A yield owes the conversation a visible final unless private findings let the
   // requester choose silence.
   const requireVisibleReply = requesterYielded && !hasPrivateRows;
-  return { privateRows, requireVisibleReply, parentOnly, privateBinding, admissionMarker };
+  return { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker };
 }

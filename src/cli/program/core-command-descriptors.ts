@@ -39,9 +39,12 @@ export const CORE_CLI_COMMAND_DESCRIPTORS: readonly NamedCommandDescriptor[] = [
   command("backup", "Create, verify, and restore backup archives and SQLite snapshots", true),
   command(
     "database",
-    "Inspect database schema compatibility and shared-state write ownership",
+    "Inspect database compatibility, manage ownership, and port workboard stores",
     true,
-    { parentDefaultHelp: true },
+    {
+      parentDefaultHelp: true,
+      machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
+    },
   ),
   command("migrate", "Import state from another agent system", true),
   command("storage", "List, initialize, and test configured storage locations", true, {

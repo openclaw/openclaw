@@ -182,21 +182,25 @@ async function patchGatewayConfig(params: {
   throw new Error("Matrix QA config patch exhausted retries");
 }
 
-async function waitForMatrixAccountReady(params: {
+export async function waitForMatrixAccountReady(params: {
   afterStartAt?: number;
   accountId: string;
   deadline: number;
-  gateway: FlowPreparationInput["gateway"];
+  gateway: Pick<FlowPreparationInput["gateway"], "call">;
+  fixedPolling?: { intervalMs: number; requestTimeoutMs: number };
 }) {
   const deadline = params.deadline;
   let lastAccounts: unknown;
   let remainingMs: number;
   while ((remainingMs = deadline - Date.now()) > 0) {
     try {
-      const accounts = await readLiveQaChannelAccounts(params.gateway, "matrix", {
-        timeoutMs: remainingMs,
-        deadlineMs: params.deadline,
-      });
+      const accounts = await readLiveQaChannelAccounts(
+        params.gateway,
+        "matrix",
+        params.fixedPolling
+          ? { timeoutMs: params.fixedPolling.requestTimeoutMs }
+          : { timeoutMs: remainingMs, deadlineMs: params.deadline },
+      );
       lastAccounts = accounts;
       const account = accounts.find((entry) => entry.accountId === params.accountId);
       if (
@@ -209,7 +213,9 @@ async function waitForMatrixAccountReady(params: {
     } catch {
       // Retry until the scenario-specific readiness deadline.
     }
-    await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
+    await sleep(
+      params.fixedPolling?.intervalMs ?? Math.min(500, Math.max(0, deadline - Date.now())),
+    );
   }
   throw new Error(
     `matrix account "${params.accountId}" did not become ready; last accounts: ${JSON.stringify(lastAccounts ?? [])}`,
@@ -249,7 +255,7 @@ async function waitForGatewayConfigApplied(params: {
   );
 }
 
-export function isMatrixQaAccountReady(
+function isMatrixQaAccountReady(
   account: ChannelAccountSnapshot | undefined,
 ): account is ChannelAccountSnapshot {
   return (

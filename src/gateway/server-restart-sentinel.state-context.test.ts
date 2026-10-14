@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-state-context.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
@@ -36,10 +37,24 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { configureRestartSessionEventMocks } from "./server-restart-sentinel.test-support.js";
 import { scheduleRestartSentinelWakeAfterReady } from "./server-startup-restart-sentinel.js";
 
 const mocks = vi.hoisted(() => ({
-  loadSessionEntry: vi.fn<typeof import("./session-utils.js").loadSessionEntry>(),
+  loadSessionEntryAsync:
+    vi.fn<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>(),
+  resolveSessionTarget:
+    vi.fn<
+      typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker
+    >(),
+  captureSessionEventTarget:
+    vi.fn<
+      typeof import("../auto-reply/reply/session-event-handoff.js").captureSessionEventTargetForHost
+    >(),
+  enqueueSessionEvent:
+    vi.fn<
+      typeof import("../auto-reply/reply/session-event-handoff.js").enqueueSessionEventForHost
+    >(),
   sendDurableMessageBatchCore: vi.fn(async () => ({
     status: "sent" as const,
     results: [{ channel: "matrix" as const, messageId: "synthetic-notice" }],
@@ -60,13 +75,20 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: mocks.loadSessionEntry,
+// mock-isolation: Keep real entry reads for the state-custody cases; stub target selection.
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: {
+    key: string;
+    agentId?: string;
+    env?: NodeJS.ProcessEnv;
+  }) => mocks.loadSessionEntryAsync(params.key, { agentId: params.agentId, env: params.env }),
+  resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: vi.fn(),
+// mock-isolation: The state-context suite observes adoption without executing a model turn.
+vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
+  enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
 vi.mock("../channels/message/runtime.js", () => ({
   sendDurableMessageBatchCore: mocks.sendDurableMessageBatchCore,
@@ -93,8 +115,18 @@ vi.mock("../auto-reply/reply/dispatch-from-config.runtime-loaders.js", () => ({
   loadGetReplyFromConfigRuntime: async () => ({ prewarmConfigDrivenReplyRuntime: async () => {} }),
 }));
 const { startGatewaySidecars } = await import("./server-startup-post-attach.js");
-const { loadSessionEntry: realLoadSessionEntry } =
-  await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
+const sessionWorker = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+  "./session-utils-store-worker.js",
+);
+const realLoadSessionEntry: typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync =
+  (key, opts) =>
+    sessionWorker.loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key,
+      ...opts,
+      excludeInternalEffects: true,
+      readOnly: false,
+    });
 const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
 const gatewayLocks: Array<{ release: () => Promise<void> }> = [];
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
@@ -132,7 +164,9 @@ beforeEach(() => {
   ]);
   setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
   vi.clearAllMocks();
-  mocks.loadSessionEntry.mockReturnValue({
+  setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: ["matrix:!operator:example"] } });
+  configureRestartSessionEventMocks(mocks, "synthetic-session");
+  mocks.loadSessionEntryAsync.mockResolvedValue({
     cfg: { commands: { ownerAllowFrom: ["matrix:!operator:example"] } },
     agentId: "main",
     entry: { sessionId: "synthetic-session", updatedAt: 1 },
@@ -520,7 +554,7 @@ it.each(["verifying", "terminal-before-marker", "replaced-handoff", "replaced-ki
     const context = captureDeliveryQueueStateContext();
     const cfg = { commands: { ownerAllowFrom: ["matrix:!operator:example"] } };
     setRuntimeConfigSnapshot(cfg);
-    mocks.loadSessionEntry.mockImplementation(realLoadSessionEntry);
+    mocks.loadSessionEntryAsync.mockImplementation(realLoadSessionEntry);
     const sessionKey = "agent:main:main";
     for (const [env, sessionId, to] of [
       [originalEnv, "original-session", "!operator:example"],
@@ -619,7 +653,7 @@ it.each(["verifying", "terminal-before-marker", "replaced-handoff", "replaced-ki
       undefined,
       expect.objectContaining({ stateDir: originalRoot }),
     );
-    expect(mocks.loadSessionEntry.mock.results.at(-1)?.value.entry.sessionId).toBe(
+    expect((await mocks.loadSessionEntryAsync.mock.results.at(-1)?.value)?.entry?.sessionId).toBe(
       "original-session",
     );
     expect(await readRestartSentinel(originalEnv)).toBeNull();

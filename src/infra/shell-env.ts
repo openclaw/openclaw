@@ -10,6 +10,7 @@ import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { killProcessTree } from "../process/kill-tree.js";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
@@ -126,7 +127,7 @@ function createLoginShellExecSpec(params: LoginShellExecParams) {
 function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffer> {
   const { shell, args, options } = createLoginShellExecSpec(params);
   return new Promise((resolve, reject) => {
-    const deadline = options.timeout > 0 ? performance.now() + options.timeout : undefined;
+    let exited = false;
     let outputTimeout: ReturnType<typeof setTimeout> | undefined;
     // execFile discards stdio and detached. spawn preserves the sync probe's terminal isolation.
     const child = spawn(shell, args, options);
@@ -159,19 +160,22 @@ function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffe
       discardOutput();
       reject(error);
     });
+    // A spawn timeout only sends SIGTERM; startup may ignore it and never emit exit.
+    // Keep the deadline owned here until the shell and its output have settled.
+    if (options.timeout > 0) {
+      outputTimeout = setTimeout(() => {
+        reject(new Error("Login-shell environment check timed out"));
+        discardOutput();
+        if (!exited && child.pid !== undefined) {
+          killProcessTree(child.pid, { detached: true, force: true });
+        }
+      }, options.timeout);
+    }
     child.once("exit", () => {
+      exited = true;
       // A timed-out shell's descendants must not hold its output pipes open.
       if (child.killed) {
         discardOutput();
-      } else if (deadline !== undefined) {
-        // spawn clears its timeout on exit, but descendants can retain the output pipes.
-        outputTimeout = setTimeout(
-          () => {
-            reject(new Error("Login-shell environment check timed out"));
-            discardOutput();
-          },
-          Math.max(0, deadline - performance.now()),
-        );
       }
     });
     child.once("close", (code, signal) => {
@@ -258,6 +262,24 @@ type LoginShellEnvProbeResult =
   | { ok: true; shellEnv: Map<string, string> }
   | { ok: false; error: string };
 
+function prepareLoginShellEnvProbe(
+  params: Parameters<typeof getShellPathFromLoginShell>[0] & { purpose: LoginShellEnvProbePurpose },
+  exec?: typeof execFileSync,
+) {
+  const request: LoginShellExecParams = {
+    timeoutMs: resolveTimeoutMs(params.timeoutMs),
+    shell: resolveShell(params.env),
+    env: resolveShellExecEnv(params.env),
+    purpose: params.purpose,
+  };
+  const cacheKey = createLoginShellEnvCacheKey({
+    ...request,
+    exec,
+    execEnv: request.env,
+  });
+  return { request, cacheKey };
+}
+
 function probeLoginShellEnv(
   params: Parameters<typeof getShellPathFromLoginShell>[0] & { purpose: LoginShellEnvProbePurpose },
 ): LoginShellEnvProbeResult {
@@ -267,28 +289,14 @@ function probeLoginShellEnv(
   }
 
   const exec = params.exec ?? execFileSync;
-  const timeoutMs = resolveTimeoutMs(params.timeoutMs);
-  const shell = resolveShell(params.env);
-  const execEnv = resolveShellExecEnv(params.env);
-  const cacheKey = createLoginShellEnvCacheKey({
-    shell,
-    timeoutMs,
-    exec: params.exec,
-    execEnv,
-    purpose: params.purpose,
-  });
+  const { request, cacheKey } = prepareLoginShellEnvProbe(params, params.exec);
   const cached = loginShellEnvProbeCache.get(cacheKey);
   if (cached) {
     return { ok: true, shellEnv: new Map(cached) };
   }
 
   try {
-    const spec = createLoginShellExecSpec({
-      shell,
-      env: execEnv,
-      timeoutMs,
-      purpose: params.purpose,
-    });
+    const spec = createLoginShellExecSpec(request);
     const stdout = exec(spec.shell, spec.args, spec.options);
     const shellEnv = parseShellEnv(stdout);
     // Failed startup can recover on the next lookup; retain only successful probes.
@@ -413,15 +421,7 @@ export function prepareShellPathFromLoginShell(
     cachedShellPath = null;
     return Promise.resolve(null);
   }
-  const timeoutMs = resolveTimeoutMs(opts.timeoutMs);
-  const shell = resolveShell(opts.env);
-  const execEnv = resolveShellExecEnv(opts.env);
-  const cacheKey = createLoginShellEnvCacheKey({
-    shell,
-    timeoutMs,
-    execEnv,
-    purpose: "path",
-  });
+  const { request, cacheKey } = prepareLoginShellEnvProbe({ ...opts, purpose: "path" });
   const pending = pendingShellPathProbes.get(cacheKey);
   if (pending) {
     return pending;
@@ -429,9 +429,7 @@ export function prepareShellPathFromLoginShell(
   const cached = loginShellEnvProbeCache.peek(cacheKey);
   const probe = cached
     ? Promise.resolve(new Map(cached))
-    : execLoginShellEnvZeroAsync({ shell, env: execEnv, timeoutMs, purpose: "path" }).then(
-        parseShellEnv,
-      );
+    : execLoginShellEnvZeroAsync(request).then(parseShellEnv);
   const result = probe
     .then((shellEnv) => {
       loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);

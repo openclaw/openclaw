@@ -123,6 +123,7 @@ const parseCiEnvFlag = (value, fallback = false) => {
   }
   return fallback;
 };
+const fullUiPullRequest = ordinaryPullRequest && parseCiEnvFlag(process.env.OPENCLAW_CI_FULL);
 
 const pluginContractPlan = await importTargetPlan(
   existsSync("./scripts/lib/plugin-contract-test-plan.mts")
@@ -171,6 +172,7 @@ const changedPaths = (() => {
 })();
 const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
 const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const rootProseOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY);
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
 const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
@@ -412,26 +414,29 @@ const runSkillsPython =
 const runControlUiI18n =
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
 let runUiTests =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
-  !docsOnly &&
-  !nodeDataOnly &&
-  !releaseFastLane;
+  fullUiPullRequest ||
+  (parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
+    !docsOnly &&
+    !nodeDataOnly &&
+    !releaseFastLane);
 // The UI owner graph also covers protocol and Gateway-served inputs
 // outside ui/. Ordinary UI test leaves retain their cheaper unit owner.
 const selectUiE2eFamily = (family) =>
-  !docsOnly &&
-  !nodeDataOnly &&
-  !releaseFastLane &&
-  (runtimePullRequest &&
-  (!frozenTarget || releaseGate) &&
-  !compatibilityTarget &&
-  changedPaths !== null &&
-  typeof changedNodeTestPlan.hasUiE2eAffectingChange === "function"
-    ? changedNodeTestPlan.hasUiE2eAffectingChange(changedPaths, { family })
-    : runUiTests);
+  fullUiPullRequest ||
+  (!docsOnly &&
+    !nodeDataOnly &&
+    !releaseFastLane &&
+    (runtimePullRequest &&
+    (!frozenTarget || releaseGate) &&
+    !compatibilityTarget &&
+    changedPaths !== null &&
+    typeof changedNodeTestPlan.hasUiE2eAffectingChange === "function"
+      ? changedNodeTestPlan.hasUiE2eAffectingChange(changedPaths, { family })
+      : runUiTests));
 let runControlUiE2e = selectUiE2eFamily("control-ui");
 let runBrowserExtensionE2e = selectUiE2eFamily("browser-extension");
-let runUiRealGateway = !ordinaryPullRequest && selectUiE2eFamily("real-gateway");
+let runUiRealGateway =
+  (fullUiPullRequest || !ordinaryPullRequest) && selectUiE2eFamily("real-gateway");
 let runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
 const nodeRunnerBackend = process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || runnerProfile;
 const usesHostedRunnerProfile = runnerProfile === "github" || runnerProfile === "hybrid";
@@ -576,7 +581,10 @@ const uiOwnerScope = {
   realGateway: runUiRealGateway,
 };
 const forceFullUiE2e =
-  !runtimePullRequest || releaseGate || parseCiEnvFlag(process.env.OPENCLAW_CI_UI_E2E_FULL);
+  fullUiPullRequest ||
+  !runtimePullRequest ||
+  releaseGate ||
+  parseCiEnvFlag(process.env.OPENCLAW_CI_UI_E2E_FULL);
 const uiE2eSelection =
   runControlUiE2e &&
   !compatibilityTarget &&
@@ -590,14 +598,14 @@ let uiTestGroups =
   (!frozenTarget || releaseGate) &&
   typeof nodeTestPlan.createUiTestShardGroups === "function"
     ? nodeTestPlan.createUiTestShardGroups({
-        // Preserve the ordinary owner-family inventory. Protected or directly
-        // selected files opt into the existing release-only UI tier below.
+        // Only edited test files opt into the release-only UI tier on automatic CI.
         includeReleaseOnlyTests: includeReleaseOnlyUiTests,
         ...(typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
           ? { includeReleaseOnlyE2eTests: forceFullUiE2e }
           : {}),
-        includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
-        changedPaths: selectedTestTargets ?? changedPaths ?? [],
+        includePrExemptRuntimeTests:
+          fullUiPullRequest || selectedTestTargets ? true : includePrExemptRuntimeTests,
+        changedPaths: changedPaths ?? [],
         ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
@@ -637,7 +645,8 @@ if (selectedTestTargets) {
         controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
       (file) =>
         realGatewayTargets.has(file)
-          ? !ordinaryPullRequest && (uiOwnerScope.realGateway || selected.has(file))
+          ? (fullUiPullRequest || !ordinaryPullRequest) &&
+            (uiOwnerScope.realGateway || selected.has(file))
           : uiE2eSelection
             ? selectedControlUiFiles.has(file)
             : uiOwnerScope.mocked || selected.has(file),
@@ -658,6 +667,10 @@ if (selectedTestTargets) {
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
 }
 if (uiE2eSelection) {
+  const includedFiles = new Set(
+    uiTestGroups?.e2e.flatMap((group) => group.includePatterns ?? []) ?? uiE2eSelection.files,
+  );
+  uiE2eSelection.files = uiE2eSelection.files.filter((file) => includedFiles.has(file));
   // Selection also applies to UI-only plans without a Node target inventory.
   runControlUiE2e = uiE2eSelection.files.length > 0;
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
@@ -668,6 +681,26 @@ if (uiE2eSelection) {
       : uiE2eSelection.files.length;
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlUiRows) + 1;
 }
+// WebKit shares the first UI row; it never adds a runner or matrix slot.
+// Keep its browser-only contracts scoped to their interaction and style owners.
+const uiWebkitOwners = [
+  "ui/vitest.config.ts",
+  "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
+  "ui/src/app/app-shell-chrome.ts",
+  "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
+  "ui/src/pages/chat/chat-composer*.{ts,tsx}",
+  "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
+  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
+  "ui/src/lit/presentation-binding.ts",
+  "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
+  "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
+  "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",
+  "ui/src/styles/chat/{composer*,emoji-menu*,mention-menu*,model-picker*}.css",
+];
+const runUiWebkit =
+  runUiTests &&
+  !frozenTarget &&
+  Boolean(changedPaths?.some((file) => uiWebkitOwners.some((owner) => matchesGlob(file, owner))));
 if (selectedTestTargets && runWindows && !windowsTestPlan) {
   throw new Error("Current PR CI requires a target-owned Windows planner");
 }
@@ -919,6 +952,47 @@ const runSqliteSessionLifecycle =
   supportsSqliteSessionLifecycleProof &&
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
+const postgresConformancePaths = [
+  "src/state/openclaw-state-db*",
+  "src/state/openclaw-state-feature-schema-ensure.ts",
+  "src/state/user-profiles-schema.ts",
+  "src/snapshot/**",
+  "src/infra/backup-*.ts",
+  "src/infra/update-database-*.ts",
+  "src/cli/update-cli/**",
+  "src/commands/backup*.ts",
+  "src/state/openclaw-state-snapshot-sanitizer.ts",
+  "scripts/generate-postgres-schema.mts",
+  "scripts/lib/postgres-schema-catalog.mts",
+  "scripts/lib/postgres-schema-triggers.mts",
+  "scripts/lib/postgres-agent-conformance.mts",
+  "src/state/openclaw-agent-schema.sql",
+  "test/scripts/generate-postgres-schema.test.ts",
+  "src/state/*schema*",
+  "src/state/openclaw-state-db-contract.ts",
+  "src/state/postgres-schema.generated/**",
+  "src/cron/store/runtime-authority-store.ts",
+  "src/infra/database-engine/**",
+  "src/infra/postgres-sync/**",
+  "src/infra/sql-connection.ts",
+  "src/infra/sql-query-compiler.ts",
+  "src/infra/kysely-sync*.ts",
+  "src/infra/sqlite-transaction.ts",
+  "extensions/workboard/**",
+  "src/config/zod-schema.database.ts",
+  "scripts/test-database-conformance*.mjs",
+];
+const runPostgresConformance =
+  existsSync("scripts/test-database-conformance.mjs") &&
+  (eventName === "schedule" ||
+    ((eventName === "pull_request" || releaseGate) &&
+      !docsOnly &&
+      (changedPaths === null ||
+        changedPaths.some(
+          (file) =>
+            !changedNodeTestPlan.isCiDocumentationPath?.(file) &&
+            postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
+        ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
   (runNodeFull &&
@@ -940,6 +1014,12 @@ const runQaSmokeCi =
   runNodeFull &&
   changedScopeHasQaImpact &&
   (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
+const nodeWorkerE2eShards =
+  runNodeFull &&
+  !runtimePullRequest &&
+  typeof changedNodeTestPlan.createNodeWorkerE2eTestShards === "function"
+    ? changedNodeTestPlan.createNodeWorkerE2eTestShards()
+    : [];
 const rawNodeTestShards = runNodeFull
   ? changedNodeTestShards
     ? changedNodeTestShards
@@ -956,9 +1036,11 @@ const rawNodeTestShards = runNodeFull
           // the complete compact inventory within its 77-row main-tier cap.
           compact: compactPlanMode !== undefined,
           compactMode: mainValidation ? "pull-request" : compactPlanMode,
-          compactNodeJobCap: nodeMatrixLimit,
+          mainValidation,
+          compactNodeJobCap: nodeMatrixLimit - nodeWorkerE2eShards.length,
           runnerBackend: nodeRunnerBackend,
         }),
+        ...nodeWorkerE2eShards,
       ]
   : [];
 if (
@@ -1033,16 +1115,17 @@ const plannedUiRealGatewayShards =
     : selectedTestTargets
       ? []
       : [{ shard: 1, shard_count: 1, run_desktop: true, groups: uiTestGroups?.e2e }];
-const uiRealGatewayShards = ordinaryPullRequest
-  ? []
-  : selectedTestTargets
-    ? plannedUiRealGatewayShards
-        .map((shard) => ({
-          ...shard,
-          groups: shard.groups?.filter((group) => group.includePatterns?.length > 0),
-        }))
-        .filter((shard) => shard.run_desktop || shard.groups?.length > 0)
-    : plannedUiRealGatewayShards;
+const uiRealGatewayShards =
+  ordinaryPullRequest && !fullUiPullRequest
+    ? []
+    : selectedTestTargets
+      ? plannedUiRealGatewayShards
+          .map((shard) => ({
+            ...shard,
+            groups: shard.groups?.filter((group) => group.includePatterns?.length > 0),
+          }))
+          .filter((shard) => shard.run_desktop || shard.groups?.length > 0)
+      : plannedUiRealGatewayShards;
 const projectNodeTestGroup = ({
   configs,
   env,
@@ -1095,6 +1178,19 @@ const knownToolingConfigs = new Set([
   "test/vitest/vitest.tooling-isolated.config.ts",
   "test/vitest/vitest.tooling-docker.config.ts",
 ]);
+const compactReleaseMatrixRows =
+  eventName === "workflow_dispatch" &&
+  !mainValidation &&
+  !releaseGate &&
+  !ciQualification &&
+  nodeRunnerBackend === "github";
+const shardRequiresTests = (shard, tests, fallback) =>
+  (shard.groups ?? [shard]).some((plan) => {
+    const patterns = plan.targets ?? plan.includePatterns;
+    return patterns
+      ? patterns.some((pattern) => tests.some((test) => matchesGlob(test, pattern)))
+      : fallback(plan);
+  });
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const nodeTestShards = targetNodeTestShards
   .toSorted(
@@ -1118,7 +1214,7 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
-    return {
+    const row = {
       check_name: shard.checkName,
       test_runtime_policy: testRuntimeMode,
       requires_bun:
@@ -1138,11 +1234,7 @@ const nodeTestShards = targetNodeTestShards
       plan_concurrency: shard.planConcurrency,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
-      requires_go: (shard.groups ?? [shard]).some((plan) => {
-        const patterns = plan.targets ?? plan.includePatterns;
-        if (patterns) {
-          return patterns.some((pattern) => matchesGlob("test/scripts/docs-i18n.test.ts", pattern));
-        }
+      requires_go: shardRequiresTests(shard, ["test/scripts/docs-i18n.test.ts"], (plan) => {
         if (
           plan.configs?.length &&
           plan.configs.every((config) => knownToolingConfigs.has(config))
@@ -1153,36 +1245,55 @@ const nodeTestShards = targetNodeTestShards
         // current isolated and Docker catalogs exclude the Go owner.
         return (plan.shard_name ?? plan.shardName).startsWith("core-tooling");
       }),
-      requires_ripgrep: (shard.groups ?? [shard]).some((plan) => {
-        const patterns = plan.targets ?? plan.includePatterns;
-        if (patterns) {
-          return patterns.some((pattern) =>
-            [
-              "src/agents/sessions/agent-session-runtime-projection.test.ts",
-              "src/agents/sessions/tools/index.test.ts",
-              "src/agents/sessions/tools/grep.byte-path.test.ts",
-              "src/agents/filesystem-tools-output-contract.test.ts",
-              "test/scripts/check-database-worker-ratchet.test.ts",
-            ].some((test) => matchesGlob(test, pattern)),
-          );
-        }
-        return ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
-          plan.shard_name ?? plan.shardName,
-        );
-      }),
-      requires_sandbox_image: (shard.groups ?? [shard]).some((plan) => {
-        const patterns = plan.targets ?? plan.includePatterns;
-        if (patterns) {
-          return patterns.some((pattern) =>
-            [
-              "test/e2e/qa-lab/runtime/agent-sandboxed-exec-behavior.e2e.test.ts",
-              "test/e2e/qa-lab/runtime/openclaw-sandbox-workspace-isolation.e2e.test.ts",
-            ].some((test) => matchesGlob(test, pattern)),
-          );
-        }
-        return plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false;
-      }),
+      requires_ripgrep: shardRequiresTests(
+        shard,
+        [
+          "src/agents/sessions/agent-session-runtime-projection.test.ts",
+          "src/agents/sessions/tools/index.test.ts",
+          "src/agents/sessions/tools/grep.byte-path.test.ts",
+          "src/agents/filesystem-tools-output-contract.test.ts",
+          "test/scripts/check-database-worker-ratchet.test.ts",
+          "test/scripts/pr-baseline-publication.test.ts",
+          "test/scripts/pr-baseline-signing.test.ts",
+          "test/scripts/pr-baseline-successor.test.ts",
+          "test/scripts/pr-correction-continuation.test.ts",
+        ],
+        (plan) =>
+          ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
+            plan.shard_name ?? plan.shardName,
+          ),
+      ),
+      requires_sandbox_image: shardRequiresTests(
+        shard,
+        [
+          "test/e2e/qa-lab/runtime/agent-sandboxed-exec-behavior.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/openclaw-sandbox-workspace-isolation.e2e.test.ts",
+        ],
+        (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
+      ),
     };
+    if (compactReleaseMatrixRows || (packedGroups && !frozenTarget)) {
+      // The workflow treats absent feature flags as false and history as [].
+      // Encoded groups own their names; the outer name is only a legacy fallback.
+      for (const key of [
+        "requires_bun",
+        "requires_dist",
+        "requires_go",
+        "requires_ripgrep",
+        "requires_sandbox_image",
+      ]) {
+        if (row[key] === false) {
+          delete row[key];
+        }
+      }
+      if (row.git_commits.length === 0) {
+        delete row.git_commits;
+      }
+      if (packedGroups && groups.every((group) => group.shard_name)) {
+        delete row.shard_name;
+      }
+    }
+    return row;
   });
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
@@ -1244,14 +1355,14 @@ const additionalChecks = [
     group,
     runner: "blacksmith-4vcpu-ubuntu-2404",
   })),
-  // Only dispatches execute this report; scheduled tips have no change range.
-  ...(eventName === "workflow_dispatch"
+  // Main-shaped qualifications are still dispatches with an exact comparison range.
+  ...(eventName === "workflow_dispatch" || mainQualification
     ? [
-        // Diff generation took 209–246s on smaller hosts; keep its 8GiB heap isolated.
+        // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {
           check_name: "report-plugin-sdk-api-diff",
           group: "plugin-sdk-api-diff",
-          runner: "blacksmith-8vcpu-ubuntu-2404",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
         },
       ]
     : []),
@@ -1259,7 +1370,7 @@ const additionalChecks = [
   {
     check_name: "check-additional-extension-package-boundary",
     group: "extension-package-boundary",
-    runner: "blacksmith-32vcpu-ubuntu-2404",
+    runner: frozenTarget ? "blacksmith-32vcpu-ubuntu-2404" : "blacksmith-16vcpu-ubuntu-2404",
   },
   {
     check_name: "check-additional-runtime-topology-architecture",
@@ -1401,6 +1512,7 @@ const manifest = {
   ),
   run_prompt_snapshots: runNodeFull && !releaseFastLane && changedScopeHasPromptSnapshotImpact,
   run_sqlite_session_lifecycle: runSqliteSessionLifecycle,
+  run_postgres_conformance: runPostgresConformance,
   checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
   run_plugin_contracts_shards: pluginContractShards.length > 0,
   plugin_contracts_matrix: createContractMatrix(pluginContractShards, "contracts-plugins"),
@@ -1457,9 +1569,11 @@ const manifest = {
   shared_sdk_declarations: sharedSdkDeclarations,
   check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
   run_check_docs: docsChanged && eventName !== "push",
+  run_docs_content: !(ordinaryPullRequest && docsOnly && rootProseOnly),
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
   run_ui_tests: runUiTests,
+  run_ui_webkit: runUiWebkit,
   ui_test_runtime_policy: uiTestRuntimePolicy,
   ui_test_shard_count: uiTestShardCount,
   ui_test_matrix: createMatrix(
@@ -1468,15 +1582,16 @@ const manifest = {
   ui_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.ui) : "",
   ui_e2e_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.e2e) : "",
   ui_real_gateway_matrix: createMatrix(
-    uiRealGatewayShards.map(({ groups, ...row }) => ({
-      ...row,
-      run_tests:
-        !groups ||
-        groups.some(
-          (group) => group.includePatterns === undefined || group.includePatterns.length > 0,
-        ),
-      test_groups_gzip_base64: groups ? encodeNodeTestGroups(groups) : "",
-    })),
+    uiRealGatewayShards.map(({ groups, ...row }) =>
+      Object.assign(row, {
+        run_tests:
+          !groups ||
+          groups.some(
+            (group) => group.includePatterns === undefined || group.includePatterns.length > 0,
+          ),
+        test_groups_gzip_base64: groups ? encodeNodeTestGroups(groups) : "",
+      }),
+    ),
   ),
   run_control_ui_performance: runControlUiPerformance,
   run_ui_e2e: runUiE2e,
@@ -1613,9 +1728,8 @@ if (hybridHostedEligible) {
   hybridHostedBaseRows = Object.values({
     preflight: count(ciQualification),
     "check-plan": count(hostedPlanner && runCheckPlan),
-    "pr-fail-fast": count(
+    "pr-failure-report": count(
       workflowEventName === "pull_request" &&
-        manifest.run_checks_node_core_nondist &&
         process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
@@ -1650,6 +1764,7 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
+    "postgres-conformance": count(manifest.run_postgres_conformance),
     "skills-python": count(manifest.run_skills_python_job),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
@@ -1666,7 +1781,6 @@ if (hybridHostedEligible) {
   }).reduce((total, rows) => total + rows, 0);
   hybridHostedOffloadRows =
     1 +
-    count(manifest.run_ui_tests, 3) +
     count(
       manifest.run_ui_e2e && !compatibilityTarget,
       manifest.ui_e2e_matrix.include.filter((row) => row.task === "browser-extension").length,
@@ -1754,69 +1868,6 @@ if (hybridHostedEligible) {
     `Hybrid hosted rows: ${manifest.hybrid_hosted_base_rows} base, ${manifest.hybrid_hosted_total_rows} total; optional offload ${hybridHostedOffload ? "admitted" : "retained on Blacksmith"}; measured checks ${hybridHostedChecks ? "admitted" : "retained on Blacksmith"}; main checks ${hybridHostedMainChecks ? "admitted" : "retained on Blacksmith"}`,
   );
 }
-
-// The PR monitor must see the whole selected graph before declaring it
-// complete; an early jobs response can omit not-yet-expanded matrices.
-const countPrJobs = (selected, rows = 1) => (selected ? rows : 0);
-manifest.pr_check_job_count =
-  workflowEventName !== "pull_request"
-    ? 0
-    : countPrJobs(manifest.run_check, manifest.check_matrix.include.length) +
-      countPrJobs(
-        manifest.run_check && manifest.run_lint_core && usesHostedRunnerProfile,
-        manifest.lint_core_matrix.include.length,
-      ) +
-      countPrJobs(
-        manifest.run_check && manifest.run_lint_extensions && runnerProfile === "hybrid",
-        manifest.lint_extension_matrix.include.length,
-      ) +
-      countPrJobs(
-        manifest.run_check &&
-          usesHostedRunnerProfile &&
-          (!manifest.narrow_check_paths_json || manifest.run_changed_core_type_stripes),
-        manifest.core_type_matrix.include.length,
-      );
-manifest.pr_job_count =
-  workflowEventName !== "pull_request"
-    ? 0
-    : 2 +
-      countPrJobs(sharedSdkDeclarations) +
-      countPrJobs(manifest.run_check_plan) +
-      manifest.pr_check_job_count +
-      [
-        "run_build_artifacts",
-        "run_control_ui_performance",
-        "run_native_i18n",
-        "run_control_ui_i18n",
-        "run_baseline_ratchets",
-        "run_check_docs",
-        "run_skills_python_job",
-        "run_docker_seed_e2e",
-        "run_published_driver_update",
-      ].reduce((sum, key) => sum + countPrJobs(manifest[key]), 0) +
-      [
-        ["run_checks_fast_core", "checks_fast_core_matrix"],
-        ["run_plugin_contracts_shards", "plugin_contracts_matrix"],
-        ["run_channel_contracts_shards", "channel_contracts_matrix"],
-        ["run_checks_node_core_nondist", "checks_node_core_nondist_matrix"],
-        ["run_check_additional", "check_additional_matrix"],
-        ["run_checks_windows", "checks_windows_matrix"],
-        ["run_macos_node", "macos_node_matrix"],
-        ["run_android_job", "android_matrix"],
-        ["run_qa_smoke_ci", "qa_smoke_ci_matrix"],
-        ["run_ui_e2e", "ui_e2e_matrix"],
-      ].reduce(
-        (sum, [selected, matrix]) =>
-          sum + countPrJobs(manifest[selected], manifest[matrix].include.length),
-        0,
-      ) +
-      countPrJobs(manifest.run_ui_tests, uiTestShardCount) +
-      countPrJobs(manifest.run_macos_swift, 2) +
-      countPrJobs(manifest.run_ios_build) +
-      (manifest.run_ui_real_gateway ? uiRealGatewayShards.length : 0) +
-      countPrJobs(manifest.run_android_access_native, 2) +
-      countPrJobs(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 3) +
-      countPrJobs(manifest.run_android_screenshots);
 
 for (const [key, value] of Object.entries(manifest)) {
   appendFileSync(

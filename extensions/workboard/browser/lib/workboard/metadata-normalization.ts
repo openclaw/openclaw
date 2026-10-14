@@ -1,8 +1,5 @@
 import { z } from "zod";
-import {
-  normalizeAutomation,
-  normalizeDiagnosticAction,
-} from "./metadata-contract-normalization.ts";
+import { definedFields } from "../../../record-fields.js";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
@@ -15,7 +12,6 @@ import {
   WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
   WORKBOARD_TEMPLATE_IDS,
-  type WorkboardDiagnosticAction,
   type WorkboardEvent,
   type WorkboardExecution,
   type WorkboardMetadata,
@@ -40,18 +36,59 @@ function tolerantArray<T>(schema: z.ZodType<T>) {
     .catch(undefined);
 }
 
-function omitUndefinedFields<T extends Record<string, unknown>>(value: T): T {
-  for (const key of Object.keys(value)) {
-    if (value[key] === undefined) {
-      delete value[key];
-    }
-  }
-  return value;
+function sparseObject<Shape extends z.ZodRawShape>(shape: Shape) {
+  return z.object(shape).transform(definedFields);
 }
 
-function sparseObject<Shape extends z.ZodRawShape>(shape: Shape) {
-  return z.object(shape).transform(omitUndefinedFields);
-}
+const automationNumberSchema = z
+  .custom<number>((value) => typeof value === "number")
+  .optional()
+  .catch(undefined);
+const automationStringsSchema = tolerantArray(z.string().refine((value) => value.trim() !== ""));
+const automationSchema = sparseObject({
+  tenant: optionalStringSchema,
+  boardId: optionalStringSchema,
+  createdByCardId: optionalStringSchema,
+  idempotencyKey: optionalStringSchema,
+  skills: automationStringsSchema,
+  createdCardIds: automationStringsSchema,
+  workspace: sparseObject({
+    kind: z.enum(["scratch", "dir", "worktree"]),
+    path: optionalStringSchema,
+    branch: optionalStringSchema,
+    sourcePath: optionalStringSchema,
+    sourceBranch: optionalStringSchema,
+  })
+    .optional()
+    .catch(undefined),
+  workspaceAccess: z
+    .union([
+      z.object({ unrestricted: z.literal(true) }),
+      z.object({
+        unrestricted: z.literal(false),
+        roots: z
+          .array(z.unknown())
+          .transform((roots) => roots.filter((root): root is string => typeof root === "string")),
+        writable: z.boolean(),
+      }),
+    ])
+    .optional()
+    .catch(undefined),
+  maxRuntimeSeconds: automationNumberSchema,
+  maxRetries: automationNumberSchema,
+  scheduledAt: automationNumberSchema,
+  summary: optionalStringSchema,
+  dispatchCount: automationNumberSchema,
+  lastDispatchAt: automationNumberSchema,
+})
+  .transform((value) => (Object.keys(value).length ? value : undefined))
+  .optional()
+  .catch(undefined);
+
+const diagnosticActionSchema = z.object({
+  kind: z.enum(["claim", "unblock", "promote", "reclaim", "reassign", "add_proof", "open_session"]),
+  label: z.string(),
+});
 
 const workboardExecutionSchema = z
   .object({
@@ -177,15 +214,7 @@ const diagnosticSchema = z
     firstSeenAt: optionalNumberSchema,
     lastSeenAt: optionalNumberSchema,
     count: optionalNumberSchema,
-    actions: z
-      .array(z.unknown())
-      .transform((actions) =>
-        actions
-          .map(normalizeDiagnosticAction)
-          .filter((action): action is WorkboardDiagnosticAction => action !== null),
-      )
-      .optional()
-      .catch(undefined),
+    actions: tolerantArray(diagnosticActionSchema),
   })
   .transform((value) => ({
     kind: value.kind,
@@ -232,7 +261,7 @@ const workboardMetadataSchema = z
     attachments: tolerantArray(attachmentSchema),
     workerLogs: tolerantArray(workerLogSchema),
     workerProtocol: workerProtocolSchema,
-    automation: z.unknown().transform(normalizeAutomation).optional(),
+    automation: automationSchema,
     claim: claimSchema,
     diagnostics: tolerantArray(diagnosticSchema),
     notifications: tolerantArray(notificationSchema),
@@ -248,7 +277,7 @@ const workboardMetadataSchema = z
     failureCount: optionalNumberSchema,
   })
   .transform((value): WorkboardMetadata | undefined => {
-    const metadata = omitUndefinedFields(value);
+    const metadata = definedFields(value);
     return Object.keys(metadata).length ? metadata : undefined;
   });
 

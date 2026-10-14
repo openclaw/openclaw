@@ -86,9 +86,11 @@ export class ChatLog extends Container {
 
   // Pruning must clear side maps so future stream/tool updates do not target detached components.
   private dropComponentReferences(component: Component) {
-    for (const [toolId, tool] of this.tools.entries()) {
-      if (tool.component === component) {
-        this.tools.delete(toolId);
+    for (const entries of [this.tools, this.pendingUsers]) {
+      for (const [id, entry] of entries) {
+        if (entry.component === component) {
+          entries.delete(id);
+        }
       }
     }
     if (component instanceof MarkdownMessageComponent && component.role === "assistant") {
@@ -101,19 +103,11 @@ export class ChatLog extends Container {
         this.releaseAssistantRunIfEmpty(runId, run);
       }
     }
-    for (const [runId, entry] of this.pendingUsers.entries()) {
-      if (entry.component === component) {
-        this.pendingUsers.delete(runId);
-      }
-    }
-    for (const [messageId, user] of this.userComponents.entries()) {
-      if (user === component) {
-        this.userComponents.delete(messageId);
-      }
-    }
-    for (const [runId, entry] of this.pendingSystemNotices.entries()) {
-      if (entry === component) {
-        this.pendingSystemNotices.delete(runId);
+    for (const entries of [this.userComponents, this.pendingSystemNotices]) {
+      for (const [id, entry] of entries) {
+        if (entry === component) {
+          entries.delete(id);
+        }
       }
     }
     if (this.btwMessage === component) {

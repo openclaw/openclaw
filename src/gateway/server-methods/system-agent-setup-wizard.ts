@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { WizardSession } from "../../wizard/session.js";
+import type { GatewayClient } from "./client-types.js";
 import {
   createAdmittedWizardSession,
   respondSetupAdmissionBusy,
@@ -10,6 +11,7 @@ import {
   createSystemAgentGatewayRuntime,
 } from "./system-agent-execution.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
+import { publishWizardLoginSession } from "./wizard-login.js";
 
 type SetupActivation = Pick<
   Parameters<typeof activateGatewaySetupInference>[0],
@@ -21,12 +23,14 @@ type SetupActivation = Pick<
   | "apiKey"
   | "workspace"
   | "nativeSessionCatalogsEnabled"
+  | "selectModel"
 >;
 type AuthWizardRequest = {
   ownerKey: string;
   activation: SetupActivation;
-  pendingSessionIds: Set<string>;
-  session: Promise<{ sessionId: string; session: WizardSession } | "superseded" | undefined>;
+  sessionId: string;
+  pending: boolean;
+  session: Promise<WizardSession | undefined>;
 };
 const authWizardRequests = new WeakMap<
   GatewayRequestContext["wizardSessions"],
@@ -42,7 +46,7 @@ async function createSetupActivationSession(
     context: GatewayRequestContext;
   },
   createSession: () => WizardSession,
-): Promise<WizardSession | "superseded" | undefined> {
+): Promise<WizardSession | undefined> {
   const { ownerKey, activation } = params;
   if (!ownerKey || activation.kind !== "provider-auth") {
     return createAdmittedWizardSession(createSession);
@@ -51,88 +55,63 @@ async function createSetupActivationSession(
   const previous = authWizardRequests.get(sessions);
   if (
     previous &&
-    (previous.ownerKey !== ownerKey ||
+    (previous.pending ||
+      previous.ownerKey !== ownerKey ||
       previous.activation.authChoice !== activation.authChoice ||
       previous.activation.agentId !== activation.agentId ||
       previous.activation.workspace !== activation.workspace ||
       previous.activation.modelTarget !== activation.modelTarget ||
+      previous.activation.selectModel !== activation.selectModel ||
       previous.activation.nativeSessionCatalogsEnabled !== activation.nativeSessionCatalogsEnabled)
   ) {
     return undefined;
   }
-  let authorityFailure: { error: unknown } | undefined;
-  const assertCurrent = () => {
+  if (previous) {
+    // Concurrent retries receive busy; one replacement owns cancellation and cleanup.
+    previous.pending = true;
     try {
+      const predecessor = await previous.session;
       params.assertCurrent?.();
-    } catch (error) {
-      authorityFailure = { error };
-      throw error;
+      if (predecessor) {
+        if (predecessor.getStatus() === "running" && !predecessor.cancel()) {
+          return undefined;
+        }
+        await whenAdmittedWizardSessionSettled(predecessor);
+        params.context.purgeWizardSession(previous.sessionId);
+      }
+    } finally {
+      previous.pending = false;
     }
-  };
+  }
   const request: AuthWizardRequest = {
     ownerKey,
     activation,
-    pendingSessionIds: previous?.pendingSessionIds ?? new Set(),
-    session: Promise.resolve().then(async () => {
-      const predecessor = previous ? await previous.session : undefined;
-      try {
-        assertCurrent();
-        if (predecessor && predecessor !== "superseded") {
-          if (predecessor.session.getStatus() === "running" && !predecessor.session.cancel()) {
-            // Preparation locks can lift later; rejected retries must retain that owner.
-            return predecessor;
-          }
-          // Cancellation retires prompts before provider sockets and the setup lock.
-          // Every queued replacement inherits this barrier, even if superseded.
-          await whenAdmittedWizardSessionSettled(predecessor.session);
-          if (sessions.get(predecessor.sessionId) === predecessor.session) {
-            params.context.purgeWizardSession(predecessor.sessionId);
-          }
-        }
-        if (authWizardRequests.get(sessions) !== request) {
-          return "superseded";
-        }
-        const session = await createAdmittedWizardSession(() => {
-          assertCurrent();
-          return createSession();
-        });
-        return session ? { sessionId: params.sessionId, session } : undefined;
-      } catch (error) {
-        if (!authorityFailure) {
-          throw error;
-        }
-        // Denied callers receive their error, but later retries still inherit the live owner.
-        return predecessor;
-      }
+    sessionId: params.sessionId,
+    pending: true,
+    session: createAdmittedWizardSession(() => {
+      params.assertCurrent?.();
+      return createSession();
     }),
   };
-  // Reserve before awaiting admission so only the newest request can start login.
   authWizardRequests.set(sessions, request);
-  request.pendingSessionIds.add(params.sessionId);
   const release = () => {
     if (authWizardRequests.get(sessions) === request) {
       authWizardRequests.delete(sessions);
     }
   };
   try {
-    const session = await request.session.catch((error: unknown) => {
-      release();
-      throw error;
-    });
-    let result: WizardSession | "superseded" | undefined;
-    if (session && session !== "superseded") {
-      void whenAdmittedWizardSessionSettled(session.session).then(release, release);
-      result = session.sessionId === params.sessionId ? session.session : undefined;
+    const session = await request.session;
+    if (session) {
+      void whenAdmittedWizardSessionSettled(session).then(release, release);
     } else {
       release();
-      result = session;
     }
-    if (authorityFailure) {
-      throw authorityFailure.error;
-    }
-    return result;
+    return session;
+  } catch (error) {
+    release();
+    throw error;
   } finally {
-    request.pendingSessionIds.delete(params.sessionId);
+    request.pending = false;
   }
 }
 
@@ -144,7 +123,7 @@ export function rejectExistingSetupWizardSession(params: {
   const sessions = params.context.wizardSessions;
   if (
     !sessions.has(params.sessionId) &&
-    !authWizardRequests.get(sessions)?.pendingSessionIds.has(params.sessionId)
+    authWizardRequests.get(sessions)?.sessionId !== params.sessionId
   ) {
     return false;
   }
@@ -159,6 +138,7 @@ export function rejectExistingSetupWizardSession(params: {
 export async function startSetupActivationWizard(params: {
   sessionId: string;
   ownerKey?: string;
+  client?: GatewayClient;
   assertCurrent?: () => void;
   activation: SetupActivation;
   isLocalClient?: boolean;
@@ -182,10 +162,21 @@ export async function startSetupActivationWizard(params: {
             prompter,
             signal,
             isCancelled: () => signal.aborted,
-            beforePersistentEffect: () => runnerSession.lockCancellationForPreparation(),
-            onPreparationComplete: () => runnerSession.finishPreparation(),
-            onCommitStarted: () => runnerSession.lockCancellation(),
+            assertCurrent: params.assertCurrent,
+            beforePersistentEffect: () => {
+              params.assertCurrent?.();
+              runnerSession.lockCancellationForPreparation();
+            },
+            onPreparationComplete: () => {
+              params.assertCurrent?.();
+              runnerSession.finishPreparation();
+            },
+            onCommitStarted: () => {
+              params.assertCurrent?.();
+              runnerSession.lockCancellation();
+            },
           });
+          params.assertCurrent?.();
           signal.throwIfAborted();
           if (!result.ok) {
             if (result.disposition === "rejected-before-promotion") {
@@ -209,12 +200,15 @@ export async function startSetupActivationWizard(params: {
     respondSetupAdmissionBusy(params.respond);
     return;
   }
-  if (session === "superseded") {
-    params.respond(
-      true,
-      { sessionId: params.sessionId, done: true, status: "cancelled" },
-      undefined,
-    );
+  if (params.client) {
+    await publishWizardLoginSession({
+      client: params.client,
+      context: params.context,
+      sessionId: params.sessionId,
+      respond: params.respond,
+      assertCurrent: () => params.assertCurrent?.(),
+      session,
+    });
     return;
   }
   params.context.wizardSessions.set(params.sessionId, session);

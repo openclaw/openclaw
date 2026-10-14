@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
-import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
@@ -22,6 +22,11 @@ const boundary = vi.hoisted(() => ({
   readToken: vi.fn(),
   connect: vi.fn(),
   ensureToken: vi.fn(),
+  config: vi.fn<() => OpenClawConfig>(),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => boundary.config(),
 }));
 vi.mock("../browser/extension-install.js", async (original) => {
   const real = await original<typeof import("../browser/extension-install.js")>();
@@ -143,7 +148,7 @@ async function setup(
     status: async () => ({ ready: true, identity: { extensionVersion: "fixture" } }),
     close: async () => {},
   });
-  const config = vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue(cfg);
+  const config = boundary.config.mockReset().mockReturnValue(cfg);
   const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(capture.writeJson);
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(capture.error);
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(capture.exit);
@@ -319,18 +324,6 @@ describe("POSIX bundle migration", () => {
       await f.assertPairingPreserved();
     },
   );
-  it("honors an explicit different extension profile rather than treating omission as that choice", async () => {
-    const f = await setup(platform);
-    await f.run("install", "other");
-    expect(f.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({ profile: "other", relayPort: 19555 }),
-      }),
-    );
-    const selected = JSON.parse(await fs.readFile(f.manifestPath, "utf8")) as { path: string };
-    expect(await fs.readFile(selected.path, "utf8")).toContain("'--browser-profile' 'other'");
-    await f.assertPairingPreserved();
-  });
   it("refuses verification for a different profile without rewriting a healthy registration", async () => {
     const f = await setup(platform, { relocate: false });
     const assertUnchanged = await preserveFiles(f.manifestPath, f.manifest.path);

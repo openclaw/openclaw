@@ -1,6 +1,7 @@
 /* Full-page new-session draft: the welcome and draft form one top-anchored
    composition, with the target row and composer between hero and recents. */
-openclaw-new-session-page {
+openclaw-new-session-page,
+.new-session-page {
   display: flex;
   flex: 1 1 0;
   min-width: 0;
@@ -9,12 +10,8 @@ openclaw-new-session-page {
 
 .new-session-page {
   position: relative;
-  display: flex;
   flex-direction: column;
-  flex: 1 1 0;
   width: 100%;
-  min-width: 0;
-  min-height: 0;
 }
 
 /* Opposite end of the fixed shell-control rail: new-thread privacy belongs to
@@ -72,6 +69,17 @@ openclaw-new-session-page {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
+}
+
+.new-session-page__incognito-toggle--active.shell-chrome-controls__button {
+  width: auto;
+  padding-inline: 10px;
+  gap: 7px;
+}
+
+.new-session-page__incognito-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
@@ -174,9 +182,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   pointer-events: none;
   transform: translateY(-2px);
   visibility: hidden;
-  white-space: nowrap;
+  white-space: normal;
   transition:
-    max-height 160ms cubic-bezier(0.2, 0, 0, 1),
     margin 160ms cubic-bezier(0.2, 0, 0, 1),
     opacity 120ms ease-out,
     filter 120ms ease-out,
@@ -185,7 +192,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__incognito-notice--visible {
-  max-height: 20px;
+  max-height: none;
   margin-top: 0;
   opacity: 1;
   filter: blur(0);
@@ -320,6 +327,12 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   position: relative;
 }
 
+.new-session-page__hosted-workspace {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 .new-session-page__select--agent openclaw-agent-select {
   width: auto;
   max-width: min(40vw, 260px);
@@ -347,7 +360,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__trigger:hover:not(:disabled),
-.new-session-page__trigger[aria-expanded="true"] {
+.new-session-page__trigger[aria-expanded="true"],
+.new-session-page__browser-nav:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
@@ -391,7 +405,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   max-width: 100%;
 }
 
-.new-session-page__trigger-summary {
+.new-session-page__trigger-summary,
+.new-session-page__selected-summary {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -546,7 +561,9 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .session-group-defaults__resolved-mode > .new-session-page__target-icon,
-.session-group-defaults__mode-option-icon {
+.session-group-defaults__mode-option-icon,
+.session-group-defaults__mode-trigger .new-session-page__trigger-chevron,
+.new-session-page__target-icon {
   display: inline-flex;
   color: var(--muted);
 }
@@ -557,7 +574,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   container-type: inline-size;
 }
 
-.session-group-defaults__mode-dropdown::part(menu) {
+.session-group-defaults__mode-dropdown > .session-group-defaults__mode-menu {
   width: min(100cqw, calc(100vw - 48px));
   padding: var(--menu-padding);
   border: 1px solid var(--border-strong);
@@ -568,7 +585,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .session-group-defaults__mode-trigger {
-  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  display: block;
   width: 100%;
   min-height: 56px;
   color: var(--text);
@@ -578,23 +595,25 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
+.session-group-defaults__mode-trigger > .oc-menu-item__label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 10px;
+}
+
 .session-group-defaults__mode-trigger:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-.session-group-defaults__mode-trigger .new-session-page__trigger-chevron {
-  display: inline-flex;
-  color: var(--muted);
-}
-
-.session-group-defaults__mode-option {
+.session-group-defaults__mode-menu .session-group-defaults__mode-option {
   color: var(--text);
   font: inherit;
   font-size: 13px;
 }
 
-.session-group-defaults__mode-option::part(label) {
+.session-group-defaults__mode-option > .oc-menu-item__label {
   width: 100%;
   min-width: 0;
 }
@@ -605,18 +624,26 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 
 /* Menu panel anchored under its trigger; item rows reuse the shared
    .session-menu__* geometry so its panel and hover pills stay concentric. */
-wa-popover.new-session-page__select {
-  --max-width: min(320px, calc(100vw - 24px));
-}
-
-wa-popover.new-session-page__select::part(body) {
-  min-width: 224px;
-  max-width: min(320px, calc(100vw - 24px));
+.oc-popover.new-session-page__select,
+.oc-popover.new-session-page__branch-popup {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
+}
+
+.oc-popover.new-session-page__select {
+  --oc-overlay-max-width: min(320px, calc(100vw - 24px));
+  --oc-overlay-distance: 8px;
+
+  min-width: min(224px, var(--oc-overlay-available-width, 100%));
+}
+
+.oc-popover.new-session-page__branch-popup {
+  --oc-overlay-distance: 0px;
+
+  width: anchor-size(width);
 }
 
 .new-session-page__menu-title {
@@ -628,7 +655,7 @@ wa-popover.new-session-page__select::part(body) {
   text-transform: uppercase;
 }
 
-wa-popover.new-session-page__picker-popover
+.oc-popover.new-session-page__picker-popover
   .new-session-page__picker-root
   > .new-session-page__menu-title:not(:first-child) {
   margin-top: var(--space-2);
@@ -641,13 +668,17 @@ wa-popover.new-session-page__picker-popover
 
 .new-session-page__project-search input {
   width: 100%;
-  min-width: 0;
   padding: 6px 8px;
+  background: var(--bg);
+  font: inherit;
+}
+
+.new-session-page__project-search input,
+.new-session-page__menu-field input {
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg);
   color: var(--text);
-  font: inherit;
   font-size: 12px;
   outline: none;
 }
@@ -687,18 +718,24 @@ wa-popover.new-session-page__picker-popover
 
 .new-session-page__menu-field input {
   flex: 1 1 auto;
-  min-width: 0;
   padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
 }
 
 .new-session-page__menu-field input:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.new-session-page__device-folder {
+  flex-basis: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.new-session-page__device-folder > span:last-child {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .new-session-page__branch-field {
@@ -708,14 +745,6 @@ wa-popover.new-session-page__picker-popover
 
 .new-session-page__branch-field > input {
   width: 100%;
-}
-
-.new-session-page__branch-popup::part(popup) {
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .new-session-page__branch-suggestions {
@@ -770,15 +799,26 @@ wa-popover.new-session-page__picker-popover
 }
 
 /* Project browsing uses a wider shell for paths and remote result details. */
-wa-popover.new-session-page__project-popover {
-  --max-width: min(420px, calc(100vw - 24px));
-}
-
-wa-popover.new-session-page__project-popover::part(body) {
-  width: min(420px, calc(100vw - 24px));
-  max-width: none;
+.oc-popover.new-session-page__project-popover,
+.oc-popover.new-session-page__where-popover {
+  --oc-overlay-max-width: min(420px, calc(100vw - 24px));
+  width: var(--oc-overlay-max-width);
   padding: 0;
   overflow: hidden;
+}
+
+.oc-popover.session-group-defaults__folder-popover {
+  --oc-overlay-max-width: min(420px, calc(100vw - 24px));
+  --oc-popover-padding: 0;
+
+  width: var(--oc-overlay-max-width);
+  min-width: min(224px, var(--oc-overlay-max-width), var(--oc-overlay-available-width, 100%));
+  overflow-y: auto;
+  background: var(--bg-elevated);
+}
+
+.session-group-defaults__folder-popover > .new-session-page__browser {
+  flex-shrink: 0;
 }
 
 /* Popovers need their own scroll region because project and destination
@@ -790,21 +830,21 @@ wa-popover.new-session-page__project-popover::part(body) {
 }
 
 /* Destination search and mode controls stay visible while the flat inventory scrolls. */
-wa-popover.new-session-page__where-popover {
-  --max-width: min(360px, calc(100vw - 24px));
+.oc-popover.new-session-page__where-popover {
+  --oc-overlay-max-width: min(360px, calc(100vw - 24px));
 }
 
-wa-popover.new-session-page__where-popover::part(body) {
-  width: min(360px, calc(100vw - 24px));
-  max-width: none;
-  padding: 0;
-  overflow: hidden;
+.new-session-page__environment-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .new-session-page__environment-picker {
   display: flex;
   flex-direction: column;
-  max-height: min(360px, calc(var(--auto-size-available-height, 70vh) - 2px));
+  min-height: 0;
+  max-height: min(360px, calc(var(--oc-overlay-available-height, 70vh) - 2px));
   overflow: hidden;
 }
 
@@ -820,7 +860,8 @@ wa-popover.new-session-page__where-popover::part(body) {
   border-radius: var(--menu-item-radius);
 }
 
-.new-session-page__environment-search svg {
+.new-session-page__environment-search svg,
+.new-session-page__connect-device svg {
   display: block;
   width: 14px;
   height: 14px;
@@ -866,7 +907,9 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-option .session-menu__icon,
-.new-session-page__environment-option .session-menu__icon svg {
+.new-session-page__environment-option .session-menu__icon svg,
+.new-session-page__card-icon svg,
+.new-session-page__submenu-chevron svg {
   width: 14px;
   height: 14px;
 }
@@ -935,8 +978,8 @@ wa-popover.new-session-page__where-popover::part(body) {
 
 .connect-machine-dialog .login-gate__command code {
   min-width: 0;
-  overflow-x: auto;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   user-select: all;
 }
 
@@ -1011,11 +1054,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   }
 }
 
-.new-session-page__target-icon {
-  display: inline-flex;
-  color: var(--muted);
-}
-
 .new-session-page__browser-nav {
   display: inline-flex;
   align-items: center;
@@ -1027,11 +1065,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-}
-
-.new-session-page__browser-nav:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
 }
 
 .new-session-page__browser-nav:disabled {
@@ -1445,16 +1478,11 @@ wa-popover.new-session-page__where-popover::part(body) {
   .new-session-page__incognito-notice {
     align-items: flex-start;
     width: calc(100% - 2 * var(--chat-mobile-edge-inset));
-    max-height: 0;
     max-width: var(--chat-thread-max-width, 48rem);
     margin-inline: auto;
     padding-inline: 0;
     white-space: normal;
     text-align: left;
-  }
-
-  .new-session-page__incognito-notice--visible {
-    max-height: 48px;
   }
 }
 
@@ -1490,11 +1518,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   flex: 0 0 14px;
 }
 
-.new-session-page__card-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
 .new-session-page__environment-card code {
   font-family: var(--mono);
   font-size: inherit;
@@ -1507,8 +1530,23 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-option[aria-disabled="true"] {
-  opacity: 0.5;
+  color: var(--muted);
   cursor: default;
+}
+
+.new-session-page__unavailable-status {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  font-size: 11px;
+}
+
+.new-session-page__unavailable-status svg {
+  display: block;
+  width: 13px;
+  height: 13px;
 }
 
 .new-session-page__environment-heading {
@@ -1543,14 +1581,9 @@ wa-popover.new-session-page__where-popover::part(body) {
 
 .new-session-page__selected-summary {
   display: block;
-  min-width: 0;
   font-size: 11px;
   margin-left: 8px;
-  color: var(--muted);
   font-weight: 400;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .new-session-page__environment-option .session-menu__text:has(.new-session-page__selected-summary) {
@@ -1573,11 +1606,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   display: flex;
   flex: 0 0 14px;
   color: var(--muted);
-}
-
-.new-session-page__submenu-chevron svg {
-  width: 14px;
-  height: 14px;
 }
 
 .new-session-page__devices-heading {
@@ -1605,12 +1633,6 @@ wa-popover.new-session-page__where-popover::part(body) {
 
 .new-session-page__connect-device:hover {
   background: var(--bg-hover);
-}
-
-.new-session-page__connect-device svg {
-  display: block;
-  width: 14px;
-  height: 14px;
 }
 
 .new-session-page__cloud-choice-list + .new-session-page__environment-heading {

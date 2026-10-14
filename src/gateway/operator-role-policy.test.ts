@@ -8,9 +8,16 @@ import {
 import { runWithModelFallback } from "../agents/model-fallback-runner.js";
 import { resolveReplyOperatorAuthorityKey } from "../auto-reply/reply/reply-tool-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { linkUserChannelIdentity } from "../state/user-channel-identities.js";
-import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { publishUserProfileAuthorityChange } from "../state/user-profile-events.js";
+import {
+  prepareUserProfileCatalog,
+  publishUserProfilesChange,
+} from "../state/user-profile-list.js";
 import {
   linkEmail,
   setDisplayName,
@@ -18,6 +25,7 @@ import {
   syncGitHubIdentity,
 } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveChannelOperatorAdminAuthority } from "./channel-operator-authority.js";
 import {
@@ -645,7 +653,7 @@ describe("operator role policy", () => {
     },
   );
 
-  it.each(["legacy", "prepared", "stale"] as const)(
+  it.each(["legacy", "prepared", "unknown"] as const)(
     "resolves %s assignments and denies unavailable role authority",
     async (assignment) => {
       const cfg = roleConfig();
@@ -658,21 +666,20 @@ describe("operator role policy", () => {
       }
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const profile = ensureProfileForEmail("role-assignment@example.test");
-        if (assignment === "stale") {
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        if (assignment === "unknown") {
           setUserProfileRole(profile.id, "retired");
         } else {
           expect(resolveOperatorRolePolicy(identifiedClient(profile.id), cfg)).toEqual(guestRole);
         }
         expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
-        if (assignment === "stale") {
+        if (assignment === "unknown") {
           expect(resolveOperatorRolePolicyForProfile(profile.id, roleConfig(false))).toMatchObject(
             denied,
           );
           return;
         }
         setUserProfileRole(profile.id, "maintainer");
-        expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
-        invalidateOperatorRolePolicy(profile.id);
         expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(
           cfg.gateway?.roles?.definitions.maintainer,
         );
@@ -680,9 +687,48 @@ describe("operator role policy", () => {
     },
   );
 
+  it("reads committed role changes and deletion without a role cache or main-thread SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("current-role@example.test");
+      setUserProfileRole(profile.id, "maintainer");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const cfg = roleConfig();
+      const sql = observeMainThreadSql();
+      try {
+        expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(
+          cfg.gateway?.roles?.definitions.maintainer,
+        );
+        sql.expectIdle();
+
+        setUserProfileRole(profile.id, "guest");
+        sql.clear();
+        expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
+        expect(
+          authorizeGatewaySessionCreation({ cfg, profileId: profile.id, agentId: "private-agent" }),
+        ).toMatchObject({ code: "FORBIDDEN" });
+        sql.expectIdle();
+
+        // Model a committed owner deletion, including the same publication used by profile writers.
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.prepare("DELETE FROM user_profiles WHERE id = ?").run(profile.id);
+          publishUserProfileAuthorityChange(db, profile.id);
+          publishUserProfilesChange(db, profile.id);
+        });
+        sql.clear();
+        expect(() => resolveOperatorRolePolicyForProfile(profile.id, cfg)).toThrow(
+          "user profile not found",
+        );
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+    });
+  });
+
   it("keeps human-derived sandbox restrictions separate from profile provenance", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("role-sandbox-creator@example.com");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = roleConfig();
       const guest = cfg.gateway?.roles?.definitions.guest;
       if (!guest) {
@@ -763,6 +809,7 @@ describe("operator role policy", () => {
   it("authorizes only configured agents and rejects unidentified operators", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("role-agents@example.com");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = roleConfig();
 
       expect(

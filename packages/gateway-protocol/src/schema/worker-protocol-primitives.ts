@@ -119,6 +119,11 @@ export const WorkerTranscriptUsageSchema = closedObject({
   output: Type.Number({ minimum: 0 }),
   cacheRead: Type.Number({ minimum: 0 }),
   cacheWrite: Type.Number({ minimum: 0 }),
+  usageReport: Type.Optional(
+    closedObject({
+      state: Type.Union([Type.Literal("available"), Type.Literal("unavailable")]),
+    }),
+  ),
   contextUsage: Type.Optional(
     Type.Union([
       closedObject({
@@ -241,7 +246,13 @@ export function workerMessageSchemas(text: TString, signature: TString, timestam
     provider: WorkerIdentifierSchema,
     model: WorkerIdentifierSchema,
     responseModel: Type.Optional(WorkerIdentifierSchema),
-    responseId: Type.Optional(WorkerIdentifierSchema),
+    responseId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+        pattern: "^\\S(?:.*\\S)?$",
+      }),
+    ),
     providerReplay: Type.Optional(WorkerProviderReplayStateSchema),
     usage: WorkerTranscriptUsageSchema,
     timestamp,
@@ -266,6 +277,9 @@ export function workerMessageSchemas(text: TString, signature: TString, timestam
       errorCode: Type.Optional(Type.String({ maxLength: 256 })),
       errorType: Type.Optional(Type.String({ maxLength: 256 })),
       errorBody: Type.Optional(text),
+      retryAfterMs: Type.Optional(
+        Type.Union([Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()]),
+      ),
     }),
     toolResult: closedObject({
       role: Type.Literal("toolResult"),

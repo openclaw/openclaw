@@ -14,6 +14,7 @@ import {
 } from "./tool-description-presets.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
@@ -105,14 +106,6 @@ describe("createOpenClawCodingTools availability guidance", () => {
     );
   });
 
-  it("keeps shell-quoting guidance without background continuation", () => {
-    const exec = findToolDescription("exec", undefined, false);
-
-    expect(exec.description).toBe(
-      "Run shell and wait for completion. Omit host to use the session's configured host. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
-    );
-  });
-
   it("preserves plugin and channel ownership when replacing descriptions", () => {
     const originalTool = {
       name: "process",
@@ -151,19 +144,22 @@ describe("createOpenClawCodingTools availability guidance", () => {
     }
   });
 
-  it("describes only executable conversation routes", () => {
-    const [tool] = applyToolAvailabilityDescriptions([
-      { name: "sessions_send", description: describeSessionsSendTool() },
-      ...["conversations_list", "conversations_send"].map((name) => ({
-        name,
-        description: "available",
-      })),
-    ] as AnyAgentTool[]);
+  it.each([false, true])(
+    "describes only executable conversation routes (allowThreadTargets=%s)",
+    (allowThreadTargets) => {
+      const [tool] = applyToolAvailabilityDescriptions([
+        { name: "sessions_send", description: describeSessionsSendTool({ allowThreadTargets }) },
+        ...["conversations_list", "conversations_send"].map((name) => ({
+          name,
+          description: "available",
+        })),
+      ] as AnyAgentTool[]);
 
-    expect(tool?.description).toContain("conversations_list");
-    expect(tool?.description).toContain("conversations_send");
-    expect(tool?.description).not.toContain("conversations_turn");
-  });
+      expect(tool?.description).toContain("conversations_list");
+      expect(tool?.description).toContain("conversations_send");
+      expect(tool?.description).not.toContain("conversations_turn");
+    },
+  );
 
   it("keeps authorized history guidance and the prepared session URL", () => {
     const sessionLinkBase = "https://gateway.example/control";
@@ -243,5 +239,27 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain(
       "When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
     );
+  });
+
+  it("names exec for file listing only when exec survives tool filtering", () => {
+    const nodes = createNodesTool();
+    const [withoutExec] = applyToolAvailabilityDescriptions([nodes]);
+    const [withExec] = applyToolAvailabilityDescriptions([
+      nodes,
+      { name: "exec", description: "exec base" } as AnyAgentTool,
+    ]);
+
+    expect(withoutExec?.description).toContain("fs.listDir returns sub-directories only");
+    expect(withoutExec?.description).not.toContain("use the exec tool with host=node");
+    expect(withExec?.description).toContain(
+      "fs.listDir returns sub-directories only; use the exec tool with host=node to list files",
+    );
+    const invokeCommand = (
+      expectDefined(withoutExec, "nodes tool").parameters as {
+        properties?: Record<string, { description?: string }>;
+      }
+    ).properties?.invokeCommand;
+    expect(invokeCommand?.description).toContain("fs.listDir returns sub-directories only");
+    expect(invokeCommand?.description).not.toContain("use the exec tool");
   });
 });

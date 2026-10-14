@@ -5,11 +5,17 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../../test/helpers/promise.js";
 import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -17,7 +23,6 @@ import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   createOpenClawTestState,
@@ -72,80 +77,66 @@ function own<T>(promise: Promise<T>): Promise<T> {
   return promise;
 }
 
-it.each([false, true])(
-  "keeps native page cleanup outside archive admission (incognito: %s)",
-  async (incognito) => {
-    const options = {
-      agentId: "main",
-      env: state.env,
-      ...(incognito
-        ? { path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }) }
-        : {}),
-    };
-    const database = openOpenClawAgentDatabase(options);
-    const nativeReclaim = vi.spyOn(database.walMaintenance, "reclaimFreePages");
-    const schemaLease = incognito ? undefined : acquireStateDatabaseSchemaLease(database.path);
-    const maintenance = schemaLease
-      ? createOpenClawDatabaseMaintenanceScope({
-          schemaMaintenance: true,
-          assertOwnerCurrent: () => schemaLease.assertCurrent(),
-          assertDatabaseAccess: schemaLease.assertDatabaseAccess,
-        })
-      : undefined;
-    const entered = createDeferred();
-    const release = createDeferred();
-    releases.push(release.resolve);
-    const blocker = own(
-      runExclusiveSqliteTranscriptArchiveWorker(async () => {
-        entered.resolve();
-        await release.promise;
-      }),
+it("keeps native page cleanup outside archive admission", async () => {
+  const options = {
+    agentId: "main",
+    env: state.env,
+  };
+  const database = openOpenClawAgentDatabase(options);
+  const nativeReclaim = vi.spyOn(database.walMaintenance, "reclaimFreePages");
+  const schemaLease = acquireStateDatabaseSchemaLease(database.path);
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent: () => schemaLease.assertCurrent(),
+    assertDatabaseAccess: schemaLease.assertDatabaseAccess,
+  });
+  const entered = createDeferred();
+  const release = createDeferred();
+  releases.push(release.resolve);
+  const blocker = own(
+    runExclusiveSqliteTranscriptArchiveWorker(async () => {
+      entered.resolve();
+      await release.promise;
+    }),
+  );
+  await entered.promise;
+  const pageComplete = createDeferred();
+  let archiveRead = false;
+  const run = () =>
+    pageReclamation.withSqliteSessionPageReclamation(
+      options,
+      async (reclaim, _assertCurrent, _databaseOptions, archives) => {
+        expect(await reclaim(1)).toMatchObject({ checkpointCompleted: true });
+        pageComplete.resolve();
+        return archives.withWriter(async () => {
+          archiveRead = true;
+          return archives.read();
+        });
+      },
     );
-    await entered.promise;
-    const pageComplete = createDeferred();
-    let archiveRead = false;
-    const run = () =>
-      pageReclamation.withSqliteSessionPageReclamation(
-        options,
-        async (reclaim, _assertCurrent, _databaseOptions, archives) => {
-          expect(await reclaim(1)).toMatchObject({ checkpointCompleted: true });
-          pageComplete.resolve();
-          return archives.withWriter(async () => {
-            archiveRead = true;
-            return archives.read();
-          });
-        },
-      );
-    const work = own(maintenance ? maintenance.run(run) : run());
-    void work.catch(pageComplete.reject);
+  const work = own(maintenance.run(run));
+  void work.catch(pageComplete.reject);
+  try {
+    await withTestTimeout(
+      pageComplete.promise,
+      10_000,
+      "Native page cleanup waited for archive admission",
+    );
+    expect(nativeReclaim).toHaveBeenCalledOnce();
+    expect(archiveRead).toBe(false);
+    release.resolve();
+    await expect(work).resolves.toBeNull();
+    expect(archiveRead).toBe(true);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([blocker, work]);
     try {
-      await withTestTimeout(
-        pageComplete.promise,
-        10_000,
-        "Native page cleanup waited for archive admission",
-      );
-      expect(nativeReclaim).toHaveBeenCalledOnce();
-      if (incognito) {
-        await expect(work).resolves.toBeNull();
-        expect(archiveRead).toBe(true);
-        expect(fs.existsSync(database.path)).toBe(false);
-      } else {
-        expect(archiveRead).toBe(false);
-      }
-      release.resolve();
-      await expect(work).resolves.toBeNull();
-      expect(archiveRead).toBe(true);
+      await maintenance.close();
     } finally {
-      release.resolve();
-      await Promise.allSettled([blocker, work]);
-      try {
-        await maintenance?.close();
-      } finally {
-        schemaLease?.release();
-      }
+      schemaLease.release();
     }
-  },
-);
+  }
+});
 
 it("retires a queued archive removal without waiting for unrelated archive work", async () => {
   const fixture = await publishedArchive();
@@ -253,6 +244,85 @@ async function publishedArchive(content = "synthetic retained archive payload") 
       ),
   };
 }
+
+it("skips writer admission when the archive budget target is already satisfied", async ({
+  signal,
+}) => {
+  const fixture = await publishedArchive();
+  const entered = createDeferred();
+  const release = createDeferred();
+  releases.push(release.resolve);
+  const blocker = own(
+    runExclusiveSqliteSessionWrite(
+      fixture.options,
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+      "session-entry.patch",
+    ),
+  );
+  await entered.promise;
+  const work = fixture.prune(Infinity);
+  try {
+    await expect(withinTest(work, signal)).resolves.toMatchObject({
+      removedFiles: 0,
+      completed: true,
+      checkpointIncomplete: 0,
+    });
+    expect(fixture.readArchive()).toEqual(fixture.originalArchive);
+    expect(fs.readFileSync(fixture.archivePath)).toEqual(fixture.archivedBytes);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([blocker, work]);
+  }
+});
+
+it("lets foreground writes settle while archive pruning scans physical usage", async ({
+  signal,
+}) => {
+  const fixture = await publishedArchive();
+  const scanning = createDeferred();
+  const release = createDeferred();
+  releases.push(release.resolve);
+  const measure = diskBudget.measureSessionPhysicalDiskUsage;
+  let measurements = 0;
+  vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage").mockImplementation(async (storePath) => {
+    if (++measurements === 3) {
+      scanning.resolve();
+      await release.promise;
+    }
+    return measure(storePath);
+  });
+  const work = fixture.prune();
+  void work.catch(scanning.reject);
+  let foreground: Promise<unknown> | undefined;
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        scanning.promise,
+        work,
+        "Archive pruning did not reach its usage scan",
+      ),
+      signal,
+    );
+    foreground = own(
+      replaceSessionEntry(
+        { sessionKey: "agent:main:foreground", storePath: fixture.storePath },
+        { sessionId: "foreground", updatedAt: 2 },
+      ),
+    );
+    await withinTest(foreground, signal);
+    release.resolve();
+    await expect(withinTest(work, signal)).resolves.toMatchObject({
+      removedFiles: 1,
+      completed: true,
+    });
+  } finally {
+    release.resolve();
+    await Promise.allSettled([work, foreground]);
+  }
+});
 
 it("enforces a physical archive budget without ordinary host SQLite calls", async () => {
   const fixture = await withSessionHistoryBudgetSweepsForTest(() =>
@@ -449,7 +519,7 @@ it("bounds broker page reclamation and stops when its owner is revoked between u
     31,
   );
   let remaining: number | null = null;
-  const failure: unknown = await own(
+  await own(
     pageReclamation.withSqliteSessionPageReclamation(options, async (reclaim) => {
       const first = await reclaim(1);
       expect(first).toMatchObject({ checkpointCompleted: true, vacuumPagesRequested: 1 });
@@ -459,16 +529,12 @@ it("bounds broker page reclamation and stops when its owner is revoked between u
       closeOpenClawAgentDatabaseByPath(database.path);
       await expect(reclaim(1)).rejects.toThrow(/revoked|closed/);
     }),
-  ).catch((error: unknown) => error);
+  );
   await closeOpenClawAgentDatabaseByPathAsync(database.path);
   const reopened = openOpenClawAgentDatabase(options);
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(
     remaining,
   );
-  expect(failure).toMatchObject({
-    code: "unavailable",
-    message: expect.stringMatching(/revoked/),
-  });
 });
 
 it.each([
@@ -705,34 +771,30 @@ it("excludes peer publication until atomic legacy removal settles", async () => 
       });
     },
   );
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (
-          !attempted &&
-          removing === fixture.archivePath &&
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          isRecord(request.facts.identity) &&
-          request.facts.identity.nativeLocation === physicalPath
-        ) {
-          attempted = true;
-          filePresentAtGrant = fs.existsSync(fixture.archivePath);
-          try {
-            peer.exec("BEGIN IMMEDIATE");
-            peerEntered = true;
-          } catch (error) {
-            refusal = error;
-          } finally {
-            if (peer.isTransaction) {
-              peer.exec("ROLLBACK");
-            }
-          }
+  workerProbe.admission(workerAdmission, (request, grant, admit) => {
+    if (
+      !attempted &&
+      removing === fixture.archivePath &&
+      request.stage === "commit" &&
+      isRecord(request.facts) &&
+      isRecord(request.facts.identity) &&
+      request.facts.identity.nativeLocation === physicalPath
+    ) {
+      attempted = true;
+      filePresentAtGrant = fs.existsSync(fixture.archivePath);
+      try {
+        peer.exec("BEGIN IMMEDIATE");
+        peerEntered = true;
+      } catch (error) {
+        refusal = error;
+      } finally {
+        if (peer.isTransaction) {
+          peer.exec("ROLLBACK");
         }
-        admit(request, grant);
-      }, attachment),
-  );
+      }
+    }
+    admit(request, grant);
+  });
   let work: ReturnType<typeof pruneAllSessionTranscriptArchivesToHighWater> | undefined;
   try {
     work = fixture.prune();

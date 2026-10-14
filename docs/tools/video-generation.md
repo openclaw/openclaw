@@ -66,7 +66,7 @@ Video generation is asynchronous:
    automatic final reply, or `message(action="send")` when the session requires
    the message tool. If the requester session is inactive, or its wake fails and
    generated media is still missing from the completion reply, OpenClaw sends
-   an idempotent direct fallback with the media.
+   a direct fallback with the media, without duplicate sends on retries.
 
 While a job is in flight, duplicate `video_generate` calls in the same
 chat return the current task status instead of starting another
@@ -162,13 +162,13 @@ the shared live sweep:
 <ParamField path="images" type="string[]">Multiple reference images (up to 9).</ParamField>
 <ParamField path="imageRoles" type="string[]">
 Optional per-position role hints parallel to the combined image list.
-Canonical values: `first_frame`, `last_frame`, `reference_image`.
+Standard values: `first_frame`, `last_frame`, `reference_image`.
 </ParamField>
 <ParamField path="video" type="string">Single reference video (path or URL).</ParamField>
 <ParamField path="videos" type="string[]">Multiple reference videos (up to 4).</ParamField>
 <ParamField path="videoRoles" type="string[]">
 Optional per-position role hints parallel to the combined video list.
-Canonical value: `reference_video`.
+Standard value: `reference_video`.
 </ParamField>
 <ParamField path="audioRef" type="string">
 Single reference audio (path or URL). Used for background music or voice
@@ -177,11 +177,11 @@ reference when the provider supports audio inputs.
 <ParamField path="audioRefs" type="string[]">Multiple reference audios (up to 3).</ParamField>
 <ParamField path="audioRoles" type="string[]">
 Optional per-position role hints parallel to the combined audio list.
-Canonical value: `reference_audio`.
+Standard value: `reference_audio`.
 </ParamField>
 
 <Note>
-Role hints are forwarded to the provider as-is. Canonical values come from
+Role hints are forwarded to the provider as-is. Standard values come from
 the `VideoGenerationAssetRole` union but providers may accept additional
 role strings. `*Roles` arrays must not have more entries than the
 corresponding reference list; off-by-one mistakes fail with a clear error.
@@ -508,7 +508,7 @@ Flat aggregate fields such as `maxInputImages` and `maxInputVideos` are
 **not** enough to advertise transform-mode support. Providers should
 declare `generate`, `imageToVideo`, and `videoToVideo` explicitly so live
 tests, contract tests, and the shared `video_generate` tool can validate
-mode support deterministically.
+mode support from those declarations.
 
 When one model in a provider has wider reference-input support than the
 rest, use `maxInputImagesByModel`, `maxInputVideosByModel`, or

@@ -73,17 +73,13 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
 }));
 
 // mock-isolation: Session projection fixtures own their entries without native database admission.
-vi.mock("./session-utils.js", () => {
-  const loadSessionEntry = vi.fn(emptySessionLookup);
-  return {
-    loadSessionEntry,
-    loadGatewaySessionEntryReadOnly: loadSessionEntry,
-  };
-});
+const loadSessionEntryAsync = vi.hoisted(() =>
+  vi.fn<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>(),
+);
 
 // mock-isolation: Reuse controlled session state without admitting a worker database.
 vi.mock("./session-utils-store-worker.js", () => ({
-  loadGatewaySessionEntryReadOnlyInWorker: async () => loadSessionEntry("session-1"),
+  loadGatewaySessionEntryReadOnlyInWorker: async () => await loadSessionEntryAsync("session-1"),
 }));
 
 import { getRuntimeConfig } from "../config/io.js";
@@ -108,7 +104,6 @@ import { broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import * as sessionEventRows from "./session-event-prepared-row.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -128,7 +123,7 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
-    vi.mocked(loadSessionEntry).mockReset().mockReturnValue(emptySessionLookup());
+    vi.mocked(loadSessionEntryAsync).mockReset().mockResolvedValue(emptySessionLookup());
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     loadGatewaySessionLifecycleSnapshotMock
       .mockReset()
@@ -159,10 +154,10 @@ describe("agent event handler", () => {
   }
 
   function mockSessionEntry(
-    entry: ReturnType<typeof loadSessionEntry>["entry"],
+    entry: Awaited<ReturnType<typeof loadSessionEntryAsync>>["entry"],
     canonicalKey = "session-1",
   ) {
-    vi.mocked(loadSessionEntry).mockReturnValue({
+    vi.mocked(loadSessionEntryAsync).mockResolvedValue({
       cfg: {},
       agentId: "main",
       storePath: "/tmp/sessions.json",
@@ -595,6 +590,7 @@ describe("agent event handler", () => {
             attempt,
             maxAttempts: 10,
             reason,
+            retryAt: 1_800_000_000_000 + attempt * 30_000,
           },
           { seq: attempt * 2 + 1 },
         );
@@ -606,7 +602,12 @@ describe("agent event handler", () => {
             runId: "client-retry",
             state: "status",
             phase: "starting_model",
-            ...(reason === "rate_limit" ? { retry: { attempt, maxAttempts: 10, reason } } : {}),
+            retry: {
+              attempt,
+              maxAttempts: 10,
+              reason,
+              retryAt: 1_800_000_000_000 + attempt * 30_000,
+            },
           }),
         ),
       );
@@ -1291,7 +1292,7 @@ describe("agent event handler", () => {
         });
       }
       await stop.drain();
-      expect(loadSessionEntry).not.toHaveBeenCalled();
+      expect(loadSessionEntryAsync).not.toHaveBeenCalled();
       expect(h.broadcast).not.toHaveBeenCalled();
       expect(h.nodeSendToSession).not.toHaveBeenCalled();
       const delivered = h.targetedAgent();
@@ -1331,11 +1332,19 @@ describe("agent event handler", () => {
   });
 
   it("uses newer session verbose state for in-flight tool events", async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    vi.mocked(getRuntimeConfig).mockReturnValue(cfg);
+    lineageProjection = createSessionRowProjectionFixture({
+      cfg,
+      agentId: "main",
+      store: {
+        "session-1": { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 },
+      },
+    });
     const h = createHarness({
       now: 1_000,
       resolveSessionKeyForRun: () => "session-1",
     });
-    mockSessionEntry({ sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 });
 
     registerAgentRunContext("run-tool-toggle", {
       sessionKey: "session-1",
@@ -1662,6 +1671,42 @@ describe("agent event handler", () => {
       abortedLastRun: false,
     });
   });
+
+  it.each([false, true])(
+    "settles failure persistence without delaying another run's final (write fails=%s)",
+    async (writeFails) => {
+      const persistence = createDeferred();
+      persistGatewaySessionLifecycleEventMock.mockReturnValueOnce(persistence.promise);
+      const h = createHarness({ resolveSessionKeyForRun: (runId) => `session-${runId}` });
+      try {
+        await h.emit("failed", "lifecycle", {
+          phase: "error",
+          error: "runtime connection lost",
+          executionSettled: true,
+        });
+        expect(h.chat()).toEqual([]);
+
+        await h.emit("completed", "lifecycle", { phase: "end" });
+        expect(h.chat().map(([, payload]) => [payload.runId, payload.state])).toEqual([
+          ["completed", "final"],
+        ]);
+
+        if (writeFails) {
+          persistence.reject(new Error("disk full"));
+        } else {
+          persistence.resolve();
+        }
+        await persistence.promise.catch(() => undefined);
+        expect(h.chat().map(([, payload]) => [payload.runId, payload.state])).toEqual([
+          ["completed", "final"],
+          ["failed", "error"],
+        ]);
+      } finally {
+        persistence.resolve();
+        await h.handler.dispose();
+      }
+    },
+  );
 
   it("broadcasts a terminal fallback snapshot when persistence fails", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
@@ -2007,7 +2052,7 @@ describe("agent event handler", () => {
       ["lifecycle", { msg: "status update" }],
     ]);
 
-    vi.advanceTimersByTime(100);
+    await vi.advanceTimersByTimeAsync(100);
 
     const finalPayload = h.chat().at(-1)?.[1] as {
       state?: string;
@@ -2191,7 +2236,7 @@ describe("agent event handler", () => {
         { phase: "error", error: "chat.send failed" },
         { seq: linked ? 1 : 2 },
       );
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       const errors = h.chat().filter(([, payload]) => payload.state === "error");
       expect(errors).toHaveLength(linked ? 1 : 0);
       if (linked) {
@@ -2314,6 +2359,7 @@ describe("agent event handler", () => {
       await entered.promise;
       releaseAgentRunContext(runId, claimId);
       broadcastChatFinal({
+        terminalEntry: undefined,
         context: harness,
         runId,
         sessionKey,

@@ -4,11 +4,8 @@ import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
-import { iterateOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-read-connection.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   withOpenClawStateLease,
@@ -20,7 +17,6 @@ import type {
   TranscriptSourceLocator,
   TranscriptUtterance,
 } from "./provider-types.js";
-import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import {
   isCaseSensitiveDirectory,
   legacyTranscriptSessionSelector,
@@ -51,7 +47,6 @@ import {
 } from "./store-worker-client.js";
 import type { TranscriptReadRequests } from "./store-worker-contract.js";
 import type { TranscriptAppendScheduler } from "./store-worker.types.js";
-// Stores meeting-capture transcripts in the shared SQLite state database.
 import type { TranscriptWriteOperations } from "./store-write.worker-contract.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
@@ -60,6 +55,15 @@ export type * from "./store-types.js";
 export { safeTranscriptPathSegment, transcriptSessionExportKey, transcriptSessionSelector };
 
 type TranscriptSessionMatchEntry = StoreTypes.TranscriptsSessionEntry & { inputRevision: string };
+
+// Retain only the latest bounded page across the short-lived RPC store instances.
+let transcriptListCache:
+  | {
+      key: string;
+      writeToken: string;
+      page: TranscriptReadRequests["transcripts.readEntries"]["output"];
+    }
+  | undefined;
 
 /** Canonical meeting-capture transcript store. Files are explicit exports only. */
 export class TranscriptsStore {
@@ -70,11 +74,6 @@ export class TranscriptsStore {
       "env" | "path" | "readOnly"
     > = {},
   ) {}
-
-  private database() {
-    ensureMeetingTranscriptsSchema(this.databaseOptions);
-    return openOpenClawStateDatabase(this.databaseOptions);
-  }
 
   sessionDir(session: TranscriptSessionDescriptor): string {
     return path.join(this.exportRootDir, transcriptSessionSelector(session));
@@ -102,27 +101,9 @@ export class TranscriptsStore {
     };
   }
 
-  private async readExportOwnership(
-    session: TranscriptSessionDescriptor,
-    operation = createTranscriptStoreOperation(this.databaseOptions),
-  ): Promise<{
-    manifest: Record<string, string>;
-    pending: Set<string>;
-  }> {
-    const row = await operation.read("transcripts.exportOwnership", {
-      params: { session: { sessionId: session.sessionId, startedAt: session.startedAt } },
-    });
-    return row
-      ? {
-          manifest: parseTranscriptExportManifest(row.export_manifest_json),
-          pending: parseTranscriptPendingExports(row.export_pending_json),
-        }
-      : { manifest: {}, pending: new Set() };
-  }
-
   private async readSessionByIdentity(
     { sessionId, startedAt }: TranscriptSessionDescriptor,
-    operation = createTranscriptStoreOperation(this.databaseOptions),
+    operation: TranscriptStoreOperation,
   ): Promise<TranscriptSessionDescriptor | undefined> {
     return operation.read("transcripts.session", {
       params: { session: { sessionId, startedAt } },
@@ -160,8 +141,8 @@ export class TranscriptsStore {
   private async updateExportManifest(
     session: TranscriptSessionDescriptor,
     exportedHashes: Readonly<Record<string, string>>,
-    removedExports: ReadonlySet<string> = new Set(),
-    operation = createTranscriptStoreOperation(this.databaseOptions),
+    removedExports: ReadonlySet<string>,
+    operation: TranscriptStoreOperation,
     lease?: OpenClawStateLeaseContext,
   ): Promise<void> {
     const input = {
@@ -178,8 +159,8 @@ export class TranscriptsStore {
 
   private async assertExportDestinationOwned(
     session: TranscriptSessionDescriptor,
-    sessionDir = this.sessionDir(session),
-    operation = createTranscriptStoreOperation(this.databaseOptions),
+    sessionDir: string,
+    operation: TranscriptStoreOperation,
     lease?: OpenClawStateLeaseContext,
   ): Promise<void> {
     let entries;
@@ -191,7 +172,15 @@ export class TranscriptsStore {
       }
       throw error;
     }
-    const ownership = await this.readExportOwnership(session, operation);
+    const row = await operation.read("transcripts.exportOwnership", {
+      params: { session: { sessionId: session.sessionId, startedAt: session.startedAt } },
+    });
+    const manifest: Record<string, string> = row
+      ? parseTranscriptExportManifest(row.export_manifest_json)
+      : {};
+    const pending = row
+      ? parseTranscriptPendingExports(row.export_pending_json)
+      : new Set<string>();
     const caseSensitive = await isCaseSensitiveDirectory(sessionDir);
     let expectedHashes: Record<string, string> | undefined;
     const repairedHashes: Record<string, string> = {};
@@ -208,10 +197,7 @@ export class TranscriptsStore {
         );
       }
       const actualHash = await sha256File(filePath);
-      if (
-        ownership.manifest[canonicalName] === actualHash ||
-        ownership.pending.has(canonicalName)
-      ) {
+      if (manifest[canonicalName] === actualHash || pending.has(canonicalName)) {
         continue;
       }
       expectedHashes ??= await this.expectedExportHashes(session, operation);
@@ -258,15 +244,26 @@ export class TranscriptsStore {
     return this.readWorker("transcripts.libraryEntry", { params });
   }
 
-  async *iterateExport(
+  async streamExport(
     selector: string,
     includeNotes: boolean,
-  ): AsyncGenerator<ProjectedTranscriptUtterance, read.TranscriptExportRead | undefined> {
-    return yield* iterateOpenClawStateDatabaseReadOnly(
-      this.database(),
-      ({ db }) => read.iterateTranscriptExport(db, selector, includeNotes),
-      this.databaseOptions.env,
+    consume: (utterances: ProjectedTranscriptUtterance[]) => void | Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<read.TranscriptExportRead> {
+    const result = await createTranscriptStoreOperation(this.databaseOptions).streamExport(
+      { type: "meetingTranscripts.export", format: "library", selector, includeNotes },
+      async (chunk) => {
+        if (chunk.format !== "library") {
+          throw new Error("Unexpected transcript export chunk.");
+        }
+        await consume(chunk.utterances);
+      },
+      signal,
     );
+    if (!result) {
+      throw new Error("Transcript export ended before completion.");
+    }
+    return result;
   }
 
   async readRecentStoppedSession(
@@ -318,18 +315,44 @@ export class TranscriptsStore {
     options: read.TranscriptReadOptions,
   ): Promise<read.TranscriptReadPage<StoreTypes.TranscriptReadEntry>>;
   async listReadEntries(options: read.TranscriptReadOptions & { projection?: "public" }) {
-    return this.readWorker("transcripts.readEntries", { params: options });
+    const operation = createTranscriptStoreOperation(this.databaseOptions);
+    operation.assertCurrent();
+    const writeToken = readSqliteDatabaseWriteTokenForPath(operation.databaseOptions.path);
+    const key = JSON.stringify([
+      operation.databaseOptions.path,
+      operation.databaseOptions.readOnly,
+      process.env.TZ,
+      options,
+    ]);
+    if (
+      writeToken &&
+      transcriptListCache?.writeToken === writeToken &&
+      transcriptListCache.key === key
+    ) {
+      return structuredClone(transcriptListCache.page);
+    }
+    const page = await operation.read("transcripts.readEntries", { params: options });
+    if (writeToken) {
+      // A write during the read invalidates this pre-read token on the next lookup.
+      transcriptListCache = { key, writeToken, page: structuredClone(page) };
+    }
+    return page;
   }
 
   async writeSession(
     inputSession: TranscriptSessionDescriptor,
-    condition?: { expectedInputRevision?: string; assertCurrent?: () => void },
-  ): Promise<void> {
+    condition?: {
+      expectedInputRevision?: string;
+      expectedSessionRevision?: string;
+      assertCurrent?: () => void;
+    },
+  ): Promise<{ inserted: boolean; inputRevision: string; sessionRevision: string }> {
     const operation = createTranscriptStoreOperation(
       this.databaseOptions,
       condition?.assertCurrent,
     );
     const expectedInputRevision = condition?.expectedInputRevision;
+    const expectedSessionRevision = condition?.expectedSessionRevision;
     const session = { ...inputSession };
     const selector = transcriptSessionSelector(session);
     const sessionValues = {
@@ -360,7 +383,7 @@ export class TranscriptsStore {
         }),
       }))
     ) {
-      await this.assertExportDestinationOwned(session, undefined, operation);
+      await this.assertExportDestinationOwned(session, this.sessionDir(session), operation);
       const legacySelector = legacyTranscriptSessionSelector(session);
       if (legacySelector !== undefined) {
         const legacySessionDir = path.join(this.exportRootDir, legacySelector);
@@ -384,12 +407,29 @@ export class TranscriptsStore {
       sessionValues,
       now: Date.now(),
       expectedInputRevision,
+      expectedSessionRevision,
     });
     if (!result.ok) {
       throw result.reason === "conflict"
         ? new TranscriptSessionConflictError()
         : new TranscriptsSummaryChangedError();
     }
+    return {
+      inserted: result.inserted,
+      inputRevision: result.inputRevision,
+      sessionRevision: result.sessionRevision,
+    };
+  }
+
+  async deleteEmptySessionCandidate(
+    session: TranscriptSessionDescriptor,
+    condition: { expectedInputRevision: string; assertCurrent: () => void },
+  ): Promise<void> {
+    const operation = createTranscriptStoreOperation(this.databaseOptions, condition.assertCurrent);
+    await operation.write("transcripts.deleteEmptySessionCandidate", {
+      session: { sessionId: session.sessionId, startedAt: session.startedAt },
+      expectedInputRevision: condition.expectedInputRevision,
+    });
   }
 
   async readSession(sessionSelector: string): Promise<TranscriptSessionDescriptor | undefined> {
@@ -547,101 +587,102 @@ export class TranscriptsStore {
         leaseLabel: "meeting transcript export lease",
         operationLabel: "meeting-transcripts.export.lease",
       },
-      async (lease) => await this.materializeSessionArtifactsOwned(session, kind, operation, lease),
-    );
-  }
-
-  private async materializeSessionArtifactsOwned(
-    session: TranscriptSessionDescriptor,
-    kind: StoreTypes.TranscriptArtifactKind,
-    operation: TranscriptStoreOperation,
-    lease: OpenClawStateLeaseContext,
-  ): Promise<StoreTypes.MaterializedTranscriptArtifacts> {
-    const assertOwner = () => {
-      operation.assertCurrent();
-      lease.assertOwned();
-    };
-    const sessionDir = this.sessionDir(session);
-    const includeTranscript = kind === "all" || kind === "transcript";
-    const includeSummary = kind === "all" || kind === "summary";
-    const storedSummary = includeSummary
-      ? await operation.read("transcripts.summary", { params: { session } })
-      : {};
-    const exportedHashes: Record<string, string> = {};
-    const removedExports = new Set<string>();
-    await assertTranscriptExportPathAvailable({
-      selector: transcriptSessionSelector(session),
-      exportRootDir: this.exportRootDir,
-      collisions: await operation.read("transcripts.exportPathCollisions", {
-        params: { exportKey: transcriptSessionExportKey(session) },
-      }),
-    });
-    await this.assertExportDestinationOwned(session, sessionDir, operation, lease);
-    const pendingFiles = [
-      "metadata.json",
-      ...(includeTranscript ? ["transcript.jsonl"] : []),
-      ...(includeSummary ? ["summary.json", "summary.md"] : []),
-    ];
-    await operation.writeExport(
-      "transcripts.markPendingExports",
-      {
-        session: { sessionId: session.sessionId, startedAt: session.startedAt },
-        fileNames: pendingFiles,
-      },
-      lease,
-    );
-    assertOwner();
-    const ensured = await ensureAbsoluteDirectory(sessionDir, {
-      mode: 0o700,
-      scopeLabel: "transcript export directory",
-    });
-    if (!ensured.ok) {
-      throw ensured.error;
-    }
-    // Every export starts with identity metadata, so even an interrupted partial
-    // materialization remains inspectable by Doctor without guessing its owner.
-    assertOwner();
-    exportedHashes["metadata.json"] = await writeTranscriptArtifact(
-      sessionDir,
-      "metadata.json",
-      `${JSON.stringify(session, null, 2)}\n`,
-    );
-    if (includeTranscript) {
-      assertOwner();
-      exportedHashes["transcript.jsonl"] = await writeTranscriptJsonlArtifact({
-        sessionDir,
-        session,
-        databaseOptions: operation.databaseOptions,
-      });
-    }
-    if (includeSummary) {
-      const summaries = {
-        "summary.json": storedSummary.summary
-          ? `${JSON.stringify(storedSummary.summary, null, 2)}\n`
-          : undefined,
-        "summary.md":
-          storedSummary.markdown === undefined
-            ? undefined
-            : normalizeExportText(storedSummary.markdown),
-      };
-      for (const [fileName, content] of Object.entries(summaries)) {
+      async (lease) => {
+        const assertOwner = () => {
+          operation.assertCurrent();
+          lease.assertOwned();
+        };
+        const sessionDir = this.sessionDir(session);
+        const includeTranscript = kind === "all" || kind === "transcript";
+        const includeSummary = kind === "all" || kind === "summary";
+        const storedSummary = includeSummary
+          ? await operation.read("transcripts.summary", { params: { session } })
+          : {};
+        const exportedHashes: Record<string, string> = {};
+        const removedExports = new Set<string>();
+        await assertTranscriptExportPathAvailable({
+          selector: transcriptSessionSelector(session),
+          exportRootDir: this.exportRootDir,
+          collisions: await operation.read("transcripts.exportPathCollisions", {
+            params: { exportKey: transcriptSessionExportKey(session) },
+          }),
+        });
+        await this.assertExportDestinationOwned(session, sessionDir, operation, lease);
+        const pendingFiles = [
+          "metadata.json",
+          ...(includeTranscript ? ["transcript.jsonl"] : []),
+          ...(includeSummary ? ["summary.json", "summary.md"] : []),
+        ];
+        await operation.writeExport(
+          "transcripts.markPendingExports",
+          {
+            session: { sessionId: session.sessionId, startedAt: session.startedAt },
+            fileNames: pendingFiles,
+          },
+          lease,
+        );
         assertOwner();
-        if (content === undefined) {
-          await removeTranscriptArtifact(sessionDir, fileName);
-          removedExports.add(fileName);
-        } else {
-          exportedHashes[fileName] = await writeTranscriptArtifact(sessionDir, fileName, content);
+        const ensured = await ensureAbsoluteDirectory(sessionDir, {
+          mode: 0o700,
+          scopeLabel: "transcript export directory",
+        });
+        if (!ensured.ok) {
+          throw ensured.error;
         }
-      }
-    }
-    await this.updateExportManifest(session, exportedHashes, removedExports, operation, lease);
-    return {
-      sessionDir,
-      metadataPath: path.join(sessionDir, "metadata.json"),
-      transcriptPath: path.join(sessionDir, "transcript.jsonl"),
-      summaryJsonPath: path.join(sessionDir, "summary.json"),
-      summaryPath: path.join(sessionDir, "summary.md"),
-      hasSummary: storedSummary.summary !== undefined || storedSummary.markdown !== undefined,
-    };
+        // Every export starts with identity metadata, so even an interrupted partial
+        // materialization remains inspectable by Doctor without guessing its owner.
+        assertOwner();
+        exportedHashes["metadata.json"] = await writeTranscriptArtifact(
+          sessionDir,
+          "metadata.json",
+          `${JSON.stringify(session, null, 2)}\n`,
+          assertOwner,
+        );
+        if (includeTranscript) {
+          assertOwner();
+          exportedHashes["transcript.jsonl"] = await writeTranscriptJsonlArtifact({
+            sessionDir,
+            session,
+            operation,
+            assertOwner,
+            signal: lease.signal,
+          });
+        }
+        if (includeSummary) {
+          const summaries = {
+            "summary.json": storedSummary.summary
+              ? `${JSON.stringify(storedSummary.summary, null, 2)}\n`
+              : undefined,
+            "summary.md":
+              storedSummary.markdown === undefined
+                ? undefined
+                : normalizeExportText(storedSummary.markdown),
+          };
+          for (const [fileName, content] of Object.entries(summaries)) {
+            assertOwner();
+            if (content === undefined) {
+              await removeTranscriptArtifact(sessionDir, fileName, assertOwner);
+              removedExports.add(fileName);
+            } else {
+              exportedHashes[fileName] = await writeTranscriptArtifact(
+                sessionDir,
+                fileName,
+                content,
+                assertOwner,
+              );
+            }
+          }
+        }
+        await this.updateExportManifest(session, exportedHashes, removedExports, operation, lease);
+        return {
+          sessionDir,
+          metadataPath: path.join(sessionDir, "metadata.json"),
+          transcriptPath: path.join(sessionDir, "transcript.jsonl"),
+          summaryJsonPath: path.join(sessionDir, "summary.json"),
+          summaryPath: path.join(sessionDir, "summary.md"),
+          hasSummary: storedSummary.summary !== undefined || storedSummary.markdown !== undefined,
+        };
+      },
+    );
   }
 }

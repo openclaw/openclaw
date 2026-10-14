@@ -4,8 +4,61 @@ import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "./web-awesome.ts";
 
 type Item = HTMLElementTagNameMap["wa-dropdown-item"];
+type RenderedElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
 
-function item(label: string, ...children: Item[]) {
+function rendered(element: RenderedElement, ...rest: RenderedElement[]) {
+  return rest.length === 0
+    ? element.updateComplete
+    : Promise.all([element, ...rest].map((entry) => entry.updateComplete));
+}
+
+function submenu(item: Item) {
+  return item.submenuElement;
+}
+
+async function expectSubmenuFlippedRight(item: Item) {
+  await expect.poll(() => submenu(item).getAttribute("data-placement")).toMatch(/^right/);
+}
+
+async function rootClosed(dropdown: HTMLElementTagNameMap["wa-dropdown"]) {
+  await expect.poll(() => dropdown.shadowRoot?.querySelector("wa-popup")?.active).toBe(false);
+}
+
+function openSubmenu(item: Item) {
+  return item.openSubmenu();
+}
+
+function closeSubmenu(item: Item) {
+  return item.closeSubmenu();
+}
+
+function duringSubmenuTransition(
+  item: Item,
+  phase: "show" | "hide",
+  request: () => unknown,
+  action: () => void | Promise<void>,
+) {
+  return duringElementAnimation(submenu(item), phase, request, action);
+}
+
+function expectSubmenuInTopLayer(item: Item) {
+  expect(submenu(item).matches(":popover-open")).toBe(true);
+}
+
+async function submenuConnected(item: Item) {
+  await expect.poll(() => submenu(item)?.isConnected).toBe(true);
+}
+
+async function submenuRemoved(item: Item, previous: HTMLElement) {
+  await expect.poll(() => item.hasSubmenu).toBe(false);
+  await expect.poll(() => previous.isConnected).toBe(false);
+}
+
+function expectNotPresented(surface: HTMLElement) {
+  expect(surface.matches(":popover-open")).toBe(false);
+}
+
+function menuItem(label: string, ...children: Item[]) {
   const element = document.createElement("wa-dropdown-item");
   element.append(label);
   for (const child of children) {
@@ -16,16 +69,16 @@ function item(label: string, ...children: Item[]) {
 }
 
 async function fixture(shadow = false) {
-  const leaf = item("Deep action");
-  const inner = item("Inner", leaf);
-  const middle = item("Middle", inner);
-  const alternateLeaf = item("Alternate action");
-  const alternate = item("Alternate", alternateLeaf);
-  const parent = item("More", middle, alternate);
-  const otherLeaf = item("Other action");
-  const other = item("Other", otherLeaf);
-  const first = item("Web search");
-  const disabled = item("Unavailable");
+  const leaf = menuItem("Deep action");
+  const inner = menuItem("Inner", leaf);
+  const middle = menuItem("Middle", inner);
+  const alternateLeaf = menuItem("Alternate action");
+  const alternate = menuItem("Alternate", alternateLeaf);
+  const parent = menuItem("More", middle, alternate);
+  const otherLeaf = menuItem("Other action");
+  const other = menuItem("Other", otherLeaf);
+  const first = menuItem("Web search");
+  const disabled = menuItem("Unavailable");
   disabled.disabled = true;
   const dropdown = document.createElement("wa-dropdown");
   const trigger = document.createElement("button");
@@ -50,8 +103,8 @@ async function fixture(shadow = false) {
     other,
     otherLeaf,
   ];
-  await dropdown.updateComplete;
-  await Promise.all(items.map((entry) => entry.updateComplete));
+  await rendered(dropdown);
+  await Promise.all(items.map((entry) => rendered(entry)));
   const { page } = await import("vitest/browser");
   // An inherited pointer can hover a submenu as keyboard-opened popovers appear.
   await page.elementLocator(trigger).hover();
@@ -90,9 +143,7 @@ async function hidden(...items: Item[]) {
     .poll(() =>
       items.every(
         (entry) =>
-          !entry.submenuOpen &&
-          entry.submenuElement.hidden &&
-          !entry.submenuElement.matches(":popover-open"),
+          !entry.submenuOpen && submenu(entry).hidden && !submenu(entry).matches(":popover-open"),
       ),
     )
     .toBe(true);
@@ -114,15 +165,13 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
       const { userEvent } = await import("vitest/browser");
       const f = await fixture();
       f.dropdown.dir = dir;
-      await f.parent.openSubmenu();
-      await f.other.openSubmenu();
+      await openSubmenu(f.parent);
+      await openSubmenu(f.other);
       await hidden(f.parent);
       expect(focused()).toBe(f.otherLeaf);
       if (dir === "rtl") {
         // Placement flips at the left viewport edge; backward navigation stays RTL.
-        await expect
-          .poll(() => f.other.submenuElement.getAttribute("data-placement"))
-          .toMatch(/^right/);
+        await expectSubmenuFlippedRight(f.other);
       }
       await back(dir === "rtl" ? "ArrowRight" : "ArrowLeft", f.other);
       await userEvent.keyboard("{ArrowDown}");
@@ -140,16 +189,16 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
 
   it("preserves three ancestors, then retires only the replaced nested branch", async () => {
     const f = await fixture();
-    await f.parent.openSubmenu();
-    await f.middle.openSubmenu();
-    await f.inner.openSubmenu();
+    await openSubmenu(f.parent);
+    await openSubmenu(f.middle);
+    await openSubmenu(f.inner);
     expect([f.parent.submenuOpen, f.middle.submenuOpen, f.inner.submenuOpen]).toEqual([
       true,
       true,
       true,
     ]);
     f.inner.disabled = true;
-    await f.alternate.openSubmenu();
+    await openSubmenu(f.alternate);
     expect(f.parent.submenuOpen).toBe(true);
     await hidden(f.middle, f.inner);
     expect(focused()).toBe(f.alternateLeaf);
@@ -159,14 +208,14 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
 
   it("keeps the open child branch when an ancestor is opened repeatedly", async () => {
     const f = await fixture();
-    await f.parent.openSubmenu();
-    await f.middle.openSubmenu();
-    await f.parent.openSubmenu();
+    await openSubmenu(f.parent);
+    await openSubmenu(f.middle);
+    await openSubmenu(f.parent);
     // A batched property reversal notifies again without actually closing the ancestor.
     f.parent.submenuOpen = false;
     f.parent.submenuOpen = true;
-    await f.parent.updateComplete;
-    await f.parent.openSubmenu();
+    await rendered(f.parent);
+    await openSubmenu(f.parent);
     expect(f.middle.submenuOpen).toBe(true);
     await back("ArrowLeft", f.middle);
     await back("ArrowLeft", f.parent);
@@ -177,9 +226,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
     async (reason) => {
       const { page, userEvent } = await import("vitest/browser");
       const f = await fixture();
-      await f.other.openSubmenu();
+      await openSubmenu(f.other);
       if (reason === "method") {
-        await f.other.closeSubmenu();
+        await closeSubmenu(f.other);
       } else if (reason === "property") {
         f.other.submenuOpen = false;
       } else {
@@ -199,8 +248,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
     async (reason) => {
       const { userEvent } = await import("vitest/browser");
       const f = await fixture();
-      await f.parent.openSubmenu();
-      await f.middle.openSubmenu();
+      await openSubmenu(f.parent);
+      await openSubmenu(f.middle);
       f.middle.disabled = true;
       if (reason === "ancestor") {
         f.parent.submenuOpen = false;
@@ -216,14 +265,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
         f.other.before(f.parent);
       }
       if (reason === "root") {
-        await expect
-          .poll(() => f.dropdown.shadowRoot?.querySelector("wa-popup")?.active)
-          .toBe(false);
+        await rootClosed(f.dropdown);
         f.dropdown.open = true;
         await expect.poll(() => focused()).toBe(f.first);
       }
       f.middle.disabled = false;
-      await f.parent.openSubmenu();
+      await openSubmenu(f.parent);
       expect(focused()).toBe(f.middle);
       await back("ArrowLeft", f.parent);
       await userEvent.keyboard("{ArrowDown}");
@@ -234,14 +281,14 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
   it("retires direct item disconnection before another submenu opens", async () => {
     const { userEvent } = await import("vitest/browser");
     const f = await fixture();
-    await f.other.openSubmenu();
+    await openSubmenu(f.other);
     f.other.remove();
     await hidden(f.other);
     f.parent.focus();
     await userEvent.keyboard("{ArrowDown}");
     expect(focused()).toBe(f.first);
     f.dropdown.append(f.other);
-    await f.other.openSubmenu();
+    await openSubmenu(f.other);
     await back("ArrowLeft", f.other);
     await userEvent.keyboard("{ArrowDown}");
     expect(focused()).toBe(f.first);
@@ -258,12 +305,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
     f.middle.slot = "forwarded";
     f.alternate.slot = "forwarded";
     f.host.append(f.middle, f.alternate);
-    await f.parent.updateComplete;
-    await f.parent.openSubmenu();
+    await rendered(f.parent);
+    await openSubmenu(f.parent);
     expect(focused()).toBe(f.middle);
     await userEvent.keyboard("{ArrowRight}");
     expect(focused()).toBe(f.inner);
-    await f.alternate.openSubmenu();
+    await openSubmenu(f.alternate);
     await hidden(f.middle);
     await back("ArrowLeft", f.alternate);
     await userEvent.keyboard("{Home}");
@@ -277,15 +324,15 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
     const f = await fixture();
     let opening: Promise<void> | undefined;
     let replacement: Promise<void> | undefined;
-    await duringElementAnimation(
-      f.parent.submenuElement,
+    await duringSubmenuTransition(
+      f.parent,
       "show",
       () => {
-        opening = f.parent.openSubmenu();
+        opening = openSubmenu(f.parent);
       },
       () => {
         expect(focused()).toBe(f.middle);
-        replacement = f.other.openSubmenu();
+        replacement = openSubmenu(f.other);
       },
     );
     await Promise.all([opening, replacement]);
@@ -296,23 +343,23 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
 
   it("does not let an interrupted close retire a reopened child branch", async () => {
     const f = await fixture();
-    await f.parent.openSubmenu();
-    await f.middle.openSubmenu();
+    await openSubmenu(f.parent);
+    await openSubmenu(f.middle);
     let closing: Promise<void> | undefined;
     let reopened: Promise<void> | undefined;
-    await duringElementAnimation(
-      f.parent.submenuElement,
+    await duringSubmenuTransition(
+      f.parent,
       "hide",
       () => {
-        closing = f.parent.closeSubmenu();
+        closing = closeSubmenu(f.parent);
       },
       () => {
-        reopened = f.parent.openSubmenu().then(() => f.middle.openSubmenu());
+        reopened = openSubmenu(f.parent).then(() => openSubmenu(f.middle));
       },
     );
     await Promise.all([closing, reopened]);
-    expect(f.parent.submenuElement.matches(":popover-open")).toBe(true);
-    expect(f.middle.submenuElement.matches(":popover-open")).toBe(true);
+    expectSubmenuInTopLayer(f.parent);
+    expectSubmenuInTopLayer(f.middle);
     expect(focused()).toBe(f.inner);
     await back("ArrowLeft", f.middle);
     await back("ArrowLeft", f.parent);
@@ -323,12 +370,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
     async (pointerType) => {
       const { page } = await import("vitest/browser");
       const f = await fixture();
-      await f.parent.openSubmenu();
+      await openSubmenu(f.parent);
       if (pointerType === "mouse") {
         await page.elementLocator(f.other).hover();
       } else {
         f.other.dispatchEvent(new PointerEvent("pointerenter", { pointerType }));
-        await f.other.updateComplete;
+        await rendered(f.other);
         expect(f.other.submenuOpen).toBe(false);
         f.other.click();
       }
@@ -340,20 +387,20 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
 
   it("rejects a pending child opening beneath a closing ancestor", async () => {
     const f = await fixture();
-    await f.parent.openSubmenu();
+    await openSubmenu(f.parent);
     f.parent.submenuOpen = false;
     f.middle.submenuOpen = true;
     await hidden(f.parent, f.middle);
-    await f.other.openSubmenu();
+    await openSubmenu(f.other);
     expect(focused()).toBe(f.otherLeaf);
     await back("ArrowLeft", f.other);
   });
 
   it("returns to the surviving level before a property hide animation finishes", async () => {
     const f = await fixture();
-    await f.other.openSubmenu();
-    await duringElementAnimation(
-      f.other.submenuElement,
+    await openSubmenu(f.other);
+    await duringSubmenuTransition(
+      f.other,
       "hide",
       () => (f.other.submenuOpen = false),
       () => {
@@ -373,29 +420,28 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
     async (change) => {
       const { userEvent } = await import("vitest/browser");
       const f = await fixture();
-      await f.other.openSubmenu();
-      const retiredSubmenu = f.other.submenuElement;
+      await openSubmenu(f.other);
+      const retiredSubmenu = submenu(f.other);
       if (change === "removal") {
         f.otherLeaf.remove();
       } else {
         f.otherLeaf.slot = "details";
       }
-      await expect.poll(() => f.other.hasSubmenu).toBe(false);
-      await expect.poll(() => retiredSubmenu.isConnected).toBe(false);
+      await submenuRemoved(f.other, retiredSubmenu);
       f.other.focus();
       await userEvent.keyboard("{ArrowDown}");
       expect(focused()).toBe(f.first);
       expect(f.other.submenuOpen).toBe(false);
-      expect(retiredSubmenu.matches(":popover-open")).toBe(false);
+      expectNotPresented(retiredSubmenu);
 
       f.otherLeaf.slot = "submenu";
       if (change === "removal") {
         f.other.append(f.otherLeaf);
       }
-      await expect.poll(() => f.other.submenuElement?.isConnected).toBe(true);
-      await f.other.openSubmenu();
+      await submenuConnected(f.other);
+      await openSubmenu(f.other);
       expect(focused()).toBe(f.otherLeaf);
-      expect(f.other.submenuElement.matches(":popover-open")).toBe(true);
+      expectSubmenuInTopLayer(f.other);
       await back("ArrowLeft", f.other);
       await userEvent.keyboard("{ArrowDown}");
       expect(focused()).toBe(f.first);

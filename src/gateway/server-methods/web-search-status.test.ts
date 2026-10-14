@@ -30,8 +30,14 @@ vi.mock("../../web-search/runtime.js", () => ({
   listConfiguredWebSearchProviders: mocks.available,
   resolveWebSearchProviderId: mocks.selection,
 }));
-vi.mock("../../plugins/management-service.js", () => ({
-  resolveManagedPluginMetadata: mocks.metadata,
+// mock-isolation: Provider status uses fixed metadata without loading the discovery registry.
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshotAsync: mocks.metadata,
+}));
+// mock-isolation: Use fixed discovery policy without opening machine state for status projection.
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
 }));
 vi.mock("../../plugins/credential-descriptors.js", () => ({
   resolvePluginCredentialDescriptors: () => [credential],
@@ -46,8 +52,9 @@ vi.mock("../../agents/web-search-tool-policy.js", () => ({
   resolveWebSearchToolPolicy: mocks.policy,
 }));
 vi.mock("../server-model-catalog-auth.js", () => ({ readPreparedCatalog: mocks.catalog }));
+// mock-isolation: Provider status uses catalog fixtures without opening unrelated credential stores.
 vi.mock("../../agents/model-catalog-decisions.js", () => ({
-  createModelCatalogDecisions: mocks.decisions,
+  prepareModelCatalogDecisions: mocks.decisions,
   resolveCatalogDecisionRuntime: mocks.runtime,
 }));
 vi.mock("../../agents/native-web-search.js", () => ({ resolveNativeWebSearchRoute: mocks.native }));

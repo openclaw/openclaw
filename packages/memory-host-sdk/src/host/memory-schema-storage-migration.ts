@@ -383,6 +383,16 @@ function existingStorageObjects(db: DatabaseSync, table: string): string[] {
     .map((row) => String(row.sql));
 }
 
+function replaceStorageTable(db: DatabaseSync, table: string, objects: string[]): void {
+  db.exec(`
+    DROP TABLE ${table};
+    ALTER TABLE ${table}_storage_migration RENAME TO ${table};
+  `);
+  for (const sql of objects) {
+    db.exec(sql);
+  }
+}
+
 /** Record regeneration debt after a legacy import has verified its canonical copy. */
 export function markInvalidImportedMemoryEmbeddings(db: DatabaseSync, schema: string): void {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(schema)) {
@@ -486,13 +496,7 @@ export function migrateMemoryIndexStorage(
           FROM memory_index_chunks WHERE rowid = ?
         `,
         );
-        db.exec(`
-          DROP TABLE memory_index_chunks;
-          ALTER TABLE memory_index_chunks_storage_migration RENAME TO memory_index_chunks;
-        `);
-        for (const sql of chunkObjects) {
-          db.exec(sql);
-        }
+        replaceStorageTable(db, "memory_index_chunks", chunkObjects);
         if (
           db
             .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -511,13 +515,7 @@ export function migrateMemoryIndexStorage(
           ),
         );
         cacheWarning = copyLegacyMemoryEmbeddingCache(db, cacheTable, replacement, renewAuthority);
-        db.exec(`
-          DROP TABLE ${cacheTable};
-          ALTER TABLE ${replacement} RENAME TO ${cacheTable};
-        `);
-        for (const sql of cacheObjects) {
-          db.exec(sql);
-        }
+        replaceStorageTable(db, cacheTable, cacheObjects);
       }
       if (migrateChunks) {
         for (const table of [

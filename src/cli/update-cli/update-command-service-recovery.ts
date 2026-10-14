@@ -38,7 +38,10 @@ import {
   assertOriginalServiceStateCompatible,
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
-import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
+import {
+  observeUpdateGatewayReadiness,
+  verifyPreviousGatewayForUpdate,
+} from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   isPackageManagerUpdateMode,
@@ -67,6 +70,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   service: GatewayService;
   port: number;
   timeoutMs?: number;
+  onProgress?: (stage: string, reason: string) => void;
   expectedVersion?: string;
   expectedBuildId?: string;
   env?: NodeJS.ProcessEnv;
@@ -76,6 +80,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
 }> {
   const executor = params.updateRun?.executorFence;
   const assertCurrent = () => {
+    params.updateRun?.deadline?.signal.throwIfAborted();
     executor?.assertCurrent();
     params.assertCurrent?.();
   };
@@ -96,6 +101,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       const recovery = await recoverInstalledLaunchAgentAfterUpdate({
         onGatewayStartAttempted: params.onGatewayStartAttempted,
         service: params.service,
+        deadline: params.updateRun?.deadline,
         env: params.env,
         assertCurrent: assertRecovery,
       });
@@ -105,7 +111,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   );
   assertCurrent();
   // Native repair can succeed while readiness still fails; retain both observed outcomes.
-  if (launchAgentRecovery.attempted && params.updateRun) {
+  if (launchAgentRecovery.status !== "not-needed" && params.updateRun) {
     const endedAtMs = Date.now();
     const { runId, env } = params.updateRun;
     const repair = getUpdateRun(runId, { env })?.repair ?? [];
@@ -113,28 +119,34 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       runId,
       {
         attempt: Math.max(0, ...repair.map((entry) => entry.attempt)) + 1,
-        status: launchAgentRecovery.recovered ? "succeeded" : "failed",
+        status: launchAgentRecovery.status === "recovered" ? "succeeded" : "failed",
         startedAtMs,
         endedAtMs,
-        summary: launchAgentRecovery.recovered
-          ? launchAgentRecovery.message
-          : launchAgentRecovery.detail,
+        summary:
+          launchAgentRecovery.status === "recovered"
+            ? launchAgentRecovery.message
+            : launchAgentRecovery.detail,
       },
       { env },
     );
   }
-  if (!launchAgentRecovery.recovered) {
+  if (launchAgentRecovery.status !== "recovered") {
     return { health: params.health, launchAgentRecovery };
   }
 
   const health = await waitForGatewayHealthyRestart({
     service: params.service,
     port: params.port,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.updateRun?.deadline?.remainingMs() ?? params.timeoutMs,
+    deadline: params.updateRun?.deadline,
+    signal: params.updateRun?.deadline?.signal,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     requirePluginHealth: false,
     env: params.env,
+    onObservation: params.onProgress
+      ? (snapshot) => params.onProgress?.("recovery", renderRestartDiagnostics(snapshot).join("; "))
+      : undefined,
     supervisorKeepsAlive: true,
     settle: { probes: 12 },
   });
@@ -271,6 +283,16 @@ export async function admitInstalledGatewayRecovery(
       });
     };
     const startedAt = Date.now();
+    const recordMigrationRecovery = (exitCode: 0 | 1, message: string) => {
+      result.steps.push({
+        name: "gateway migration recovery",
+        command: "openclaw doctor --fix",
+        cwd: root,
+        durationMs: Date.now() - startedAt,
+        exitCode,
+        ...(exitCode === 0 ? { stdoutTail: message } : { stderrTail: message }),
+      });
+    };
     try {
       let pending = await inspect();
       if (pending.length && pending.every((database) => database.observed < database.expected)) {
@@ -295,14 +317,10 @@ export async function admitInstalledGatewayRecovery(
         assertCurrent();
         pending = await inspect();
         if (!pending.length) {
-          result.steps.push({
-            name: "gateway migration recovery",
-            command: "openclaw doctor --fix",
-            cwd: root,
-            durationMs: Date.now() - startedAt,
-            exitCode: 0,
-            stdoutTail: "Required database migrations completed before Gateway recovery.",
-          });
+          recordMigrationRecovery(
+            0,
+            "Required database migrations completed before Gateway recovery.",
+          );
         }
       }
       if (pending.length) {
@@ -322,14 +340,7 @@ export async function admitInstalledGatewayRecovery(
       assertCurrent();
       const message = `Run \`${formatCliCommand("openclaw doctor --fix", env)}\`, then \`${formatCliCommand("openclaw gateway start", env)}\`. Gateway migration recovery did not finish: ${formatErrorMessage(error)}.`;
       result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
-      result.steps.push({
-        name: "gateway migration recovery",
-        command: "openclaw doctor --fix",
-        cwd: root,
-        durationMs: Date.now() - startedAt,
-        exitCode: 1,
-        stderrTail: message,
-      });
+      recordMigrationRecovery(1, message);
       defaultRuntime.error(message);
       return false;
     }
@@ -366,6 +377,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
         "Service recovery lost its original update executor.",
       );
     }
+    params.updateRun?.deadline?.signal.throwIfAborted();
     executor?.assertCurrent();
   };
   const before = params.preManagedServiceStop;
@@ -491,14 +503,18 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       );
     }
     assertCurrent();
-    const health = await waitForGatewayHealthyRestart({
-      service,
-      port,
-      env: current.env,
+    const { health } = await observeUpdateGatewayReadiness({
+      serviceEnv: current.env,
+      gatewayPort: port,
       timeoutMs: params.timeoutMs,
+      deadline: run?.deadline,
       expectedVersion: original?.version ?? packageRecovery?.version,
       expectedBuildId: original?.buildId ?? packageRecovery?.buildId,
       requireRunningService: true,
+      healthOnly: true,
+      assertCurrent,
+      onProgress: (stage, reason) =>
+        defaultRuntime[params.jsonMode ? "error" : "log"](`Gateway recovery (${stage}): ${reason}`),
       settle: { probes: 12 },
     });
     assertCurrent();
@@ -577,31 +593,23 @@ export async function compensateOriginalManagedService(
     throw new Error("Original service observation is missing.");
   }
   const { result, opts, preManagedServiceStop: before } = params;
-  const run = opts.run;
   // A is unchanged service code, not B's previous generation. Never reverse B
   // or its current state merely to compensate the stop of compatible A.
-  const service =
-    params.allowGatewayRestart === false
-      ? undefined
-      : await maybeRestartServiceAfterFailedMutableUpdate({
-          onGatewayStartAttempted: params.onGatewayStartAttempted,
-          updateRun: run,
-          preManagedServiceStop: before,
-          originalManagedServiceRuntime: original,
-          jsonMode: Boolean(opts.json),
-          timeoutMs: params.timeoutMs,
-          invocationCwd: params.invocationCwd,
-        });
+  const healthy =
+    params.allowGatewayRestart !== false &&
+    (await maybeRestartServiceAfterFailedMutableUpdate({
+      onGatewayStartAttempted: params.onGatewayStartAttempted,
+      updateRun: opts.run,
+      preManagedServiceStop: before,
+      originalManagedServiceRuntime: original,
+      jsonMode: Boolean(opts.json),
+      timeoutMs: params.timeoutMs,
+      invocationCwd: params.invocationCwd,
+    })) === "healthy";
   assertCurrent();
-  const healthy = service === "healthy";
-  const summary = [
-    healthy
-      ? `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`
-      : "Original managed service compensation was not verified; package and current state were retained.",
-    original.packageFingerprintWarning,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const summary = healthy
+    ? `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`
+    : "Original managed service compensation was not verified; package and current state were retained.";
   return {
     result: {
       ...result,

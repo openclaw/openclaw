@@ -107,7 +107,7 @@ export class DiscordCommandDeployer {
   }
 }
 
-function stableCommandKey(command: Pick<SerializedCommand, "name" | "type">) {
+function stableCommandKey(command: { name: string; type?: ApplicationCommandType }) {
   return `${command.type ?? ApplicationCommandType.ChatInput}:${command.name}`;
 }
 

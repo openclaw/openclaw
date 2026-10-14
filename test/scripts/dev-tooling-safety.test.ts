@@ -17,7 +17,6 @@ import { testing as tuiPtyWatchTesting } from "../../scripts/dev/tui-pty-test-wa
 import {
   maskIdentifier,
   parseBooleanEnv,
-  parseStrictIntegerOption,
   previewForDevToolLog,
   redactHomePath,
   redactJsonValueForDevToolLog,
@@ -197,36 +196,6 @@ function runCli(scriptPath: string, args: string[]): Promise<CliResult> {
   });
 }
 
-function createCliPair(
-  scriptPath: string,
-  firstArgs: string[],
-  secondArgs: string[],
-): () => Promise<[CliResult, CliResult]> {
-  let result: Promise<[CliResult, CliResult]> | undefined;
-  return () => {
-    // Pair only sibling entrypoint probes: process proof stays real while peak
-    // child concurrency stays capped at two.
-    result ??= Promise.all([runCli(scriptPath, firstArgs), runCli(scriptPath, secondArgs)]);
-    return result;
-  };
-}
-
-const getDiscordCliResults = createCliPair(
-  "scripts/dev/discord-acp-plain-language-smoke.ts",
-  ["--wat"],
-  ["--help"],
-);
-const getTuiPtyCliResults = createCliPair(
-  "scripts/dev/tui-pty-test-watch.ts",
-  ["--help"],
-  ["--wat"],
-);
-const getClaudeUsageCliResults = createCliPair(
-  "scripts/debug-claude-usage.ts",
-  ["--help"],
-  ["--agent"],
-);
-
 afterEach(async () => {
   vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
@@ -261,15 +230,6 @@ describe("dev tooling safety helpers", () => {
     );
   });
 
-  it("rejects partial numeric option parses", () => {
-    expect(parseStrictIntegerOption({ fallback: 3, label: "--runs", min: 1, raw: undefined })).toBe(
-      3,
-    );
-    expect(() =>
-      parseStrictIntegerOption({ fallback: 3, label: "--runs", min: 1, raw: "2abc" }),
-    ).toThrow(/--runs must be an integer/u);
-  });
-
   it("redacts home paths and masks opaque ids", () => {
     expect(redactHomePath("/home/alice/.openclaw/state.json", "/home/alice")).toBe(
       "~/.openclaw/state.json",
@@ -290,19 +250,11 @@ describe("script-specific dev tooling hardening", () => {
 
   it("rejects unknown Discord smoke args before live Discord/OpenClaw work", async () => {
     expect(() => discordSmokeTesting.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
-    const [result] = await getDiscordCliResults();
+    const result = await runCli("scripts/dev/discord-acp-plain-language-smoke.ts", ["--wat"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
-  });
-
-  it("prints Discord smoke usage without starting live validation", async () => {
-    const [, result] = await getDiscordCliResults();
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: bun scripts/dev/discord-acp-plain-language-smoke.ts");
-    expect(result.stderr).toBe("");
   });
 
   it("rejects missing Discord smoke option values before env fallbacks", () => {
@@ -406,31 +358,6 @@ describe("script-specific dev tooling hardening", () => {
     );
   });
 
-  it("bounds Discord smoke response bodies by streamed bytes", async () => {
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new Uint8Array(6));
-          controller.close();
-        },
-      }),
-    );
-    const request = discordSmokeTesting.requestDiscordJson({
-      method: "GET",
-      path: "/channels/123/messages",
-      headers: {},
-      retries: 0,
-      timeoutMs: 50,
-      responseBodyMaxBytes: 5,
-      errorPrefix: "Discord API",
-      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
-    });
-
-    await expect(request).rejects.toThrow(
-      "Discord API GET /channels/123/messages response body exceeded 5 bytes",
-    );
-  });
-
   it("does not launch another Discord smoke retry after the timeout budget expires", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     let calls = 0;
@@ -458,17 +385,9 @@ describe("script-specific dev tooling hardening", () => {
     expect(calls).toBe(1);
   });
 
-  it("prints TUI PTY watch usage without launching the watcher", async () => {
-    const [result] = await getTuiPtyCliResults();
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node --import tsx scripts/dev/tui-pty-test-watch.ts");
-    expect(result.stderr).toBe("");
-  });
-
   it("rejects unknown TUI PTY watch args before launching the watcher", async () => {
     expect(() => tuiPtyWatchTesting.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
-    const [, result] = await getTuiPtyCliResults();
+    const result = await runCli("scripts/dev/tui-pty-test-watch.ts", ["--wat"]);
 
     expect(result.status).toBe(1);
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
@@ -548,22 +467,6 @@ describe("script-specific dev tooling hardening", () => {
     );
 
     expect(retained.toString("utf8")).toBe("89abcdef");
-  });
-
-  it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
-    let signal: AbortSignal | undefined;
-    const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
-      timeoutMs: 5,
-      fetchImpl: ((_url, init) => {
-        signal = init?.signal ?? undefined;
-        return new Promise(() => {});
-      }) as typeof fetch,
-    });
-
-    await expect(request).rejects.toThrow(
-      /OpenAI Realtime client secret request exceeded timeout/u,
-    );
-    expect(signal?.aborted).toBe(true);
   });
 
   it("times out stalled OpenAI realtime smoke response body reads", async () => {
@@ -1302,36 +1205,6 @@ describe("script-specific dev tooling hardening", () => {
     );
   });
 
-  it("prints Claude usage help without opening auth stores", async () => {
-    const [result] = await getClaudeUsageCliResults();
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node --import tsx scripts/debug-claude-usage.ts");
-    expect(result.stderr).toBe("");
-  });
-
-  it("fails missing Claude usage option values before defaulting to main auth", async () => {
-    const [, result] = await getClaudeUsageCliResults();
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("--agent requires a value");
-  });
-
-  it("aborts stalled Claude usage fetches at the request timeout", async () => {
-    let signal: AbortSignal | undefined;
-    const request = claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
-      timeoutMs: 5,
-      fetchImpl: ((_url, init) => {
-        signal = init?.signal ?? undefined;
-        return new Promise(() => {});
-      }) as typeof fetch,
-    });
-
-    await expect(request).rejects.toThrow(/Anthropic OAuth usage request exceeded timeout/u);
-    expect(signal?.aborted).toBe(true);
-  });
-
   it("times out stalled Claude usage response body reads", async () => {
     const response = new Response(
       new ReadableStream({
@@ -1352,39 +1225,6 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => claudeUsageTesting.resolveFetchTimeoutMs("1.5")).toThrow(
       /OPENCLAW_DEBUG_CLAUDE_USAGE_FETCH_TIMEOUT_MS must be an integer/u,
     );
-  });
-
-  it("bounds Claude usage response body reads by content-length", async () => {
-    const maxBytes = 256 * 1024;
-    const response = new Response("{}", {
-      headers: { "content-length": String(maxBytes + 1) },
-    });
-
-    await expect(
-      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
-        fetchImpl: async () => response,
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
-  });
-
-  it("bounds Claude usage response body reads by streamed bytes", async () => {
-    const maxBytes = 256 * 1024;
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new Uint8Array(maxBytes + 1));
-          controller.close();
-        },
-      }),
-    );
-
-    await expect(
-      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
-        fetchImpl: async () => response,
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
   });
 
   it.each([

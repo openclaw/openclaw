@@ -1,12 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
+import type {
+  WorkerOperationContext,
+  WorkerWriteOperationContext,
+} from "../state/worker-operation-registry.js";
 import * as deviceAuth from "./device-auth-store.kernel.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 function read<Input>(
-  operation: (db: DatabaseSync, input: Input) => deviceAuth.DeviceAuthTokenObservation,
+  operation: (db: EngineConnection, input: Input) => deviceAuth.DeviceAuthTokenObservation,
 ) {
   return (input: Input & { readOnly: boolean }, { open, stateOptions }: WorkerOperationContext) =>
     input.readOnly
@@ -17,21 +18,13 @@ function read<Input>(
       : operation(open().db, input);
 }
 
-function write<Input, Output>(operation: (db: DatabaseSync, input: Input) => Output) {
-  return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = operation(db, input);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        return result;
-      },
-      { database: open(), ...stateOptions() },
-    );
+function write<Input, Output>(operation: (db: EngineConnection, input: Input) => Output) {
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext): Output =>
+    writeAdmitted(({ db }) => operation(db, input));
 }
 
 export const deviceAuthWorkerOperations = {
-  "deviceAuth.prepare": (_input: undefined) => undefined,
+  "deviceAuth.prepare": (_input: undefined): void => undefined,
   "deviceAuth.read": read(deviceAuth.readDeviceAuthTokenObservationFromDatabase),
   "deviceAuth.readOrigin": read(deviceAuth.readOriginDeviceTokenObservationFromDatabase),
   "deviceAuth.list": (input: { deviceId: string }, { open }: WorkerOperationContext) =>

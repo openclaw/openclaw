@@ -16,7 +16,7 @@ import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plug
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readConfigPreflightSnapshot } from "./config-preflight-snapshot.js";
+import { createConfigPreflightSnapshotReader } from "./config-preflight-snapshot.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
@@ -195,7 +195,8 @@ exports.legacyConfigRules = [{
           });
         } else {
           await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-          await readConfigPreflightSnapshot({
+          await using snapshots = createConfigPreflightSnapshotReader();
+          await snapshots.read({
             purpose: "doctor",
             allowCurrentPluginMetadata: false,
             includePluginMetadata: true,

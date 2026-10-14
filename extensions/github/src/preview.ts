@@ -1,4 +1,5 @@
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asFiniteNumber,
   isRecord,
@@ -9,6 +10,7 @@ import {
   discardResponse,
   fetchGitHubApi,
   GITHUB_API_ORIGIN,
+  githubApiCredentialCacheScope,
   githubRestApiPath,
   readBoundedResponse,
   readGitHubJsonResponse,
@@ -34,6 +36,7 @@ const CO_AUTHOR_TRAILER =
 const SUCCESS_CACHE_MS = 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 200;
+const log = createSubsystemLogger("github/preview");
 
 export type ControlUiGitHubPreviewTarget = GitHubItemTarget;
 
@@ -43,16 +46,22 @@ export type ControlUiGitHubPreviewIdentity = {
   cacheScope: string;
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
+  stale?: true;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };
 
-type CacheEntry<T> = {
-  expiresAt: number;
-  promise: Promise<T>;
+type ConditionalPage = { etag?: string; value: unknown };
+type CachedPreview = {
+  preview: ControlUiGitHubPreview;
+  credentialScope: string;
+  pages: Map<string, ConditionalPage>;
 };
 
-const previewCache = new Map<string, CacheEntry<ControlUiGitHubPreview>>();
+const previewCaches = new WeakMap<
+  typeof fetch,
+  ReturnType<typeof createStaleWhileRevalidateCache<CachedPreview>>
+>();
 
 export const parseControlUiGitHubPreviewTarget = parseGitHubItemTarget;
 
@@ -258,15 +267,17 @@ async function fetchPreview(
   signal: AbortSignal,
   token?: string,
   identity?: ControlUiGitHubPreviewIdentity,
-): Promise<ControlUiGitHubPreview> {
-  const request = (url: string, beforeRedirect?: (url: URL) => Promise<void>) =>
+  previous?: CachedPreview,
+): Promise<CachedPreview> {
+  const startedAt = performance.now();
+  const request = (url: string, beforeRedirect?: (url: URL) => Promise<void>, etag?: string) =>
     fetchGitHubApi(
       url,
       fetchImpl,
       token,
       beforeRedirect,
       identity,
-      undefined,
+      etag,
       signal,
       undefined,
       GITHUB_API_ORIGIN,
@@ -289,8 +300,26 @@ async function fetchPreview(
         await assertPublicRepository(redirectedRepositoryUrl);
       }
     : undefined;
-  const readItem = async (url: string, maxBytes?: number) =>
-    readGitHubJsonResponse(await request(url, beforeRedirect), maxBytes);
+  // Validators live with the preview, so eviction, failed refresh, and credential
+  // rotation retire both together. Never reuse public-visibility admission.
+  const credentialScope = githubApiCredentialCacheScope(token);
+  const pages = new Map<string, ConditionalPage>();
+  const readItem = async (url: string, maxBytes?: number) => {
+    const cached =
+      previous?.credentialScope === credentialScope ? previous.pages.get(url) : undefined;
+    const response = await request(url, beforeRedirect, cached?.etag);
+    if (response.status === 304 && cached?.etag) {
+      await discardResponse(response);
+      pages.set(url, cached);
+      return cached.value;
+    }
+    const value = await readGitHubJsonResponse(response, maxBytes);
+    const etag = response.headers.get("etag");
+    if (etag) {
+      pages.set(url, { value, etag });
+    }
+    return value;
+  };
   // Both item reads use the same public admission and redirect guard. Commits
   // are optional decoration; their failure must not discard useful metadata.
   const item = readItem(itemUrl);
@@ -305,31 +334,38 @@ async function fetchPreview(
   if (!isRecord(parsed)) {
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
-  if (token) {
-    await assertPublicRepository(previewRepositoryApiUrl(target, parsed));
-  }
+  const metadataAt = performance.now();
   const { preview, avatarUrl } = parseControlUiGitHubPreviewResponse(target, parsed);
-  // Render only after rechecking the response's public repository.
+  const renderedAt = performance.now();
+  // Anonymous decoration can overlap visibility validation; delivery still awaits both.
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
     fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
     commits.then((value) => fetchCoAuthors(preview.login, value, fetchImpl, signal)),
+    token && assertPublicRepository(previewRepositoryApiUrl(target, parsed)),
   ]);
+  const finishedAt = performance.now();
+  if (finishedAt - startedAt >= 500) {
+    log.info("Slow GitHub preview load", {
+      metadataMs: Math.round(metadataAt - startedAt),
+      renderMs: Math.round(renderedAt - metadataAt),
+      decorationMs: Math.round(finishedAt - renderedAt),
+    });
+  }
   return {
-    ...preview,
-    ...(avatarDataUrl ? { avatarDataUrl } : {}),
-    ...(coAuthorFacts.coAuthorCount > 0
-      ? { coAuthors: coAuthorFacts.coAuthors, coAuthorCount: coAuthorFacts.coAuthorCount }
-      : {}),
+    pages,
+    credentialScope,
+    preview: {
+      ...preview,
+      ...(avatarDataUrl ? { avatarDataUrl } : {}),
+      ...(coAuthorFacts.coAuthorCount > 0
+        ? { coAuthors: coAuthorFacts.coAuthors, coAuthorCount: coAuthorFacts.coAuthorCount }
+        : {}),
+    },
   };
 }
 
 function cacheKey(target: ControlUiGitHubPreviewTarget, credentialScope: string): string {
   return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}\0${credentialScope}`;
-}
-
-function cachePreview(key: string, entry: CacheEntry<ControlUiGitHubPreview>): void {
-  previewCache.set(key, entry);
-  pruneMapToMaxSize(previewCache, CACHE_LIMIT);
 }
 
 export async function loadControlUiGitHubPreview(
@@ -338,65 +374,62 @@ export async function loadControlUiGitHubPreview(
   fetchImpl: typeof fetch = fetch,
   refresh = false,
 ): Promise<ControlUiGitHubPreview> {
-  await identity?.revalidate();
+  const startedAt = performance.now();
+  // Cache lookup has no external effect. Dispatch and delivery revalidate live credentials.
   identity?.assertSelected();
   const { token, cacheScope } = identity ?? { token: undefined, cacheScope: "anonymous" };
-  const key = cacheKey(target, cacheScope);
-  const now = Date.now();
-  let entry = previewCache.get(key);
-  if (entry && (refresh || entry.expiresAt <= now)) {
-    previewCache.delete(key);
-    entry = undefined;
-  }
-  const joined = entry !== undefined;
-  if (entry) {
-    previewCache.delete(key);
-    previewCache.set(key, entry);
-  } else {
-    // One upstream budget includes redirects, optional-auth retries and decoration;
-    // a slow avatar or commits page must not add another full request timeout.
-    const signal = AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS);
-    const request =
-      identity && !identity.optionalAuth
-        ? fetchPreview(target, fetchImpl, signal, token, identity)
-        : withOptionalGitHubAuth(token, (requestToken) =>
-            fetchPreview(target, fetchImpl, signal, requestToken, identity),
-          );
-    const pending: CacheEntry<ControlUiGitHubPreview> = {
-      expiresAt: now + SUCCESS_CACHE_MS,
-      promise: request.then(
-        (preview) => {
-          pending.expiresAt = Date.now() + SUCCESS_CACHE_MS;
-          return preview;
-        },
-        (error: unknown) => {
-          // Lifecycle failures belong to this caller; only upstream failures
-          // may suppress later requests from other readers of the credential.
-          if (previewCache.get(key) === pending) {
-            if (error instanceof ControlUiGitHubError) {
-              pending.expiresAt = Date.now() + FAILURE_CACHE_MS;
-            } else {
-              previewCache.delete(key);
-            }
-          }
-          throw error;
-        },
-      ),
-    };
-    entry = pending;
-    cachePreview(key, entry);
-  }
-  const preview = await entry.promise.catch((error: unknown) => {
-    // Only the initiating reader authorizes dispatch. If it loses authority,
-    // followers retry with their own live identity instead of inheriting failure.
-    if (joined && identity && !(error instanceof ControlUiGitHubError)) {
-      return loadControlUiGitHubPreview(target, identity, fetchImpl);
+  const key = cacheKey(target, `${cacheScope}\0${githubApiCredentialCacheScope(token)}`);
+  const previewCache =
+    previewCaches.get(fetchImpl) ??
+    createStaleWhileRevalidateCache<CachedPreview>({
+      maxEntries: CACHE_LIMIT,
+      ttlMs: SUCCESS_CACHE_MS,
+      errorTtlMs: (error) => (error instanceof ControlUiGitHubError ? FAILURE_CACHE_MS : 0),
+    });
+  previewCaches.set(fetchImpl, previewCache);
+  const read = () =>
+    previewCache.read(
+      key,
+      (previous) => {
+        // Refreshes retain credential checks before every dispatch, including
+        // redirects. A retired initiating identity fails this refresh; a current reader retries.
+        const signal = AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS);
+        return identity && !identity.optionalAuth
+          ? fetchPreview(target, fetchImpl, signal, token, identity, previous)
+          : withOptionalGitHubAuth(token, (requestToken) =>
+              fetchPreview(target, fetchImpl, signal, requestToken, identity, previous),
+            );
+      },
+      { refresh },
+    );
+  let result;
+  try {
+    result = await read();
+  } catch (error) {
+    // A coalesced cold load may lose its initiating caller. A current follower
+    // can retry after that failed load has been removed from the shared cache.
+    if (!identity || error instanceof ControlUiGitHubError) {
+      throw error;
     }
-    throw error;
-  });
+    await identity.revalidate();
+    identity.assertSelected();
+    result = await read();
+  }
+  const loadedAt = performance.now();
   // Transport is credential-scoped, but every reader must still hold its
   // current identity before cached or newly fetched metadata is delivered.
   await identity?.revalidate();
   identity?.assertSelected();
-  return preview;
+  const deliveredAt = performance.now();
+  if (deliveredAt - startedAt >= 500) {
+    log.info("Slow GitHub preview read", {
+      cacheWaitMs: Math.round(loadedAt - startedAt),
+      deliveryAuthMs: Math.round(deliveredAt - loadedAt),
+      stale: result.stale,
+      refresh,
+    });
+  }
+  return result.stale || identity?.stale
+    ? { ...result.value.preview, stale: true }
+    : result.value.preview;
 }

@@ -128,18 +128,16 @@ export async function compactNativeCliSession(params: {
         trigger: "manual",
         controlOperation: "compact",
         disableCliLiveSession: true,
-        // Compaction rewrites the persisted session behind any idle SDK query. Retire that query
-        // after the control turn so the next user turn reloads the compacted conversation.
+        // Queued execution retires the warm process before this control turn rewrites history.
+        // Also join any resources retained by the control turn before reporting completion.
         cleanupCliLiveSessionOnRunEnd: true,
         allowEmptyAssistantReplyAsSilent: true,
         abortSignal: params.compactParams.abortSignal,
       });
     };
-    if (params.runControlOperation) {
-      await params.runControlOperation(runControlOperation);
-    } else {
-      await runControlOperation();
-    }
+    await (params.runControlOperation
+      ? params.runControlOperation(runControlOperation)
+      : runControlOperation());
   } catch (err) {
     const signal = params.compactParams.abortSignal;
     if (signal?.aborted && (isAbortError(err) || err === signal.reason)) {
@@ -479,10 +477,7 @@ export async function compactEmbeddedAgentSessionDirect(
             });
           },
           classifyResult: ({ result, provider, model }) => {
-            if (result.ok) {
-              return null;
-            }
-            const reason = result.reason?.trim();
+            const reason = result.ok ? undefined : result.reason?.trim();
             if (!reason) {
               return null;
             }

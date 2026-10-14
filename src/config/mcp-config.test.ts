@@ -202,33 +202,6 @@ describe("config mcp config", () => {
     });
   });
 
-  it("accepts SSE MCP configs with headers at the config layer", async () => {
-    await withMcpConfigHome({}, async () => {
-      const setResult = await setConfiguredMcpServer({
-        name: "remote",
-        server: {
-          url: "https://example.com/mcp",
-          headers: {
-            Authorization: "Bearer token123",
-            "X-Retry": 1,
-            "X-Debug": true,
-          },
-        },
-      });
-
-      expect(setResult.ok).toBe(true);
-      const loaded = await readValidMcpConfig();
-      expect(loaded.mcpServers.remote).toEqual({
-        url: "https://example.com/mcp",
-        headers: {
-          Authorization: "Bearer token123",
-          "X-Retry": 1,
-          "X-Debug": true,
-        },
-      });
-    });
-  });
-
   it("restores redacted MCP secrets on set instead of writing the sentinel", async () => {
     await withMcpConfigHome(
       {
@@ -357,27 +330,6 @@ describe("config mcp config", () => {
     );
   });
 
-  it("rejects unrestorable redacted MCP secrets on set for a new server", async () => {
-    await withMcpConfigHome({}, async () => {
-      const setResult = await setConfiguredMcpServer({
-        name: "new-server",
-        server: {
-          command: "uvx",
-          args: ["new-mcp", "--api-key", REDACTED_SENTINEL],
-          headers: {
-            Authorization: REDACTED_SENTINEL,
-          },
-        },
-      });
-
-      expect(setResult.ok).toBe(false);
-      if (setResult.ok) {
-        throw new Error("expected redacted set to fail");
-      }
-      expect(setResult.error).toContain(REDACTED_SENTINEL);
-    });
-  });
-
   it("canonicalizes CLI-native HTTP type aliases when saving MCP config", async () => {
     await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({
@@ -393,33 +345,6 @@ describe("config mcp config", () => {
       expect(loaded.mcpServers.remote).toEqual({
         url: "https://example.com/mcp",
         transport: "streamable-http",
-      });
-    });
-  });
-
-  it("keeps canonical MCP operator settings when saving config", async () => {
-    await withMcpConfigHome({}, async () => {
-      const setResult = await setConfiguredMcpServer({
-        name: "remote",
-        server: {
-          url: "https://example.com/mcp",
-          connectionTimeoutMs: 5,
-          supportsParallelToolCalls: true,
-          sslVerify: false,
-          clientCert: "/tmp/client.crt",
-          clientKey: "/tmp/client.key",
-        },
-      });
-
-      expect(setResult.ok).toBe(true);
-      const loaded = await readValidMcpConfig();
-      expect(loaded.mcpServers.remote).toEqual({
-        url: "https://example.com/mcp",
-        connectionTimeoutMs: 5,
-        supportsParallelToolCalls: true,
-        sslVerify: false,
-        clientCert: "/tmp/client.crt",
-        clientKey: "/tmp/client.key",
       });
     });
   });

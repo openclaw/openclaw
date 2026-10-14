@@ -8,8 +8,11 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
-import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
@@ -30,8 +33,8 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import * as embeddedRuns from "./embedded-agent-runner/runs.js";
@@ -47,6 +50,7 @@ import {
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { compactToolOutputHint, toolSchemaDeclaration } from "./tool-schema-hints.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import { createSessionsChannelTestRegistry } from "./tools/sessions-channel-fixture.test-support.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import * as sessionsSendFollowup from "./tools/sessions-send-followup-custody.js";
@@ -68,47 +72,17 @@ const TEST_CONFIG = {
   },
 } as OpenClawConfig;
 
-const resolveSessionConversationStub: NonNullable<
-  ChannelMessagingAdapter["resolveSessionConversation"]
-> = ({ rawId }) => ({
-  id: rawId,
-});
-const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
-  kind,
-  id,
-  threadId,
-}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
-
 function installMessagingTestRegistry() {
   setActivePluginRegistry(
-    createTestRegistry(
-      (
-        [
-          { id: "discord", label: "Discord", chatTypes: ["direct", "channel", "thread"] },
-          { id: "whatsapp", label: "WhatsApp", chatTypes: ["direct", "group"] },
-        ] as const
-      ).map(({ id, label, chatTypes }) => ({
-        pluginId: id,
-        source: "test",
-        plugin: {
-          id,
-          meta: {
-            id,
-            label,
-            selectionLabel: label,
-            docsPath: `/channels/${id}`,
-            blurb: `${label} test stub.`,
-            ...(id === "whatsapp" ? { preferSessionLookupForAnnounceTarget: true } : {}),
-          },
-          capabilities: { chatTypes: [...chatTypes] },
-          messaging: {
-            resolveSessionConversation: resolveSessionConversationStub,
-            resolveSessionTarget: resolveSessionTargetStub,
-          },
-          config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
-        },
-      })),
-    ),
+    createSessionsChannelTestRegistry([
+      { id: "discord", label: "Discord", chatTypes: ["direct", "channel", "thread"] },
+      {
+        id: "whatsapp",
+        label: "WhatsApp",
+        chatTypes: ["direct", "group"],
+        preferSessionLookupForAnnounceTarget: true,
+      },
+    ]),
   );
 }
 
@@ -131,6 +105,13 @@ function getSessionTool(
     config: options?.config ?? TEST_CONFIG,
     callGateway: callGatewayMock,
   });
+}
+
+async function seedSession(sessionKey: string, sessionId = sessionKey) {
+  await upsertSessionEntryCore(
+    { agentId: parseAgentSessionKey(sessionKey)!.agentId, sessionKey },
+    { sessionId, updatedAt: 1 },
+  );
 }
 
 function cloneTestConfig() {
@@ -173,6 +154,8 @@ describe("sessions tools", () => {
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     installMessagingTestRegistry();
+    setRuntimeConfigSnapshot(TEST_CONFIG);
+    await seedSession("agent:main:main");
   });
   afterEach(() =>
     runQaGatewayFixture(
@@ -180,6 +163,7 @@ describe("sessions tools", () => {
       resetGatewayWorkAdmission,
       resetSystemEventsForTest,
       resetAdjustedParamsByToolCallIdForTests,
+      clearRuntimeConfigSnapshot,
     ),
   );
   afterAll(() =>
@@ -196,6 +180,7 @@ describe("sessions tools", () => {
 
   it("sessions_send notify queues next-turn context without starting or steering work", async () => {
     const targetKey = "agent:main:dashboard:notification-target";
+    await seedSession(targetKey);
     callGatewayMock.mockImplementation(async () => ({}));
     const tool = getSessionTool("sessions_send", { agentSessionKey: "agent:main:main" });
     const result = await tool.execute("notify", {
@@ -231,6 +216,7 @@ describe("sessions tools", () => {
 
   it("sessions_send steer refuses idle work and followup bypasses an active steering route", async () => {
     const targetKey = "agent:main:cron:followup:run:active";
+    await seedSession(targetKey, "active-target");
     const calls: GatewayCall[] = [];
     callGatewayMock.mockImplementation(async (request: GatewayCall) => {
       calls.push(request);
@@ -449,24 +435,25 @@ describe("sessions tools", () => {
     });
   });
 
-  it("sessions_history sets contentRedacted independently of contentTruncated", async () => {
+  it("sessions_history preserves credential text while reporting truncation", async () => {
     const secret = "sk-9876543210fedcba9876";
     mockGatewayResponses({
       "chat.history": { messages: [textAssistant(`${secret} ${"safe text ".repeat(420)}`)] },
     });
-    const result = await getSessionTool("sessions_history").execute("redacted", {
+    const result = await getSessionTool("sessions_history").execute("preserved", {
       sessionKey: "main",
     });
     expect(result.details).toMatchObject({
-      contentRedacted: true,
+      contentRedacted: false,
       contentTruncated: true,
       truncated: true,
     });
-    expect(JSON.stringify(result.details)).not.toContain(secret);
+    expect(JSON.stringify(result.details)).toContain(secret);
   });
 
   it("sessions_send does not redeliver a source reply when history lacks its message-tool result", async () => {
     const sessionKey = "agent:main:discord:group:source";
+    await seedSession(sessionKey, "source-session");
     const marker = "source reply delivered once";
     let waitObserved = false;
     const deliveredMessages: string[] = [];
@@ -630,6 +617,8 @@ describe("sessions tools", () => {
   ])(
     "returns an inline $name reply without starting a detached continuation",
     async ({ requesterKey, requesterChannel, targetKey }) => {
+      await seedSession(requesterKey);
+      await seedSession(targetKey);
       const calls: GatewayCall[] = [];
       callGatewayMock.mockImplementation(async (request: GatewayCall) => {
         calls.push(request);
@@ -716,6 +705,8 @@ describe("sessions tools", () => {
   ])(
     "rejects $name without durable-session fallback",
     async ({ key, rejects, deliveryMode, streaming, reason }) => {
+      await seedSession("agent:re-portal:main");
+      await seedSession(key, "caller-active-session");
       const queueMessage = activeRun(key, {
         rejects,
         streaming,
@@ -795,7 +786,7 @@ describe("sessions tools", () => {
         }
       });
     }
-    const queue = vi.spyOn(embeddedRuns, "queueEmbeddedAgentMessageWithOutcomeAsync");
+    const queue = vi.spyOn(embeddedRuns, "queueGuardedEmbeddedAgentMessageWithOutcomeAsync");
     const prepare = vi.spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup");
     try {
       if (rejection) {
@@ -824,13 +815,19 @@ describe("sessions tools", () => {
         delivery: { status: steered ? "skipped" : "pending" },
       });
       expect(queue).toHaveBeenCalledOnce();
-      expect(queue).toHaveBeenCalledWith(sessionId, expect.stringContaining("deps are ready"), {
-        steeringMode: "all",
-        debounceMs: 0,
-        deliveryTimeoutMs: 30_000,
-        waitForTranscriptCommit: false,
-        userTurnTranscriptRecorder: expect.any(Object),
-      });
+      expect(queue).toHaveBeenCalledWith(
+        sessionId,
+        expect.stringContaining("deps are ready"),
+        {
+          steeringMode: "all",
+          debounceMs: 0,
+          deliveryTimeoutMs: 30_000,
+          waitForTranscriptCommit: false,
+          onQueueAccepted: expect.any(Function),
+          userTurnTranscriptRecorder: expect.any(Object),
+        },
+        expect.any(Function),
+      );
       if (steered) {
         expect(queueMessage).toHaveBeenCalledOnce();
       }
@@ -862,6 +859,8 @@ describe("sessions tools", () => {
   it("sessions_send keeps ordinary active session targets on the gateway agent path", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const ordinaryActiveKey = "agent:main:main";
+    await seedSession("agent:re-portal:main");
+    await seedSession(ordinaryActiveKey, "ordinary-active-session");
     const queueMessage = activeRun(ordinaryActiveKey, {
       sessionId: "ordinary-active-session",
       sourceReplyDeliveryMode: "automatic",
@@ -901,7 +900,7 @@ describe("sessions tools", () => {
   it("sessions_send falls back from stranded cron run key to durable cron parent", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const requesterKey = "agent:main:cron:source-job:run:source-run";
-    const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
+    const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:stranded";
     const durableCronCallerKey = "agent:leasing-ops:cron:monthly-utility";
     const dir = sessionDirs.make();
     const parentScope = {

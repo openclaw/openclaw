@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answerInitialize,
@@ -43,8 +47,8 @@ import {
 } from "./shared-client.js";
 import { createInferenceReadyClientHarness } from "./test-support.js";
 
-vi.mock("./desktop-generation.js", () => ({
-  isCodexDesktopGenerationCurrent: () => false,
+vi.mock("./desktop-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./desktop-generation.js")>()),
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 
@@ -189,12 +193,14 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
 
 describe("Codex runtime startup resource lifetime", () => {
   setupRunAttemptTestHooks();
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   it.each(["capture-failed", "abort", "cleanup", "replacement"] as const)(
     "releases allocated runtime owners once when native monitor setup ends with %s",
     async (ending) => {
       const harness = createStartedThreadHarness();
       const params = createTestParams();
+      setRuntimeConfigSnapshot(params.config ?? {});
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
       params.sandbox = createSandboxContext({});

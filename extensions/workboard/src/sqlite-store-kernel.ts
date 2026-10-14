@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   normalizeWorkboardSessionsBoardSpec,
   type WorkboardCard,
@@ -6,14 +5,18 @@ import {
   type WorkboardExecution,
 } from "@openclaw/workboard-contract";
 import {
+  runEngineStoreReadSnapshot,
+  type DatabaseEngineInput,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
-  runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { definedFields } from "../record-fields.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -29,7 +32,6 @@ import type {
 } from "./persistence-types.js";
 import {
   blobToBase64,
-  definedFields,
   jsonValue,
   loadCardChildRows,
   numberValue,
@@ -42,7 +44,8 @@ import {
   type Row,
   type WorkboardCardDatabase,
 } from "./sqlite-store-records.js";
-import { createWorkboardDatabase } from "./sqlite-store-schema.js";
+import { createWorkboardDatabase, type WorkboardSqlConnection } from "./sqlite-store-schema.js";
+import { readSessionLinkedCardIds } from "./sqlite-store-session-links.js";
 import { WorkboardSqliteSessionsBoardStore } from "./sqlite-store-sessions-board.js";
 import { bindNull, insertCard, prepareWorkboardUpsert } from "./sqlite-store-write.js";
 import {
@@ -58,12 +61,22 @@ type SyncStore<T> = {
 export type WorkboardSqliteKernel = {
   [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
 } & {
-  dataVersion(this: void): number;
   close(this: void): void;
+  withWriteTransaction<T>(
+    operation: () => T,
+    options?: Parameters<typeof runSqliteImmediateTransactionSync>[2],
+  ): T;
 };
 
+function keyedEntries<T>(rows: Iterable<Row>, read: (row: Row) => T) {
+  return Array.from(rows, (row) => ({
+    key: requiredString(row, "id"),
+    value: read(row),
+  }));
+}
+
 class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly db: WorkboardSqlConnection) {}
 
   private matchesUpdatedAt(key: string, expectedUpdatedAt: number): boolean {
     const current = executeSqliteQueryTakeFirstSync(
@@ -255,9 +268,9 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   }
 
   entries(scope?: WorkboardCardReadScope): Array<{ key: string; value: PersistedWorkboardCard }> {
-    // Selection and hydration must agree if another connection changes a parent or sibling.
-    return scope?.kind === "worker-context"
-      ? runSqliteDeferredTransactionSync(this.db, () => this.readEntries(scope))
+    // Keep lightweight selection and full hydration in one consistent snapshot.
+    return scope?.kind === "worker-context" || scope?.kind === "session-links"
+      ? runEngineStoreReadSnapshot(this.db, () => this.readEntries(scope))
       : this.readEntries(scope);
   }
 
@@ -283,6 +296,12 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
           ]),
         ]),
       );
+    } else if (scope?.kind === "session-links") {
+      const ids = readSessionLinkedCardIds(this.db, scope);
+      if (ids.length === 0) {
+        return [];
+      }
+      query = query.where("id", "in", sqliteStringSet(ids));
     } else if (scope?.kind === "worker-context") {
       const ids = this.workerContextCardIds(scope);
       if (ids.length === 0) {
@@ -446,7 +465,7 @@ function readBoard(row: Row): PersistedWorkboardBoard {
 class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<PersistedWorkboardBoard>> {
   private readonly rowsQuery;
 
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: WorkboardSqlConnection) {
     this.rowsQuery = getNodeSqliteKysely<{ workboard_boards: Row }>(db)
       .selectFrom("workboard_boards")
       .selectAll();
@@ -519,12 +538,9 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
   }
 
   entries(): Array<{ key: string; value: PersistedWorkboardBoard }> {
-    return Array.from(
+    return keyedEntries(
       iterateSqliteQuerySync(this.db, this.rowsQuery.orderBy("id", "asc")),
-      (row) => ({
-        key: requiredString(row, "id"),
-        value: readBoard(row),
-      }),
+      readBoard,
     );
   }
 }
@@ -561,7 +577,7 @@ function readSubscription(row: Row): PersistedWorkboardNotificationSubscription 
 class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptionStore> {
   private readonly rowsQuery;
 
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: WorkboardSqlConnection) {
     this.rowsQuery = getNodeSqliteKysely<{ workboard_notification_subscriptions: Row }>(db)
       .selectFrom("workboard_notification_subscriptions")
       .selectAll();
@@ -611,12 +627,9 @@ class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptio
     if (options.cardId) {
       query = query.where("card_id", "=", options.cardId);
     }
-    return Array.from(
+    return keyedEntries(
       iterateSqliteQuerySync(this.db, query.orderBy("created_at", "asc").orderBy("id", "asc")),
-      (row) => ({
-        key: requiredString(row, "id"),
-        value: readSubscription(row),
-      }),
+      readSubscription,
     );
   }
 }
@@ -634,7 +647,7 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 > {
   private readonly rowsQuery;
 
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: WorkboardSqlConnection) {
     this.rowsQuery = getNodeSqliteKysely<{
       workboard_card_attachments: Row;
       workboard_attachment_blobs: Row;
@@ -676,15 +689,12 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 
   entries(): Array<{ key: string; value: PersistedWorkboardAttachment }> {
     // Decode each BLOB before advancing so the list never retains a second full raw payload copy.
-    return Array.from(
+    return keyedEntries(
       iterateSqliteQuerySync(
         this.db,
         this.rowsQuery.orderBy("a.created_at", "asc").orderBy("a.id", "asc"),
       ),
-      (row) => ({
-        key: requiredString(row, "id"),
-        value: readPersistedAttachment(row),
-      }),
+      readPersistedAttachment,
     );
   }
 }
@@ -692,8 +702,9 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 export function createWorkboardSqliteKernel(
   dbPath: string,
   retainClose?: (close: () => void) => void,
+  postgresInput?: DatabaseEngineInput,
 ): WorkboardSqliteKernel {
-  const { db, close } = createWorkboardDatabase(dbPath, retainClose);
+  const { db, close } = createWorkboardDatabase(dbPath, retainClose, postgresInput);
   const boards = new WorkboardSqliteBoardStore(db);
   return {
     cards: new WorkboardSqliteCardStore(db),
@@ -701,10 +712,8 @@ export function createWorkboardSqliteKernel(
     sessionsBoard: new WorkboardSqliteSessionsBoardStore(db, boards),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
-    // This connection-local primitive changes only after another connection commits.
-    dataVersion: () =>
-      // SAFETY: PRAGMA data_version always returns one row on an open connection.
-      requiredNumber(db.prepare("PRAGMA data_version").get() as Row, "data_version"),
     close,
+    withWriteTransaction: (operation, options) =>
+      runSqliteImmediateTransactionSync(db, operation, options),
   };
 }

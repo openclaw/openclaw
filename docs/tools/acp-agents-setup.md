@@ -38,7 +38,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `droid`      | [Factory Droid](https://www.factory.ai)                                                                |
 | `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                    |
 | `gemini`     | [Gemini CLI](https://github.com/google-gemini/gemini-cli)                                              |
-| `grok-build` | Grok Build (`grok agent stdio`)                                                                        |
+| `grok-build` | [Grok Build](https://docs.x.ai/build/overview) (`grok agent stdio`)                                    |
 | `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                     |
 | `kilocode`   | [Kilocode](https://kilocode.ai)                                                                        |
 | `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                     |
@@ -57,6 +57,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 `factory-droid` and `factorydroid` also resolve to the built-in `droid` adapter.
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
+`grok-build` is an ACPX agent target, not the xAI model id `xai/grok-build-0.1`. Use `agentId: "grok-build"` to launch the Grok Build CLI through ACP; use `xai/grok-build-0.1` only when selecting that model on OpenClaw's xAI provider route.
 If your local Cursor install still exposes ACP as `agent acp`, override the `cursor` agent command in your acpx config instead of changing the built-in default.
 
 Direct acpx CLI usage can also target arbitrary adapters via `--agent <command>`, but that raw escape hatch is an acpx CLI feature (not the normal OpenClaw `agentId` path).
@@ -159,12 +160,14 @@ Core ACP baseline:
       "cursor",
       "droid",
       "gemini",
+      "grok-build",
       "iflow",
       "kilocode",
       "kimi",
       "kiro",
       "openclaw",
       "opencode",
+      "pool",
       "qwen",
     ],
     stream: {
@@ -204,7 +207,7 @@ ACPX isolates bare session names by OpenClaw owner. If a session reports
 `openclaw doctor --fix`, then restart. Doctor uses the same service workspace
 as the Gateway; ACPX's default state directory is `<service workspace>/state`.
 
-The repair requires one current, unambiguous canonical owner claim with matching
+The repair requires one current, unambiguous stored owner claim with matching
 backend identifiers. It preserves the raw history, event-log references, upstream
 session IDs, timestamps, options, and usage. Persistent record names move to an
 owner-qualified resource; existing oneshot physical IDs and histories remain intact.
@@ -214,7 +217,7 @@ session does not bypass this repair.
 
 This is an offline, crash-recoverable migration with atomic destination-file
 publication. Files and SQLite are not one atomic transaction. Interrupted repairs
-can be rerun: Doctor checks the existing destination and canonical claim before
+can be rerun: Doctor checks the existing destination and stored owner claim before
 finishing the metadata update and archiving the old persistent record.
 
 ## Plugin setup for acpx backend
@@ -442,7 +445,7 @@ See [Config hot reload](/gateway/configuration/hot-reload) for other reload mode
 <Warning>
 OpenClaw defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode`.
 
-If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
+If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions deny restricted actions instead of crashing.
 </Warning>
 
 ## Related
