@@ -431,7 +431,8 @@ describe("sidebar projection memo", () => {
       status: "running",
     });
     const { sidebar, gateway, row, sessions } = await mount([target, other]);
-    const spinner = (key: string) => row(key)?.querySelector('[aria-label="Active run"]');
+    const spinner = (sessionKey: string) =>
+      row(sessionKey)?.querySelector('[aria-label="Active run"]');
     expect(spinner(target.key)).not.toBeNull();
     gateway.publishEvent("agent", {
       sessionKey: target.key,
