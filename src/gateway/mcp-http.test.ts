@@ -295,6 +295,7 @@ async function createCliGrant(
     runtimeOwnerToken: runtime.ownerToken,
     admittedRunContext: options.admittedRunContext ?? (await activeAdmission(runId)),
     ...options,
+    toolPolicyConfig: options.toolPolicyConfig ?? getRuntimeConfigMock(),
   });
   const captureParams = { token: grant.token, runtimeOwnerToken: runtime.ownerToken, captureKey };
   const capture = activateMcpLoopbackClientGrantCapture(captureParams);

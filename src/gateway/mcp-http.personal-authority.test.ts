@@ -76,6 +76,7 @@ it.each([false, true])(
           bind: () => {},
           invoke,
         };
+        const config = { session: { mainKey: "main" } };
         const context = buildCliMcpGrantContext({
           run: {
             sessionId: "library-session",
@@ -88,13 +89,13 @@ it.each([false, true])(
             runId: "run-library-grant",
             skillLibraryAuthoring,
           },
-          config: {},
+          config,
           requireExplicitMessageTarget: false,
           agentId: "main",
           modelProvider: "openai",
           modelId: "gpt-5.6-luna",
         });
-        const preparedGrant = finalizeCliMcpGrant(context, undefined, false);
+        const preparedGrant = finalizeCliMcpGrant(context, undefined, false, { config });
         if (!preparedGrant) {
           throw new Error("Expected prepared CLI grant");
         }

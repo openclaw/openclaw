@@ -20,7 +20,7 @@ import type {
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-import { getRuntimeConfig } from "../config/io.js";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
@@ -305,7 +305,7 @@ export function mintMcpLoopbackClientGrant(
     token: crypto.randomBytes(32).toString("hex"),
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
-    toolPolicyConfig: captureRuntimeConfig(params.toolPolicyConfig ?? getRuntimeConfig()),
+    toolPolicyConfig: captureRuntimeConfig(params.toolPolicyConfig ?? readRuntimeConfig()),
     sessionEventSourcePolicy: params.sessionEventSourcePolicy,
     admittedRunContext: params.admittedRunContext,
     personalToolParticipants: params.personalToolParticipants,
