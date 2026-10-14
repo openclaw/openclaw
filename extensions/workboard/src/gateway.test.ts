@@ -968,6 +968,22 @@ describe("workboard gateway methods", () => {
     });
   });
 
+  it("preserves the actionable claim refusal in the direct RPC error shape", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const { api, invoke } = createGatewayMethodCapture();
+    registerWorkboardGatewayMethods({ api, store });
+    const parent = await store.create({ title: "Completed parent", status: "done" });
+    const child = await store.create({ title: "Blocked child", parents: [parent.id] });
+    const claimed = await store.claim(child.id, { ownerId: "main" });
+    await store.block(child.id, { token: claimed.token, reason: "Waiting for review" });
+
+    const respond = await invoke("workboard.cards.claim", { id: child.id, ownerId: "main" });
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "workboard_error",
+      message: "card is blocked; use workboard_unblock before claiming.",
+    });
+  });
+
   it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {
     const { api, methods, invoke } = createGatewayMethodCapture();
 
