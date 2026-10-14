@@ -20,7 +20,13 @@ import {
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { setCanonicalUserProfileDisplayName } from "../state/user-profile-writes.js";
+import {
+  linkEmail,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
@@ -307,7 +313,7 @@ describe("restart recovery authenticated operator source", () => {
       });
     },
   );
-  it.each(["signal", "assertion", "new policy"] as const)(
+  it.each(["signal", "assertion", "new policy", "github binding"] as const)(
     "resumes the original access grant once and fences retained recovery through %s",
     async (revocation) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -325,8 +331,10 @@ describe("restart recovery authenticated operator source", () => {
             }
           },
         };
-        const resume = vi.fn<NonNullable<PluginGatewayAccessPolicy["resume"]>>(() =>
-          permitted ? grant : undefined,
+        const resume = vi.fn<NonNullable<PluginGatewayAccessPolicy["resume"]>>(({ profile }) =>
+          permitted && (revocation !== "github binding" || profile.githubAccountIds?.includes(42))
+            ? grant
+            : undefined,
         );
         const registry = createEmptyPluginRegistry();
         registry.plugins.push(createPluginRecord({ id: original.pluginId }));
@@ -345,6 +353,17 @@ describe("restart recovery authenticated operator source", () => {
         stageActivePluginRegistry(registry, null, "default");
         try {
           const profile = ensureProfileForEmail("access@example.test");
+          if (revocation === "github binding") {
+            syncGitHubIdentity({
+              identity: { accountId: 41, login: "primary" },
+              authenticationAlias: { kind: "email", email: "access@example.test" },
+            });
+            syncGitHubIdentity({
+              identity: { accountId: 42, login: "secondary" },
+              authenticationAlias: { kind: "email", email: "secondary@example.test" },
+            });
+            linkEmail("secondary@example.test", profile.id);
+          }
           const fixture = await createOperatorRecoveryFixture({
             stateDir: state.stateDir,
             context: createContext(),
@@ -371,6 +390,13 @@ describe("restart recovery authenticated operator source", () => {
               expect(restored.authority.signal?.aborted).toBe(true);
             } else if (revocation === "assertion") {
               permitted = false;
+            } else if (revocation === "github binding") {
+              const { db } = openOpenClawStateDatabase();
+              // Seed a removed secondary identity, then publish through the profile writer.
+              db.prepare(
+                "DELETE FROM user_profile_identities WHERE provider = 'github' AND subject = ?",
+              ).run("42");
+              await setCanonicalUserProfileDisplayName(profile.id, "Updated display");
             } else {
               additionalApplicable = true;
             }

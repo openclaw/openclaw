@@ -212,16 +212,19 @@ export async function restoreGatewayOperatorRecovery(params: {
     assertSourcePolicy();
     identity = await prepareUserProfileIdentity(snapshot.profileId);
     const profileIdentity = identity;
+    let githubAccountIds: readonly number[] | undefined;
     const assertFacts = () => {
       const cfg = assertSourcePolicy();
       const profile = profileIdentity.readCurrentFacts(snapshot.aliasBindingIds).profile;
       if (
         profile.profileId !== snapshot.profileId ||
         profile.assignedRole !== snapshot.assignedRole ||
-        (profile.githubLogin ?? null) !== snapshot.githubLogin
+        (profile.githubLogin ?? null) !== snapshot.githubLogin ||
+        githubAccountIds?.some((accountId) => !profile.githubAccountIds?.includes(accountId))
       ) {
         throw new Error("Restart recovery operator identity changed.");
       }
+      githubAccountIds ??= profile.githubAccountIds ?? [];
       return { cfg, profile };
     };
     let accessAuthority: ReturnType<typeof resumeGatewayOperatorAccessGrant>;
