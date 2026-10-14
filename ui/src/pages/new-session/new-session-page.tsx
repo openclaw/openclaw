@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
@@ -51,10 +51,13 @@ export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
 
 const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
 
-function DraftBlock(props: { page: () => NewSessionPageOwner; revision: () => object }) {
+function DraftBlock(props: {
+  page: () => NewSessionPageOwner;
+  revision: () => object;
+  options: () => ReturnType<NewSessionPageOwner["composerOptions"]>;
+}) {
   const submission = () => props.page().submission;
   const place = () => props.page().place;
-  const options = () => props.page().composerOptions();
   const permissionControl = (
     <Show when={!catalog.isTarget(props.page().data)}>
       <ChatPermissionPicker
@@ -165,7 +168,11 @@ function DraftBlock(props: { page: () => NewSessionPageOwner; revision: () => ob
         />
       </Show>
       <NewSessionComposer
-        options={Object.assign(options(), { permissionControl, dictationStatus, voiceControl })}
+        options={Object.assign(props.options(), {
+          permissionControl,
+          dictationStatus,
+          voiceControl,
+        })}
       />
       <Show when={!catalog.isTarget(props.page().data)}>
         <NewSessionIncognitoNotice active={submission().visibility === "incognito"} />
@@ -184,6 +191,8 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     revision();
     return owner;
   };
+  // Both draft presentations share one preparation per revision, not one per binding.
+  const options = createMemo(() => page().composerOptions());
   createEffect(revision, () =>
     untrack(() => {
       owner.updated();
@@ -265,12 +274,12 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
                 <LitContent
                   value={renderWelcomeState({
                     ...page().welcomeOptions(),
-                    composer: solidContent(DraftBlock, { page, revision }),
+                    composer: solidContent(DraftBlock, { page, revision, options }),
                   })}
                 />
               }
             >
-              <DraftBlock page={page} revision={revision} />
+              <DraftBlock page={page} revision={revision} options={options} />
             </Show>
           )}
           onOpenImage={owner.setImageLightbox}
