@@ -348,7 +348,6 @@ export class SqliteDatabaseAdmissionRegistry {
   ): SqliteDatabaseAdmissions {
     if (!identities && !cursor) {
       this.publish();
-      return [...this.published.values()];
     }
     if (!identities && cursor?.revision === this.revision) {
       return [];
@@ -386,7 +385,6 @@ export class SqliteDatabaseAdmissionRegistry {
       }
       let changed = false;
       if (record && isSqliteDatabaseAdmissionRetired(record)) {
-        this.records.delete(record.identity);
         record = undefined;
       }
       if (!record) {
@@ -412,9 +410,10 @@ export class SqliteDatabaseAdmissionRegistry {
           continue;
         }
         // The host selects one shared incarnation for concurrent discoveries of the same key.
+        const previous = record.writeScopes.get(key);
         if (
-          record.writeScopes.get(key)?.identity === revision.identity ||
-          (threadId === 0 && record.writeScopes.has(key))
+          previous?.identity === revision.identity ||
+          (threadId === 0 && previous && Atomics.load(new Int32Array(previous.state), 1) === 0)
         ) {
           continue;
         }
