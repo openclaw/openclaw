@@ -917,6 +917,10 @@ that generated cohort. Labels alone do not trigger extra CI runs. Main and manua
 validation keep their normal coverage.
 
 The existing known-main-red allowance reads the latest completed hourly main run directly from GitHub.
+Within one failure report, attribution and the allowance share that scheduled run
+inventory, its attempt job pages, and downloaded logs. Each report starts a fresh
+observation; PR identity, current main, ancestry, and changed-subject checks remain
+separate admission reads.
 A supported Node Vitest assertion, compiler diagnostic, or hosted lint diagnostic
 is advisory only when its file and complete signature match main, and the PR
 changes neither the file nor its direct subjects. Subject ownership conservatively
