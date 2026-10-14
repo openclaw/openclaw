@@ -90,7 +90,9 @@ it.each([
   ];
   const group = createMessageGroup(messages[0]!.message, "assistant", { messages });
   const onReply = vi.fn();
-  const view = mountSolid(() => <MessageGroup group={group} options={{ onReply }} />);
+  const view = mountSolid(() => (
+    <MessageGroup group={group} options={{ showReasoning: false, onReply }} />
+  ));
   flush();
   expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
   const replies = view.container.querySelectorAll<HTMLButtonElement>(
