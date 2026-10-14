@@ -48,7 +48,7 @@ describe("file path tooltip", () => {
     await userEvent.keyboard("{Escape}");
     await page.elementLocator(anchor()).hover();
     await expect.element(copyButton()).toBeVisible();
-    expect(card()?.textContent).not.toContain("Copied!");
+    await expect.poll(() => card()?.textContent?.trim()).toBe(filePath);
     await page.elementLocator(anchor()).click();
     expect(open).toHaveBeenCalledOnce();
     expect(card()).toBeNull();

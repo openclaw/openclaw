@@ -14,7 +14,14 @@ import type { PluginKind } from "./plugin-kind.types.js";
 /** UI hint metadata for plugin config schema fields. */
 export type PluginConfigUiHint = Pick<
   ConfigUiHint,
-  "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder" | "presentation"
+  | "label"
+  | "help"
+  | "tags"
+  | "advanced"
+  | "sensitive"
+  | "placeholder"
+  | "presentation"
+  | "multiline"
 >;
 
 /** Static, portable palettes; no plugin JavaScript or native UI activation is required. */

@@ -318,6 +318,9 @@ publication are not detected. Its full fingerprint is retained for recovery;
 resumed publication and repair still verify package contents. This optimization
 applies when the installed updater contains it; older updaters keep their checks.
 
+pnpm updates use the installation's own pnpm home and bin directory, even when
+macOS service PATH excludes pnpm. The installed updater must contain this fix.
+
 Native pnpm updates also relocate pnpm 12 launcher paths before publishing them.
 After activation, unresolved launcher targets produce a warning with repair
 guidance without rolling back the updated package. These protections require
@@ -716,6 +719,12 @@ its original recovery owner; the independent helper cannot authorize publication
 or rollback for it. Do not rewrite identities or delete recovery artifacts.
 
 ### Unfinished publication and rollback
+
+`openclaw update` automatically settles a `publication-complete` operation when
+the live candidate passes the same verification as repair, even when the update
+lease is unchanged. A dry run previews settlement without changing recovery
+artifacts. With an unchanged lease, other unfinished phases still require explicit
+repair.
 
 For an external-helper operation stuck at `prepared`, `publishing`, or
 `publication-complete` whose live package already serves the candidate, run

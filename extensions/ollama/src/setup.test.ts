@@ -179,7 +179,6 @@ describe("ollama setup", () => {
       "minimax-m2.7:cloud",
       "minimax-m3:cloud",
       "kimi-k3:cloud",
-      "glm-5.1:cloud",
       "glm-5.2:cloud",
       "llama3:8b",
     ]);

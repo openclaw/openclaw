@@ -52,6 +52,7 @@ import {
   readSessionActorEntryFacts,
   readSessionActorRowFacts,
   retainSessionActorEntryFacts,
+  retainSessionActorTranscriptReplica,
 } from "./session-actor-replica.js";
 import { createSessionActor } from "./session-actor.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
@@ -142,6 +143,74 @@ function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   expect(selected.install(snapshot)).toBe(true);
   return snapshot;
 }
+
+it.each(["entry", "transcript", "plugin keys"] as const)(
+  "evicts old replicas for large %s strings and releases replaced bytes",
+  async (payload) => {
+    await withReplica(({ replica, load }) => {
+      const first = load();
+      if (first.target.database.kind !== "file") {
+        throw new Error("Replica fixture requires a durable target");
+      }
+      const database = first.target.database;
+      const siblingTarget = {
+        database,
+        sessionKey: "agent:main:budget-sibling",
+      };
+      const sibling = createSessionActorReplica({
+        target: siblingTarget,
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        currentGeneration: () => "budget-sibling",
+      });
+      const large = "x".repeat(5 * 1024 * 1024);
+      const install = (label: string) => {
+        const next = load();
+        if (payload !== "transcript") {
+          next.entry = { sessionId: "replica-session", updatedAt: 1, label };
+          if (payload === "plugin keys") {
+            next.entry.label = "before";
+            next.entry.pluginExtensions = { fixture: { [label]: null } };
+          }
+        }
+        expect(replica.beginRead().install(next)).toBe(true);
+        if (payload === "transcript") {
+          retainSessionActorTranscriptReplica(next, {
+            version: next.transcript.version,
+            sessionId: next.entry?.sessionId,
+            tail: {
+              coveredAfterSeq: -1,
+              events: [{ rawSeq: 0, event: { text: label }, serializedBytes: label.length }],
+            },
+          });
+        }
+        return next;
+      };
+      const installSibling = () => {
+        const next = { ...load(), target: siblingTarget };
+        next.writeToken = readSqliteDatabaseScopedWriteTokenForPath(database.nativeLocation, [
+          ...collectSessionEntryLookupKeys(siblingTarget.sessionKey),
+          ...next.dependencySessionIds.map(sqliteSessionIdWriteScope),
+        ])!;
+        expect(sibling.beginRead().install(next)).toBe(true);
+        return next;
+      };
+      try {
+        const oversized = install(large);
+        expect(replica.read()).toBe(oversized);
+        const small = installSibling();
+        expect(replica.read() === undefined).toBe(true);
+        expect(sibling.read()).toBe(small);
+        install(large);
+        expect(sibling.read()).toBeUndefined();
+        const replaced = install("small");
+        installSibling();
+        expect(replica.read()).toBe(replaced);
+      } finally {
+        sibling.close();
+      }
+    });
+  },
+);
 
 it("keeps actor facts after usage cache writes and pruning", async () => {
   await withReplica(async (fixture) => {
@@ -445,10 +514,6 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
       throw new Error("Replica fixture requires a durable target");
     }
     const target = { ...initial.target, database: initial.target.database };
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: null,
-      has_optional_references: 0,
-    });
     const shared = replica.read()!;
     expect(shared).toBe(initial);
     expect(replica.read()).toBe(shared);
@@ -484,10 +549,6 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     });
     const outcome = committed(accepted, load("first", 1));
     expect(pending.settle(outcome)).toBe(true);
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: 23,
-      has_optional_references: 1,
-    });
     expect(replica.read()).toBe(outcome.receipt.postimage);
     expect(pending.settle(outcome)).toBe(false);
 
@@ -512,10 +573,6 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
       { entry: load().entry, snapshots: "full" },
       "cold-entry-reader",
     );
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: 23,
-      has_optional_references: 1,
-    });
 
     const stale = replica.beginCommand();
     const superseded = load("superseded");

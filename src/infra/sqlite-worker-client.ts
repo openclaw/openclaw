@@ -100,7 +100,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
       const inCaller = admission || createAdmission ? AsyncLocalStorage.snapshot() : undefined;
       try {
         const commandType = command.type;
-        requestClass = classifyWorkerRequest(commandType);
+        requestClass = classifyWorkerRequest(commandType, command.input);
         assertCurrent = admission && inCaller ? () => inCaller(admission, commandType) : undefined;
         assertCurrent?.();
         // The queued guard and wire command must observe the same captured type.

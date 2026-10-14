@@ -27,8 +27,10 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
+  isReleaseGhServerError,
   MAX_RELEASE_ARTIFACT_BYTES,
   planReleaseChildRerun,
+  readReleaseJobListing,
   releaseChildSpec,
   releaseChildSpecs,
   releaseGhRateLimitRetryAt,
@@ -281,7 +283,7 @@ function isUnknownAllowEscapeSequencesFlag(error) {
   );
 }
 
-async function execGhRead(args, options = {}) {
+async function execGhRead(args, { smallerPageFallback = false, ...options } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     const remaining =
       options.operationDeadline === undefined
@@ -295,6 +297,7 @@ async function execGhRead(args, options = {}) {
     } catch (error) {
       if (
         attempt === 4 ||
+        (smallerPageFallback && isReleaseGhServerError(error)) ||
         releaseGhRateLimitRetryAt(error) !== undefined ||
         classifyReleaseGhTransportError(error) !== "transient"
       ) {
@@ -1014,15 +1017,24 @@ export function createClient(repository, dependencies = {}) {
   const rerun = (runId, action) =>
     mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);
   const execute = dependencies.execCommand ?? execCommand;
-  const readJobs = async (path, options) => {
-    const output = await apiText(path, ".jobs[] | @json", [], options);
-    return output
-      ? output
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => JSON.parse(line))
-      : [];
-  };
+  const readJobs = (path, options) =>
+    readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+      const output = await apiText(
+        `${path}${path.includes("?") ? "&" : "?"}per_page=${perPage}`,
+        ".jobs[] | @json",
+        [],
+        {
+          ...options,
+          smallerPageFallback,
+        },
+      );
+      return output
+        ? output
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [];
+    });
   const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
     const sourceSha = plan.trustedWorkflow?.sha;
     return execute(
@@ -1065,7 +1077,7 @@ export function createClient(repository, dependencies = {}) {
     getAttemptJobs:
       dependencies.getAttemptJobs ??
       ((runId, runAttempt, options) =>
-        readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options)),
+        readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs`, options)),
     getRef(fullRef, options) {
       const ref = fullRef
         .replace(/^refs\//u, "")
@@ -1083,8 +1095,7 @@ export function createClient(repository, dependencies = {}) {
     getRunAttempt(runId, runAttempt, options) {
       return apiJson(`actions/runs/${runId}/attempts/${runAttempt}`, options);
     },
-    getParentJobs: (runId, options) =>
-      readJobs(`actions/runs/${runId}/jobs?filter=all&per_page=100`, options),
+    getParentJobs: (runId, options) => readJobs(`actions/runs/${runId}/jobs?filter=all`, options),
     async getJobLog(jobId, options) {
       // Octopool's gh shim refuses log bodies with terminal escape sequences even off a TTY;
       // real gh ignores the flag off-TTY, so the controller works with either binary.

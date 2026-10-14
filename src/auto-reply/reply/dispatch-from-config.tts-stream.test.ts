@@ -87,27 +87,30 @@ it.each([
   );
 });
 
-it("dispatchReplyFromConfig keeps a deferred literal in its complete-text fallback", async () => {
-  installCaptionedVoiceTestPlugin("telegram");
-  const delivered: Array<{ text?: string; kind: string }> = [];
-  const dispatcher = createReplyDispatcher({
-    deliver: async (payload, { kind }) => {
-      delivered.push({ text: payload.text, kind });
-    },
-  });
-  await dispatchReplyFromConfig({
-    ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
-    cfg: emptyConfig,
-    dispatcher,
-    replyResolver: async (_ctx, opts) => {
-      await opts?.onBlockReply?.({ text: "See [" });
-      return undefined;
-    },
-  });
-  dispatcher.markComplete();
-  await dispatcher.waitForIdle();
-  expect(delivered).toEqual([{ text: "See [", kind: "final" }]);
-});
+it.each(["See [", "Example:\n```text\nkeep two spaces  \nkeep a tab\t\n```"])(
+  "dispatchReplyFromConfig keeps deferred literal %j in its complete-text fallback",
+  async (text) => {
+    installCaptionedVoiceTestPlugin("telegram");
+    const delivered: Array<{ text?: string; kind: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, { kind }) => {
+        delivered.push({ text: payload.text, kind });
+      },
+    });
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text });
+        return undefined;
+      },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(delivered).toEqual([{ text, kind: "final" }]);
+  },
+);
 
 it("settles retained followup streams before external cleanup", async () => {
   let retained: GetReplyOptions | undefined;

@@ -15,12 +15,12 @@ import { crabboxState } from "./crabbox-state.test-support.js";
 import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
   CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
-  CRABBOX_SETUP_SECRETS_CHECK_ID,
   registerCrabboxWorkerProviderDoctorChecks,
   type CrabboxDoctorRegistrationHost,
 } from "./doctor.js";
 
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
+const CRABBOX_SETUP_SECRETS_CHECK_ID = "crabbox/setup-secrets";
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 const listPluginStateEntries: CrabboxDoctorRegistrationHost["listPluginStateEntries"] = <T>(
   options: OpenKeyedStoreOptions,

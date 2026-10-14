@@ -430,6 +430,16 @@
   color: var(--destructive);
 }
 
+.chat-diff__change--add {
+  background: color-mix(in srgb, var(--ok) 28%, transparent);
+  border-radius: 2px;
+}
+
+.chat-diff__change--del {
+  background: color-mix(in srgb, var(--destructive) 25%, transparent);
+  border-radius: 2px;
+}
+
 .chat-diff__row--file {
   padding-block: 3px;
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);

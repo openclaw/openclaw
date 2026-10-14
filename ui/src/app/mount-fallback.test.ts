@@ -14,12 +14,20 @@ async function readIndexHtml(): Promise<string> {
   return readFile(indexHtmlPath, "utf8");
 }
 
-function createIsolatedWindow(): TestWindow {
+function createIsolatedWindow(url?: string): TestWindow {
   const frame = document.createElement("iframe");
+  if (url) {
+    frame.src = url;
+  }
   document.body.append(frame);
   const frameWindow = frame.contentWindow as TestWindow | null;
   if (!frameWindow) {
     throw new Error("failed to create isolated frame window");
+  }
+  if (url) {
+    frameWindow.document.open();
+    frameWindow.document.write("<!doctype html><html><head></head><body></body></html>");
+    frameWindow.document.close();
   }
   return frameWindow;
 }
@@ -183,6 +191,43 @@ describe("Control UI mount fallback", () => {
     );
   });
 
+  it("gives a slow module download a fresh grace window after DOMContentLoaded", async () => {
+    const frameWindow = createIsolatedWindow();
+    const readyState = vi
+      .spyOn(frameWindow.document, "readyState", "get")
+      .mockReturnValue("loading");
+    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtml());
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs + 1_000);
+    expect(fetch).not.toHaveBeenCalled();
+    readyState.mockReturnValue("interactive");
+    frameWindow.document.dispatchEvent(new frameWindow.Event("DOMContentLoaded"));
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs - 1);
+    expect(fetch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each([1, 2, 3])("bounds recovery navigations after attempt %s", async (attempt) => {
+    const frameWindow = createIsolatedWindow(
+      `http://localhost:3000/?openclaw_mount_recovery=${attempt}`,
+    );
+    vi.spyOn(frameWindow.document, "readyState", "get").mockReturnValue("complete");
+    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtml());
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
+    if (attempt < 3) {
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(new URL(fetch.mock.calls[0]![0]).searchParams.get("openclaw_mount_recovery")).toBe(
+        String(attempt + 1),
+      );
+    } else {
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  });
+
   it("does not begin recovery while the unsupported browser screen is loading", async () => {
     const frameWindow = createIsolatedWindow();
     const fetch = vi.fn().mockResolvedValue({ ok: true });
@@ -232,10 +277,11 @@ describe("Control UI mount fallback", () => {
     });
     Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
     installFallbackShell(frameWindow, await readIndexHtml());
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(200_000);
 
-    expect(fetch).toHaveBeenCalledTimes(6);
-    expect(signals).toHaveLength(6);
+    expect(fetch.mock.calls.length).toBeGreaterThan(6);
+    expect(signals.slice(0, 6).every((signal) => signal.aborted)).toBe(true);
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-rendered"));
     expect(signals.every((signal) => signal.aborted)).toBe(true);
   });
 
@@ -273,7 +319,7 @@ describe("Control UI mount fallback", () => {
     },
   );
 
-  it("bounds automatic recovery attempts while the gateway is unavailable", async () => {
+  it("keeps probing beyond six failures while the gateway is unavailable", async () => {
     const frameWindow = createIsolatedWindow();
     const fetch = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
     const unregister = vi.fn().mockResolvedValue(true);
@@ -284,9 +330,9 @@ describe("Control UI mount fallback", () => {
       value: { getRegistrations },
     });
     installFallbackShell(frameWindow, await readIndexHtml());
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(120_000);
 
-    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(fetch.mock.calls.length).toBeGreaterThan(6);
     expect(unregister).toHaveBeenCalled();
     expect(getRegistrations).toHaveBeenCalled();
     expect(
@@ -295,6 +341,7 @@ describe("Control UI mount fallback", () => {
         "openclaw-mount-fallback-summary",
         frameWindow.HTMLParagraphElement,
       ).textContent,
-    ).toContain("gateway is still unavailable");
+    ).toContain("will keep retrying");
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-rendered"));
   });
 });

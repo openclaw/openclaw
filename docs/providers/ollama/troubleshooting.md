@@ -166,7 +166,7 @@ sidebarTitle: "Troubleshooting"
     session and a fallback model:
 
     ```bash
-    openclaw infer model run --model ollama/kimi-k2.5:cloud --prompt "Reply with exactly: ok" --json
+    openclaw infer model run --model ollama/kimi-k2.6:cloud --prompt "Reply with exactly: ok" --json
     openclaw models set ollama/gemma4
     ```
 

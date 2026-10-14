@@ -6,11 +6,6 @@ const HTTP_DATE_MONTH_INDEX = new Map(
 const HTTP_DATE_SHORT_WEEKDAY_INDEX = new Map(
   ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((weekday, index) => [weekday, index]),
 );
-const HTTP_DATE_LONG_WEEKDAY_INDEX = new Map(
-  ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map(
-    (weekday, index) => [weekday, index],
-  ),
-);
 
 const IMF_FIXDATE_RE =
   /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/;
@@ -122,36 +117,34 @@ export function parseHttpDateInstant(
   value: string,
   nowMs = Date.now(),
 ): HttpDateInstant | undefined {
-  const imfFixdate = IMF_FIXDATE_RE.exec(value);
-  if (imfFixdate) {
-    return parseHttpDateComponents({
-      weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(imfFixdate[1] ?? ""),
-      year: Number.parseInt(imfFixdate[4] ?? "", 10),
-      month: HTTP_DATE_MONTH_INDEX.get(imfFixdate[3] ?? ""),
-      day: Number.parseInt(imfFixdate[2] ?? "", 10),
-      hours: Number.parseInt(imfFixdate[5] ?? "", 10),
-      minutes: Number.parseInt(imfFixdate[6] ?? "", 10),
-      seconds: Number.parseInt(imfFixdate[7] ?? "", 10),
-    });
+  let fields: readonly (string | undefined)[] | undefined = (
+    IMF_FIXDATE_RE.exec(value) ?? OBSOLETE_RFC850_DATE_RE.exec(value)
+  )?.slice(1);
+  if (!fields) {
+    const asctimeDate = OBSOLETE_ASCTIME_DATE_RE.exec(value);
+    if (!asctimeDate) {
+      return undefined;
+    }
+    const [, weekday, month, day, hours, minutes, seconds, year] = asctimeDate;
+    fields = [weekday, day, month, year, hours, minutes, seconds];
   }
-
-  const rfc850Date = OBSOLETE_RFC850_DATE_RE.exec(value);
-  if (rfc850Date) {
+  const [weekday, day, month, year, hours, minutes, seconds] = fields;
+  const components: HttpDateComponents = {
+    weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get((weekday ?? "").slice(0, 3)),
+    year: Number.parseInt(year ?? "", 10),
+    month: HTTP_DATE_MONTH_INDEX.get(month ?? ""),
+    day: Number.parseInt(day ?? "", 10),
+    hours: Number.parseInt(hours ?? "", 10),
+    minutes: Number.parseInt(minutes ?? "", 10),
+    seconds: Number.parseInt(seconds ?? "", 10),
+  };
+  if (year?.length === 2) {
     const now = new Date(nowMs);
     if (Number.isNaN(now.getTime())) {
       return undefined;
     }
-    const shortYear = Number.parseInt(rfc850Date[4] ?? "", 10);
-    const candidateYear = Math.floor(now.getUTCFullYear() / 100) * 100 + shortYear;
-    const components = {
-      weekday: HTTP_DATE_LONG_WEEKDAY_INDEX.get(rfc850Date[1] ?? ""),
-      month: HTTP_DATE_MONTH_INDEX.get(rfc850Date[3] ?? ""),
-      day: Number.parseInt(rfc850Date[2] ?? "", 10),
-      hours: Number.parseInt(rfc850Date[5] ?? "", 10),
-      minutes: Number.parseInt(rfc850Date[6] ?? "", 10),
-      seconds: Number.parseInt(rfc850Date[7] ?? "", 10),
-    };
-    const candidate = parseHttpDateCalendarMs({ year: candidateYear, ...components });
+    components.year += Math.floor(now.getUTCFullYear() / 100) * 100;
+    const candidate = parseHttpDateCalendarMs(components);
     if (candidate === undefined) {
       return undefined;
     }
@@ -166,24 +159,11 @@ export function parseHttpDateInstant(
       now.getUTCSeconds(),
       now.getUTCMilliseconds(),
     );
-    const resolvedYear = candidate > fiftyYearsFromNow ? candidateYear - 100 : candidateYear;
-    return parseHttpDateComponents({ year: resolvedYear, ...components });
+    if (candidate > fiftyYearsFromNow) {
+      components.year -= 100;
+    }
   }
-
-  const asctimeDate = OBSOLETE_ASCTIME_DATE_RE.exec(value);
-  if (asctimeDate) {
-    return parseHttpDateComponents({
-      weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(asctimeDate[1] ?? ""),
-      year: Number.parseInt(asctimeDate[7] ?? "", 10),
-      month: HTTP_DATE_MONTH_INDEX.get(asctimeDate[2] ?? ""),
-      day: Number.parseInt((asctimeDate[3] ?? "").trim(), 10),
-      hours: Number.parseInt(asctimeDate[4] ?? "", 10),
-      minutes: Number.parseInt(asctimeDate[5] ?? "", 10),
-      seconds: Number.parseInt(asctimeDate[6] ?? "", 10),
-    });
-  }
-
-  return undefined;
+  return parseHttpDateComponents(components);
 }
 
 function parseHttpDateComponents(components: HttpDateComponents): HttpDateInstant | undefined {

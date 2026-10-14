@@ -2259,7 +2259,6 @@
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../sessions/resource-loader.js","e68d7a70e50f9b35d4088df4bde251260040002e55a07e9035ae3e66b9148b18",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../transcript-policy.js","4a81085e9f062fa04e20403ccccccfc45c84e4281f892e1b6f90963314dc534d",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","./compaction-safety-timeout.js","9abce0b4286c41b7d2be5f72a6413a76d1d817d1c2e821e7cb2d0cef49b8dc6e",1]
-["src/agents/embedded-agent-runner/compact.hooks.harness.ts","./extensions.js","fe21ef018b87f3340e1daa024ec343da936fc3ad21397b1233bf67fbb51c9f12",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","./extra-params.js","8b57e295d31583e215de033ed4b91996fa53a14d2993086554252d3ad045db73",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","./history.js","11dd8349fa2aa29fca2b318ef534c166bff9b523540900e21c4e281a4bb88ae8",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","./lanes.js","b4d04e6455e92621f3b8f9385c2182740fe8f89e26e66215b13e06531d0c86f1",1]

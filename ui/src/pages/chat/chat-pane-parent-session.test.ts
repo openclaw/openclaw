@@ -150,6 +150,10 @@ describe("mounted pane parent session", () => {
         await vi.dynamicImportSettled();
         expect(parentBreadcrumb(pane)).toBeNull();
         expect(parentReads).toBe(1);
+        sessions.reconcile({ ...child, updatedAt: 2, displayName: "Updated child" });
+        await vi.dynamicImportSettled();
+        expect(parentBreadcrumb(pane)).toBeNull();
+        expect(parentReads).toBe(1);
         await sessions.refresh({ agentId: "main", force: true });
         await refreshPane(pane);
       } else {

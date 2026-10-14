@@ -67,11 +67,11 @@ import {
 } from "./crabbox-worker-snapshot-actions.js";
 import {
   countCrabboxProvisionSetupPhases,
-  CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
+  CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
-  CRABBOX_STOP_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
+  resolveCrabboxDestroyTimeoutMs,
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxNodeEnrollmentTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
@@ -83,8 +83,6 @@ import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.
 import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
-// Local pack creation, two seed commands, and upload precede runtime preparation and capture.
-const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS = 4 * CRABBOX_SETUP_TIMEOUT_MS;
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
 type LeaseHeartbeatContext = LeaseCommandContext &
@@ -218,7 +216,7 @@ export function createCrabboxWorkerProvider(
     assertCrabboxLeaseId(lease.leaseId);
     return {
       context: {
-        binary: (await resolveBinary(profile.binary)).binary,
+        binary: (await resolveBinary(profile.binary, lease.signal)).binary,
         heartbeatIntervalMs: profile.heartbeatIntervalMs,
         heartbeatTimeoutMs: profile.heartbeatTimeoutMs,
         id: lease.leaseId,
@@ -656,24 +654,13 @@ export function createCrabboxWorkerProvider(
       await warmImages.notePreparedDemand(lease.leaseId, preparation),
     resolveAllocation,
     resolveProvisionTimeoutMs(profile, options) {
-      const parsed = parseCrabboxProfile(profile);
-      return (
-        resolveCrabboxProvisionCallTimeoutMs(parsed, options?.nodeBootstrapTimeoutMs) +
-        (parsed.warmImage === false
-          ? 0
-          : CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
-            resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
+      return resolveCrabboxProvisionCallTimeoutMs(
+        parseCrabboxProfile(profile),
+        options?.nodeBootstrapTimeoutMs,
       );
     },
     resolveDestroyTimeoutMs(profile) {
-      const parsed = parseCrabboxCleanupProfile(profile);
-      // Lifecycle profiles omit placement sizing. Reserve capture unless disabled,
-      // plus separate heartbeat and stop child settlement.
-      return (
-        CRABBOX_STOP_TIMEOUT_MS +
-        2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
-        (parsed.warmImage === false ? 0 : resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
-      );
+      return resolveCrabboxDestroyTimeoutMs(parseCrabboxCleanupProfile(profile));
     },
     prepareProvision,
     async provision(...args) {
@@ -687,7 +674,9 @@ export function createCrabboxWorkerProvider(
         ...context,
         runCommand,
         sleep,
+        signal: lease.signal,
       });
+      lease.signal?.throwIfAborted();
       if (!inspected || isNonRunnableState(inspected.state)) {
         await heartbeats.stop(context.id);
         return { status: "unknown" };

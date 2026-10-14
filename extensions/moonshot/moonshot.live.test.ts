@@ -94,7 +94,7 @@ describeLive("moonshot plugin live", () => {
       },
     } as never);
 
-    let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
+    let result: Record<string, unknown> | undefined;
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -117,9 +117,14 @@ describeLive("moonshot plugin live", () => {
     }
 
     expect(result?.provider).toBe("kimi");
-    expect(typeof result?.content).toBe("string");
-    expect((result!.content as string).length).toBeGreaterThan(20);
-    expect(Array.isArray(result?.citations)).toBe(true);
+    expect(result?.count).toBe(1);
+    expect(result?.results).toEqual([
+      expect.objectContaining({
+        title: expect.stringContaining("<<<EXTERNAL_UNTRUSTED_CONTENT"),
+        url: expect.stringMatching(/^https?:\/\//),
+        description: expect.any(String),
+      }),
+    ]);
   }, 180_000);
 });
 

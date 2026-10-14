@@ -42,7 +42,6 @@ import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import { cloneSessionModelContextEntries } from "./session-manager-codec.js";
@@ -157,7 +156,7 @@ export class SessionManager extends SessionManagerBranching {
       // materializing this snapshot need not join a later, still-pending write.
       this.assertTranscriptWriteActive();
       reader.assertCurrent();
-      return this.buildInitialContext(prepared.branch);
+      return buildCoreSessionContext(prepared.branch);
     }
     const context = await readSessionManagerModelContextAsync(
       target,
@@ -171,32 +170,7 @@ export class SessionManager extends SessionManagerBranching {
     ) {
       throw new Error("Session manager changed during initial context read");
     }
-    return this.buildInitialContext(context.getBranch());
-  }
-
-  private buildInitialContext(branch: SessionEntry[]) {
-    for (const entry of branch) {
-      if (entry.type !== "message") {
-        continue;
-      }
-      const stored = this.byId.get(entry.id);
-      if (stored?.type !== "message") {
-        continue;
-      }
-      // The worker projects private fields away; equal payloads can share immutable custody.
-      if (isDeepStrictEqual(entry.message, stored.message)) {
-        entry.message = freezeJsonSnapshot(stored.message);
-      } else {
-        for (const key of Object.keys(entry.message)) {
-          const value: unknown = Reflect.get(stored.message, key);
-          if (isDeepStrictEqual(Reflect.get(entry.message, key), value)) {
-            Reflect.set(entry.message, key, freezeJsonSnapshot(value));
-          }
-        }
-        freezeJsonSnapshot(entry.message);
-      }
-    }
-    return buildCoreSessionContext(branch);
+    return buildCoreSessionContext(context.getBranch());
   }
 
   /** No buffered writes remain here; asynchronous metadata methods own their settlement. */
@@ -382,10 +356,6 @@ export class SessionManager extends SessionManagerBranching {
       ): Generator<SessionPersistenceStep, void, void> {
         const publication = SessionManager.inMemory(prepared.cwd);
         Object.assign(publication, cloneTranscriptView(prepared.captureTranscriptView()));
-        // Publication changes ancestry and storage metadata, never the sealed payloads.
-        publication.fileEntries = publication.fileEntries.map((entry, index) =>
-          index < initialEntryCount ? entry : { ...entry },
-        );
         const entries = publication.fileEntries
           .slice(initialEntryCount)
           .filter((entry) => entry.type !== "session");
@@ -438,7 +408,6 @@ export class SessionManager extends SessionManagerBranching {
             persistedBoundaryCount + publication.getBoundaryCount() - loadedBoundaryCount;
         }
         const adopt = (version = publication.transcriptVersion) => {
-          entries.forEach((entry) => freezeJsonSnapshot(entry));
           publication.transcriptVersion = version;
           publication.transcriptMutationAt = version?.updatedAt;
           Object.assign(this, publication.captureTranscriptView());

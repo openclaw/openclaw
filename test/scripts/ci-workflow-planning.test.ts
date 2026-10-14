@@ -98,6 +98,21 @@ function successfulNativeSetup() {
 
 describe("PostgreSQL conformance selection", () => {
   it.each([
+    [["extensions/workboard/README.md", "src/utils/absolute-deadline.test.ts"], false],
+    [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
+    [["extensions/workboard/test/fixtures/README.md", "src/utils/absolute-deadline.test.ts"], true],
+  ] as const)("selects mixed diff %j: %s", (changedPaths, selected) => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths: [...changedPaths],
+      targetFiles: ["scripts/test-database-conformance.mjs"],
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_postgres_conformance).toBe(String(selected));
+  });
+
+  it.each([
     ["src/infra/database-engine/open.ts", true],
     ["src/infra/postgres-sync/locks.test.ts", true],
     ["src/infra/sql-connection.ts", true],
@@ -5314,6 +5329,34 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it.each([
+    { event: "pull_request", docsOnly: "true", root: "true", expected: "false" },
+    { event: "pull_request", docsOnly: "true", root: "", expected: "true" },
+    { event: "pull_request", docsOnly: "false", root: "true", expected: "true" },
+    { event: "schedule", docsOnly: "true", root: "true", expected: "true" },
+    { event: "workflow_dispatch", docsOnly: "true", root: "true", expected: "true" },
+  ] as const)(
+    "keeps docs content conservative for $event/$docsOnly/$root",
+    ({ event, docsOnly, root, expected }) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        changedPaths: docsOnly === "false" ? ["VISION.md", "src/focused.ts"] : ["VISION.md"],
+        eventName: event,
+        scopeEnv: {
+          OPENCLAW_CI_DOCS_ONLY: docsOnly,
+          OPENCLAW_CI_DOCS_CHANGED: "true",
+          OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY: root,
+        },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs).toMatchObject({
+        run_docs_content: expected,
+        run_check_docs: "true",
+        run_format_check: "true",
+      });
+    },
+  );
+
   it("resolves admitted main qualification profiles without changing ordinary main routing", () => {
     for (const [configuredProfile, backend] of (
       ["", "github", "blacksmith", "hybrid"] as const
@@ -5566,6 +5609,7 @@ describe("ci workflow guards", () => {
       docs_changed: "true",
       run_check_docs: "true",
       run_node: "false",
+      run_docs_content: "true",
     });
   });
 

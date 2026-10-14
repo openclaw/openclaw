@@ -10,6 +10,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
+import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
 
@@ -59,6 +60,8 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
   // Node also reports direct plugin/dependency Workers here, without a second registry.
   process.on("worker", trackWorker);
   return {
+    // SAFETY: The optional callback starts unset and only receives the typed observer below.
+    gcObserver: undefined as ((samples: GcSample[], thread: string) => void) | undefined,
     revision: 0,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
@@ -234,6 +237,20 @@ async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource):
   }
 }
 
+/** Heartbeat demand also applies to workers attaching after observer activation. */
+export function setTrackedWorkerGcObserver(
+  observer: ((samples: GcSample[], thread: string) => void) | undefined,
+): void {
+  const wasEnabled = Boolean(trackedWorkers.gcObserver);
+  trackedWorkers.gcObserver = observer;
+  const enabled = Boolean(observer);
+  if (wasEnabled !== enabled) {
+    for (const source of trackedWorkers.workers.values()) {
+      source.memoryPort?.postMessage({ gc: enabled });
+    }
+  }
+}
+
 /** The existing registry owns this channel until native exit, never the submitting task. */
 export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknown): boolean {
   if (!isRecord(message) || message.status !== "memory" || !(message.port instanceof MessagePort)) {
@@ -253,32 +270,42 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     source.memoryUnavailable = true;
     port.close();
   };
-  port.on("message", (value: unknown) => {
-    const record = isRecord(value) ? value : {};
-    const heapUsed = asNonNegativeFiniteNumber(record.heapUsed);
-    const heapTotal = asNonNegativeFiniteNumber(record.heapTotal);
-    const external = asNonNegativeFiniteNumber(record.external);
-    const arrayBuffers = asNonNegativeFiniteNumber(record.arrayBuffers);
-    const heapSizeLimitBytes = asPositiveFiniteNumber(record.heapSizeLimitBytes);
-    if (
-      heapUsed === undefined ||
-      heapTotal === undefined ||
-      external === undefined ||
-      arrayBuffers === undefined
-    ) {
-      close();
-      return;
-    }
-    source.heap = {
-      value: { heapUsed, heapTotal, external, arrayBuffers, heapSizeLimitBytes },
-      sampledAt: performance.now(),
-    };
-    source.memoryPending = false;
-    source.memoryUnavailable = false;
-  });
+  port.on(
+    "message",
+    (record: Partial<NodeJS.MemoryUsage> & { heapSizeLimitBytes?: number; gc?: GcSample[] }) => {
+      // This private port is handed off by our isolate telemetry owner, not task input.
+      if (record.gc) {
+        trackedWorkers.gcObserver?.(record.gc, source.script);
+        return;
+      }
+      const heapUsed = asNonNegativeFiniteNumber(record.heapUsed);
+      const heapTotal = asNonNegativeFiniteNumber(record.heapTotal);
+      const external = asNonNegativeFiniteNumber(record.external);
+      const arrayBuffers = asNonNegativeFiniteNumber(record.arrayBuffers);
+      const heapSizeLimitBytes = asPositiveFiniteNumber(record.heapSizeLimitBytes);
+      if (
+        heapUsed === undefined ||
+        heapTotal === undefined ||
+        external === undefined ||
+        arrayBuffers === undefined
+      ) {
+        close();
+        return;
+      }
+      source.heap = {
+        value: { heapUsed, heapTotal, external, arrayBuffers, heapSizeLimitBytes },
+        sampledAt: performance.now(),
+      };
+      source.memoryPending = false;
+      source.memoryUnavailable = false;
+    },
+  );
   port.once("close", close);
   port.once("messageerror", close);
   port.unref();
+  if (trackedWorkers.gcObserver) {
+    port.postMessage({ gc: true });
+  }
   return true;
 }
 
