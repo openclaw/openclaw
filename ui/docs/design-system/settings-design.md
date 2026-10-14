@@ -75,8 +75,8 @@ classes. Keep this owner shared with the Lit shell adapter during migration.
 When a page body loads asynchronously, publish its column trait at the page-shell
 boundary, outside the loading branch. The Models shell reserves the narrow
 settings column before provider data arrives, keeping its heading in place.
-The settings footer also applies the build chip's `display: contents` layout
-before the custom element upgrades.
+The settings footer reserves one line for connection status and applies the
+build chip's `display: contents` layout before the custom element upgrades.
 
 ## Phone and native embed layouts
 

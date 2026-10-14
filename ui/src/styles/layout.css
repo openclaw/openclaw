@@ -762,6 +762,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: contents;
 }
 
+.settings-sidebar__connection {
+  min-height: 1lh;
+}
+
 openclaw-settings-save-indicator {
   min-width: 0;
 }
