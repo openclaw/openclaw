@@ -1,4 +1,3 @@
-// Mattermost plugin module implements setup core behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   defineChannelSetupContract,
@@ -6,18 +5,15 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
 } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
-import {
-  inspectMattermostAccount,
-  type ResolvedMattermostAccount,
-} from "./setup.accounts.runtime.js";
-import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
-import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
+import type { ResolvedMattermostAccount } from "./mattermost/accounts.js";
+import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 
 const channel = "mattermost" as const;
 
@@ -30,10 +26,6 @@ export function isMattermostConfigured(account: ResolvedMattermostAccount): bool
   const tokenConfigured =
     Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
   return tokenConfigured && Boolean(account.baseUrl);
-}
-
-export function resolveMattermostAccountWithSecrets(cfg: OpenClawConfig, accountId: string) {
-  return inspectMattermostAccount({ cfg, accountId });
 }
 
 export function applyMattermostSetupConfigPatch(params: {
@@ -63,7 +55,11 @@ export function applyMattermostSetupConfigPatch(params: {
   });
 }
 
+const accountCredentialKeys = ["botToken", "baseUrl"];
+
 export const mattermostSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: accountCredentialKeys,
+  namedAccountPromotionKeys: accountCredentialKeys,
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({

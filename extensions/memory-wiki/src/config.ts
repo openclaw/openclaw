@@ -1,20 +1,14 @@
-// Memory Wiki helper module supports config behavior.
 import os from "node:os";
 import path from "node:path";
 // agent-scope-runtime exports the same resolvers without memory-host-core's
 // event-store/kysely graph, which doctor enumeration must not cold-load.
 import {
   resolveDefaultAgentId,
-  resolveSessionAgentId,
+  resolveSessionAgentIdStrict,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import {
-  buildPluginConfigSchema,
-  z,
-  type OpenClawPluginConfigSchema,
-  type OpenClawConfig,
-} from "../api.js";
+import { z } from "zod";
+import type { OpenClawConfig } from "../api.js";
 
 const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
 const WIKI_VAULT_SCOPES = ["global", "agent"] as const;
@@ -22,99 +16,13 @@ const WIKI_RENDER_MODES = ["native", "obsidian"] as const;
 export const WIKI_SEARCH_BACKENDS = ["shared", "local"] as const;
 export const WIKI_SEARCH_CORPORA = ["wiki", "memory", "all"] as const;
 
-type WikiVaultMode = (typeof WIKI_VAULT_MODES)[number];
-type WikiVaultScope = (typeof WIKI_VAULT_SCOPES)[number];
-type WikiRenderMode = (typeof WIKI_RENDER_MODES)[number];
 export type WikiSearchBackend = (typeof WIKI_SEARCH_BACKENDS)[number];
 export type WikiSearchCorpus = (typeof WIKI_SEARCH_CORPORA)[number];
 
-export type MemoryWikiPluginConfig = {
-  vaultMode?: WikiVaultMode;
-  vault?: {
-    scope?: WikiVaultScope;
-    path?: string;
-    renderMode?: WikiRenderMode;
-  };
-  obsidian?: {
-    enabled?: boolean;
-    useOfficialCli?: boolean;
-    vaultName?: string;
-    openAfterWrites?: boolean;
-  };
-  bridge?: {
-    enabled?: boolean;
-    readMemoryArtifacts?: boolean;
-    indexDreamReports?: boolean;
-    indexDailyNotes?: boolean;
-    indexMemoryRoot?: boolean;
-    followMemoryEvents?: boolean;
-  };
-  unsafeLocal?: {
-    allowPrivateMemoryCoreAccess?: boolean;
-    paths?: string[];
-  };
-  ingest?: {
-    autoCompile?: boolean;
-    maxConcurrentJobs?: number;
-    allowUrlIngest?: boolean;
-  };
-  search?: {
-    backend?: WikiSearchBackend;
-    corpus?: WikiSearchCorpus;
-  };
-  context?: {
-    includeCompiledDigestPrompt?: boolean;
-  };
-  render?: {
-    preserveHumanBlocks?: boolean;
-    createBacklinks?: boolean;
-    createDashboards?: boolean;
-  };
-};
+export type MemoryWikiPluginConfig = z.infer<typeof MemoryWikiConfigSource>;
 
-export type ResolvedMemoryWikiConfig = {
+export type ResolvedMemoryWikiConfig = ReturnType<typeof resolveMemoryWikiConfig> & {
   agentId?: string;
-  vaultMode: WikiVaultMode;
-  vault: {
-    scope: WikiVaultScope;
-    path: string;
-    renderMode: WikiRenderMode;
-  };
-  obsidian: {
-    enabled: boolean;
-    useOfficialCli: boolean;
-    vaultName?: string;
-    openAfterWrites: boolean;
-  };
-  bridge: {
-    enabled: boolean;
-    readMemoryArtifacts: boolean;
-    indexDreamReports: boolean;
-    indexDailyNotes: boolean;
-    indexMemoryRoot: boolean;
-    followMemoryEvents: boolean;
-  };
-  unsafeLocal: {
-    allowPrivateMemoryCoreAccess: boolean;
-    paths: string[];
-  };
-  ingest: {
-    autoCompile: boolean;
-    maxConcurrentJobs: number;
-    allowUrlIngest: boolean;
-  };
-  search: {
-    backend: WikiSearchBackend;
-    corpus: WikiSearchCorpus;
-  };
-  context: {
-    includeCompiledDigestPrompt: boolean;
-  };
-  render: {
-    preserveHumanBlocks: boolean;
-    createBacklinks: boolean;
-    createDashboards: boolean;
-  };
 };
 
 export type MemoryWikiConfigResolver = (
@@ -122,13 +30,7 @@ export type MemoryWikiConfigResolver = (
   appConfig?: OpenClawConfig,
 ) => ResolvedMemoryWikiConfig;
 
-const DEFAULT_WIKI_VAULT_MODE: WikiVaultMode = "isolated";
-const DEFAULT_WIKI_VAULT_SCOPE: WikiVaultScope = "global";
-const DEFAULT_WIKI_RENDER_MODE: WikiRenderMode = "native";
-const DEFAULT_WIKI_SEARCH_BACKEND: WikiSearchBackend = "shared";
-const DEFAULT_WIKI_SEARCH_CORPUS: WikiSearchCorpus = "wiki";
-
-const MemoryWikiConfigSource = z
+export const MemoryWikiConfigSource = z
   .strictObject({
     vaultMode: z.enum(WIKI_VAULT_MODES).optional(),
     vault: z
@@ -205,26 +107,6 @@ const MemoryWikiConfigSource = z
     }
   });
 
-const memoryWikiConfigSchemaBase = buildPluginConfigSchema(MemoryWikiConfigSource, {
-  safeParse(value: unknown) {
-    if (value === undefined) {
-      return { success: true, data: resolveMemoryWikiConfig(undefined) };
-    }
-    const result = MemoryWikiConfigSource.safeParse(value);
-    if (result.success) {
-      return { success: true, data: resolveMemoryWikiConfig(result.data) };
-    }
-    return {
-      success: false,
-      error: {
-        issues: mapPluginConfigIssues(result.error.issues),
-      },
-    };
-  },
-});
-
-export const memoryWikiConfigSchema: OpenClawPluginConfigSchema = memoryWikiConfigSchemaBase;
-
 function expandHomePath(inputPath: string, homedir: string): string {
   if (inputPath === "~") {
     return homedir;
@@ -238,11 +120,11 @@ function expandHomePath(inputPath: string, homedir: string): string {
 export function resolveMemoryWikiConfig(
   config: MemoryWikiPluginConfig | undefined,
   options?: { homedir?: string; env?: NodeJS.ProcessEnv },
-): ResolvedMemoryWikiConfig {
+) {
   const homedir = options?.homedir ?? os.homedir();
   const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
   const safeConfig = parsed?.success ? parsed.data : (config ?? {});
-  const vaultScope = safeConfig.vault?.scope ?? DEFAULT_WIKI_VAULT_SCOPE;
+  const vaultScope = safeConfig.vault?.scope ?? "global";
   const vaultPath =
     safeConfig.vault?.path ??
     path.join(
@@ -252,11 +134,11 @@ export function resolveMemoryWikiConfig(
     );
 
   return {
-    vaultMode: safeConfig.vaultMode ?? DEFAULT_WIKI_VAULT_MODE,
+    vaultMode: safeConfig.vaultMode ?? "isolated",
     vault: {
       scope: vaultScope,
       path: expandHomePath(vaultPath, homedir),
-      renderMode: safeConfig.vault?.renderMode ?? DEFAULT_WIKI_RENDER_MODE,
+      renderMode: safeConfig.vault?.renderMode ?? "native",
     },
     obsidian: {
       enabled: safeConfig.obsidian?.enabled ?? false,
@@ -282,8 +164,8 @@ export function resolveMemoryWikiConfig(
       allowUrlIngest: safeConfig.ingest?.allowUrlIngest ?? true,
     },
     search: {
-      backend: safeConfig.search?.backend ?? DEFAULT_WIKI_SEARCH_BACKEND,
-      corpus: safeConfig.search?.corpus ?? DEFAULT_WIKI_SEARCH_CORPUS,
+      backend: safeConfig.search?.backend ?? "shared",
+      corpus: safeConfig.search?.corpus ?? "wiki",
     },
     context: {
       includeCompiledDigestPrompt: safeConfig.context?.includeCompiledDigestPrompt ?? false,
@@ -299,15 +181,13 @@ export function resolveMemoryWikiConfig(
 export function resolveMemoryWikiConfiguredAgentIds(
   appConfig: OpenClawConfig | undefined,
 ): string[] {
-  const configuredIds = appConfig?.agents?.entries
-    ? Object.keys(appConfig.agents.entries)
-    : (appConfig?.agents?.list ?? []).map((entry) => entry.id);
+  const configuredIds = Object.keys(appConfig?.agents?.entries ?? {});
   const ids = configuredIds.flatMap((entryId) => {
     const rawId = entryId.trim();
     if (!rawId) {
       return [];
     }
-    return [resolveSessionAgentId({ config: appConfig, agentId: rawId })];
+    return [resolveSessionAgentIdStrict({ config: appConfig, agentId: rawId })];
   });
   return [...new Set(ids.length > 0 ? ids : [resolveDefaultAgentId(appConfig ?? {})])];
 }
@@ -330,7 +210,7 @@ export function resolveMemoryWikiAgentConfig(params: {
   if (!requestedAgentId && configuredAgentIds.length > 1) {
     throw new Error("agentId is required for memory-wiki when vault.scope=agent.");
   }
-  const agentId = resolveSessionAgentId({
+  const agentId = resolveSessionAgentIdStrict({
     config: params.appConfig,
     agentId: requestedAgentId ?? resolveDefaultAgentId(params.appConfig ?? {}),
   });

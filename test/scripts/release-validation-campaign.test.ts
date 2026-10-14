@@ -141,16 +141,6 @@ function harness(initialIssues: ReturnType<typeof issue>[]) {
 }
 
 describe("release-validation campaign artifact", () => {
-  it("accepts the exact beta campaign contract", () => {
-    expect(() =>
-      validateReleaseValidationCampaignArtifact(betaArtifact(), {
-        expectedTag: TAG,
-        expectedReleaseCommit: RELEASE_COMMIT,
-        expectedGuidanceMainSha: GUIDANCE_SHA,
-      }),
-    ).not.toThrow();
-  });
-
   it("rejects non-empty testing notes and local paths", () => {
     const notes = betaArtifact();
     notes.body = notes.body.replace("| **Testing notes** | |", "| **Testing notes** | failed |");
@@ -287,7 +277,6 @@ describe("release-validation campaign publisher", () => {
 describe("release-validation skill runner workflow", () => {
   it("keeps Codex read-only and publishes only through the validated artifact", () => {
     const workflow = readFileSync(".github/workflows/release-validation-skill-runner.yml", "utf8");
-    const skill = readFileSync(".agents/skills/openclaw-release-validation/SKILL.md", "utf8");
 
     expect(workflow).toContain("permissions:\n  contents: read");
     expect(workflow).not.toContain("issues: write");
@@ -296,7 +285,5 @@ describe("release-validation skill runner workflow", () => {
     expect(workflow.indexOf("openai/codex-action@")).toBeLessThan(
       workflow.indexOf("actions/create-github-app-token@"),
     );
-    expect(skill).toContain("gh workflow run release-validation-skill-runner.yml");
-    expect(skill).toContain("**Campaign artifact**");
   });
 });

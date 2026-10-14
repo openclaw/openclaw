@@ -9,6 +9,7 @@ export const FAILOVER_REASONS = PROTOCOL_FAILOVER_REASONS;
 export type FailoverReason = (typeof FAILOVER_REASONS)[number];
 export type FailoverSignal = {
   status?: number;
+  retryAfterMs?: number;
   code?: string;
   errorType?: string;
   message?: string;
@@ -19,6 +20,8 @@ export type FailoverClassification =
   | {
       kind: "reason";
       reason: FailoverReason;
+      /** A provider code can inform copy/failover without making a rejected request replayable. */
+      sameModelRetry?: false;
     }
   | {
       kind: "context_overflow";

@@ -1,14 +1,9 @@
-// Discord plugin module implements outbound adapter behavior.
-import {
-  type OutboundIdentity,
-  resolveOutboundSendDep,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -19,13 +14,13 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createDiscordActionGate } from "./accounts.js";
 import { formatDiscordApprovalDisplayValue } from "./approval-message-safety.js";
+import { resolveDiscordAttachedOutboundTarget } from "./channel.conversation.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import {
   discordInboundEventDelivery,
   notifyDiscordInboundEventOutboundPayloadSuccess,
 } from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
-import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
 import {
@@ -37,17 +32,20 @@ import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
   loadDiscordSendRuntime,
   resolveDiscordFormattingOptions,
-  resolveDiscordOutboundTarget,
   type DiscordSendFn,
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
+import { canFallbackDiscordWebhookSend } from "./retry.js";
 import {
   createDiscordSendReceiptFromResults,
   toDiscordOutboundDeliveryResult,
 } from "./send.receipt.js";
+import type { DiscordSendResult } from "./send.types.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+// Shared planning owns explicit per-send limits; Discord's sender resolves account config/defaults.
+const DISCORD_PRECHUNK_MAX_LINES = Number.MAX_SAFE_INTEGER;
 const log = createSubsystemLogger("discord/outbound");
 const loadDiscordThreadBindings = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.js"),
@@ -56,94 +54,71 @@ const loadDiscordComponentSendRuntime = createLazyRuntimeModule(
   () => import("./send.components.js"),
 );
 
-function resolveDiscordWebhookIdentity(params: {
-  identity?: OutboundIdentity;
-  binding: ThreadBindingRecord;
-}): { username?: string; avatarUrl?: string } {
-  const usernameRaw = normalizeOptionalString(params.identity?.name);
-  const fallbackUsername = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
-  const username = truncateUtf16Safe(usernameRaw || fallbackUsername || "", 80) || undefined;
-  const avatarUrl = normalizeOptionalString(params.identity?.avatarUrl);
-  return { username, avatarUrl };
+type DiscordOutboundMessageContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
+
+function resolveDiscordDeliveryOptions(params: DiscordOutboundMessageContext) {
+  return {
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
+    onDeliveryResult: params.onDeliveryResult
+      ? async (result: DiscordSendResult) =>
+          params.onDeliveryResult?.(
+            attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
+          )
+      : undefined,
+  };
 }
 
-async function maybeSendDiscordWebhookText(params: {
-  cfg: OpenClawConfig;
-  text: string;
-  threadId?: string | number | null;
-  accountId?: string | null;
-  identity?: OutboundIdentity;
-  replyToId?: string | null;
-  onPlatformSendDispatch?: () => Promise<void>;
-}): Promise<{ messageId: string; channelId: string } | null> {
-  if (params.threadId == null) {
-    return null;
-  }
+async function maybeSendDiscordWebhookText(params: DiscordOutboundMessageContext) {
   const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
   if (!threadId) {
     return null;
   }
   const { getThreadBindingManager } = await loadDiscordThreadBindings();
-  const manager = getThreadBindingManager(params.accountId ?? undefined);
-  if (!manager) {
-    return null;
-  }
-  const binding = manager.getByThreadId(threadId);
+  const binding = getThreadBindingManager(params.accountId ?? undefined)?.getByThreadId(threadId);
   if (!binding?.webhookId || !binding?.webhookToken) {
     return null;
   }
-  const persona = resolveDiscordWebhookIdentity({
-    identity: params.identity,
-    binding,
-  });
+  const username =
+    normalizeOptionalString(params.identity?.name) ||
+    normalizeOptionalString(binding.label) ||
+    binding.agentId ||
+    "";
   const { sendWebhookMessageDiscord } = await loadDiscordSendRuntime();
-  const result = await sendWebhookMessageDiscord(params.text, {
+  return await sendWebhookMessageDiscord(params.text, {
     webhookId: binding.webhookId,
     webhookToken: binding.webhookToken,
     accountId: binding.accountId,
     threadId: binding.threadId,
     cfg: params.cfg,
-    replyTo: params.replyToId ?? undefined,
-    username: persona.username,
-    avatarUrl: persona.avatarUrl,
-    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    replyTo: resolveDiscordReplyReference(params),
+    username: truncateUtf16Safe(username, 80) || undefined,
+    avatarUrl: normalizeOptionalString(params.identity?.avatarUrl),
+    tableMode: params.formatting?.tableMode,
+    chunking: {
+      maxChars: params.formatting?.textLimit,
+      maxLines: params.formatting?.maxLinesPerMessage,
+    },
+    ...resolveDiscordDeliveryOptions(params),
   });
-  return result;
 }
-
-type DiscordOutboundMessageContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
 
 async function resolveDiscordOutboundMessageSend(params: DiscordOutboundMessageContext) {
   const send =
     resolveOutboundSendDep<DiscordSendFn>(params.deps, "discord") ??
     (await loadDiscordSendRuntime()).sendMessageDiscord;
-  const reply = resolveDiscordReplyReference({
-    replyToId: params.replyToId,
-    replyToIdSource: params.replyToIdSource,
-    replyToMode: params.replyToMode,
-  });
+  const reply = resolveDiscordReplyReference(params);
   return {
     send,
-    target: resolveDiscordOutboundTarget({ to: params.to, threadId: params.threadId }),
+    target: resolveDiscordAttachedOutboundTarget(params),
     options: {
       verbose: false as const,
       reply,
       accountId: params.accountId ?? undefined,
       silent: params.silent ?? undefined,
       cfg: params.cfg,
-      ...resolveDiscordFormattingOptions({ formatting: params.formatting }),
-      onDeliveryResult: params.onDeliveryResult
-        ? async (
-            result: Parameters<
-              NonNullable<NonNullable<Parameters<DiscordSendFn>[2]>["onDeliveryResult"]>
-            >[0],
-          ) => {
-            await params.onDeliveryResult?.(
-              attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
-            );
-          }
-        : undefined,
-      onPlatformSendDispatch: params.onPlatformSendDispatch,
+      ...resolveDiscordFormattingOptions(params),
+      ...resolveDiscordDeliveryOptions(params),
     },
   };
 }
@@ -153,7 +128,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit, ctx) =>
     chunkDiscordTextWithMode(text, {
       maxChars: limit,
-      maxLines: ctx?.formatting?.maxLinesPerMessage,
+      maxLines: ctx?.formatting?.maxLinesPerMessage ?? DISCORD_PRECHUNK_MAX_LINES,
     }),
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,
@@ -171,12 +146,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       messageSendingHooks: true,
     },
   },
-  renderPresentation: async ({ payload, presentation }) => {
-    return await buildDiscordPresentationPayload({
-      payload,
-      presentation,
-    });
-  },
+  renderPresentation: buildDiscordPresentationPayload,
   resolveTarget: ({ to, allowFrom }) => normalizeDiscordOutboundTarget(to, allowFrom),
   sendPayload: async (ctx) =>
     await sendDiscordOutboundPayload({
@@ -187,27 +157,13 @@ export const discordOutbound: ChannelOutboundAdapter = {
     channel: "discord",
     sendText: async (ctx) => {
       if (!ctx.silent) {
-        let webhookSelected = false;
         try {
-          const webhookResult = await maybeSendDiscordWebhookText({
-            cfg: ctx.cfg,
-            text: ctx.text,
-            threadId: ctx.threadId,
-            accountId: ctx.accountId,
-            identity: ctx.identity,
-            replyToId: ctx.replyToId,
-            onPlatformSendDispatch: ctx.onPlatformSendDispatch
-              ? async () => {
-                  webhookSelected = true;
-                  await ctx.onPlatformSendDispatch?.();
-                }
-              : undefined,
-          });
+          const webhookResult = await maybeSendDiscordWebhookText(ctx);
           if (webhookResult) {
             return toDiscordOutboundDeliveryResult(webhookResult);
           }
         } catch (error) {
-          if (webhookSelected) {
+          if (!canFallbackDiscordWebhookSend(error)) {
             throw error;
           }
           // Falling back to the plain bot send is intended (persona delivery is
@@ -235,6 +191,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
             mediaLocalRoots: ctx.mediaLocalRoots,
             mediaReadFile: ctx.mediaReadFile,
             onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
           }),
         );
       }
@@ -277,11 +234,12 @@ export const discordOutbound: ChannelOutboundAdapter = {
       sessionKey,
       inboundEventKind,
       onPlatformSendDispatch,
+      assertDirectAdapterHandoff,
     }) => {
       if (!createDiscordActionGate({ cfg, accountId })("polls")) {
         throw new Error("Discord polls are disabled.");
       }
-      const outboundTo = resolveDiscordOutboundTarget({ to, threadId });
+      const outboundTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
       const result = await (
         await loadDiscordSendRuntime()
       ).sendPollDiscord(outboundTo, poll, {
@@ -291,6 +249,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         silent: silent ?? undefined,
         cfg,
         onPlatformSendDispatch,
+        assertPlatformSendAuthorized: assertDirectAdapterHandoff,
       });
       discordInboundEventDelivery.notify({
         sessionKey,
@@ -308,7 +267,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
   afterDeliverPayload: async ({ cfg, target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,
-      to: resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId }),
+      to: resolveDiscordAttachedOutboundTarget({ to: target.to, threadId: target.threadId }),
       accountId: target.accountId,
     });
     const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
@@ -317,7 +276,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
     );
     const componentSpec = questionId ? await resolveDiscordComponentSpec(payload) : undefined;
     if (questionId && result && componentSpec) {
-      const to = resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId });
+      const to = resolveDiscordAttachedOutboundTarget({ to: target.to, threadId: target.threadId });
       const channelId = result.target?.kind === "channel" ? result.target.id : to;
       questionGatewayRuntime.registerChannelDelivery({
         questionId,
@@ -351,6 +310,6 @@ export const discordOutbound: ChannelOutboundAdapter = {
     if (!manager?.getByThreadId(threadId)) {
       return;
     }
-    manager.touchThread({ threadId });
+    await manager.touchThread({ threadId });
   },
 };

@@ -77,10 +77,24 @@ function normalizeSlackNameSlugEntry(entry: string): string | null {
 }
 
 export const slackIngressIdentity = defineStableChannelIngressIdentity({
+  resolveParticipant: (subject) => {
+    const qualified = subject.aliases?.workspaceSenderId;
+    if (typeof qualified !== "string") {
+      return undefined;
+    }
+    const normalized = normalizeSlackWorkspaceUserEntry(qualified);
+    const target = normalized ? parseSlackTarget(normalized) : undefined;
+    return target?.teamId
+      ? {
+          domain: target.teamId,
+          idKind: target.id.startsWith("b") ? "bot-id" : "user-id",
+          id: target.id,
+        }
+      : undefined;
+  },
   key: "senderId",
   kind: "stable-id",
-  // Direct Slack transports bind this id, while relay mode only authenticates its relay peer.
-  // The shared declaration therefore uses the strongest claim defensible for every mode.
+  // Per-event transport evidence overrides this conservative shared declaration.
   authentication: "asserted",
   normalizeEntry: normalizeSlackBareUserEntry,
   normalizeSubject: normalizeSlackUserId,
@@ -114,13 +128,21 @@ export function createSlackIngressSubject(params: {
   senderId: string;
   senderName?: string;
   teamId?: string;
+  senderAuthentication?: "verified" | "asserted";
 }) {
   const senderId = normalizeSlackUserId(params.senderId);
   const teamId = normalizeOptionalLowercaseString(params.teamId);
   const senderName = params.senderName?.trim().toLowerCase();
   const senderNameSlug = senderName ? normalizeSlackSlug(senderName) : undefined;
   return {
-    stableId: senderId,
+    // Host admission binds the native ID exactly; allowlist normalizers own casing.
+    stableId: params.senderId,
+    authentication: {
+      senderId: params.senderAuthentication ?? "asserted",
+      workspaceSenderId: params.senderAuthentication ?? "asserted",
+      senderName: "mutable" as const,
+      senderNameSlug: "mutable" as const,
+    },
     aliases: {
       workspaceSenderId: teamId && senderId ? `team:${teamId}:user:${senderId}` : undefined,
       senderName,

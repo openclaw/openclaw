@@ -1,10 +1,61 @@
-/** Minimal agent-run result projection shared by setup and diagnostic probes. */
-import { isReplyPayloadTerminalContent, type ReplyPayload } from "../auto-reply/reply-payload.js";
+/** Agent-run result projections shared by execution owners and diagnostic probes. */
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "./agent-run-terminal-outcome.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+
+/** Only the transcript owner's receipt makes a final CLI reply durable. */
+export function hasCommittedCliFinalReply(result: EmbeddedAgentRunResult): boolean {
+  return (
+    result.meta.executionTrace?.runner === "cli" &&
+    result.meta.completion?.finishReason === "stop" &&
+    !result.meta.error &&
+    result.payloads?.some((payload) => {
+      const metadata = getReplyPayloadMetadata(payload);
+      return (
+        metadata?.assistantTranscriptOwned === true &&
+        Boolean(metadata.assistantTranscriptIdempotencyKey)
+      );
+    }) === true
+  );
+}
+
+/** Adds an owner-bounded, redacted diagnostic without discarding returned work. */
+export function appendAgentRunFailure(
+  result: EmbeddedAgentRunResult,
+  diagnostic: string,
+): EmbeddedAgentRunResult {
+  const primaryError = result.meta.error;
+  // Preserve interruptions and delivery evidence. A replacement also owns a fresh
+  // fallback classification rather than mutating an already-classified result.
+  return {
+    ...result,
+    payloads: [...(result.payloads ?? []), { text: diagnostic, isError: true }],
+    meta: {
+      ...result.meta,
+      replayInvalid: true,
+      error: {
+        ...primaryError,
+        kind: primaryError?.kind ?? "incomplete_turn",
+        message: primaryError ? `${primaryError.message}\n${diagnostic}` : diagnostic,
+        // Incomplete-turn fallbackSafe otherwise overrides replayInvalid.
+        fallbackSafe: false,
+      },
+    },
+  };
+}
 
 export type AgentRunResultView = {
   payloads?: Array<ReplyPayload & { visible?: boolean }>;
   meta?: {
+    aborted?: boolean;
+    stopReason?: string;
+    timeoutPhase?: EmbeddedAgentRunResult["meta"]["timeoutPhase"];
+    providerStarted?: boolean;
     executionTrace?: { winnerProvider?: string; winnerModel?: string };
     finalAssistantVisibleText?: string;
     finalAssistantRawText?: string;
@@ -34,22 +85,17 @@ export function extractAgentRunText(result: AgentRunResultView): string | undefi
 
 export function extractAgentRunTerminalError(result: AgentRunResultView): string | undefined {
   const errorPayload = result.payloads?.find((payload) => payload.isError === true)?.text?.trim();
-  const livenessState = result.meta?.livenessState?.trim().toLowerCase();
-  if (
-    !errorPayload &&
-    !result.meta?.error &&
-    livenessState !== "blocked" &&
-    livenessState !== "abandoned"
-  ) {
+  const error = result.meta?.error?.message?.trim() || errorPayload;
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: errorPayload || result.meta?.error ? "error" : "end",
+    data: { ...result.meta, error },
+  });
+  if (outcome.status === "ok") {
     return undefined;
   }
   return (
-    result.meta?.error?.message?.trim() ||
-    errorPayload ||
-    (livenessState ? `Inference ended in the ${livenessState} state.` : "Inference failed.")
+    error ||
+    outcome.error ||
+    (outcome.status === "timeout" ? "Inference timed out." : `Inference ${outcome.reason}.`)
   );
-}
-
-export function agentRunHasVisibleReply(result: AgentRunResultView): boolean {
-  return Boolean(extractAgentRunText(result));
 }

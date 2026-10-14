@@ -1,0 +1,21 @@
+name: Setup test Bun
+description: Install the shared checksum-pinned Linux x64 Bun fork used by test lanes.
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Bun test runtime
+      shell: bash
+      env:
+        OPENCLAW_BUN_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        if [[ "$RUNNER_OS/$RUNNER_ARCH" != "Linux/X64" ]]; then
+          echo "::error::The pinned Bun test runtime requires Linux/X64."
+          exit 1
+        fi
+        bun_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-test-bun.XXXXXX")"
+        # Resolve from the action: frozen CI/release harnesses own their own pin.
+        /bin/bash "$OPENCLAW_BUN_ACTION_PATH/../../../scripts/stage-openclaw-bun.sh" "$bun_dir" linux x64
+        "$bun_dir/bin/bun" --version
+        "$bun_dir/bin/bun" --revision
+        echo "$bun_dir/bin" >> "$GITHUB_PATH"

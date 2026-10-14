@@ -56,13 +56,8 @@ public enum WebViewJavaScriptSupport {
 
     public static func jsValue(_ value: String?) -> String {
         guard let value else { return "null" }
-        if let data = try? JSONSerialization.data(withJSONObject: [value]),
-           let encoded = String(data: data, encoding: .utf8),
-           encoded.count >= 2
-        {
-            return String(encoded.dropFirst().dropLast())
-        }
-        return "null"
+        guard let data = try? JSONSerialization.data(withJSONObject: [value]) else { return "null" }
+        return String(String(bytes: data, encoding: .utf8)!.dropFirst().dropLast())
     }
 }
 #endif

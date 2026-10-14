@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { McpCodexToolApprovalMode, McpServerConfig } from "../config/types.mcp.js";
 
 export type McpCodexToolAnnotations = {
@@ -7,12 +8,8 @@ export type McpCodexToolAnnotations = {
   openWorldHint?: boolean;
 };
 
-const APPROVAL_MODES = new Set<McpCodexToolApprovalMode>(["auto", "prompt", "approve"]);
-
 function normalizeApprovalMode(value: unknown): McpCodexToolApprovalMode | undefined {
-  return typeof value === "string" && APPROVAL_MODES.has(value as McpCodexToolApprovalMode)
-    ? (value as McpCodexToolApprovalMode)
-    : undefined;
+  return value === "auto" || value === "prompt" || value === "approve" ? value : undefined;
 }
 
 function isOpenClawLoopbackServer(name: string, server: McpServerConfig): boolean {
@@ -27,30 +24,29 @@ function isOpenClawLoopbackServer(name: string, server: McpServerConfig): boolea
 export function resolveProjectedMcpCodexToolApprovalMode(
   serverName: string,
   server: McpServerConfig,
+  projectedServer?: Record<string, unknown>,
+  toolName?: string,
 ): McpCodexToolApprovalMode | undefined {
   const codex =
     server.codex && typeof server.codex === "object" && !Array.isArray(server.codex)
       ? (server.codex as Record<string, unknown>)
       : {};
+  const projectedTools = isRecord(projectedServer?.tools) ? projectedServer.tools : undefined;
+  const projectedTool =
+    toolName && isRecord(projectedTools?.[toolName]) ? projectedTools[toolName] : undefined;
   return (
+    normalizeApprovalMode(projectedTool?.approval_mode) ??
     normalizeApprovalMode(codex.defaultToolsApprovalMode) ??
     normalizeApprovalMode(codex.default_tools_approval_mode) ??
+    normalizeApprovalMode(projectedServer?.default_tools_approval_mode) ??
     (isOpenClawLoopbackServer(serverName, server) ? "approve" : undefined)
   );
 }
 
-export function resolveMcpCodexToolApprovalMode(
-  serverName: string,
-  server: McpServerConfig,
-): McpCodexToolApprovalMode {
-  return resolveProjectedMcpCodexToolApprovalMode(serverName, server) ?? "auto";
-}
-
 export function normalizeMcpCodexToolAnnotations(value: unknown): McpCodexToolAnnotations {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return {};
   }
-  const record = value as Record<string, unknown>;
   const result: McpCodexToolAnnotations = {};
   for (const key of [
     "readOnlyHint",
@@ -58,22 +54,24 @@ export function normalizeMcpCodexToolAnnotations(value: unknown): McpCodexToolAn
     "idempotentHint",
     "openWorldHint",
   ] as const) {
-    if (typeof record[key] === "boolean") {
-      result[key] = record[key];
+    if (typeof value[key] === "boolean") {
+      result[key] = value[key];
     }
   }
   return result;
 }
 
-/** Mirrors Codex `auto` approval semantics for unattended dynamic execution. */
+/** Explicit server policy outranks the prepared session posture. */
 export function requiresMcpCodexToolApproval(params: {
-  mode: McpCodexToolApprovalMode;
+  mode?: McpCodexToolApprovalMode;
+  fullPermission?: boolean;
   annotations?: McpCodexToolAnnotations;
 }): boolean {
-  if (params.mode === "approve") {
+  const mode = params.mode ?? (params.fullPermission ? "approve" : "auto");
+  if (mode === "approve") {
     return false;
   }
-  if (params.mode === "prompt") {
+  if (mode === "prompt") {
     return true;
   }
   const annotations = params.annotations ?? {};
@@ -84,4 +82,10 @@ export function requiresMcpCodexToolApproval(params: {
     return false;
   }
   return annotations.destructiveHint !== false || annotations.openWorldHint !== false;
+}
+
+export function formatMcpCodexApprovalRemedy(serverName?: string): string {
+  // Config keys are unbounded; keep model-visible hints short and never emit a CLI option as a name.
+  const server = serverName && /^[\w.][\w.-]{0,127}$/.test(serverName) ? serverName : "<server>";
+  return `Run openclaw mcp configure ${server} --approval approve for a trusted server, or change the session permission mode.`;
 }

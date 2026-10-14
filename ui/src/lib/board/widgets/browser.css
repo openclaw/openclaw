@@ -1,0 +1,56 @@
+openclaw-browser-dashboard-widget {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
+
+.board-browser {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.board-browser__content {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.board-browser__content > openclaw-browser-panel {
+  display: block;
+  height: 100%;
+}
+
+.board-browser__notice {
+  display: grid;
+  align-content: center;
+  height: 100%;
+  margin: 0;
+  padding: 20px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.board-browser__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 11px;
+
+  > div {
+    display: flex;
+    gap: 6px;
+  }
+}
+
+.board-browser__error {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--muted);
+}

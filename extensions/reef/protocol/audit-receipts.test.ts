@@ -1,45 +1,23 @@
-import { ed25519 } from "@noble/curves/ed25519.js";
 import { describe, expect, it } from "vitest";
-import {
-  appendAudit,
-  appendInboxRead,
-  decryptAuditText,
-  exportRedactedJsonl,
-  MemoryAuditStore,
-  signCheckpoint,
-  verifyChain,
-  verifyCheckpoint,
-  type AuditEntry,
-} from "./audit.js";
-import { base64url, fromBase64url, utf8 } from "./encoding.js";
+import { decryptAuditText, verifyChain } from "./audit.js";
 import { generateIdentity } from "./identity.js";
+import { MemoryAuditStore } from "./memory-stores.test-support.js";
 import { confirmDelivery, signReceipt, verifyReceipt, type SignedReceipt } from "./receipts.js";
 
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 
 describe("audit", () => {
-  it("builds and verifies a chain and signed checkpoint", async () => {
+  it("builds and verifies an encrypted audit chain", async () => {
     const store = new MemoryAuditStore(auditKey);
-    await appendAudit(store, "proposal", { id: "one", text: "secret message" }, 10);
-    await appendAudit(
-      store,
+    await store.appendEvent("proposal", { id: "one", text: "secret message" }, 10);
+    await store.appendEvent(
       "guard_verdict",
       { decision: "allow", reason: "looks safe", model: "model-20260101" },
       11,
     );
-    await appendInboxRead(store, ["one"], 12);
+    await store.appendEvent("read", { ids: ["one"] }, 12);
     const entries = await store.entries();
-    const identity = generateIdentity();
-    const checkpoint = signCheckpoint(entries, identity.signing.secretKey);
     expect(verifyChain(entries, { head: entries.at(-1)!.entryHash, length: 3 })).toBe(true);
-    expect(verifyCheckpoint(checkpoint, identity.signing.publicKey)).toBe(true);
-    const legacy = {
-      head: checkpoint.head,
-      signature: base64url(
-        ed25519.sign(utf8(checkpoint.head), fromBase64url(identity.signing.secretKey)),
-      ),
-    };
-    expect(verifyCheckpoint(legacy, identity.signing.publicKey)).toBe(false);
     expect(entries.at(-1)!.event.type).toBe("read");
     expect(decryptAuditText(entries[0]!, auditKey).event.payload).toMatchObject({
       text: "secret message",
@@ -51,8 +29,8 @@ describe("audit", () => {
 
   it("detects mutation and externally anchored truncation", async () => {
     const store = new MemoryAuditStore(auditKey);
-    await appendAudit(store, "one", { value: 1 }, 10);
-    await appendAudit(store, "two", { value: 2 }, 11);
+    await store.appendEvent("one", { value: 1 }, 10);
+    await store.appendEvent("two", { value: 2 }, 11);
     const entries = await store.entries();
     const expected = { head: entries[1]!.entryHash, length: 2 };
     expect(
@@ -64,10 +42,9 @@ describe("audit", () => {
     expect(verifyChain(entries.slice(0, 1), expected)).toBe(false);
   });
 
-  it("exports an unchanged, verifiable chain without plaintext", async () => {
+  it("keeps plaintext out of the verifiable stored chain", async () => {
     const store = new MemoryAuditStore(auditKey);
-    await appendAudit(
-      store,
+    await store.appendEvent(
       "inbox",
       {
         id: "one",
@@ -77,16 +54,11 @@ describe("audit", () => {
       10,
     );
     const entries = await store.entries();
-    const exported = exportRedactedJsonl(entries);
-    const parsed = exported
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as AuditEntry);
-    expect(exported).not.toContain("DO NOT LEAK ME");
-    expect(exported).not.toContain("ALSO PRIVATE");
-    expect(exported).toContain('"enc"');
-    expect(parsed).toEqual(entries);
-    expect(verifyChain(parsed)).toBe(true);
+    const serialized = JSON.stringify(entries);
+    expect(serialized).not.toContain("DO NOT LEAK ME");
+    expect(serialized).not.toContain("ALSO PRIVATE");
+    expect(serialized).toContain('"enc"');
+    expect(verifyChain(entries)).toBe(true);
   });
 
   it("serializes twenty concurrent appends into one valid chain", async () => {

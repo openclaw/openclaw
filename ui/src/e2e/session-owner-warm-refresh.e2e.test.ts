@@ -1,14 +1,17 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI warm owner-first refresh" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "session-owner-warm");
+const rosterMatch = { includeGlobal: true };
 
 function sessionRow(ownerId: string, key: string, label: string, updatedAt: number) {
   const owner = {
@@ -41,11 +44,14 @@ async function captureSidebar(page: Page, fileName: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
-  await page.locator(".sidebar-sessions").screenshot({
-    animations: "disabled",
-    path: path.join(proofDir, fileName),
-  });
+  await mkdir(path.join(suite.artifactDir, "session-owner-warm"), { recursive: true });
+  const sidebar = page.locator(".sidebar-sessions");
+  await writeFile(
+    path.join(suite.artifactDir, "session-owner-warm", fileName),
+    await takeControlUiElementScreenshot(page, sidebar, [
+      sidebar.locator(".sidebar-recent-session").first(),
+    ]),
+  );
 }
 
 suite.define(() => {
@@ -53,7 +59,12 @@ suite.define(() => {
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureProof
-        ? { recordVideo: { dir: proofDir, size: { height: 800, width: 1200 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "session-owner-warm"),
+              size: { height: 800, width: 1200 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -70,16 +81,19 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       const ada = page.locator('[data-session-key="agent:main:ada"]');
       const bob = page.locator('[data-session-key="agent:main:bob"]');
       await ada.waitFor();
+      // This regression protects foreign rows during a warm refresh.
+      expect(await bob.count()).toBe(0);
+      await selectAllSidebarSessions(page);
       await bob.waitFor();
       await captureSidebar(page, "warm-before-event.png");
 
       // Hold the single warm roster projection open and observe the existing DOM.
-      const before = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const before = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: adaRow.key,
         key: adaRow.key,
@@ -87,15 +101,13 @@ suite.define(() => {
         reason: "create",
         updatedAt: 3,
       });
-      await gateway.waitForRequest("sessions.list", { after: before });
-      const refreshProbe = await page.evaluateHandle(() => {
-        const app = document.querySelector<
-          HTMLElement & { runtime?: { context: ApplicationContext } }
-        >("openclaw-app");
+      await gateway.waitForRequest("sessions.list", { after: before, match: rosterMatch });
+      const applicationHandle = await getControlUiContextHandle(page);
+      const refreshProbe = await applicationHandle.evaluateHandle((application) => {
         const sidebar = document.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
           "openclaw-app-sidebar",
         );
-        const sessions = app?.runtime?.context.sessions;
+        const sessions = application.sessions;
         const row = sidebar?.querySelector('[data-session-key="agent:main:bob"]');
         const scope = sessions?.captureConnectionScope();
         if (!sidebar || !sessions || !row || !scope) {
@@ -139,8 +151,12 @@ suite.define(() => {
         rowRemoved: false,
       });
       expect(
-        (await gateway.getRequests("sessions.list")).slice(before).map((request) => request.params),
-      ).toEqual([expect.objectContaining({ ownerFirst: true, limit: 60 })]);
+        (await gateway.getRequests("sessions.list", rosterMatch))
+          .slice(before)
+          .map((request) => request.params),
+      ).toEqual([
+        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+      ]);
 
       for (let sample = 0; sample < 6; sample += 1) {
         expect(await bob.count()).toBe(1);
@@ -185,6 +201,7 @@ suite.define(() => {
       expect(await ada.count()).toBe(1);
       await captureSidebar(page, "warm-after-refresh.png");
       await refreshProbe.dispose();
+      await applicationHandle.dispose();
     } finally {
       await context.close();
     }

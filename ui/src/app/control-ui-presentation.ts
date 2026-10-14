@@ -18,19 +18,34 @@ const ACCENT_CSS_VARIABLES = [
 
 let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
+const systemChromeRevisions = new WeakMap<HTMLElement, string>();
 
-export function syncControlUiSystemChrome(): void {
+export function syncControlUiSystemChrome(paletteChanged = false): void {
   if (typeof document === "undefined") {
     return;
   }
   const root = document.documentElement;
-  const computedStyle = getComputedStyle(root);
-  const pageBackground = computedStyle.getPropertyValue("--bg").trim();
+  const chatShell = document.querySelector(".shell--chat") !== null;
+  if (root.classList.contains("control-ui-chat-shell") !== chatShell) {
+    root.classList.toggle("control-ui-chat-shell", chatShell);
+  }
   const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
+  const revision = () =>
+    JSON.stringify([
+      root.dataset.theme,
+      root.dataset.themeMode,
+      root.getAttribute("style"),
+      narrow && chatShell,
+    ]);
+  if (!paletteChanged && systemChromeRevisions.get(root) === revision()) {
+    return;
+  }
+  const computedStyle = getComputedStyle(root);
+  const pageBackground = computedStyle.getPropertyValue("--bg").trim();
   const background =
-    narrow && document.querySelector(".shell--chat")
+    narrow && chatShell
       ? computedStyle.getPropertyValue("--bg-content").trim() || pageBackground
       : pageBackground;
   if (!background) {
@@ -41,12 +56,17 @@ export function syncControlUiSystemChrome(): void {
     meta.content = background;
     meta.removeAttribute("media");
   }
+  // Include our own output so the next shell commit does not invalidate the sample.
+  systemChromeRevisions.set(root, revision());
 }
 
 export function applyControlUiAccent(userAccent?: string): void {
   userAccentOverride = userAccent;
   const root = document.documentElement;
-  const hex = (userAccentOverride ?? operatorSeamColor)?.trim().replace(/^#/, "");
+  // An explicit theme selection must not expose the lower-precedence seam color.
+  const accent =
+    userAccentOverride === "theme" ? undefined : (userAccentOverride ?? operatorSeamColor);
+  const hex = accent?.trim().replace(/^#/, "");
   const color = hex && /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
   if (!color) {
     for (const property of ACCENT_CSS_VARIABLES) {

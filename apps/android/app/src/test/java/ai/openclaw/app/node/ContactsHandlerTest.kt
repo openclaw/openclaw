@@ -5,7 +5,6 @@ import android.app.Application
 import android.content.ContentProvider
 import android.content.ContentUris
 import android.content.ContentValues
-import android.content.Context
 import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
@@ -26,7 +25,7 @@ import org.robolectric.shadows.ShadowContentResolver
 class ContactsHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleContactsSearch_requiresReadPermission() {
-    val handler = ContactsHandler.forTesting(appContext(), FakeContactsDataSource(canRead = false))
+    val handler = ContactsHandler(appContext(), FakeContactsDataSource(canRead = false))
 
     val result = handler.handleContactsSearch(null)
 
@@ -37,7 +36,7 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleContactsAdd_rejectsEmptyContact() {
     val handler =
-      ContactsHandler.forTesting(
+      ContactsHandler(
         appContext(),
         FakeContactsDataSource(canRead = true, canWrite = true),
       )
@@ -61,7 +60,7 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
         emails = listOf("ada@example.com"),
       )
     val handler =
-      ContactsHandler.forTesting(
+      ContactsHandler(
         appContext(),
         FakeContactsDataSource(canRead = true, searchResults = listOf(contact)),
       )
@@ -69,23 +68,18 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
     val result = handler.handleContactsSearch("""{"query":"ada","limit":1}""")
 
     assertTrue(result.ok)
-    val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
-    val contacts = payload.getValue("contacts").jsonArray
-    assertEquals(1, contacts.size)
     assertEquals(
-      "Ada Lovelace",
-      contacts
-        .first()
-        .jsonObject
-        .getValue("displayName")
-        .jsonPrimitive.content,
+      Json.parseToJsonElement(
+        """{"contacts":[{"identifier":"1","displayName":"Ada Lovelace","givenName":"Ada","familyName":"Lovelace","organizationName":"Analytical Engine","phoneNumbers":["+12025550123"],"emails":["ada@example.com"]}]}""",
+      ),
+      Json.parseToJsonElement(result.payloadJson ?: error("missing payload")),
     )
   }
 
   @Test
   fun handleContactsSearch_preservesExplicitJsonNullQuery() {
     val source = FakeContactsDataSource(canRead = true)
-    val handler = ContactsHandler.forTesting(appContext(), source)
+    val handler = ContactsHandler(appContext(), source)
 
     val result = handler.handleContactsSearch("""{"query":null}""")
 
@@ -107,7 +101,7 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
         emails = listOf("grace@example.com"),
       )
     val source = FakeContactsDataSource(canRead = true, canWrite = true, addResult = added)
-    val handler = ContactsHandler.forTesting(appContext(), source)
+    val handler = ContactsHandler(appContext(), source)
 
     val result =
       handler.handleContactsAdd(
@@ -115,16 +109,19 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
       )
 
     assertTrue(result.ok)
-    val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
-    val contact = payload.getValue("contact").jsonObject
-    assertEquals("Grace Hopper", contact.getValue("displayName").jsonPrimitive.content)
+    assertEquals(
+      Json.parseToJsonElement(
+        """{"contact":{"identifier":"2","displayName":"Grace Hopper","givenName":"Grace","familyName":"Hopper","organizationName":"US Navy","phoneNumbers":[],"emails":["grace@example.com"]}}""",
+      ),
+      Json.parseToJsonElement(result.payloadJson ?: error("missing payload")),
+    )
     assertEquals(1, source.addCalls)
   }
 
   @Test
   fun handleContactsAdd_omitsExplicitJsonNullFields() {
     val source = FakeContactsDataSource(canRead = true, canWrite = true)
-    val handler = ContactsHandler.forTesting(appContext(), source)
+    val handler = ContactsHandler(appContext(), source)
 
     val result =
       handler.handleContactsAdd(
@@ -147,7 +144,7 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleContactsAdd_rejectsOnlyExplicitJsonNullFields() {
     val source = FakeContactsDataSource(canRead = true, canWrite = true)
-    val handler = ContactsHandler.forTesting(appContext(), source)
+    val handler = ContactsHandler(appContext(), source)
 
     val result =
       handler.handleContactsAdd(
@@ -163,7 +160,7 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleContactsAdd_preservesLiteralNullStrings() {
     val source = FakeContactsDataSource(canRead = true, canWrite = true)
-    val handler = ContactsHandler.forTesting(appContext(), source)
+    val handler = ContactsHandler(appContext(), source)
 
     val result = handler.handleContactsAdd("""{"givenName":"null","phoneNumbers":["null"]}""")
 
@@ -323,6 +320,7 @@ private class TestContactsProvider : ContentProvider() {
           )
         ContentUris.withAppendedId(uri, rawContactId)
       }
+
       "data" -> {
         val row = ContentValues(requireNotNull(values))
         val rawContactId = row.getAsLong(ContactsContract.Data.RAW_CONTACT_ID)
@@ -345,7 +343,10 @@ private class TestContactsProvider : ContentProvider() {
         updateDisplayName(contactId, row)
         ContentUris.withAppendedId(uri, dataId)
       }
-      else -> error("unexpected contacts URI: $uri")
+
+      else -> {
+        error("unexpected contacts URI: $uri")
+      }
     }
 
   private fun updateDisplayName(
@@ -418,22 +419,16 @@ private class FakeContactsDataSource(
   var addedRequest: ContactsAddRequest? = null
     private set
 
-  override fun hasReadPermission(context: Context): Boolean = canRead
+  override fun hasReadPermission(): Boolean = canRead
 
-  override fun hasWritePermission(context: Context): Boolean = canWrite
+  override fun hasWritePermission(): Boolean = canWrite
 
-  override fun search(
-    context: Context,
-    request: ContactsSearchRequest,
-  ): List<ContactRecord> {
+  override fun search(request: ContactsSearchRequest): List<ContactRecord> {
     searchedRequest = request
     return searchResults
   }
 
-  override fun add(
-    context: Context,
-    request: ContactsAddRequest,
-  ): ContactRecord {
+  override fun add(request: ContactsAddRequest): ContactRecord {
     addCalls += 1
     addedRequest = request
     return addResult

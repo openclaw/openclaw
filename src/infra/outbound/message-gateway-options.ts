@@ -1,6 +1,8 @@
 // Gateway option normalization hides transport URL details for backend/managed
 // gateway clients and clamps timeout values.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import type { CallGatewayOptions } from "../../gateway/call.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -8,14 +10,45 @@ import {
   type GatewayClientName,
 } from "../../utils/message-channel.js";
 
+// Direct sends and option normalization must not load the Gateway runtime.
+export const loadMessageGatewayRuntime = createLazyRuntimeModule(
+  () => import("./message.gateway.runtime.js"),
+);
+
+export async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
+  if (idempotencyKey) {
+    return idempotencyKey;
+  }
+  const { randomIdempotencyKey } = await loadMessageGatewayRuntime();
+  return randomIdempotencyKey();
+}
+
+export type OutboundGatewayRequest = Pick<
+  CallGatewayOptions,
+  "method" | "params" | "timeoutMs" | "signal"
+>;
+
+export type OutboundGatewayRequestContext = {
+  sourceReplyFinal?: boolean;
+  sourceReplyToolCallId?: string;
+};
+
 /** Raw gateway options accepted by outbound message senders. */
-export type OutboundMessageGatewayOptionsInput = {
+export type OutboundMessageGatewayOptionsInput = Pick<
+  CallGatewayOptions,
+  "config" | "localPortOverride" | "ignoreEnvUrlOverride" | "tlsFingerprint"
+> & {
   url?: string;
   token?: string;
   timeoutMs?: number;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   mode?: GatewayClientMode;
+  /** Host-bound dispatch keeps delivery with its Gateway without opening a transport. */
+  request?: <T>(
+    request: OutboundGatewayRequest,
+    context?: OutboundGatewayRequestContext,
+  ) => Promise<T>;
   resolveAgentRuntimeIdentityToken?: () => Promise<string | undefined>;
 };
 
@@ -29,6 +62,10 @@ export function resolveOutboundMessageGatewayOptions(gateway?: OutboundMessageGa
       ? undefined
       : gateway?.url;
   return {
+    config: gateway?.config,
+    localPortOverride: gateway?.localPortOverride,
+    ignoreEnvUrlOverride: gateway?.ignoreEnvUrlOverride,
+    tlsFingerprint: gateway?.tlsFingerprint,
     url,
     token: gateway?.token,
     timeoutMs: resolveTimerTimeoutMs(gateway?.timeoutMs, 10_000),

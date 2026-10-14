@@ -174,7 +174,9 @@ describe("Buzz directory state", () => {
         name: "Engineering",
       }),
     ]);
-    expect(state.listGroupMembers({ groupId: `buzz:${ROOM_ID}`, limit: 2 })).toHaveLength(2);
+    expect(
+      state.listGroupMembers({ groupId: `buzz:${ROOM_ID}`, limit: 2 }).map((entry) => entry.id),
+    ).toEqual([ALICE_PUBLIC_KEY, BOB_PUBLIC_KEY]);
   });
 
   it("excludes rooms whose latest relay metadata marks them archived", () => {

@@ -3,6 +3,8 @@ import { TuiMainScreen, type TUI } from "@earendil-works/pi-tui";
 import { vi } from "vitest";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { createSessionActions } from "./tui-session-actions.js";
+import type { TuiStateAccess } from "./tui-types.js";
 
 type TuiSessionList = Awaited<ReturnType<TuiBackend["listSessions"]>>;
 
@@ -18,6 +20,12 @@ export function makeTuiSessionList(overrides: Partial<TuiSessionList> = {}): Tui
   };
 }
 
+export function makeTuiSessionDescription(
+  overrides: Partial<Awaited<ReturnType<TuiBackend["describeSession"]>>> = {},
+): Awaited<ReturnType<TuiBackend["describeSession"]>> {
+  return { session: null, defaults: {}, ...overrides };
+}
+
 /** Creates a complete backend fixture while keeping scenario overrides type-checked. */
 export function makeTuiBackend(overrides: Partial<TuiBackend> = {}): TuiBackend {
   const backend: TuiBackend = {
@@ -27,6 +35,7 @@ export function makeTuiBackend(overrides: Partial<TuiBackend> = {}): TuiBackend 
     sendChat: vi.fn<TuiBackend["sendChat"]>(async () => ({ runId: "test-run" })),
     abortChat: vi.fn<TuiBackend["abortChat"]>(async () => ({ ok: true, aborted: false })),
     loadHistory: vi.fn<TuiBackend["loadHistory"]>(async () => ({ messages: [] })),
+    describeSession: vi.fn<TuiBackend["describeSession"]>(async () => makeTuiSessionDescription()),
     listSessions: vi.fn<TuiBackend["listSessions"]>(async () => ({
       ts: 0,
       path: "",
@@ -83,3 +92,58 @@ export function makeTui(overrides: Partial<TUI> = {}): TUI {
   const tui = new TuiMainScreen(terminal);
   return Object.assign(tui, { requestRender: vi.fn(), ...overrides });
 }
+
+export const createBaseState = (overrides: Partial<TuiStateAccess> = {}): TuiStateAccess => ({
+  agentDefaultId: "main",
+  sessionMainKey: "agent:main:main",
+  sessionScope: "global",
+  agents: [],
+  currentAgentId: "main",
+  currentSessionKey: "agent:main:main",
+  currentSessionId: null,
+  activeChatRunId: null,
+  pendingSubmit: null,
+  historyLoaded: false,
+  sessionInfo: {},
+  initialSessionApplied: true,
+  isConnected: true,
+  autoMessageSent: false,
+  toolsExpanded: false,
+  showThinking: false,
+  connectionStatus: "connected",
+  activityStatus: "idle",
+  statusTimeout: null,
+  lastCtrlCAt: 0,
+  ...overrides,
+});
+
+export const createTestSessionActions = (
+  overrides: Partial<Parameters<typeof createSessionActions>[0]>,
+) =>
+  createSessionActions({
+    client: makeTuiBackend({ listSessions: vi.fn() }),
+    chatLog: makeChatLog({
+      addSystem: vi.fn(),
+      addUser: vi.fn(),
+      addLiveUser: vi.fn(),
+      addPendingUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+    }),
+    btw: { clear: vi.fn() },
+    tui: makeTui(),
+    opts: {},
+    state: createBaseState(),
+    agentNames: new Map(),
+    initialSessionInput: "",
+    initialSessionAgentId: null,
+    resolveSessionSelection: vi.fn((raw?: string) => ({
+      key: raw ?? "agent:main:main",
+      agentId: "main",
+    })),
+    updateHeader: vi.fn(),
+    updateFooter: vi.fn(),
+    updateAutocompleteProvider: vi.fn(),
+    setActivityStatus: vi.fn(),
+    ...overrides,
+  });

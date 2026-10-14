@@ -1,25 +1,56 @@
-// iMessage tests cover the RPC client child-process stream error handling.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PassThrough } from "node:stream";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { IMessagePrivateApiStatus } from "./private-api-status.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
+const runIMessageCliJsonCommandMock = vi.hoisted(() => vi.fn());
+const logVerboseMock = vi.hoisted(() => vi.fn());
+const contactsChangeDiagnostic =
+  "Could not fetch group for change type 1 with identifier 9E2F71C2:ABGroup, making it a delete change type.";
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
 }));
 
-// A dead imsg helper can emit an async `error` on any of its stdio streams. On
-// a raw EventEmitter an unhandled `error` throws synchronously, which in the
-// real gateway surfaces as an uncaughtException and crashes the process (#75438
-// covered stdin only). The mock child mirrors that stdio shape so we can assert
-// each stream's `error` is caught and routed to failAll.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: logVerboseMock,
+}));
+
+vi.mock("./cli-output.js", () => ({
+  runIMessageCliJsonCommand: runIMessageCliJsonCommandMock,
+}));
+
+// Raw EventEmitters expose unhandled stdio errors that would crash the Gateway.
+type MockStream = EventEmitter & { errored: Error | null };
 type MockChild = EventEmitter & {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  stdin: EventEmitter & {
+  stdout: MockStream;
+  stderr: MockStream;
+  stdin: MockStream & {
     write: (line: string, cb?: (err?: Error | null) => void) => boolean;
     end: () => void;
   };
@@ -29,11 +60,9 @@ type MockChild = EventEmitter & {
 
 function createMockChild(): MockChild {
   const child = new EventEmitter() as MockChild;
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  const stdin = new EventEmitter() as MockChild["stdin"];
-  // Resolve every write cleanly so the pending request only settles via the
-  // stream error path under test.
+  child.stdout = Object.assign(new EventEmitter(), { errored: null });
+  child.stderr = Object.assign(new EventEmitter(), { errored: null });
+  const stdin = Object.assign(new EventEmitter(), { errored: null }) as MockChild["stdin"];
   stdin.write = (_line, cb) => {
     cb?.(null);
     return true;
@@ -48,6 +77,152 @@ function createMockChild(): MockChild {
   return child;
 }
 
+function emitRpcError(child: MockChild, error: { code: number; message: string; data?: unknown }) {
+  child.stdout.emit("data", Buffer.from(`${JSON.stringify({ jsonrpc: "2.0", id: 1, error })}\n`));
+}
+
+let IMessageRpcClient: typeof import("./client.js").IMessageRpcClient;
+let IMessageRpcRequestError: typeof import("./client.js").IMessageRpcRequestError;
+let privateApiStatus: typeof import("./private-api-status.js");
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ IMessageRpcClient, IMessageRpcRequestError } = await import("./client.js"));
+  // Imported after resetModules so this is the same module instance the client
+  // mutates; a separate copy would hold a different cache map.
+  privateApiStatus = await import("./private-api-status.js");
+});
+
+afterAll(() => {
+  vi.doUnmock("node:child_process");
+  vi.doUnmock("./cli-output.js");
+  vi.resetModules();
+});
+
+afterEach(() => {
+  effectGate.prepare = undefined;
+});
+
+describe("IMessageRpcClient LF framing", () => {
+  let child: ReturnType<typeof createMockChild> & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+  };
+  let client: InstanceType<typeof IMessageRpcClient>;
+  const runtimeError = vi.fn();
+  const onNotification = vi.fn();
+
+  beforeEach(async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("VITEST", "");
+    child = Object.assign(createMockChild(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    });
+    spawnMock.mockReset().mockReturnValue(child);
+    runtimeError.mockReset();
+    onNotification.mockReset();
+    client = new IMessageRpcClient({
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+      onNotification,
+    });
+    await client.start();
+  });
+
+  afterEach(async () => {
+    child.emit("close", 0, null);
+    await client.stop();
+    vi.unstubAllEnvs();
+  });
+
+  it("delivers multiple LF responses and notifications in order, trimming CRLF and blanks", async () => {
+    const responses: unknown[] = [];
+    const first = client.request("first").then((value) => responses.push(value));
+    const second = client.request("second").then((value) => responses.push(value));
+    child.stdout.setEncoding("utf8");
+    child.stdout.write(
+      ' \r\n{"id":2,"result":"second"}\r\n{"method":"first"}\n{"id":1,"result":"first"}\n{"method":"second"}\r',
+    );
+    expect(onNotification.mock.calls).toEqual([[{ method: "first", params: undefined }]]);
+
+    child.stdout.write("\n");
+
+    expect(onNotification.mock.calls).toEqual([
+      [{ method: "first", params: undefined }],
+      [{ method: "second", params: undefined }],
+    ]);
+    await Promise.all([first, second]);
+    expect(responses).toEqual(["second", "first"]);
+    expect(runtimeError).not.toHaveBeenCalled();
+  });
+
+  it("keeps interleaved stdout/stderr decoder state independent and bypasses decoding strings", async () => {
+    const pending = client.request("ping");
+    const stdout = Buffer.from('{"id":1,"result":"\u20ac"}\n');
+    const stderr = Buffer.from("notice \u732b\r\n");
+    const stdoutSplit = stdout.indexOf(Buffer.from("\u20ac")) + 1;
+    const stderrSplit = stderr.indexOf(Buffer.from("\u732b")) + 1;
+
+    child.stdout.write(stdout.subarray(0, stdoutSplit));
+    child.stderr.write(stderr.subarray(0, stderrSplit));
+    // A string data event must not consume a buffered partial UTF-8 sequence.
+    child.stdout.emit("data", "prefix ");
+    child.stderr.emit("data", "prefix ");
+    child.stderr.write(stderr.subarray(stderrSplit));
+    child.stdout.write(stdout.subarray(stdoutSplit));
+
+    await expect(pending).resolves.toBe("prefix \u20ac");
+    expect(runtimeError.mock.calls).toEqual([["imsg rpc: notice prefix \u732b"]]);
+  });
+
+  it("resolves an unterminated stdout response before rejecting remaining requests on child close", async () => {
+    const response = client.request("first");
+    const remaining = expect(client.request("second")).rejects.toThrow("imsg rpc exited (code 1)");
+    child.stdout.write('{"id":1,"result":"final"}');
+    child.stdout.emit("close");
+    child.emit("close", 1, null);
+
+    await expect(response).resolves.toBe("final");
+    await remaining;
+    await expect(client.waitForClose()).rejects.toThrow("imsg rpc exited (code 1)");
+  });
+
+  it("flushes stdout then stderr only on child close, before choosing the terminal diagnostic", async () => {
+    const order: string[] = [];
+    onNotification.mockImplementation(() => order.push("stdout"));
+    runtimeError.mockImplementation(() => order.push("stderr"));
+    const pending = expect(client.request("ping")).rejects.toThrow(
+      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+    child.stdout.write('{"method":"final"}');
+    child.stderr.write("notice Full Disk Access denied for chat.db");
+
+    child.stdout.emit("close");
+    child.stderr.emit("close");
+    expect(order).toEqual([]);
+    child.emit("close", 1, null);
+
+    expect(order).toEqual(["stdout", "stderr"]);
+    expect(runtimeError).toHaveBeenCalledExactlyOnceWith(
+      "imsg rpc: notice Full Disk Access denied for chat.db",
+    );
+    await pending;
+  });
+
+  it("ignores both streams from a stale child after stop", async () => {
+    child.stdin.once("finish", () => child.emit("close", 0, null));
+    await client.stop();
+
+    child.stdout.write('{"method":"messages.changed","params":{}}\n');
+    child.stderr.write("late diagnostic\n");
+
+    expect(onNotification).not.toHaveBeenCalled();
+    expect(runtimeError).not.toHaveBeenCalled();
+  });
+});
+
 describe("IMessageRpcClient child stream error handling", () => {
   let child: MockChild;
   const tempDirs: string[] = [];
@@ -59,53 +234,117 @@ describe("IMessageRpcClient child stream error handling", () => {
     vi.stubEnv("VITEST", "");
     child = createMockChild();
     spawnMock.mockReset().mockReturnValue(child);
+    runIMessageCliJsonCommandMock.mockReset().mockResolvedValue({ status: "launched" });
+    logVerboseMock.mockReset();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    vi.resetModules();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })),
     );
   });
 
-  it.each(["stdout", "stderr", "stdin"] as const)(
-    "catches a %s stream error and rejects in-flight requests instead of crashing",
-    async (streamName) => {
-      const { IMessageRpcClient } = await import("./client.js");
+  it.each(["closed", "revoked"] as const)(
+    "refuses a %s RPC request after authority preparation without writing stdin",
+    async (outcome) => {
+      const preparing = Promise.withResolvers<void>();
+      const prepared = Promise.withResolvers<void>();
+      const refusal = new Error("scheduled request retired");
+      let current = true;
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      const written = Promise.withResolvers<void>();
+      const write = vi.fn(() => {
+        written.resolve();
+        return true;
+      });
+      child.stdin.write = write;
       const client = new IMessageRpcClient({ cliPath: "imsg" });
       await client.start();
-
-      const pending = client.request("ping", {}, { timeoutMs: 0 });
-      // Keep the rejection from surfacing as an unhandled rejection before we
-      // assert on it.
-      pending.catch(() => {});
-
-      const streamError = new Error(`${streamName} broke`);
-      expect(() => child[streamName].emit("error", streamError)).not.toThrow();
-
-      await expect(pending).rejects.toThrow(`${streamName} broke`);
-      await expect(client.waitForClose()).rejects.toThrow(`${streamName} broke`);
-      expect(child.kill).toHaveBeenCalledOnce();
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-
-      child.emit("close", null, "SIGTERM");
-      await client.stop();
+      const response = client
+        .request(
+          "send",
+          { text: "hello" },
+          {
+            assertCurrent: () => {
+              if (!current) {
+                throw refusal;
+              }
+            },
+          },
+        )
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([
+          preparing.promise,
+          written.promise.then(() => {
+            throw new Error("RPC handoff bypassed authority preparation");
+          }),
+        ]);
+        expect(write).not.toHaveBeenCalled();
+        if (outcome === "closed") {
+          child.emit("close", 0, null);
+        } else {
+          current = false;
+        }
+        prepared.resolve();
+        if (outcome === "revoked") {
+          expect(await response).toBe(refusal);
+        } else {
+          expect(await response).toMatchObject({
+            message: "imsg rpc process changed before request initiation",
+          });
+        }
+        expect(write).not.toHaveBeenCalled();
+      } finally {
+        prepared.resolve();
+        child.emit("close", 0, null);
+        await client.stop();
+      }
     },
   );
 
+  it("rejects in-flight requests when an errored stdout closes without an error event", async () => {
+    const client = new IMessageRpcClient({ cliPath: "imsg" });
+    await client.start();
+
+    const pending = client.request("ping", {}, { timeoutMs: 0 });
+    // Keep the rejection from surfacing as an unhandled rejection before we
+    // assert on it.
+    pending.catch(() => {});
+
+    const streamError = new Error("stdout broke");
+    child.stdout.errored = streamError;
+    try {
+      expect(() => {
+        child.stdout.emit("close");
+      }).not.toThrow();
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      await expect(pending).rejects.toThrow("stdout broke");
+      await expect(client.waitForClose()).rejects.toThrow("stdout broke");
+    } finally {
+      child.emit("close", null, "SIGTERM");
+      await client.stop();
+    }
+  });
+
   it("propagates a synchronous stdin write failure as a terminal transport error", async () => {
+    vi.useFakeTimers();
     const writeError = new Error("write after end");
     child.stdin.write = () => {
       throw writeError;
     };
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
 
-    await expect(client.request("ping", {}, { timeoutMs: 0 })).rejects.toBe(writeError);
+    await expect(client.request("ping", {}, { timeoutMs: 10 })).rejects.toBe(writeError);
+    expect(vi.getTimerCount()).toBe(0);
     await expect(client.waitForClose()).rejects.toBe(writeError);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
 
@@ -113,51 +352,8 @@ describe("IMessageRpcClient child stream error handling", () => {
     await client.stop();
   });
 
-  it("preserves structured JSON-RPC error data for send callers", async () => {
-    const { IMessageRpcClient, IMessageRpcRequestError } = await import("./client.js");
-    const client = new IMessageRpcClient({ cliPath: "imsg" });
-    await client.start();
-    const data = {
-      retry_safe: true,
-      disposition: "not_started",
-      transport: "bridge_v2",
-      operation: "send-message",
-    };
-
-    const pending = client.request("send", {}, { timeoutMs: 0 });
-    pending.catch(() => {});
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          error: {
-            code: -32603,
-            message: "Delivery failed before dispatch",
-            data,
-          },
-        })}\n`,
-      ),
-    );
-
-    const error = await pending.catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(IMessageRpcRequestError);
-    expect(error).toMatchObject({
-      name: "IMessageRpcRequestError",
-      code: -32603,
-      data,
-      message:
-        'Delivery failed before dispatch: code=-32603 {\n  "retry_safe": true,\n  "disposition": "not_started",\n  "transport": "bridge_v2",\n  "operation": "send-message"\n}',
-    });
-
-    child.emit("close", 0, null);
-    await client.stop();
-  });
-
   it("finishes graceful shutdown without scheduling escalation after synchronous close", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
     const endMock = vi.fn(() => {
@@ -175,7 +371,6 @@ describe("IMessageRpcClient child stream error handling", () => {
 
   it("escalates EOF to SIGTERM and SIGKILL, then waits for close", async () => {
     vi.useFakeTimers();
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
     child.stdin.end = vi.fn();
@@ -203,7 +398,6 @@ describe("IMessageRpcClient child stream error handling", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
     spawnMock.mockReturnValueOnce(realChild);
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
 
@@ -223,90 +417,51 @@ describe("IMessageRpcClient child stream error handling", () => {
     }
   });
 
-  it("promotes a complete Full Disk Access diagnostic", async () => {
-    const { IMessageRpcClient } = await import("./client.js");
-    const runtimeError = vi.fn();
-    const client = new IMessageRpcClient({
-      cliPath: "imsg",
-      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
-    });
-    await client.start();
-
-    const pending = client.request("ping", {}, { timeoutMs: 0 });
-    pending.catch(() => {});
-    child.stderr.emit("data", Buffer.from("notice Full Disk Access denied for chat.db\n"));
-    child.emit("close", 1, null);
-
-    await expect(pending).rejects.toThrow(
-      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+  it("classifies real child stderr for the documented reconciliation line and a framework error", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-rpc-stderr-"));
+    tempDirs.push(root);
+    const wrapperPath = path.join(root, "imsg");
+    const documented = `2026-08-04 00:32:38.518 imsg[88305:38969629] ${contactsChangeDiagnostic}`;
+    const frameworkError = "CoreData: error: Failed to load persistent store";
+    await fs.writeFile(
+      wrapperPath,
+      [
+        "#!/usr/bin/env node",
+        `process.stderr.write(${JSON.stringify(documented)} + "\\n");`,
+        `process.stderr.write(${JSON.stringify(frameworkError)} + "\\n");`,
+        'let buffered = "";',
+        'process.stdin.setEncoding("utf8");',
+        'process.stdin.on("data", (chunk) => {',
+        "  buffered += chunk;",
+        '  let newline = buffered.indexOf("\\n");',
+        "  while (newline !== -1) {",
+        "    const line = buffered.slice(0, newline);",
+        "    buffered = buffered.slice(newline + 1);",
+        "    const request = JSON.parse(line);",
+        '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { ok: true } }) + "\\n");',
+        '    newline = buffered.indexOf("\\n");',
+        "  }",
+        "});",
+      ].join("\n"),
+      { mode: 0o700 },
     );
-    expect(runtimeError).toHaveBeenCalledOnce();
-    expect(runtimeError.mock.calls[0]?.[0]).not.toContain("�");
-  });
-
-  it("preserves a split UTF-8 Full Disk Access diagnostic from a real child", async () => {
     const childProcess =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    const script = `
-      const prefix = Buffer.from("notice 猫 Full Disk Acc", "utf8");
-      setTimeout(() => {
-        process.stderr.write(prefix.subarray(0, 8));
-        setTimeout(() => {
-          process.stderr.write(prefix.subarray(8));
-          setTimeout(() => {
-            process.stderr.write("ess denied for chat.db");
-            setTimeout(() => process.exit(1), 10);
-          }, 10);
-        }, 10);
-      }, 50);
-    `;
-    const realChild = childProcess.spawn(process.execPath, ["-e", script], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    spawnMock.mockReturnValueOnce(realChild);
-    const { IMessageRpcClient } = await import("./client.js");
+    spawnMock.mockImplementationOnce((command, args, options) =>
+      childProcess.spawn(command, args, options),
+    );
     const runtimeError = vi.fn();
     const client = new IMessageRpcClient({
-      cliPath: "imsg",
+      cliPath: wrapperPath,
       runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
     });
     await client.start();
+    await expect(client.request("ping", {}, { timeoutMs: 5_000 })).resolves.toEqual({ ok: true });
+    await client.stop();
 
-    try {
-      const pending = client.request("ping", {}, { timeoutMs: 0 });
-      pending.catch(() => {});
-
-      await expect(pending).rejects.toThrow(
-        "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
-      );
-      expect(runtimeError).toHaveBeenCalledWith(
-        "imsg rpc: notice 猫 Full Disk Access denied for chat.db",
-      );
-    } finally {
-      if (!realChild.killed) {
-        realChild.kill("SIGTERM");
-      }
-      await client.stop();
-    }
-  });
-
-  it("keeps unrelated unterminated stderr on the generic close error path", async () => {
-    const { IMessageRpcClient } = await import("./client.js");
-    const runtimeError = vi.fn();
-    const client = new IMessageRpcClient({
-      cliPath: "imsg",
-      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
-    });
-    await client.start();
-
-    const pending = client.request("ping", {}, { timeoutMs: 0 });
-    pending.catch(() => {});
-    child.stderr.emit("data", Buffer.from("unrelated warning"));
-    child.emit("close", 1, null);
-
-    await expect(pending).rejects.toThrow("imsg rpc exited (code 1)");
-    await expect(client.waitForClose()).rejects.toThrow("imsg rpc exited (code 1)");
-    expect(runtimeError).toHaveBeenCalledWith("imsg rpc: unrelated warning");
+    expect(logVerboseMock).toHaveBeenCalledWith(`imsg rpc: ${documented}`);
+    expect(runtimeError).toHaveBeenCalledWith(`imsg rpc: ${frameworkError}`);
+    expect(runtimeError).not.toHaveBeenCalledWith(`imsg rpc: ${documented}`);
   });
 
   it("expands cliPath locally while preserving remote dbPath and JSON data", async () => {
@@ -345,7 +500,6 @@ describe("IMessageRpcClient child stream error handling", () => {
     spawnMock.mockImplementationOnce((command, args, options) =>
       childProcess.spawn(command, args, options),
     );
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({
       cliPath: "~/.openclaw/imsg remote",
       dbPath: "~/Library/Messages/chat.db",
@@ -374,7 +528,6 @@ describe("IMessageRpcClient child stream error handling", () => {
 
   it("keeps local dbPath home expansion", async () => {
     vi.stubEnv("HOME", "/Users/gateway");
-    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient({
       cliPath: "~/.openclaw/imsg-local",
       dbPath: "~/Library/Messages/chat.db",
@@ -387,6 +540,128 @@ describe("IMessageRpcClient child stream error handling", () => {
       ["rpc", "--json", "--db", "/Users/gateway/Library/Messages/chat.db"],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
+    child.emit("close", 0, null);
+    await client.stop();
+  });
+});
+
+describe("IMessageRpcClient bridge-stall cache invalidation", () => {
+  let child: MockChild;
+
+  const seeded: IMessagePrivateApiStatus = {
+    available: true,
+    v2Ready: true,
+    selectors: {},
+    rpcMethods: [],
+  };
+
+  beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("VITEST", "");
+    child = createMockChild();
+    spawnMock.mockReset().mockReturnValue(child);
+    runIMessageCliJsonCommandMock.mockReset().mockResolvedValue({ status: "launched" });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("logs recovery failure while preserving the original structured error", async () => {
+    const recoveryError = new Error("launch stderr stream failed");
+    const runtimeError = vi.fn();
+    runIMessageCliJsonCommandMock.mockRejectedValueOnce(recoveryError);
+    const client = new IMessageRpcClient({
+      cliPath: "/tmp/imsg-stall-recovery-failure",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+    const pending = client.request("send", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    emitRpcError(child, {
+      code: -32603,
+      message: "Timed out waiting for response to 'send-message'",
+      data: { disposition: "may_have_completed", retry_safe: false },
+    });
+
+    const error = await pending.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(IMessageRpcRequestError);
+    if (!(error instanceof IMessageRpcRequestError)) {
+      throw new Error("expected an IMessageRpcRequestError");
+    }
+    expect(error).toMatchObject({
+      code: -32603,
+      data: { disposition: "may_have_completed", retry_safe: false },
+    });
+    expect(error.message).toContain("Timed out waiting for response to 'send-message'");
+    expect(runtimeError).toHaveBeenCalledWith(
+      "imessage: automatic bridge recovery failed: launch stderr stream failed",
+    );
+
+    child.emit("close", 0, null);
+    await client.stop();
+  });
+
+  // The cache uses the configured path, while spawning expands it. Recovery
+  // must evict that same key and preserve send reconciliation's structured data.
+  it.each([{ name: "structured errors", data: { disposition: "not_started", retry_safe: true } }])(
+    "invalidates the configured bridge cache and preserves $name",
+    async ({ data }) => {
+      const cliPath = "~/imsg-stall-tilde/imsg";
+      privateApiStatus.setCachedIMessagePrivateApiStatus(cliPath, { ...seeded });
+      expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
+
+      const client = new IMessageRpcClient({ cliPath });
+      await client.start();
+      const pending = client.request("send", {}, { timeoutMs: 0 });
+      pending.catch(() => {});
+      emitRpcError(child, {
+        code: -32603,
+        message: "Timed out waiting for response to 'send-message'",
+        data,
+      });
+
+      const error = (await pending.catch((cause: unknown) => cause)) as Error;
+      expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
+      expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
+        cliPath,
+        args: ["launch"],
+        timeoutMs: 30_000,
+      });
+      expect(error.message).toContain("Timed out waiting for response to 'send-message'");
+      expect(error.message).toContain("imsg launch");
+      expect(error.message).toContain("channels status --probe");
+      expect(error).toBeInstanceOf(IMessageRpcRequestError);
+      expect(error).toMatchObject({
+        code: -32603,
+        data,
+      });
+
+      child.emit("close", 0, null);
+      await client.stop();
+    },
+  );
+
+  // send.ts matches this timeout wording; a wrapper deadline is not a bridge stall.
+  it("leaves a client-side timeout undecorated without disturbing another pending request", async () => {
+    vi.useFakeTimers();
+    const client = new IMessageRpcClient({ cliPath: "/tmp/imsg-stall-clienttimeout" });
+    await client.start();
+    const pending = client.request("send", {}, { timeoutMs: 10 });
+    pending.catch(() => {});
+    const untimed = client.request("ping", {}, { timeoutMs: -1 });
+    untimed.catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+
+    const error = (await pending.catch((cause: unknown) => cause)) as Error;
+    expect(error.message).toBe("imsg rpc timeout (send)");
+    expect(error.message).not.toContain("imsg launch");
+    child.stdout.emit("data", '{"id":1,"result":"late"}\n{"id":2,"result":"alive"}\n');
+    await expect(untimed).resolves.toBe("alive");
+    expect(vi.getTimerCount()).toBe(0);
+
     child.emit("close", 0, null);
     await client.stop();
   });

@@ -2,11 +2,6 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type {
-  TasksCancelResult,
-  TasksGetResult,
-  TasksListResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import {
   clearConfigCache,
@@ -23,8 +18,8 @@ import {
 import { buildMockOpenAiResponsesProvider } from "../../../../src/gateway/test-openai-responses-model.js";
 import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
-import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
+import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const ISOLATED_GATEWAY_ENV_KEYS = [
@@ -32,6 +27,7 @@ const ISOLATED_GATEWAY_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_URL",
   "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
   "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
   "OPENCLAW_TEST_MINIMAL_GATEWAY",
@@ -59,18 +55,6 @@ function resetGatewayState(): void {
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest({ preserveListeners: true });
   resetSystemEventsForTest();
-  resetTaskRegistryForTests({ persist: false });
-}
-
-function writeResponsesEvents(response: ServerResponse, events: unknown[]): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
 }
 
 function writeAssistantResponse(response: ServerResponse, text: string): void {
@@ -81,7 +65,7 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
     status: "completed",
     content: [{ type: "output_text", text, annotations: [] }],
   };
-  writeResponsesEvents(response, [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -100,12 +84,12 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
   ]);
 }
 
-describe("Gateway task and automation RPCs", () => {
+describe("Gateway run cancellation and automation RPCs", () => {
   beforeEach(resetGatewayState);
   afterEach(resetGatewayState);
 
   it(
-    "persists cron CRUD, wakes the heartbeat, and controls an agent-created task",
+    "persists cron CRUD, wakes the heartbeat, and cancels an agent run through chat.abort",
     { timeout: 90_000 },
     async () => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
@@ -141,6 +125,7 @@ describe("Gateway task and automation RPCs", () => {
         setTestEnvValue(key, value);
       }
       deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+      deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
       deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
 
       const taskPrompt = nextId("create-tracked-task");
@@ -204,7 +189,7 @@ describe("Gateway task and automation RPCs", () => {
                 },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",
@@ -304,64 +289,14 @@ describe("Gateway task and automation RPCs", () => {
         expect(started).toMatchObject({ runId, status: "accepted" });
 
         await expect
-          .poll(
-            async () => {
-              const page = await client.request<TasksListResult>("tasks.list", {
-                sessionKey,
-                status: "running",
-              });
-              return page.tasks.find(
-                (candidate) =>
-                  candidate.runtime === "cli" &&
-                  candidate.runId === runId &&
-                  candidate.sessionKey === sessionKey,
-              )?.id;
-            },
-            { timeout: 10_000, interval: 50 },
-          )
-          .toBeTypeOf("string");
-        const runningTasks = await client.request<TasksListResult>("tasks.list", {
-          sessionKey,
-          status: "running",
-        });
-        const taskId = runningTasks.tasks.find(
-          (candidate) =>
-            candidate.runtime === "cli" &&
-            candidate.runId === runId &&
-            candidate.sessionKey === sessionKey,
-        )?.id;
-        expect(taskId).toBeTypeOf("string");
-        if (!taskId) {
-          throw new Error("gateway-created agent task disappeared before lookup");
-        }
-
-        await expect(
-          client.request<TasksGetResult>("tasks.get", { taskId }),
-        ).resolves.toMatchObject({
-          task: {
-            id: taskId,
-            runtime: "cli",
-            status: "running",
-            prompt: taskPrompt,
-          },
-        });
-        const cancelled = await client.request<TasksCancelResult>("tasks.cancel", {
-          taskId,
-          reason: "Gateway RPC automation evidence complete",
-        });
-        expect(cancelled).toMatchObject({
-          found: true,
-          cancelled: true,
-          task: { id: taskId, status: "cancelled" },
-        });
-        await expect(
-          client.request<TasksGetResult>("tasks.get", { taskId }),
-        ).resolves.toMatchObject({
-          task: {
-            id: taskId,
-            status: "cancelled",
-            error: "Gateway RPC automation evidence complete",
-          },
+          .poll(() => providerRequests.some((body) => JSON.stringify(body).includes(taskPrompt)), {
+            timeout: 10_000,
+            interval: 50,
+          })
+          .toBe(true);
+        await expect(client.request("chat.abort", { sessionKey, runId })).resolves.toMatchObject({
+          aborted: true,
+          runIds: [runId],
         });
         const releaseResponse = releaseTaskResponse;
         if (!releaseResponse) {
@@ -374,17 +309,7 @@ describe("Gateway task and automation RPCs", () => {
           { runId: started.runId, timeoutMs: 30_000 },
           { timeoutMs: 35_000 },
         );
-        expect(agentWait).toMatchObject({ status: "ok" });
-        await expect(
-          client.request<TasksGetResult>("tasks.get", { taskId }),
-        ).resolves.toMatchObject({
-          task: {
-            id: taskId,
-            status: "cancelled",
-            error: "Gateway RPC automation evidence complete",
-          },
-        });
-
+        expect(agentWait).toMatchObject({ status: "error", stopReason: "rpc" });
         const requestsBeforeWake = providerRequests.length;
         const wakeRequestedAt = Date.now();
         await expect(

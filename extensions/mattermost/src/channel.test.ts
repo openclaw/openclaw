@@ -1,10 +1,9 @@
-// Mattermost tests cover channel plugin behavior.
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
-import { createChannelMessageReplyPipeline } from "../runtime-api.js";
+import type { OpenClawConfig, ReplyPayload } from "../runtime-api.js";
 
 const { sendMessageMattermostMock, mockFetchGuard } = vi.hoisted(() => ({
-  sendMessageMattermostMock: vi.fn(),
+  sendMessageMattermostMock: vi.fn<typeof import("./mattermost/send.js").sendMessageMattermost>(),
   mockFetchGuard: vi.fn(async (p: { url: string; init?: RequestInit }) => {
     const response = await globalThis.fetch(p.url, p.init);
     return { response, release: async () => {}, finalUrl: p.url };
@@ -14,2175 +13,826 @@ const { sendMessageMattermostMock, mockFetchGuard } = vi.hoisted(() => ({
 vi.mock("./mattermost/send.js", () => ({
   sendMessageMattermost: sendMessageMattermostMock,
 }));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/ssrf-runtime")) as Record<
-    string,
-    unknown
-  >;
-  return { ...original, fetchWithSsrFGuard: mockFetchGuard };
-});
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => ({
+  ...(await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  )),
+  fetchWithSsrFGuard: mockFetchGuard,
+}));
 
 import { mattermostPlugin } from "./channel.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
-  requestUrl,
   withMockedGlobalFetch,
 } from "./mattermost/reactions.test-helpers.js";
+import type { MattermostConfig } from "./types.js";
 
-describe("mattermost target classification", () => {
-  it("requires an explicit user namespace for direct targets", () => {
-    expect(mattermostPlugin.messaging?.inferTargetChatType?.({ to: "user:owner" })).toBe("direct");
-    expect(mattermostPlugin.messaging?.inferTargetChatType?.({ to: "channel:operators" })).toBe(
-      "channel",
-    );
-    expect(mattermostPlugin.messaging?.inferTargetChatType?.({ to: "ambiguous" })).toBeUndefined();
+const actions = mattermostPlugin.actions!;
+const outbound = mattermostPlugin.outbound!;
+const threading = mattermostPlugin.threading!;
+type ActionContext = Parameters<NonNullable<typeof actions.handleAction>>[0];
+
+function config(mattermost: MattermostConfig = {}): OpenClawConfig {
+  const cfg = createMattermostTestConfig();
+  return { channels: { mattermost: { ...cfg.channels?.mattermost, ...mattermost } } };
+}
+
+function action(overrides: Partial<ActionContext>): ActionContext {
+  return { channel: "mattermost", action: "send", params: {}, cfg: config(), ...overrides };
+}
+
+async function sendPrepared(overrides: Partial<ActionContext>) {
+  const ctx = action(overrides);
+  const to = "channel:CHAN1";
+  const text = typeof ctx.params.message === "string" ? ctx.params.message : "report";
+  const payload = await actions.prepareSendPayload!({ ctx, to, payload: { text } });
+  expect(payload).not.toBeNull();
+  return outbound.sendPayload!({
+    cfg: ctx.cfg,
+    to,
+    text,
+    payload: payload!,
+    accountId: ctx.accountId ?? undefined,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
+  });
+}
+
+async function render(
+  payload: ReplyPayload & { presentation: NonNullable<ReplyPayload["presentation"]> },
+) {
+  return outbound.renderPresentation!({
+    payload,
+    presentation: payload.presentation,
+    ctx: { cfg: config(), to: "channel:CHAN1", text: "", payload },
+  });
+}
+
+function expectSend(text = "report") {
+  expect(sendMessageMattermostMock).toHaveBeenCalledTimes(1);
+  const [to, actualText, options] = sendMessageMattermostMock.mock.calls[0]!;
+  expect(to).toBe("channel:CHAN1");
+  expect(actualText).toBe(text);
+  return options;
+}
+
+beforeEach(() => {
+  sendMessageMattermostMock.mockReset();
+  sendMessageMattermostMock.mockResolvedValue({
+    messageId: "post-1",
+    channelId: "channel-1",
+    content: "report",
+    receipt: {
+      primaryPlatformMessageId: "post-1",
+      platformMessageIds: ["post-1"],
+      parts: [{ platformMessageId: "post-1", kind: "text", index: 0 }],
+      sentAt: 1,
+    },
   });
 });
 
-type MattermostHandleAction = NonNullable<
-  NonNullable<typeof mattermostPlugin.actions>["handleAction"]
->;
-type MattermostActionContext = Parameters<MattermostHandleAction>[0];
-type MattermostSendText = NonNullable<NonNullable<typeof mattermostPlugin.outbound>["sendText"]>;
-type MattermostSendTextParams = Parameters<MattermostSendText>[0];
-type MattermostSendMedia = NonNullable<NonNullable<typeof mattermostPlugin.outbound>["sendMedia"]>;
-type MattermostSendMediaParams = Parameters<MattermostSendMedia>[0];
-type MattermostRenderPresentation = NonNullable<
-  NonNullable<typeof mattermostPlugin.outbound>["renderPresentation"]
->;
-type MattermostSendPayload = NonNullable<
-  NonNullable<typeof mattermostPlugin.outbound>["sendPayload"]
->;
-
-function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
-  return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
-}
-
-function requireMattermostNormalizeTarget() {
-  const normalize = mattermostPlugin.messaging?.normalizeTarget;
-  if (!normalize) {
-    throw new Error("mattermost messaging.normalizeTarget missing");
-  }
-  return normalize;
-}
-
-function requireMattermostTargetResolver() {
-  const resolveTarget = mattermostPlugin.messaging?.targetResolver?.resolveTarget;
-  if (!resolveTarget) {
-    throw new Error("mattermost messaging.targetResolver.resolveTarget missing");
-  }
-  return resolveTarget;
-}
-
-function requireMattermostPairingNormalizer() {
-  const normalize = mattermostPlugin.pairing?.normalizeAllowEntry;
-  if (!normalize) {
-    throw new Error("mattermost pairing.normalizeAllowEntry missing");
-  }
-  return normalize;
-}
-
-function requireMattermostReplyToModeResolver() {
-  const resolveReplyToMode = mattermostPlugin.threading?.resolveReplyToMode;
-  if (!resolveReplyToMode) {
-    throw new Error("mattermost threading.resolveReplyToMode missing");
-  }
-  return resolveReplyToMode;
-}
-
-function requireMattermostThreadTargetMatcher() {
-  const matchesToolContextTarget = mattermostPlugin.threading?.matchesToolContextTarget;
-  if (!matchesToolContextTarget) {
-    throw new Error("mattermost threading.matchesToolContextTarget missing");
-  }
-  return matchesToolContextTarget;
-}
-
-function requireMattermostSendText() {
-  const sendText = mattermostPlugin.outbound?.sendText;
-  if (!sendText) {
-    throw new Error("mattermost outbound.sendText missing");
-  }
-  return sendText;
-}
-
-function requireMattermostSendMedia() {
-  const sendMedia = mattermostPlugin.outbound?.sendMedia;
-  if (!sendMedia) {
-    throw new Error("mattermost outbound.sendMedia missing");
-  }
-  return sendMedia;
-}
-
-function requireMattermostChunker() {
-  const chunker = mattermostPlugin.outbound?.chunker;
-  if (!chunker) {
-    throw new Error("mattermost outbound.chunker missing");
-  }
-  return chunker;
-}
-
-function requireMattermostRenderPresentation(): MattermostRenderPresentation {
-  const renderPresentation = mattermostPlugin.outbound?.renderPresentation;
-  if (!renderPresentation) {
-    throw new Error("mattermost outbound.renderPresentation missing");
-  }
-  return renderPresentation;
-}
-
-function requireMattermostSendPayload(): MattermostSendPayload {
-  const sendPayload = mattermostPlugin.outbound?.sendPayload;
-  if (!sendPayload) {
-    throw new Error("mattermost outbound.sendPayload missing");
-  }
-  return sendPayload;
-}
-
-function createMattermostActionContext(
-  overrides: Partial<MattermostActionContext>,
-): MattermostActionContext {
-  return {
-    channel: "mattermost",
-    action: "send",
-    params: {},
-    cfg: createMattermostTestConfig(),
-    ...overrides,
-  };
-}
-
-function expectSingleMattermostSend(to: string, text: string): Record<string, unknown> {
-  expect(sendMessageMattermostMock).toHaveBeenCalledTimes(1);
-  const [call] = sendMessageMattermostMock.mock.calls;
-  if (!call) {
-    throw new Error("expected Mattermost send call");
-  }
-  const [actualTo, actualText, options] = call;
-  expect(actualTo).toBe(to);
-  expect(actualText).toBe(text);
-  if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new Error("expected Mattermost send options object");
-  }
-  return options as Record<string, unknown>;
-}
-
-describe("mattermostPlugin", () => {
-  beforeEach(() => {
-    sendMessageMattermostMock.mockReset();
-    sendMessageMattermostMock.mockResolvedValue({
-      messageId: "post-1",
-      channelId: "channel-1",
-    });
-  });
-
-  it("opts into account-scoped config restarts", () => {
-    expect(mattermostPlugin.reload).toMatchObject({ accountScopedRestart: true });
+describe("Mattermost configuration and threading", () => {
+  it("requires an explicit user namespace for direct targets", () => {
+    const infer = mattermostPlugin.messaging!.inferTargetChatType!;
+    expect(infer({ to: "user:owner" })).toBe("direct");
+    expect(infer({ to: "channel:operators" })).toBe("channel");
+    expect(infer({ to: "ambiguous" })).toBeUndefined();
   });
 
   it("keeps sibling resolution stable across named-account additions and edits", () => {
+    const beta = { baseUrl: "https://beta.example.com", chatmode: "onmessage" as const };
     const before: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          replyToMode: "first",
-          accounts: {
-            beta: {
-              baseUrl: "https://beta.example.com",
-              chatmode: "onmessage",
-            },
-          },
-        },
-      },
+      channels: { mattermost: { replyToMode: "first", accounts: { beta } } },
     };
-    const afterAdd: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          replyToMode: "first",
-          accounts: {
-            alpha: {
-              baseUrl: "https://alpha.example.com",
-              chatmode: "oncall",
-            },
-            beta: {
-              baseUrl: "https://beta.example.com",
-              chatmode: "onmessage",
-            },
-          },
+    const expected = mattermostPlugin.config.resolveAccount(before, "beta");
+    for (const baseUrl of ["https://alpha.example.com", "https://alpha-new.example.com"]) {
+      const after = {
+        ...before,
+        channels: {
+          mattermost: { ...before.channels?.mattermost, accounts: { beta, alpha: { baseUrl } } },
         },
-      },
-    };
-    const afterEdit: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          replyToMode: "first",
-          accounts: {
-            alpha: {
-              baseUrl: "https://alpha-new.example.com",
-              chatmode: "onchar",
-            },
-            beta: {
-              baseUrl: "https://beta.example.com",
-              chatmode: "onmessage",
-            },
-          },
-        },
-      },
-    };
-
-    const expectedBeta = mattermostPlugin.config.resolveAccount(before, "beta");
-    expect(mattermostPlugin.config.resolveAccount(afterAdd, "beta")).toEqual(expectedBeta);
-    expect(mattermostPlugin.config.resolveAccount(afterEdit, "beta")).toEqual(expectedBeta);
+      };
+      expect(mattermostPlugin.config.resolveAccount(after, "beta")).toEqual(expected);
+    }
   });
 
-  describe("messaging", () => {
-    it("keeps @username targets", () => {
-      const normalize = requireMattermostNormalizeTarget();
-
-      expect(normalize("@Alice")).toBe("@Alice");
-      expect(normalize("@alice")).toBe("@alice");
-    });
-
-    it("normalizes spaced mattermost prefixes to user targets", () => {
-      const normalize = requireMattermostNormalizeTarget();
-
-      expect(normalize("mattermost:USER123")).toBe("user:USER123");
-      expect(normalize("  mattermost:USER123  ")).toBe("user:USER123");
-    });
+  it("normalizes pairing allowlist entries", () => {
+    const normalize = mattermostPlugin.pairing!.normalizeAllowEntry!;
+    expect(normalize("  @Alice  ")).toBe("alice");
+    expect(normalize("user:USER123")).toBe("user123");
+    expect(normalize("  mattermost:USER123  ")).toBe("user123");
   });
 
-  describe("pairing", () => {
-    it("normalizes allowlist entries", () => {
-      const normalize = requireMattermostPairingNormalizer();
-
-      expect(normalize("@Alice")).toBe("alice");
-      expect(normalize("user:USER123")).toBe("user123");
-      expect(normalize("  @Alice  ")).toBe("alice");
-      expect(normalize("  mattermost:USER123  ")).toBe("user123");
-    });
+  it("formats allowFrom entries", () => {
+    expect(
+      mattermostPlugin.config.formatAllowFrom!({
+        cfg: {},
+        allowFrom: [" @Alice ", " user:USER123 ", " mattermost:BOT999 "],
+      }),
+    ).toEqual(["@alice", "user123", "bot999"]);
   });
 
-  describe("threading", () => {
-    it("builds tool context from the effective Mattermost thread root", () => {
-      const buildToolContext = mattermostPlugin.threading?.buildToolContext;
-      if (!buildToolContext) {
-        throw new Error("mattermost threading.buildToolContext missing");
-      }
-      const hasRepliedRef = { value: false };
-
-      expect(
-        buildToolContext({
-          cfg: createMattermostTestConfig(),
-          accountId: "default",
-          context: {
-            To: "channel:C1",
-            ChatType: "channel",
-            CurrentMessageId: "child-1",
-            MessageThreadId: "root-1",
-          },
-          hasRepliedRef,
-        }),
-      ).toEqual({
-        currentChannelId: "channel:C1",
-        currentThreadTs: "root-1",
-        currentMessageId: "child-1",
-        replyToMode: "all",
+  it("builds tool context from the effective thread root", () => {
+    const hasRepliedRef = { value: false };
+    expect(
+      threading.buildToolContext!({
+        cfg: config(),
+        accountId: "default",
         hasRepliedRef,
-        sameChannelThreadRequired: true,
-      });
-    });
-
-    it.each(["first", "batched"] as const)(
-      "preserves %s mode when the current post starts the thread",
-      (replyToMode) => {
-        const buildToolContext = mattermostPlugin.threading?.buildToolContext;
-        if (!buildToolContext) {
-          throw new Error("mattermost threading.buildToolContext missing");
-        }
-
-        const context = buildToolContext({
-          cfg: {
-            channels: {
-              mattermost: {
-                replyToMode,
-              },
-            },
-          },
-          accountId: "default",
-          context: {
-            To: "channel:C1",
-            ChatType: "channel",
-            CurrentMessageId: "post-1",
-            MessageThreadId: "post-1",
-          },
-        });
-
-        expect(context?.replyToMode).toBe(replyToMode);
-      },
-    );
-
-    it("matches bare Mattermost channel ids against the active channel target", () => {
-      const matchesToolContextTarget = requireMattermostThreadTargetMatcher();
-
-      expect(
-        matchesToolContextTarget({
-          target: "tqfek9psh7fw8mpa5berwyytqw",
-          toolContext: {
-            currentChannelId: "channel:tqfek9psh7fw8mpa5berwyytqw",
-          },
-        }),
-      ).toBe(true);
-      expect(
-        matchesToolContextTarget({
-          target: "tqfek9psh7fw8mpa5berwyytqw",
-          toolContext: {
-            currentChannelId: "channel:kqfek9psh7fw8mpa5berwyytqw",
-          },
-        }),
-      ).toBe(false);
-    });
-
-    it("exposes the effective reply root as the transport thread", () => {
-      const resolveReplyTransport = mattermostPlugin.threading?.resolveReplyTransport;
-      if (!resolveReplyTransport) {
-        throw new Error("mattermost threading.resolveReplyTransport missing");
-      }
-
-      expect(
-        resolveReplyTransport({
-          cfg: {},
-          replyToId: "post-parent",
-          threadId: "other-thread",
-        }),
-      ).toEqual({
-        replyToId: "other-thread",
-        threadId: "other-thread",
-      });
-      expect(
-        resolveReplyTransport({
-          cfg: {},
-          replyToId: "child-post",
-          replyToIsExplicit: true,
-          threadId: "root-post",
-        }),
-      ).toEqual({
-        replyToId: "root-post",
-        threadId: "root-post",
-      });
-      expect(
-        resolveReplyTransport({
-          cfg: {},
-          replyToId: "child-post",
-          replyToIsExplicit: false,
-          threadId: "root-post",
-        }),
-      ).toEqual({
-        replyToId: "root-post",
-        threadId: "root-post",
-      });
-      expect(
-        resolveReplyTransport({
-          cfg: {},
-          threadId: 42,
-        }),
-      ).toEqual({
-        replyToId: "42",
-        threadId: "42",
-      });
-    });
-
-    it("matches final delivery routing for existing threads and direct messages", () => {
-      const resolveReplyTransport = mattermostPlugin.threading?.resolveReplyTransport;
-      if (!resolveReplyTransport) {
-        throw new Error("mattermost threading.resolveReplyTransport missing");
-      }
-
-      expect(
-        resolveReplyTransport({
-          cfg: {},
-          replyToId: "child-post",
-          threadId: "root-post",
-          replyDelivery: {
-            chatType: "channel",
-            replyToMode: "all",
-          },
-        }),
-      ).toEqual({
-        replyToId: "root-post",
-        threadId: "root-post",
-      });
-      expect(
-        resolveReplyTransport({
-          cfg: {},
-          replyToId: "other-root",
-          replyToIsExplicit: true,
-          threadId: "ambient-root",
-          replyDelivery: {
-            chatType: "channel",
-            replyToMode: "all",
-          },
-        }),
-      ).toEqual({
-        replyToId: "other-root",
-        threadId: "other-root",
-      });
-      for (const replyToMode of ["first", "all", "batched"] as const) {
-        expect(
-          resolveReplyTransport({
-            cfg: {},
-            replyToId: "dm-post",
-            replyDelivery: {
-              chatType: "direct",
-              replyToMode,
-            },
-          }),
-        ).toEqual({
-          replyToId: "dm-post",
-          threadId: "dm-post",
-        });
-      }
-      expect(
-        resolveReplyTransport({
-          cfg: {},
-          replyToId: "dm-post",
-          replyDelivery: {
-            chatType: "direct",
-            replyToMode: "off",
-          },
-        }),
-      ).toEqual({
-        replyToId: null,
-        threadId: null,
-      });
-    });
-
-    it("extracts explicit and implicit send thread evidence", () => {
-      const extractToolSend = mattermostPlugin.actions?.extractToolSend;
-      if (!extractToolSend) {
-        throw new Error("mattermost actions.extractToolSend missing");
-      }
-
-      expect(
-        extractToolSend({
-          args: { action: "send", to: "channel:C1", replyTo: "root-1" },
-        }),
-      ).toMatchObject({
-        to: "channel:C1",
-        threadId: "root-1",
-      });
-      expect(
-        extractToolSend({
-          args: { action: "send", to: "channel:C1" },
-        }),
-      ).toMatchObject({
-        to: "channel:C1",
-        threadImplicit: true,
-      });
-
-      const extractToolSendResult = mattermostPlugin.actions?.extractToolSendResult;
-      if (!extractToolSendResult) {
-        throw new Error("mattermost actions.extractToolSendResult missing");
-      }
-      expect(
-        extractToolSendResult({
-          send: { to: "channel:C1" },
-          result: {
-            details: {
-              toolSend: {
-                to: "channel:C1",
-                threadId: "root-1",
-              },
-            },
-          },
-        }),
-      ).toEqual({
-        to: "channel:C1",
-        threadId: "root-1",
-      });
-      expect(
-        extractToolSendResult({
-          send: { to: "user:U1" },
-          result: {
-            details: {
-              toolSend: {
-                to: "channel:DM1",
-              },
-            },
-          },
-        }),
-      ).toEqual({
-        to: "user:U1",
-      });
-    });
-
-    it("resolves the active Mattermost root for same-channel sends", () => {
-      const resolveAutoThreadId = mattermostPlugin.threading?.resolveAutoThreadId;
-      if (!resolveAutoThreadId) {
-        throw new Error("mattermost threading.resolveAutoThreadId missing");
-      }
-
-      expect(
-        resolveAutoThreadId({
-          cfg: {},
-          to: "channel:C1",
-          replyToId: "child-1",
-          toolContext: {
-            currentChannelId: "channel:C1",
-            currentThreadTs: "root-1",
-            currentMessageId: "child-1",
-            replyToMode: "off",
-          },
-        }),
-      ).toBe("root-1");
-      expect(
-        resolveAutoThreadId({
-          cfg: {},
-          to: "channel:C2",
-          toolContext: {
-            currentChannelId: "channel:C1",
-            currentThreadTs: "root-1",
-            replyToMode: "all",
-          },
-        }),
-      ).toBeUndefined();
-      expect(
-        resolveAutoThreadId({
-          cfg: {},
-          to: "tqfek9psh7fw8mpa5berwyytqw",
-          toolContext: {
-            currentChannelId: "channel:tqfek9psh7fw8mpa5berwyytqw",
-            currentThreadTs: "root-1",
-            replyToMode: "all",
-          },
-        }),
-      ).toBe("root-1");
-      expect(
-        resolveAutoThreadId({
-          cfg: {},
-          to: "channel:C1",
-          replyToId: "other-root",
-          toolContext: {
-            currentChannelId: "channel:C1",
-            currentThreadTs: "root-1",
-            currentMessageId: "child-1",
-            replyToMode: "all",
-          },
-        }),
-      ).toBe("other-root");
-      expect(
-        resolveAutoThreadId({
-          cfg: {},
-          to: "channel:C1",
-          toolContext: {
-            currentChannelId: "channel:C1",
-            currentThreadTs: "root-1",
-            currentMessageId: "root-1",
-            replyToMode: "first",
-            hasRepliedRef: { value: true },
-          },
-        }),
-      ).toBeUndefined();
-      expect(
-        resolveAutoThreadId({
-          cfg: {},
-          to: "channel:C1",
-          toolContext: {
-            currentChannelId: "channel:C1",
-            currentThreadTs: "root-1",
-            currentMessageId: "root-1",
-            replyToMode: "batched",
-          },
-        }),
-      ).toBeUndefined();
-    });
-
-    it("uses replyToMode for channel messages and keeps direct messages off", () => {
-      const resolveReplyToMode = requireMattermostReplyToModeResolver();
-
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            replyToMode: "all",
-          },
+        context: {
+          To: "channel:C1",
+          ChatType: "channel",
+          CurrentMessageId: "child-1",
+          MessageThreadId: "root-1",
         },
-      };
-
-      expect(
-        resolveReplyToMode({
-          cfg,
-          accountId: "default",
-          chatType: "channel",
-        }),
-      ).toBe("all");
-      expect(
-        resolveReplyToMode({
-          cfg,
-          accountId: "default",
-          chatType: "direct",
-        }),
-      ).toBe("off");
-    });
-
-    it("uses configured defaultAccount when accountId is omitted", () => {
-      const resolveReplyToMode = requireMattermostReplyToModeResolver();
-
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            defaultAccount: "alerts",
-            replyToMode: "off",
-            accounts: {
-              alerts: {
-                replyToMode: "all",
-                botToken: "alerts-token",
-                baseUrl: "https://alerts.example.com",
-              },
-            },
-          },
-        },
-      };
-
-      expect(
-        resolveReplyToMode({
-          cfg,
-          chatType: "channel",
-        }),
-      ).toBe("all");
+      }),
+    ).toEqual({
+      currentChannelId: "channel:C1",
+      currentThreadTs: "root-1",
+      currentMessageId: "child-1",
+      replyToMode: "all",
+      hasRepliedRef,
+      sameChannelThreadRequired: true,
     });
   });
 
-  describe("messageActions", () => {
-    let reactionActionSequence = 0;
+  it("preserves first mode when the current post starts the thread", () => {
+    expect(
+      threading.buildToolContext!({
+        cfg: config({ replyToMode: "first" }),
+        accountId: "default",
+        context: {
+          To: "channel:C1",
+          ChatType: "channel",
+          CurrentMessageId: "post-1",
+          MessageThreadId: "post-1",
+        },
+      })?.replyToMode,
+    ).toBe("first");
+  });
 
-    const runReactAction = async (
-      params: Record<string, unknown>,
-      fetchMode: "add" | "remove",
-      emojiName = "thumbsup",
-    ) => {
-      const cfg = createMattermostTestConfig(`message-action-${++reactionActionSequence}`);
-      const fetchImpl = createMattermostReactionFetchMock({
-        mode: fetchMode,
-        postId: "POST1",
-        emojiName,
-      });
+  it("matches bare channel ids against the active target", () => {
+    const match = threading.matchesToolContextTarget!;
+    const target = "tqfek9psh7fw8mpa5berwyytqw";
+    expect(match({ target, toolContext: { currentChannelId: "channel:" + target } })).toBe(true);
+    expect(
+      match({ target, toolContext: { currentChannelId: "channel:kqfek9psh7fw8mpa5berwyytqw" } }),
+    ).toBe(false);
+  });
 
-      return await withMockedGlobalFetch(fetchImpl, async () => {
-        return await mattermostPlugin.actions?.handleAction?.(
-          createMattermostActionContext({
-            action: "react",
-            params,
-            cfg,
+  it("exposes the effective reply root as the transport thread", () => {
+    const resolve = threading.resolveReplyTransport!;
+    expect(
+      resolve({ cfg: {}, replyToId: "child-post", replyToIsExplicit: true, threadId: "root-post" }),
+    ).toEqual({ replyToId: "root-post", threadId: "root-post" });
+    expect(resolve({ cfg: {}, threadId: 42 })).toEqual({ replyToId: "42", threadId: "42" });
+  });
+
+  it("matches final delivery routing for existing threads and direct messages", () => {
+    const resolve = threading.resolveReplyTransport!;
+    expect(
+      resolve({
+        cfg: {},
+        replyToId: "child-post",
+        threadId: "root-post",
+        replyDelivery: { chatType: "channel", replyToMode: "all" },
+      }),
+    ).toEqual({ replyToId: "root-post", threadId: "root-post" });
+    expect(
+      resolve({
+        cfg: {},
+        replyToId: "other-root",
+        replyToIsExplicit: true,
+        threadId: "ambient-root",
+        replyDelivery: { chatType: "channel", replyToMode: "all" },
+      }),
+    ).toEqual({ replyToId: "other-root", threadId: "other-root" });
+    expect(
+      resolve({
+        cfg: {},
+        replyToId: "dm-post",
+        replyDelivery: { chatType: "direct", replyToMode: "all" },
+      }),
+    ).toEqual({ replyToId: "dm-post", threadId: "dm-post" });
+    expect(
+      resolve({
+        cfg: {},
+        replyToId: "dm-post",
+        replyDelivery: { chatType: "direct", replyToMode: "off" },
+      }),
+    ).toEqual({ replyToId: null, threadId: null });
+  });
+
+  it("extracts explicit and implicit send thread evidence", () => {
+    expect(
+      actions.extractToolSend!({ args: { action: "send", to: "channel:C1", replyTo: "root-1" } }),
+    ).toMatchObject({ to: "channel:C1", threadId: "root-1" });
+    expect(actions.extractToolSend!({ args: { action: "send", to: "channel:C1" } })).toMatchObject({
+      to: "channel:C1",
+      threadImplicit: true,
+    });
+  });
+
+  it("resolves the active root for same-channel sends", () => {
+    const resolve = threading.resolveAutoThreadId!;
+    const toolContext = {
+      currentChannelId: "channel:C1",
+      currentThreadTs: "root-1",
+      currentMessageId: "child-1",
+      replyToMode: "all" as const,
+    };
+    expect(
+      resolve({
+        cfg: {},
+        to: "channel:C1",
+        replyToId: "child-1",
+        toolContext: { ...toolContext, replyToMode: "off" },
+      }),
+    ).toBe("root-1");
+    expect(resolve({ cfg: {}, to: "channel:C2", toolContext })).toBeUndefined();
+    const bare = "tqfek9psh7fw8mpa5berwyytqw";
+    expect(
+      resolve({
+        cfg: {},
+        to: bare,
+        toolContext: {
+          currentChannelId: "channel:" + bare,
+          currentThreadTs: "root-1",
+          replyToMode: "all",
+        },
+      }),
+    ).toBe("root-1");
+    expect(resolve({ cfg: {}, to: "channel:C1", replyToId: "other-root", toolContext })).toBe(
+      "other-root",
+    );
+    expect(
+      resolve({
+        cfg: {},
+        to: "channel:C1",
+        toolContext: {
+          ...toolContext,
+          currentMessageId: "root-1",
+          replyToMode: "first",
+          hasRepliedRef: { value: true },
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      resolve({
+        cfg: {},
+        to: "channel:C1",
+        toolContext: { ...toolContext, currentMessageId: "root-1", replyToMode: "batched" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses the configured default account's reply mode while keeping direct messages flat", () => {
+    const cfg = config({
+      defaultAccount: "alerts",
+      replyToMode: "off",
+      accounts: {
+        alerts: {
+          replyToMode: "all",
+          botToken: "alerts-token",
+          baseUrl: "https://alerts.example.com",
+        },
+      },
+    });
+    expect(threading.resolveReplyToMode!({ cfg, chatType: "channel" })).toBe("all");
+    expect(threading.resolveReplyToMode!({ cfg, accountId: "alerts", chatType: "direct" })).toBe(
+      "off",
+    );
+  });
+});
+
+describe("Mattermost actions", () => {
+  it("isolates discovery to available selected accounts and honors account overrides", () => {
+    const cfg = config({
+      actions: { messages: false, reactions: false },
+      accounts: {
+        default: { actions: { messages: false, reactions: false } },
+        work: { botToken: "work-token", actions: { messages: true, reactions: true } },
+        broken: {
+          botToken: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_TEST_MISSING_MATTERMOST_TOKEN",
+          },
+        },
+      },
+    });
+    expect(actions.describeMessageTool({ cfg })?.actions).toEqual(["send", "react", "read"]);
+    expect(actions.describeMessageTool({ cfg, accountId: "default" })?.actions).toEqual(["send"]);
+    expect(actions.describeMessageTool({ cfg, accountId: "work" })?.actions).toEqual([
+      "send",
+      "react",
+      "read",
+    ]);
+    expect(actions.describeMessageTool({ cfg, accountId: "broken" })?.actions).toEqual([]);
+  });
+
+  it("declines native sends in favor of durable outbound delivery", () => {
+    expect(actions.supportsAction!({ action: "react" })).toBe(true);
+    expect(actions.supportsAction!({ action: "read" })).toBe(true);
+    expect(actions.supportsAction!({ action: "send" })).toBe(false);
+    expect(actions.describeMessageTool({ cfg: config() })?.schema).toBeUndefined();
+  });
+
+  it("blocks reactions disabled by the default account", async () => {
+    await expect(
+      actions.handleAction!(
+        action({
+          action: "react",
+          params: { messageId: "POST1", emoji: "thumbsup" },
+          cfg: config({
+            actions: { reactions: true },
+            accounts: { default: { actions: { reactions: false } } },
+          }),
+        }),
+      ),
+    ).rejects.toThrow("Mattermost reactions are disabled in config");
+  });
+
+  it("blocks reads disabled by the selected account before provider access", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(
+      withMockedGlobalFetch(fetchImpl, () =>
+        actions.handleAction!(
+          action({
+            action: "read",
+            params: { target: "channel:CURRENT" },
+            cfg: config({
+              actions: { messages: true },
+              accounts: { default: { actions: { messages: false } } },
+            }),
             accountId: "default",
             conversationReadOrigin: "direct-operator",
           }),
-        );
+        ),
+      ),
+    ).rejects.toThrow("Mattermost message reads are disabled in config");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("reads posts into the shared JSON result with normalized timestamps", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      expect(requestUrl(input)).toContain("/api/v4/channels/CURRENT/posts?per_page=2");
+      return Response.json({
+        order: ["post-2", "post-1"],
+        posts: {
+          "post-1": { id: "post-1", message: "older", create_at: 1_700_000_001_000 },
+          "post-2": { id: "post-2", message: "newer", create_at: 1_700_000_002_000 },
+        },
       });
-    };
-
-    it("keeps message reads hidden until they are explicitly enabled", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            botToken: "test-token",
-            baseUrl: "https://chat.example.com",
-          },
-        },
-      };
-
-      const actions = getDescribedActions(cfg);
-      expect(actions).toContain("react");
-      expect(actions).not.toContain("read");
-      expect(actions).toContain("send");
-      expect(mattermostPlugin.actions?.supportsAction?.({ action: "react" })).toBe(true);
-      expect(mattermostPlugin.actions?.supportsAction?.({ action: "read" })).toBe(true);
-      expect(mattermostPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
     });
-
-    it("hides react when mattermost is not configured", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-          },
-        },
-      };
-
-      const actions = getDescribedActions(cfg);
-      expect(actions).toStrictEqual([]);
-    });
-
-    it("declares presentation capability for message sends", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            botToken: "test-token",
-            baseUrl: "https://chat.example.com",
-          },
-        },
-      };
-
-      const discovery = mattermostPlugin.actions?.describeMessageTool?.({ cfg });
-      expect(discovery?.capabilities).toContain("presentation");
-      expect(discovery?.schema).toBeUndefined();
-    });
-
-    it("prepares supported sends for the core durable lifecycle", async () => {
-      const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
-      if (!prepareSendPayload) {
-        throw new Error("mattermost actions.prepareSendPayload missing");
-      }
-      const payload = { text: "report" };
-
-      const prepared = await prepareSendPayload({
-        ctx: createMattermostActionContext({
-          params: {
-            to: "channel:CHAN1",
-            message: "report",
-            filePath: "/tmp/workspace/report.md",
-            replyToId: "post-root",
+    const result = await withMockedGlobalFetch(fetchImpl, () =>
+      actions.handleAction!(
+        action({
+          action: "read",
+          params: { target: "channel:CURRENT", to: "channel:CURRENT", limit: 2 },
+          cfg: config({ actions: { messages: true } }),
+          accountId: "default",
+          requesterAccountId: "default",
+          conversationReadOrigin: "delegated",
+          toolContext: {
+            currentChannelProvider: "mattermost",
+            currentChannelId: "channel:CURRENT",
           },
         }),
-        to: "channel:CHAN1",
-        payload,
-        replyToId: "post-root",
-      });
-
-      expect(prepared).toEqual({
-        text: "report",
-        mediaUrl: "/tmp/workspace/report.md",
-        mediaUrls: ["/tmp/workspace/report.md"],
-      });
-    });
-
-    it("carries provider attachment text through core payload delivery", async () => {
-      const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
-      if (!prepareSendPayload) {
-        throw new Error("mattermost actions.prepareSendPayload missing");
-      }
-      const prepared = await prepareSendPayload({
-        ctx: createMattermostActionContext({
-          params: {
-            to: "channel:CHAN1",
-            message: "report",
-            attachmentText: "native attachment",
-          },
-        }),
-        to: "channel:CHAN1",
-        payload: { text: "report" },
-      });
-      expect(prepared).toMatchObject({
-        channelData: { mattermost: { attachmentText: "native attachment" } },
-      });
-
-      await requireMattermostSendPayload()({
-        cfg: createMattermostTestConfig(),
-        to: "channel:CHAN1",
-        text: "report",
-        payload: prepared!,
-      });
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "report");
-      expect(options.attachmentText).toBe("native attachment");
-    });
-
-    it.each([
-      ["buffer attachments", { buffer: "cmVwb3J0" }, "buffer/base64 payloads"],
-      [
-        "multiple attachments",
-        { mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"] },
-        "supports one attachment per message",
+      ),
+    );
+    expect(result.details).toMatchObject({
+      ok: true,
+      channelId: "CURRENT",
+      hasMore: false,
+      messages: [
+        { id: "post-2", message: "newer", timestampMs: 1_700_000_002_000 },
+        { id: "post-1", message: "older", timestampMs: 1_700_000_001_000 },
       ],
-    ])("rejects unsupported %s before provider dispatch", async (_label, extraParams, error) => {
-      const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
-      if (!prepareSendPayload) {
-        throw new Error("mattermost actions.prepareSendPayload missing");
-      }
-
-      await expect(async () =>
-        prepareSendPayload({
-          ctx: createMattermostActionContext({
-            params: { to: "channel:CHAN1", message: "report", ...extraParams },
-          }),
-          to: "channel:CHAN1",
-          payload: { text: "report" },
-        }),
-      ).rejects.toThrow(error);
-      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
     });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 
-    it("keeps read opt in when reactions are disabled", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            botToken: "test-token",
-            baseUrl: "https://chat.example.com",
-            actions: { reactions: false },
-          },
-        },
-      };
-
-      const actions = getDescribedActions(cfg);
-      expect(actions).not.toContain("react");
-      expect(actions).not.toContain("read");
-      expect(actions).toContain("send");
-    });
-
-    it("exposes read when actions.messages is true", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            botToken: "test-token-placeholder",
-            baseUrl: "https://chat.example.com",
-            actions: { messages: true },
-          },
-        },
-      };
-
-      const actions = getDescribedActions(cfg);
-      expect(actions).toContain("read");
-      expect(actions).toContain("react");
-      expect(actions).toContain("send");
-    });
-
-    it("respects per-account actions.messages in message discovery", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            actions: { messages: false },
-            accounts: {
-              default: {
-                enabled: true,
-                botToken: "test-token-placeholder",
-                baseUrl: "https://chat.example.com",
-                actions: { messages: true },
-              },
-            },
-          },
-        },
-      };
-
-      expect(getDescribedActions(cfg)).toContain("read");
-    });
-
-    it("respects per-account actions.reactions in message discovery", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            actions: { reactions: false },
-            accounts: {
-              default: {
-                enabled: true,
-                botToken: "test-token",
-                baseUrl: "https://chat.example.com",
-                actions: { reactions: true },
-              },
-            },
-          },
-        },
-      };
-
-      const actions = getDescribedActions(cfg);
-      expect(actions).toContain("react");
-    });
-
-    it("honors the selected Mattermost account during discovery", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            actions: { reactions: false },
-            accounts: {
-              default: {
-                enabled: true,
-                botToken: "test-token",
-                baseUrl: "https://chat.example.com",
-                actions: { reactions: false },
-              },
-              work: {
-                enabled: true,
-                botToken: "work-token",
-                baseUrl: "https://chat.example.com",
-                actions: { reactions: true },
-              },
-            },
-          },
-        },
-      };
-
-      expect(getDescribedActions(cfg, "default")).toEqual(["send"]);
-      expect(getDescribedActions(cfg, "work")).toEqual(["send", "react"]);
-    });
-
-    it("blocks react when default account disables reactions and accountId is omitted", async () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            actions: { reactions: true },
-            accounts: {
-              default: {
-                enabled: true,
-                botToken: "test-token",
-                baseUrl: "https://chat.example.com",
-                actions: { reactions: false },
-              },
-            },
-          },
-        },
-      };
-
+  it("rejects invalid read cursors and limits before provider access", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    for (const params of [
+      { target: "channel:CURRENT", before: "p1", after: "p2" },
+      { target: "channel:CURRENT", limit: 0 },
+    ]) {
       await expect(
-        mattermostPlugin.actions?.handleAction?.(
-          createMattermostActionContext({
-            action: "react",
-            params: { messageId: "POST1", emoji: "thumbsup" },
-            cfg,
-          }),
-        ),
-      ).rejects.toThrow("Mattermost reactions are disabled in config");
-    });
-
-    it("blocks read when the selected account disables messages", async () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            actions: { messages: true },
-            accounts: {
-              default: {
-                enabled: true,
-                botToken: "test-token-placeholder",
-                baseUrl: "https://chat.example.com",
-                actions: { messages: false },
-              },
-            },
-          },
-        },
-      };
-      const fetchImpl = vi.fn<typeof fetch>();
-
-      await expect(
-        withMockedGlobalFetch(fetchImpl, async () =>
-          mattermostPlugin.actions?.handleAction?.(
-            createMattermostActionContext({
+        withMockedGlobalFetch(fetchImpl, () =>
+          actions.handleAction!(
+            action({
               action: "read",
-              params: { target: "channel:CURRENT" },
-              cfg,
+              params,
+              cfg: config({ actions: { messages: true } }),
               accountId: "default",
               conversationReadOrigin: "direct-operator",
             }),
           ),
         ),
-      ).rejects.toThrow("Mattermost message reads are disabled in config");
-      expect(fetchImpl).not.toHaveBeenCalled();
-    });
+      ).rejects.toThrow();
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 
-    it("blocks read when actions.messages is not configured", async () => {
-      const cfg = createMattermostTestConfig(`read-disabled-${++reactionActionSequence}`);
-      const fetchImpl = vi.fn<typeof fetch>();
-
-      await expect(
-        withMockedGlobalFetch(fetchImpl, async () =>
-          mattermostPlugin.actions?.handleAction?.(
-            createMattermostActionContext({
-              action: "read",
-              params: { target: "channel:CURRENT" },
-              cfg,
-              accountId: "default",
-              conversationReadOrigin: "direct-operator",
-            }),
-          ),
-        ),
-      ).rejects.toThrow("Mattermost message reads are disabled in config");
-      expect(fetchImpl).not.toHaveBeenCalled();
-    });
-
-    it("reads posts into the shared JSON result with normalized timestamps", async () => {
-      const cfg = createMattermostTestConfig(`read-action-${++reactionActionSequence}`);
-      const mattermostConfig = cfg.channels?.mattermost;
-      if (!mattermostConfig) {
-        throw new Error("expected Mattermost config fixture");
-      }
-      mattermostConfig.actions = { messages: true };
-      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-        const url = requestUrl(input);
-        if (!url.includes("/api/v4/channels/CURRENT/posts?per_page=2")) {
-          throw new Error(`Unexpected Mattermost request: ${url}`);
-        }
-        return Response.json({
-          order: ["post-2", "post-1"],
-          posts: {
-            "post-1": { id: "post-1", message: "older", create_at: 1_700_000_001_000 },
-            "post-2": { id: "post-2", message: "newer", create_at: 1_700_000_002_000 },
-          },
-        });
-      });
-
-      const result = await withMockedGlobalFetch(fetchImpl, async () =>
-        mattermostPlugin.actions?.handleAction?.(
-          createMattermostActionContext({
-            action: "read",
-            params: { target: "channel:CURRENT", to: "channel:CURRENT", limit: 2 },
-            cfg,
-            accountId: "default",
-            requesterAccountId: "default",
-            conversationReadOrigin: "delegated",
-            toolContext: {
-              currentChannelProvider: "mattermost",
-              currentChannelId: "channel:CURRENT",
-            },
-          }),
-        ),
-      );
-
-      expect(result?.details).toMatchObject({
-        ok: true,
-        channelId: "CURRENT",
-        messages: [
-          { id: "post-2", message: "newer", timestampMs: 1_700_000_002_000 },
-          { id: "post-1", message: "older", timestampMs: 1_700_000_001_000 },
-        ],
-        hasMore: false,
-      });
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-    });
-
-    it("rejects invalid read cursors and limits before provider access", async () => {
-      const cfg = createMattermostTestConfig(`read-validation-${++reactionActionSequence}`);
-      const mattermostConfig = cfg.channels?.mattermost;
-      if (!mattermostConfig) {
-        throw new Error("expected Mattermost config fixture");
-      }
-      mattermostConfig.actions = { messages: true };
-      const fetchImpl = vi.fn<typeof fetch>();
-
-      for (const params of [
-        { target: "channel:CURRENT", before: "p1", after: "p2" },
-        { target: "channel:CURRENT", limit: 0 },
-      ]) {
-        await expect(
-          withMockedGlobalFetch(fetchImpl, async () =>
-            mattermostPlugin.actions?.handleAction?.(
-              createMattermostActionContext({
-                action: "read",
-                params,
-                cfg,
-                accountId: "default",
-                conversationReadOrigin: "direct-operator",
-              }),
-            ),
-          ),
-        ).rejects.toThrow();
-      }
-      expect(fetchImpl).not.toHaveBeenCalled();
-    });
-
-    it("rejects a disabled account before provider access", async () => {
-      const cfg = createMattermostTestConfig(`disabled-reaction-${++reactionActionSequence}`);
-      const mattermostConfig = cfg.channels?.mattermost;
-      if (!mattermostConfig) {
-        throw new Error("expected Mattermost config fixture");
-      }
-      mattermostConfig.accounts = { default: { enabled: false } };
-      const fetchImpl = vi.fn<typeof fetch>();
-
-      await expect(
-        withMockedGlobalFetch(fetchImpl, async () =>
-          mattermostPlugin.actions?.handleAction?.(
-            createMattermostActionContext({
-              action: "react",
-              params: {
-                target: "channel:CHAN1",
-                to: "channel:CHAN1",
-                messageId: "POST1",
-                emoji: "thumbsup",
-              },
-              cfg,
-              accountId: "default",
-              conversationReadOrigin: "direct-operator",
-            }),
-          ),
-        ),
-      ).rejects.toThrow('Mattermost account "default" is disabled');
-      expect(fetchImpl).not.toHaveBeenCalled();
-    });
-
-    it("rejects disabled accounts before opaque target resolution provider access", async () => {
-      const cfg = createMattermostTestConfig(`disabled-target-${++reactionActionSequence}`);
-      const mattermostConfig = cfg.channels?.mattermost;
-      if (!mattermostConfig) {
-        throw new Error("expected Mattermost config fixture");
-      }
-      mattermostConfig.accounts = { default: { enabled: false } };
-      const fetchImpl = vi.fn<typeof fetch>();
-
-      await expect(
-        withMockedGlobalFetch(fetchImpl, async () =>
-          requireMattermostTargetResolver()({
-            cfg,
-            accountId: "default",
-            input: "disabled12abcd1234abcd1234",
-            normalized: "disabled12abcd1234abcd1234",
-          }),
-        ),
-      ).rejects.toThrow('Mattermost account "default" is disabled');
-      expect(fetchImpl).not.toHaveBeenCalled();
-    });
-
-    it("handles react by calling Mattermost reactions API", async () => {
-      const result = await runReactAction({ messageId: "POST1", emoji: "thumbsup" }, "add");
-
-      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
-      expect(result?.details).toStrictEqual({});
-    });
-
-    it.each([
-      {
-        label: "named channel add",
-        rawTarget: "#town-square",
-        resolvedTarget: "channel:CHAN1",
-        mode: "add" as const,
-        remove: false,
-        postChannelId: "CHAN1",
-        expectedText: "Reacted with :thumbsup: on POST1",
-      },
-      {
-        label: "named channel remove",
-        rawTarget: "#town-square",
-        resolvedTarget: "channel:CHAN1",
-        mode: "remove" as const,
-        remove: true,
-        postChannelId: "CHAN1",
-        expectedText: "Removed reaction :thumbsup: from POST1",
-      },
-      {
-        label: "named user add",
-        rawTarget: "@alice",
-        resolvedTarget: "user:PEER1",
-        mode: "add" as const,
-        remove: false,
-        postChannelId: "DMCHAN1",
-        channelType: "D",
-        channelName: "BOT123__PEER1",
-        expectedText: "Reacted with :thumbsup: on POST1",
-      },
-      {
-        label: "named user remove",
-        rawTarget: "@alice",
-        resolvedTarget: "user:PEER1",
-        mode: "remove" as const,
-        remove: true,
-        postChannelId: "DMCHAN1",
-        channelType: "D",
-        channelName: "BOT123__PEER1",
-        expectedText: "Removed reaction :thumbsup: from POST1",
-      },
-    ])("uses the resolved target for $label", async (fixture) => {
-      const cfg = createMattermostTestConfig(`delegated-reaction-${++reactionActionSequence}`);
-      const fetchImpl = createMattermostReactionFetchMock({
-        mode: fixture.mode,
-        postId: "POST1",
-        postChannelId: fixture.postChannelId,
-        channelType: fixture.channelType,
-        channelName: fixture.channelName,
-        emojiName: "thumbsup",
-      });
-
-      const result = await withMockedGlobalFetch(fetchImpl, async () =>
-        mattermostPlugin.actions?.handleAction?.(
-          createMattermostActionContext({
+  it("rejects a disabled account before reaction provider access", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(
+      withMockedGlobalFetch(fetchImpl, () =>
+        actions.handleAction!(
+          action({
             action: "react",
             params: {
-              target: fixture.rawTarget,
-              to: fixture.resolvedTarget,
+              target: "channel:CHAN1",
+              to: "channel:CHAN1",
               messageId: "POST1",
               emoji: "thumbsup",
-              remove: fixture.remove,
             },
-            cfg,
+            cfg: config({ accounts: { default: { enabled: false } } }),
             accountId: "default",
-            conversationReadOrigin: "delegated",
+            conversationReadOrigin: "direct-operator",
           }),
         ),
-      );
+      ),
+    ).rejects.toThrow('Mattermost account "default" is disabled');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 
-      expect(result?.content).toEqual([{ type: "text", text: fixture.expectedText }]);
-    });
-
-    it("only treats boolean remove flag as removal", async () => {
-      const result = await runReactAction(
-        { messageId: "POST1", emoji: "thumbsup", remove: "true" },
-        "add",
-      );
-
-      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
-    });
-
-    it("removes reaction when remove flag is boolean true", async () => {
-      const result = await runReactAction(
-        { messageId: "POST1", emoji: "thumbsup", remove: true },
-        "remove",
-      );
-
-      expect(result?.content).toEqual([
-        { type: "text", text: "Removed reaction :thumbsup: from POST1" },
-      ]);
-      expect(result?.details).toStrictEqual({});
-    });
-
-    it("normalizes a raw emoji glyph through the react action boundary", async () => {
-      const result = await runReactAction({ messageId: "POST1", emoji: "👍" }, "add");
-
-      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
-      expect(result?.details).toStrictEqual({});
-    });
-
-    it("normalizes a raw emoji glyph when removing a reaction", async () => {
-      const result = await runReactAction(
-        { messageId: "POST1", emoji: "👍", remove: true },
-        "remove",
-      );
-
-      expect(result?.content).toEqual([
-        { type: "text", text: "Removed reaction :thumbsup: from POST1" },
-      ]);
-      expect(result?.details).toStrictEqual({});
-    });
-
-    it("preserves the skin tone when adding a toned glyph reaction", async () => {
-      const result = await runReactAction(
-        { messageId: "POST1", emoji: "👍🏽" },
-        "add",
-        "thumbsup_medium_skin_tone",
-      );
-
-      expect(result?.content).toEqual([
-        { type: "text", text: "Reacted with :thumbsup_medium_skin_tone: on POST1" },
-      ]);
-      expect(result?.details).toStrictEqual({});
-    });
-
-    it("preserves the skin tone when removing a toned glyph reaction", async () => {
-      const result = await runReactAction(
-        { messageId: "POST1", emoji: "👍🏽", remove: true },
-        "remove",
-        "thumbsup_medium_skin_tone",
-      );
-
-      expect(result?.content).toEqual([
-        { type: "text", text: "Removed reaction :thumbsup_medium_skin_tone: from POST1" },
-      ]);
-      expect(result?.details).toStrictEqual({});
-    });
-
-    it("maps replyTo to replyToId for send actions", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "hello",
-            replyTo: "post-root",
-          },
-          cfg,
+  it("rejects disabled accounts before opaque target resolution provider access", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(
+      withMockedGlobalFetch(fetchImpl, () =>
+        mattermostPlugin.messaging!.targetResolver!.resolveTarget!({
+          cfg: config({ accounts: { default: { enabled: false } } }),
           accountId: "default",
+          input: "disabled12abcd1234abcd1234",
+          normalized: "disabled12abcd1234abcd1234",
         }),
-      );
+      ),
+    ).rejects.toThrow('Mattermost account "default" is disabled');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 
-      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.accountId).toBe("default");
-      expect(options.replyToId).toBe("post-root");
+  it.each([
+    {
+      label: "named channel add",
+      target: "#town-square",
+      to: "channel:CHAN1",
+      mode: "add" as const,
+      postChannelId: "CHAN1",
+      emoji: "thumbsup",
+      expected: "Reacted with :thumbsup: on POST1",
+    },
+    {
+      label: "named user removal",
+      target: "@alice",
+      to: "user:PEER1",
+      mode: "remove" as const,
+      postChannelId: "DMCHAN1",
+      channelType: "D",
+      channelName: "BOT123__PEER1",
+      emoji: "👍",
+      expected: "Removed reaction :thumbsup: from POST1",
+    },
+  ])("uses the resolved target for $label", async (fixture) => {
+    const fetchImpl = createMattermostReactionFetchMock({
+      ...fixture,
+      postId: "POST1",
+      emojiName: "thumbsup",
     });
-
-    it("uses threadId as the Mattermost root when generic replyTo names a child post", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "hello",
-            threadId: "post-root",
-            replyTo: "child-post",
-          },
-          cfg,
+    const result = await withMockedGlobalFetch(fetchImpl, () =>
+      actions.handleAction!(
+        action({
+          action: "react",
           accountId: "default",
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.replyToId).toBe("post-root");
-    });
-
-    it("keeps explicit replyToId precedence when threadId is also provided", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
+          conversationReadOrigin: "delegated",
           params: {
-            to: "channel:CHAN1",
-            message: "hello",
-            replyToId: "explicit-root",
-            threadId: "post-root",
-            replyTo: "child-post",
-          },
-          cfg,
-          accountId: "default",
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.replyToId).toBe("explicit-root");
-    });
-
-    it("routes filePath send actions through Mattermost media upload options", async () => {
-      const cfg = createMattermostTestConfig();
-      const mediaReadFile = vi.fn(async () => Buffer.from("report"));
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "report",
-            filePath: "/tmp/workspace/report.md",
-          },
-          cfg,
-          accountId: "default",
-          mediaLocalRoots: ["/tmp/workspace"],
-          mediaReadFile,
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "report");
-      expect(options.mediaUrl).toBe("/tmp/workspace/report.md");
-      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
-      expect(options.mediaReadFile).toBe(mediaReadFile);
-      expect(options.requireMediaUpload).toBe(true);
-    });
-
-    it("preserves workspaceDir for relative filePath send actions", async () => {
-      const cfg = createMattermostTestConfig();
-      const mediaReadFile = vi.fn(async () => Buffer.from("report"));
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "report",
-            filePath: "report.md",
-          },
-          cfg,
-          accountId: "default",
-          mediaAccess: {
-            localRoots: ["/tmp/workspace"],
-            readFile: mediaReadFile,
-            workspaceDir: "/tmp/workspace",
+            target: fixture.target,
+            to: fixture.to,
+            messageId: "POST1",
+            emoji: fixture.emoji,
+            remove: fixture.mode === "remove",
           },
         }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "report");
-      expect(options.mediaUrl).toBe("report.md");
-      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
-      expect(options.mediaReadFile).toBe(mediaReadFile);
-      expect(options.workspaceDir).toBe("/tmp/workspace");
-      expect(options.requireMediaUpload).toBe(true);
-    });
-
-    it("routes structured attachment send actions through Mattermost media upload options", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "report",
-            attachments: [{ filePath: "/tmp/workspace/report.md" }],
-          },
-          cfg,
-          accountId: "default",
-          mediaLocalRoots: ["/tmp/workspace"],
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "report");
-      expect(options.mediaUrl).toBe("/tmp/workspace/report.md");
-      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
-      expect(options.requireMediaUpload).toBe(true);
-    });
-
-    it("routes media_urls send actions through Mattermost media upload options", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "report",
-            media_urls: ["/tmp/workspace/report.md"],
-          },
-          cfg,
-          accountId: "default",
-          mediaLocalRoots: ["/tmp/workspace"],
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "report");
-      expect(options.mediaUrl).toBe("/tmp/workspace/report.md");
-      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
-      expect(options.requireMediaUpload).toBe(true);
-    });
-
-    it("preserves HTTP media send fallback behavior", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "report",
-            mediaUrl: "https://example.com/report.md",
-          },
-          cfg,
-          accountId: "default",
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "report");
-      expect(options.mediaUrl).toBe("https://example.com/report.md");
-      expect(options.requireMediaUpload).toBeUndefined();
-    });
-
-    it("rejects multiple Mattermost send attachments instead of dropping extras", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await expect(
-        mattermostPlugin.actions?.handleAction?.(
-          createMattermostActionContext({
-            action: "send",
-            params: {
-              to: "channel:CHAN1",
-              message: "reports",
-              media_urls: ["/tmp/workspace/one.md", "/tmp/workspace/two.md"],
-            },
-            cfg,
-            accountId: "default",
-            mediaLocalRoots: ["/tmp/workspace"],
-          }),
-        ),
-      ).rejects.toThrow("supports one attachment per message");
-      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
-    });
-
-    it.each(["buffer", "base64"] as const)(
-      "rejects unsupported %s-only Mattermost send attachments",
-      async (field) => {
-        const cfg = createMattermostTestConfig();
-
-        await expect(
-          mattermostPlugin.actions?.handleAction?.(
-            createMattermostActionContext({
-              action: "send",
-              params: {
-                to: "channel:CHAN1",
-                message: "report",
-                [field]: "cmVwb3J0",
-                filename: "report.md",
-              },
-              cfg,
-              accountId: "default",
-            }),
-          ),
-        ).rejects.toThrow("buffer/base64 payloads are not supported");
-        expect(sendMessageMattermostMock).not.toHaveBeenCalled();
-      },
+      ),
     );
+    expect(result.content).toEqual([{ type: "text", text: fixture.expected }]);
+  });
 
-    it.each([
-      { location: "top-level", params: { buffer: "", base64: "  " } },
-      {
-        location: "nested",
-        params: { attachments: [{ buffer: "", base64: "  " }] },
-      },
-    ])("ignores blank $location attachment payload fields", async ({ params }) => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "plain text",
-            ...params,
-          },
-          cfg,
-          accountId: "default",
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "plain text");
-      expect(options.mediaUrl).toBeUndefined();
+  it("preserves skin tone when adding a raw glyph reaction", async () => {
+    const fetchImpl = createMattermostReactionFetchMock({
+      mode: "add",
+      postId: "POST1",
+      emojiName: "thumbsup_medium_skin_tone",
     });
-
-    it("rejects mixed supported and unsupported Mattermost send attachments", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await expect(
-        mattermostPlugin.actions?.handleAction?.(
-          createMattermostActionContext({
-            action: "send",
-            params: {
-              to: "channel:CHAN1",
-              message: "report",
-              attachments: [
-                { filePath: "/tmp/workspace/report.md" },
-                { buffer: "cmVwb3J0", filename: "report-copy.md" },
-              ],
-            },
-            cfg,
-            accountId: "default",
-            mediaLocalRoots: ["/tmp/workspace"],
-          }),
-        ),
-      ).rejects.toThrow("buffer/base64 payloads are not supported");
-      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
-    });
-
-    it("maps legacy presentation buttons without using interactive conversion", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "Deploy finished",
-            presentation: {
-              blocks: [
-                {
-                  type: "buttons",
-                  buttons: [
-                    {
-                      label: "Open",
-                      value: "open",
-                      style: "primary",
-                    },
-                    { label: "Docs", url: "https://example.com/docs" },
-                  ],
-                },
-              ],
-            },
-          },
-          cfg,
+    const result = await withMockedGlobalFetch(fetchImpl, () =>
+      actions.handleAction!(
+        action({
+          action: "react",
+          params: { messageId: "POST1", emoji: "👍🏽", remove: "true" },
           accountId: "default",
+          conversationReadOrigin: "direct-operator",
         }),
-      );
+      ),
+    );
+    expect(result.content).toEqual([
+      { type: "text", text: "Reacted with :thumbsup_medium_skin_tone: on POST1" },
+    ]);
+    expect(result.details).toStrictEqual({});
+  });
 
-      const options = expectSingleMattermostSend(
-        "channel:CHAN1",
-        "Deploy finished\n\n- Open\n- Docs: https://example.com/docs",
-      );
-      expect(options.buttons).toStrictEqual([
-        [
-          {
-            id: "open",
-            text: "Open",
-            callback_data: "open",
-            context: { callback_data: "open" },
-            style: "primary",
-          },
-        ],
-      ]);
+  it("carries provider attachment text through prepared payload delivery", async () => {
+    await sendPrepared({ params: { attachmentText: "native attachment" } });
+    expect(expectSend().attachmentText).toBe("native attachment");
+  });
+
+  it("forwards a prepared local attachment with trusted roots and a reader", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("report"));
+    await sendPrepared({
+      params: { attachments: [{ filePath: "/tmp/workspace/report.md", buffer: "", base64: "  " }] },
+      accountId: "default",
+      mediaLocalRoots: ["/tmp/workspace"],
+      mediaReadFile,
     });
-
-    it("does not render callback action buttons that Mattermost cannot round-trip", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "Pick",
-            presentation: {
-              blocks: [
-                {
-                  type: "buttons",
-                  buttons: [{ label: "Inspect", action: { type: "callback", value: "inspect" } }],
-                },
-              ],
-            },
-          },
-          cfg,
-          accountId: "default",
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "Pick\n\n- Inspect");
-      expect(options.buttons).toBeUndefined();
-    });
-
-    it("does not render command action buttons that Mattermost cannot execute", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "Pick",
-            presentation: {
-              blocks: [
-                {
-                  type: "buttons",
-                  buttons: [{ label: "Plugins", action: { type: "command", command: "/codex" } }],
-                },
-              ],
-            },
-          },
-          cfg,
-          accountId: "default",
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "Pick\n\n- Plugins: `/codex`");
-      expect(options.buttons).toBeUndefined();
-    });
-
-    it("keeps unsupported select commands actionable without exposing callback values", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "Pick",
-            presentation: {
-              blocks: [
-                {
-                  type: "select",
-                  placeholder: "Environment",
-                  options: [
-                    {
-                      label: "Production",
-                      action: { type: "command", command: "/deploy production" },
-                    },
-                    {
-                      label: "Opaque",
-                      action: { type: "callback", value: "private-callback-token" },
-                    },
-                  ],
-                },
-              ],
-            },
-          },
-          cfg,
-          accountId: "default",
-        }),
-      );
-
-      const options = expectSingleMattermostSend(
-        "channel:CHAN1",
-        "Pick\n\nEnvironment:\n- Production: `/deploy production`\n- Opaque",
-      );
-      expect(options.buttons).toBeUndefined();
-    });
-
-    it("falls back to trimmed replyTo when replyToId is blank", async () => {
-      const cfg = createMattermostTestConfig();
-
-      await mattermostPlugin.actions?.handleAction?.(
-        createMattermostActionContext({
-          action: "send",
-          params: {
-            to: "channel:CHAN1",
-            message: "hello",
-            replyToId: "   ",
-            replyTo: " post-root ",
-          },
-          cfg,
-          accountId: "default",
-        }),
-      );
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.accountId).toBe("default");
-      expect(options.replyToId).toBe("post-root");
+    expect(expectSend()).toMatchObject({
+      mediaUrl: "/tmp/workspace/report.md",
+      mediaLocalRoots: ["/tmp/workspace"],
+      mediaReadFile,
+      requireMediaUpload: true,
     });
   });
 
-  describe("outbound", () => {
-    it.each([
-      {
-        name: "text",
-        send: async (onDeliveryResult: MattermostSendTextParams["onDeliveryResult"]) =>
-          await requireMattermostSendText()({
-            cfg: createMattermostTestConfig(),
-            to: "channel:CHAN1",
-            text: "provider-final",
-            onDeliveryResult,
-          }),
-      },
-      {
-        name: "media",
-        send: async (onDeliveryResult: MattermostSendMediaParams["onDeliveryResult"]) =>
-          await requireMattermostSendMedia()({
-            cfg: createMattermostTestConfig(),
-            to: "channel:CHAN1",
-            text: "provider-final",
-            mediaUrl: "https://example.com/report.png",
-            onDeliveryResult,
-          }),
-      },
-      {
-        name: "payload",
-        send: async (onDeliveryResult: MattermostSendTextParams["onDeliveryResult"]) =>
-          await requireMattermostSendPayload()({
-            cfg: createMattermostTestConfig(),
-            to: "channel:CHAN1",
-            text: "provider-final",
-            payload: {
-              text: "provider-final",
-              channelData: {
-                mattermost: {
-                  attachmentText: "attachment",
-                },
-              },
-            },
-            onDeliveryResult,
-          }),
-      },
-    ])("reports $name provider progress before a later bookkeeping failure", async ({ send }) => {
-      const onDeliveryResult = vi.fn();
-      sendMessageMattermostMock.mockImplementationOnce(
-        async (_to: string, _text: string, options: Record<string, unknown>) => {
-          const report = options.onDeliveryResult as
-            | ((result: Record<string, unknown>) => Promise<void>)
-            | undefined;
-          await report?.({
-            messageId: "post-final",
-            channelId: "CHAN1",
-            content: "provider-final",
-          });
-          throw new Error("activity store unavailable");
-        },
-      );
+  it.each([
+    [
+      "multiple media",
+      { media_urls: ["/tmp/one.md", "/tmp/two.md"] },
+      "supports one attachment per message",
+    ],
+    [
+      "mixed supported and buffer",
+      { attachments: [{ filePath: "/tmp/report.md" }, { buffer: "cmVwb3J0" }] },
+      "buffer/base64",
+    ],
+  ])("rejects prepared %s attachments", async (_name, params, error) => {
+    await expect(sendPrepared({ params })).rejects.toThrow(error);
+    expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+  });
+});
 
-      await expect(send(onDeliveryResult)).rejects.toThrow("activity store unavailable");
+describe("Mattermost outbound", () => {
+  it.each(["text", "payload"] as const)(
+    "reports %s provider progress before bookkeeping fails",
+    async (mode) => {
+      const onDeliveryResult = vi.fn();
+      const receipt = {
+        primaryPlatformMessageId: "post-final",
+        platformMessageIds: ["post-final"],
+        parts: [{ platformMessageId: "post-final", kind: "text" as const, index: 0 }],
+        sentAt: 1,
+      };
+      sendMessageMattermostMock.mockImplementationOnce(async (_to, _text, options) => {
+        await options.onDeliveryResult?.({
+          messageId: "post-final",
+          channelId: "CHAN1",
+          content: "provider-final",
+          receipt,
+        });
+        throw new Error("activity store unavailable");
+      });
+      const ctx = {
+        cfg: config(),
+        to: "channel:CHAN1",
+        text: "provider-final",
+        onDeliveryResult,
+        ...(mode === "text" ? { mediaUrl: "https://example.com/incidental.png" } : {}),
+      };
+      const pending =
+        mode === "text"
+          ? outbound.sendText!(ctx)
+          : outbound.sendPayload!({
+              ...ctx,
+              payload: {
+                text: ctx.text,
+                channelData: { mattermost: { attachmentText: "attachment" } },
+              },
+            });
+      await expect(pending).rejects.toThrow("activity store unavailable");
+      expect(sendMessageMattermostMock.mock.calls[0]?.[2].mediaUrl).toBeUndefined();
       expect(onDeliveryResult).toHaveBeenCalledTimes(1);
       expect(onDeliveryResult).toHaveBeenCalledWith({
         channel: "mattermost",
         messageId: "post-final",
         target: { kind: "channel", id: "CHAN1" },
         content: "provider-final",
+        receipt,
       });
-    });
+    },
+  );
 
-    it("renders presentation buttons for normal reply payload delivery", async () => {
-      const renderPresentation = requireMattermostRenderPresentation();
-      const sendPayload = requireMattermostSendPayload();
-      const cfg = createMattermostTestConfig();
-      const presentation = {
+  it("renders question guidance and the Gateway option index beside the buttons", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const rendered = await render({
+      presentationTextMode: "fallback",
+      channelData: { askUser: { questionId, optionValues: ["staging", "production"] } },
+      presentation: {
         blocks: [
-          { type: "text" as const, text: "Deploy finished" },
+          { type: "text", text: "Which environment?" },
           {
-            type: "buttons" as const,
+            type: "text",
+            text: "- staging\n- production\n\nTap an option, or reply with the option number or text.",
+          },
+          {
+            type: "buttons",
             buttons: [
-              { label: "Open", value: "open", style: "primary" as const },
+              {
+                label: "staging",
+                action: { type: "question", questionId, optionValue: "staging" },
+              },
+              {
+                label: "production",
+                action: { type: "question", questionId, optionValue: "production" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(rendered?.text).toBe(
+      "Which environment?\n\n- staging\n- production\n\nTap an option, or reply with the option number or text.\n\n- staging\n- production",
+    );
+    expect(rendered).toMatchObject({
+      channelData: {
+        mattermost: {
+          presentationButtons: [
+            [
+              {
+                text: "staging",
+                context: { oc_question: true, question_id: questionId, option_index: 0 },
+              },
+              {
+                text: "production",
+                context: { oc_question: true, question_id: questionId, option_index: 1 },
+              },
+            ],
+          ],
+        },
+      },
+    });
+  });
+
+  it("delivers presentation buttons with required local media and preserves card receipts", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const payload = await render({
+      mediaUrl: "report.png",
+      presentation: {
+        blocks: [
+          { type: "text", text: "Deploy finished" },
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Open", value: "open", style: "primary" },
               { label: "Docs", url: "https://example.com/docs" },
             ],
           },
         ],
-      };
-      const rendered = await renderPresentation({
-        payload: { presentation },
-        presentation,
-        ctx: {
-          cfg,
-          to: "channel:CHAN1",
-          text: "",
-          payload: { presentation },
-        },
-      });
-
-      expect(rendered).toMatchObject({
-        text: "Deploy finished\n\n- Open\n- Docs: https://example.com/docs",
-        channelData: {
-          mattermost: {
-            presentationButtons: [[{ text: "Open", callback_data: "open", style: "primary" }]],
-          },
-        },
-      });
-
-      await sendPayload({
-        cfg,
-        to: "channel:CHAN1",
-        text: "",
-        payload: rendered!,
-      });
-
-      const options = expectSingleMattermostSend(
-        "channel:CHAN1",
-        "Deploy finished\n\n- Open\n- Docs: https://example.com/docs",
-      );
-      expect(options.buttons).toStrictEqual([
-        [
-          {
-            id: "open",
-            text: "Open",
-            callback_data: "open",
-            context: { callback_data: "open" },
-            style: "primary",
-          },
-        ],
-      ]);
+      },
     });
+    sendMessageMattermostMock.mockResolvedValueOnce({
+      messageId: "post-1",
+      channelId: "channel-1",
+      content: "card",
+      receipt: {
+        primaryPlatformMessageId: "post-1",
+        platformMessageIds: ["post-1"],
+        parts: [{ platformMessageId: "post-1", kind: "card", index: 0 }],
+        sentAt: 1,
+      },
+    });
+    const result = await mattermostPlugin.message!.send!.payload!({
+      cfg: config(),
+      to: "channel:CHAN1",
+      text: "",
+      payload: payload!,
+      mediaAccess: {
+        localRoots: ["/tmp/workspace"],
+        readFile: mediaReadFile,
+        workspaceDir: "/tmp/workspace",
+      },
+    });
+    const options = expectSend("Deploy finished\n\n- Open\n- Docs: https://example.com/docs");
+    expect(options).toMatchObject({
+      mediaUrl: "report.png",
+      mediaLocalRoots: ["/tmp/workspace"],
+      mediaReadFile,
+      workspaceDir: "/tmp/workspace",
+      requireMediaUpload: true,
+    });
+    expect(options.buttons).toStrictEqual([
+      [
+        {
+          id: "open",
+          text: "Open",
+          callback_data: "open",
+          context: { callback_data: "open" },
+          style: "primary",
+        },
+      ],
+    ]);
+    expect(result.receipt.platformMessageIds).toEqual(["post-1"]);
+    expect(result.receipt.parts[0]?.kind).toBe("card");
+  });
 
-    it("keeps typed URL actions on the normal Mattermost text delivery path", async () => {
-      const renderPresentation = requireMattermostRenderPresentation();
-      const sendPayload = requireMattermostSendPayload();
-      const cfg = createMattermostTestConfig();
-      const presentation = {
+  it("keeps typed navigation and approval actions on the text delivery path", async () => {
+    const payload = await render({
+      presentation: {
         blocks: [
           {
-            type: "buttons" as const,
+            type: "buttons",
             buttons: [
-              {
-                label: "Review",
-                action: {
-                  type: "url" as const,
-                  url: "https://example.com/review",
-                },
-              },
-              {
-                label: "Open app",
-                action: {
-                  type: "web-app" as const,
-                  url: "https://example.com/app",
-                },
-              },
+              { label: "Review", action: { type: "url", url: "https://example.com/review" } },
+              { label: "Open app", action: { type: "web-app", url: "https://example.com/app" } },
               {
                 label: "Allow",
                 action: {
-                  type: "approval" as const,
+                  type: "approval",
                   approvalId: "approval-1",
-                  approvalKind: "exec" as const,
-                  decision: "allow-once" as const,
+                  approvalKind: "exec",
+                  decision: "allow-once",
                 },
                 value: "/approve approval-1 allow-once",
               },
             ],
           },
         ],
-      };
-      const payload = { presentation };
-      const rendered = await renderPresentation({
-        payload,
-        presentation,
-        ctx: {
-          cfg,
-          to: "channel:CHAN1",
-          text: "",
-          payload,
-        },
-      });
-
-      expect(rendered).toMatchObject({
-        text: "- Review: https://example.com/review\n- Open app: https://example.com/app\n- Allow",
-      });
-      expect(rendered?.channelData?.mattermost).toBeUndefined();
-
-      await sendPayload({
-        cfg,
-        to: "channel:CHAN1",
-        text: rendered?.text ?? "",
-        payload: rendered!,
-      });
-
-      const options = expectSingleMattermostSend(
-        "channel:CHAN1",
-        "- Review: https://example.com/review\n- Open app: https://example.com/app\n- Allow",
-      );
-      expect(options.buttons).toBeUndefined();
-      expect(JSON.stringify(options)).not.toContain("approval-1");
-      expect(JSON.stringify(options)).not.toContain("/approve");
+      },
     });
-
-    it("skips hosted widget actions without a Mattermost URL", async () => {
-      const renderPresentation = requireMattermostRenderPresentation();
-      const cfg = createMattermostTestConfig();
-      const presentation = {
-        blocks: [
-          {
-            type: "buttons" as const,
-            buttons: [
-              {
-                label: "Hosted widget",
-                action: {
-                  type: "web-app" as const,
-                  widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
-                },
-              },
-            ],
-          },
-        ],
-      };
-
-      expect(
-        await renderPresentation({
-          payload: { presentation },
-          presentation,
-          ctx: {
-            cfg,
-            to: "channel:CHAN1",
-            text: "",
-            payload: { presentation },
-          },
-        }),
-      ).toBeNull();
-    });
-
-    it("requires upload success for local media on presentation button payloads", async () => {
-      const renderPresentation = requireMattermostRenderPresentation();
-      const sendPayload = requireMattermostSendPayload();
-      const cfg = createMattermostTestConfig();
-      const mediaReadFile = vi.fn(async () => Buffer.from("image"));
-      const presentation = {
-        blocks: [
-          {
-            type: "buttons" as const,
-            buttons: [{ label: "Open", value: "open" }],
-          },
-        ],
-      };
-      const rendered = await renderPresentation({
-        payload: { presentation, mediaUrl: "report.png" },
-        presentation,
-        ctx: {
-          cfg,
-          to: "channel:CHAN1",
-          text: "",
-          payload: { presentation, mediaUrl: "report.png" },
-        },
-      });
-
-      await sendPayload({
-        cfg,
-        to: "channel:CHAN1",
-        text: "",
-        payload: rendered!,
-        mediaAccess: {
-          localRoots: ["/tmp/workspace"],
-          readFile: mediaReadFile,
-          workspaceDir: "/tmp/workspace",
-        },
-      });
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "- Open");
-      expect(options.mediaUrl).toBe("report.png");
-      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
-      expect(options.mediaReadFile).toBe(mediaReadFile);
-      expect(options.workspaceDir).toBe("/tmp/workspace");
-      expect(options.requireMediaUpload).toBe(true);
-    });
-
-    it("keeps multi-media presentation payloads on the text/media fallback path", async () => {
-      const renderPresentation = requireMattermostRenderPresentation();
-      const presentation = {
-        blocks: [
-          {
-            type: "buttons" as const,
-            buttons: [{ label: "Open", value: "open" }],
-          },
-        ],
-      };
-
-      expect(
-        await renderPresentation({
-          payload: {
-            presentation,
-            mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
-          },
-          presentation,
-          ctx: {
-            cfg: createMattermostTestConfig(),
-            to: "channel:CHAN1",
-            text: "",
-            payload: { presentation },
-          },
-        }),
-      ).toBeNull();
-    });
-
-    it("chunks outbound text without requiring Mattermost runtime initialization", () => {
-      const chunker = requireMattermostChunker();
-
-      expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
-    });
-
-    it("forwards mediaLocalRoots on sendMedia", async () => {
-      const sendMedia = requireMattermostSendMedia();
-      const cfg = createMattermostTestConfig();
-      const mediaReadFile = vi.fn(async () => Buffer.from("image"));
-
-      const params: MattermostSendMediaParams = {
-        cfg,
-        to: "channel:CHAN1",
-        text: "hello",
-        mediaUrl: "/tmp/workspace/image.png",
-        mediaLocalRoots: ["/tmp/workspace"],
-        mediaReadFile,
-        accountId: "default",
-        replyToId: "post-root",
-      };
-
-      await sendMedia(params);
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.mediaUrl).toBe("/tmp/workspace/image.png");
-      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
-      expect(options.mediaReadFile).toBe(mediaReadFile);
-      expect(options.requireMediaUpload).toBe(true);
-    });
-
-    it("falls back to structured mediaAccess on sendMedia", async () => {
-      const sendMedia = requireMattermostSendMedia();
-      const cfg = createMattermostTestConfig();
-      const mediaReadFile = vi.fn(async () => Buffer.from("image"));
-
-      await sendMedia({
-        cfg,
-        to: "channel:CHAN1",
-        text: "hello",
-        mediaUrl: "image.png",
-        mediaAccess: {
-          localRoots: ["/tmp/workspace"],
-          readFile: mediaReadFile,
-          workspaceDir: "/tmp/workspace",
-        },
-      });
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.mediaUrl).toBe("image.png");
-      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
-      expect(options.mediaReadFile).toBe(mediaReadFile);
-      expect(options.workspaceDir).toBe("/tmp/workspace");
-      expect(options.requireMediaUpload).toBe(true);
-    });
-
-    it("threads resolved cfg on sendText", async () => {
-      const sendText = requireMattermostSendText();
-      const cfg = {
-        channels: {
-          mattermost: {
-            botToken: "resolved-bot-token",
-            baseUrl: "https://chat.example.com",
-          },
-        },
-      } as OpenClawConfig;
-
-      const params: MattermostSendTextParams = {
-        cfg,
-        to: "channel:CHAN1",
-        text: "hello",
-        accountId: "default",
-      };
-
-      await sendText(params);
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.cfg).toBe(cfg);
-      expect(options.accountId).toBe("default");
-    });
-
-    it("uses threadId as fallback when replyToId is absent (sendText)", async () => {
-      const sendText = requireMattermostSendText();
-      const cfg = createMattermostTestConfig();
-
-      const params: MattermostSendTextParams = {
-        cfg,
-        to: "channel:CHAN1",
-        text: "hello",
-        accountId: "default",
-        threadId: "post-root",
-      };
-
-      await sendText(params);
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.accountId).toBe("default");
-      expect(options.replyToId).toBe("post-root");
-    });
-
-    it("uses threadId as fallback when replyToId is absent (sendMedia)", async () => {
-      const sendMedia = requireMattermostSendMedia();
-      const cfg = createMattermostTestConfig();
-
-      const params: MattermostSendMediaParams = {
-        cfg,
-        to: "channel:CHAN1",
-        text: "caption",
-        mediaUrl: "https://example.com/image.png",
-        accountId: "default",
-        threadId: "post-root",
-      };
-
-      await sendMedia(params);
-
-      const options = expectSingleMattermostSend("channel:CHAN1", "caption");
-      expect(options.accountId).toBe("default");
-      expect(options.replyToId).toBe("post-root");
-      expect(options.requireMediaUpload).toBeUndefined();
-    });
+    const text =
+      "- Review: https://example.com/review\n- Open app: https://example.com/app\n- Allow";
+    expect(payload?.text).toBe(text);
+    expect(payload?.channelData?.mattermost).toBeUndefined();
+    await outbound.sendPayload!({ cfg: config(), to: "channel:CHAN1", text, payload: payload! });
+    const options = expectSend(text);
+    expect(options.buttons).toBeUndefined();
+    expect(JSON.stringify(options)).not.toContain("approval-1");
+    expect(JSON.stringify(options)).not.toContain("/approve");
   });
 
-  describe("config", () => {
-    it("formats allowFrom entries", () => {
-      const formatAllowFrom = mattermostPlugin.config.formatAllowFrom!;
-
-      const formatted = formatAllowFrom({
-        cfg: {} as OpenClawConfig,
-        allowFrom: [" @Alice ", " user:USER123 ", " mattermost:BOT999 "],
-      });
-      expect(formatted).toEqual(["@alice", "user123", "bot999"]);
-    });
-
-    it("uses account responsePrefix overrides", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            responsePrefix: "[Channel]",
-            accounts: {
-              default: { responsePrefix: "[Account]" },
+  it("skips hosted widget actions without a Mattermost URL", async () => {
+    expect(
+      await render({
+        presentation: {
+          blocks: [
+            { type: "text", text: "Widget" },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Hosted widget",
+                  action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+                },
+              ],
             },
-          },
+          ],
         },
-      };
+      }),
+    ).toBeNull();
+  });
 
-      const prefixContext = createChannelMessageReplyPipeline({
-        cfg,
-        agentId: "main",
-        channel: "mattermost",
-        accountId: "default",
-      });
+  it("keeps multi-media presentations on the fallback path", async () => {
+    expect(
+      await render({
+        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      }),
+    ).toBeNull();
+  });
 
-      expect(prefixContext.responsePrefix).toBe("[Account]");
+  it("uses a thread as fallback for media delivery with structured workspace access", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    await outbound.sendMedia!({
+      cfg: config(),
+      to: "channel:CHAN1",
+      text: "caption",
+      mediaUrl: "image.png",
+      threadId: "post-root",
+      mediaAccess: {
+        localRoots: ["/tmp/workspace"],
+        readFile: mediaReadFile,
+        workspaceDir: "/tmp/workspace",
+      },
+    });
+    expect(expectSend("caption")).toMatchObject({
+      replyToId: "post-root",
+      mediaUrl: "image.png",
+      mediaLocalRoots: ["/tmp/workspace"],
+      mediaReadFile,
+      workspaceDir: "/tmp/workspace",
+      requireMediaUpload: true,
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

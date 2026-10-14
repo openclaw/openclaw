@@ -1,36 +1,29 @@
-import { html } from "lit";
 import type { GatewayAgentRow } from "../../api/types.ts";
-import "../../components/agent-select-registration.ts";
-import { t } from "../../i18n/index.ts";
-import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { AgentIdentityCapability } from "../../lib/agents/identity.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import type { DraftGatewayState } from "./draft-gateway-state.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
+import type { NewSessionRouteData } from "./location.ts";
 
-type DraftAgent = GatewayAgentRow;
-
-export function renderAgentSelect(params: {
-  agents: DraftAgent[];
+export type AgentSelectOptions = {
+  agents: GatewayAgentRow[];
   agentId: string;
   agentIdentity?: AgentIdentityCapability;
   disabled: boolean;
+  variant?: "default" | "compact";
   onSelect: (agentId: string) => void;
-}) {
-  const selectedId = normalizeAgentId(params.agentId);
-  return html`
-    <span class="new-session-page__select new-session-page__select--agent">
-      <openclaw-agent-select
-        class="agent-select--compact"
-        .options=${params.agents.map((agent) => ({
-          value: normalizeAgentId(agent.id),
-          label: normalizeAgentTargetLabel(agent, params.agentIdentity?.get(agent.id)),
-          agent,
-        }))}
-        .value=${selectedId}
-        .accessibleLabel=${t("newSession.agent")}
-        .menuLabel=${t("newSession.agents")}
-        .disabled=${params.disabled}
-        .onSelect=${params.onSelect}
-      ></openclaw-agent-select>
-    </span>
-  `;
-}
+  onOpenChange: (open: boolean) => void;
+};
+
+export type NewSessionPlaceControlsOptions = {
+  context: ApplicationContext | undefined;
+  data: NewSessionRouteData | undefined;
+  gateway: DraftGatewayState;
+  place: DraftPlaceState;
+  submitting: boolean;
+  pendingPlacement: boolean;
+  onConnectMachine: () => void;
+  onNavigate: ApplicationContext["navigate"];
+  onFocusComposer: () => void;
+  requestUpdate: () => void;
+};

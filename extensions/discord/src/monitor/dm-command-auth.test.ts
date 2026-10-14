@@ -1,9 +1,43 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover dm command auth plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveDiscordDmCommandAccess,
   resolveDiscordTextCommandAccess,
 } from "./dm-command-auth.js";
+
+const participantResolutions = vi.hoisted(
+  () =>
+    [] as Array<
+      ReturnType<
+        NonNullable<
+          import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressIdentityDescriptor["resolveParticipant"]
+        >
+      >
+    >,
+);
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>();
+  return {
+    ...actual,
+    defineStableChannelIngressIdentity: (
+      params: Parameters<typeof actual.defineStableChannelIngressIdentity>[0],
+    ) => {
+      const identity = actual.defineStableChannelIngressIdentity(params);
+      return {
+        ...identity,
+        resolveParticipant: (subject) => {
+          const participant = identity.resolveParticipant?.(subject);
+          participantResolutions.push(participant);
+          return participant;
+        },
+      } satisfies typeof identity;
+    },
+  };
+});
 
 const canViewDiscordGuildChannelMock = vi.hoisted(() => vi.fn());
 type DiscordDmIngressAccess = Awaited<ReturnType<typeof resolveDiscordDmCommandAccess>>;
@@ -109,56 +143,53 @@ describe("resolveDiscordDmCommandAccess", () => {
     tag: "alice#0001",
   };
 
+  function resolveDmAccess(
+    overrides: Partial<Parameters<typeof resolveDiscordDmCommandAccess>[0]>,
+  ) {
+    return resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "open",
+      configuredAllowFrom: [],
+      sender,
+      allowNameMatching: false,
+      readStoreAllowFrom: async () => [],
+      ...overrides,
+    });
+  }
+
   beforeEach(() => {
     canViewDiscordGuildChannelMock.mockReset();
   });
 
-  async function resolveOpenDmAccess(configuredAllowFrom: string[]) {
-    return await resolveDiscordDmCommandAccess({
-      accountId: "default",
-      dmPolicy: "open",
-      configuredAllowFrom,
-      sender,
-      allowNameMatching: false,
-      readStoreAllowFrom: async () => [],
-    });
-  }
-
   it("blocks open DMs without allowlist wildcard entries", async () => {
-    const result = await resolveOpenDmAccess([]);
+    const result = await resolveDmAccess({ configuredAllowFrom: [] });
 
     expect(result.senderAccess.decision).toBe("block");
     expect(dmCommandAuthorized(result)).toBe(false);
   });
 
   it("marks command auth true when sender is allowlisted", async () => {
-    const result = await resolveOpenDmAccess(["discord:123"]);
+    const result = await resolveDmAccess({ configuredAllowFrom: ["discord:123"] });
 
     expect(result.senderAccess.decision).toBe("allow");
     expect(dmCommandAuthorized(result)).toBe(true);
   });
 
   it("authorizes a matching Discord tag when name matching is enabled", async () => {
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const result = await resolveDmAccess({
       dmPolicy: "allowlist",
       configuredAllowFrom: ["alice#0001"],
       sender: { id: "999", name: "alice", tag: "alice#0001" },
       allowNameMatching: true,
-      readStoreAllowFrom: async () => [],
     });
 
     expect(result.senderAccess.allowed).toBe(true);
   });
 
   it("blocks open DMs when configured allowlist does not match", async () => {
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const result = await resolveDmAccess({
       dmPolicy: "open",
       configuredAllowFrom: ["discord:999"],
-      sender,
-      allowNameMatching: false,
-      readStoreAllowFrom: async () => [],
     });
 
     expect(result.senderAccess.decision).toBe("block");
@@ -167,13 +198,9 @@ describe("resolveDiscordDmCommandAccess", () => {
   });
 
   it("returns pairing decision and unauthorized command auth for unknown senders", async () => {
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const result = await resolveDmAccess({
       dmPolicy: "pairing",
       configuredAllowFrom: ["discord:456"],
-      sender,
-      allowNameMatching: false,
-      readStoreAllowFrom: async () => [],
     });
 
     expect(result.senderAccess.decision).toBe("pairing");
@@ -181,12 +208,9 @@ describe("resolveDiscordDmCommandAccess", () => {
   });
 
   it("authorizes sender from pairing-store allowlist entries", async () => {
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const result = await resolveDmAccess({
       dmPolicy: "pairing",
       configuredAllowFrom: [],
-      sender,
-      allowNameMatching: false,
       readStoreAllowFrom: async () => ["discord:123"],
     });
 
@@ -195,8 +219,7 @@ describe("resolveDiscordDmCommandAccess", () => {
   });
 
   it("authorizes PluralKit senders from prefixed pairing-store allowlist entries", async () => {
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const result = await resolveDmAccess({
       dmPolicy: "pairing",
       configuredAllowFrom: [],
       sender: {
@@ -205,7 +228,6 @@ describe("resolveDiscordDmCommandAccess", () => {
         tag: "Echo",
         isPluralKit: true,
       },
-      allowNameMatching: false,
       readStoreAllowFrom: async () => ["pk:pk-member-1"],
     });
 
@@ -214,31 +236,21 @@ describe("resolveDiscordDmCommandAccess", () => {
   });
 
   it("distinguishes Gateway-bound Discord ids from asserted PluralKit member ids", async () => {
-    const ordinary = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const ordinary = await resolveDmAccess({
       dmPolicy: "allowlist",
       configuredAllowFrom: ["discord:123"],
-      sender,
-      allowNameMatching: false,
       minIdentifierAuthentication: "verified",
-      readStoreAllowFrom: async () => [],
     });
-    const pluralKit = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const pluralKit = await resolveDmAccess({
       dmPolicy: "allowlist",
       configuredAllowFrom: ["pk:pk-member-1"],
       sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
-      allowNameMatching: false,
       minIdentifierAuthentication: "verified",
-      readStoreAllowFrom: async () => [],
     });
-    const compatiblePluralKitDefault = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const compatiblePluralKitDefault = await resolveDmAccess({
       dmPolicy: "allowlist",
       configuredAllowFrom: ["pk:pk-member-1"],
       sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
-      allowNameMatching: false,
-      readStoreAllowFrom: async () => [],
     });
 
     expect(ordinary.senderAccess.decision).toBe("allow");
@@ -249,12 +261,9 @@ describe("resolveDiscordDmCommandAccess", () => {
   it("authorizes allowlist DMs from a Discord channel audience access group", async () => {
     canViewDiscordGuildChannelMock.mockResolvedValueOnce(true);
 
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const result = await resolveDmAccess({
       dmPolicy: "allowlist",
       configuredAllowFrom: ["accessGroup:maintainers"],
-      sender,
-      allowNameMatching: false,
       cfg: {
         accessGroups: {
           maintainers: {
@@ -265,7 +274,6 @@ describe("resolveDiscordDmCommandAccess", () => {
         },
       },
       token: "token",
-      readStoreAllowFrom: async () => [],
     });
 
     expect(canViewDiscordGuildChannelMock).toHaveBeenCalledWith("guild-1", "channel-1", "123", {
@@ -286,12 +294,9 @@ describe("resolveDiscordDmCommandAccess", () => {
   });
 
   it("authorizes allowlist DMs from a generic message sender access group", async () => {
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const result = await resolveDmAccess({
       dmPolicy: "allowlist",
       configuredAllowFrom: ["accessGroup:owners"],
-      sender,
-      allowNameMatching: false,
       cfg: {
         accessGroups: {
           owners: {
@@ -303,7 +308,6 @@ describe("resolveDiscordDmCommandAccess", () => {
           },
         },
       },
-      readStoreAllowFrom: async () => [],
     });
 
     expect(canViewDiscordGuildChannelMock).not.toHaveBeenCalled();
@@ -314,12 +318,9 @@ describe("resolveDiscordDmCommandAccess", () => {
   it("fails closed when a Discord channel audience access group lookup rejects", async () => {
     canViewDiscordGuildChannelMock.mockRejectedValueOnce(new Error("missing intent"));
 
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
+    const result = await resolveDmAccess({
       dmPolicy: "allowlist",
       configuredAllowFrom: ["accessGroup:maintainers"],
-      sender,
-      allowNameMatching: false,
       cfg: {
         accessGroups: {
           maintainers: {
@@ -329,25 +330,38 @@ describe("resolveDiscordDmCommandAccess", () => {
           },
         },
       },
-      readStoreAllowFrom: async () => [],
-    });
-
-    expect(result.senderAccess.decision).toBe("block");
-    expect(dmCommandAuthorized(result)).toBe(false);
-  });
-
-  it("keeps open DM blocked without wildcard even when access groups are disabled", async () => {
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
-      dmPolicy: "open",
-      configuredAllowFrom: [],
-      sender,
-      allowNameMatching: false,
-      cfg: {},
-      readStoreAllowFrom: async () => [],
     });
 
     expect(result.senderAccess.decision).toBe("block");
     expect(dmCommandAuthorized(result)).toBe(false);
   });
 });
+
+it.each(["user", "bot", "pluralkit-member", undefined] as const)(
+  "keeps Discord participant kind %s separate without guessing",
+  async (participantKind) => {
+    participantResolutions.length = 0;
+    await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "open",
+      configuredAllowFrom: ["*"],
+      sender: {
+        id: "123",
+        ...(participantKind === "pluralkit-member"
+          ? { isPluralKit: true }
+          : { authorKind: participantKind }),
+      },
+      allowNameMatching: false,
+      readStoreAllowFrom: async () => [],
+    });
+    expect(participantResolutions).toEqual([
+      participantKind
+        ? {
+            domain: participantKind === "pluralkit-member" ? "pluralkit" : "discord",
+            idKind: participantKind,
+            id: "123",
+          }
+        : undefined,
+    ]);
+  },
+);

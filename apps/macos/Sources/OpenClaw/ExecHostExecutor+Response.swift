@@ -4,7 +4,13 @@ extension ExecHostExecutor {
     static func commandResponse(
         execution: Task<ShellExecutor.ShellResult, Never>) async -> ExecHostResponse
     {
-        let result = await execution.value
+        // Enqueuing stays adjacent to the approval commit; awaiting a detached
+        // task alone does not propagate the request's cancellation into it.
+        let result = await withTaskCancellationHandler {
+            await execution.value
+        } onCancel: {
+            execution.cancel()
+        }
         if let preflightError = result.preflightError {
             return self.errorResponse(
                 code: "UNAVAILABLE",
@@ -18,12 +24,24 @@ extension ExecHostExecutor {
             stdout: ExecHostOutputLimiter.truncate(result.stdout),
             stderr: ExecHostOutputLimiter.truncate(result.stderr),
             error: result.errorMessage)
-        return self.successResponse(payload)
+        return ExecHostResponse(
+            type: "exec-res",
+            id: UUID().uuidString,
+            ok: true,
+            payload: payload,
+            error: nil)
     }
 
-    static func errorResponse(_ error: ExecHostError) -> ExecHostResponse {
+    static func cancelledResponse() -> ExecHostResponse {
+        self.errorResponse(
+            code: "UNAVAILABLE",
+            message: "SYSTEM_RUN_CANCELLED: execution cancelled",
+            reason: "cancelled")
+    }
+
+    static func errorResponse(_ error: ExecHostError, type: String = "response") -> ExecHostResponse {
         ExecHostResponse(
-            type: "response",
+            type: type,
             id: UUID().uuidString,
             ok: false,
             payload: nil,
@@ -35,20 +53,6 @@ extension ExecHostExecutor {
         message: String,
         reason: String?) -> ExecHostResponse
     {
-        ExecHostResponse(
-            type: "exec-res",
-            id: UUID().uuidString,
-            ok: false,
-            payload: nil,
-            error: ExecHostError(code: code, message: message, reason: reason))
-    }
-
-    static func successResponse(_ payload: ExecHostRunResult) -> ExecHostResponse {
-        ExecHostResponse(
-            type: "exec-res",
-            id: UUID().uuidString,
-            ok: true,
-            payload: payload,
-            error: nil)
+        self.errorResponse(ExecHostError(code: code, message: message, reason: reason), type: "exec-res")
     }
 }

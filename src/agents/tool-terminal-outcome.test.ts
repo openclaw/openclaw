@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { Type } from "typebox";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Agent } from "../../packages/agent-core/src/agent.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { Message, Model } from "../llm/types.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
@@ -8,11 +13,199 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
 import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
+import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { inferToolMetaFromArgsCore } from "./tool-display.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
+const steeringModel: Model = {
+  id: "tool-terminal-steering-model",
+  name: "Tool terminal steering model",
+  api: "openai-responses",
+  provider: "test-provider",
+  baseUrl: "https://example.test",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1_000,
+  maxTokens: 1_000,
+};
+
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
+
+  it.each([
+    { firstOutcome: "success", error: undefined, warnings: [] },
+    { firstOutcome: "failure", error: "Original tool failure", warnings: ["⚠️ Exec failed"] },
+    { firstOutcome: "blocked", error: "Original admission failure", warnings: ["⚠️ Exec blocked"] },
+  ])(
+    "classifies a steering skip after $firstOutcome through the registered subscription",
+    async ({ firstOutcome, error, warnings }) => {
+      const firstSettled = createDeferred();
+      const releaseFirst = createDeferred();
+      const execute = vi.fn(async () => {
+        if (firstOutcome === "failure") {
+          throw new Error("Original tool failure");
+        }
+        return { content: [{ type: "text" as const, text: "first completed" }], details: {} };
+      });
+      const providerRequests: Message[][] = [];
+      const { emit, subscription } = createSubscribedSessionHarness({ runId: "steering-warning" });
+      const agent = new Agent({
+        initialState: {
+          model: steeringModel,
+          tools: [
+            {
+              name: "exec",
+              label: "exec",
+              description: "Runs a step.",
+              parameters: Type.Object({}),
+              execute,
+            },
+          ],
+        },
+        streamFn: (_model, context) => {
+          providerRequests.push(context.messages.slice());
+          const message = makeAgentAssistantMessage(
+            providerRequests.length === 1
+              ? {
+                  content: [
+                    // A blocked call does not start the plan, so an executed call precedes it.
+                    ...(firstOutcome === "blocked"
+                      ? [
+                          {
+                            type: "toolCall" as const,
+                            id: "call-started",
+                            name: "exec",
+                            arguments: {},
+                          },
+                        ]
+                      : []),
+                    { type: "toolCall", id: "call-first", name: "exec", arguments: {} },
+                    { type: "toolCall", id: "call-second", name: "exec", arguments: {} },
+                  ],
+                  stopReason: "toolUse",
+                }
+              : { content: [] },
+          );
+          const stream = createAssistantMessageEventStream();
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+          stream.end();
+          return stream;
+        },
+        toolExecution: "sequential",
+        beforeToolCall: async ({ toolCall }) =>
+          firstOutcome === "blocked" && toolCall.id === "call-first"
+            ? { block: true, reason: "Original admission failure" }
+            : undefined,
+        afterToolOutcome: async ({ toolCall }) => {
+          if (toolCall.id === "call-first") {
+            firstSettled.resolve();
+            await releaseFirst.promise;
+          }
+        },
+      });
+      const unsubscribe = agent.subscribe(emit);
+      const run = agent.prompt("start the sequence");
+      try {
+        await firstSettled.promise;
+        agent.steer({ role: "user", content: "change direction", timestamp: 1 });
+        releaseFirst.resolve();
+        await run;
+        await subscription.waitForPendingEvents();
+
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(providerRequests).toHaveLength(2);
+        expect(providerRequests[1]?.slice(-2)).toMatchObject([
+          {
+            role: "toolResult",
+            toolCallId: "call-second",
+            isError: true,
+            details: { status: "skipped", deniedReason: "steering" },
+          },
+          { role: "user", content: "change direction" },
+        ]);
+        const lastToolError = subscription.getLastToolError();
+        expect(lastToolError?.error).toBe(error);
+        expect(
+          buildPayloads({
+            assistantTexts: subscription.assistantTexts,
+            lastAssistant: subscription.getCurrentAttemptAssistant(),
+            lastToolError,
+          }).map((payload) => payload.text),
+        ).toEqual(warnings);
+      } finally {
+        releaseFirst.resolve();
+        await run;
+        unsubscribe();
+        subscription.unsubscribe();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "admission failure",
+      executionStarted: false,
+      details: { status: "blocked", deniedReason: "tool-admission" },
+    },
+    {
+      name: "other skipped work",
+      executionStarted: false,
+      details: { status: "skipped", deniedReason: "policy" },
+    },
+    {
+      name: "executed steering-lookalike result",
+      executionStarted: true,
+      details: { status: "skipped", deniedReason: "steering" },
+    },
+  ])("keeps $name as a failure", ({ executionStarted, details }) => {
+    const terminal = createToolTerminalObserver("run-non-steering-failure")({
+      toolName: "exec",
+      executionStarted,
+      outcome: "failure",
+      result: { details },
+      failure: { error: "Original failure" },
+    });
+    expect(terminal.lastToolError).toMatchObject({ error: "Original failure", executionStarted });
+    expect(
+      buildPayloads({ lastToolError: terminal.lastToolError }).map((payload) => payload.text),
+    ).toEqual([executionStarted ? "⚠️ Exec failed" : "⚠️ Exec blocked"]);
+  });
+
+  it("retains a genuine message failure across suppression until a real send succeeds", () => {
+    const observe = createToolTerminalObserver("run-suppression");
+    const suppression = {
+      toolName: "message",
+      arguments: { action: "send", target: "123", message: "omitted" },
+      outcome: "success" as const,
+      result: { details: { status: "suppressed", reason: "cancelled_by_message_sending_hook" } },
+    };
+    expect(observe(suppression).lastToolError).toBeUndefined();
+    observe({
+      toolName: "message",
+      arguments: { action: "send", target: "123", message: "failed" },
+      outcome: "failure",
+      failure: { error: "Telegram transport failed" },
+    });
+    const afterSuppression = observe(suppression);
+    expect(afterSuppression.lastToolError).toMatchObject({ error: "Telegram transport failed" });
+    expect(buildPayloads({ lastToolError: afterSuppression.lastToolError })).toEqual([
+      expect.objectContaining({ isError: true }),
+    ]);
+    expect(
+      observe({
+        toolName: "message",
+        arguments: { action: "send", target: "123", message: "delivered" },
+        outcome: "success",
+        result: { details: { ok: true, messageId: "sent-1" } },
+      }).lastToolError,
+    ).toBeUndefined();
+  });
 
   it("keeps the latest failure when a different tool succeeds", () => {
     const observe = createToolTerminalObserver("run-1");
@@ -115,6 +308,85 @@ describe("tool terminal outcome observer", () => {
     });
   });
 
+  it.each([
+    {
+      name: "pre-execution rejection",
+      input: {
+        toolName: "message",
+        arguments: { action: "send" },
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "blocked" },
+      },
+      state: "uncertain",
+    },
+    {
+      name: "completed read",
+      input: { toolName: "message", arguments: { action: "read" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed read",
+      input: {
+        toolName: "message",
+        arguments: { action: "read" },
+        outcome: "failure",
+        failure: { error: "read failed" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "completed computer observation",
+      input: { toolName: "computer", arguments: { action: "list_windows" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed computer observation",
+      input: {
+        toolName: "computer",
+        arguments: { action: "get_cursor_position" },
+        outcome: "failure",
+        failure: { error: "observation unavailable" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "owner-declared replay-safe failure",
+      input: {
+        toolName: "plugin_read",
+        arguments: {},
+        replaySafe: true,
+        outcome: "failure",
+        failure: { error: "read failed" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "completed mutation",
+      input: { toolName: "message", arguments: { action: "send" }, outcome: "success" },
+      state: "mutation_committed",
+    },
+    {
+      name: "completed unknown operation",
+      input: { toolName: "plugin_unknown", arguments: {}, outcome: "success" },
+      state: "uncertain",
+    },
+    {
+      name: "failed mutation",
+      input: {
+        toolName: "message",
+        arguments: { action: "send" },
+        outcome: "failure",
+        failure: { error: "send failed" },
+      },
+      state: "uncertain",
+    },
+  ] as const)("records a host-owned effect receipt for $name", ({ input, state }) => {
+    expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
+      state,
+    });
+  });
+
   it("clears a failed sessions_spawn once a retry with adjusted arguments succeeds", () => {
     const observe = createToolTerminalObserver("run-spawn-retry");
     const failedArgs = {
@@ -145,27 +417,6 @@ describe("tool terminal outcome observer", () => {
     expect(payloads).toEqual([]);
   });
 
-  it("keeps the sessions_spawn failure warning when no later spawn succeeds", () => {
-    const observe = createToolTerminalObserver("run-spawn-failed");
-    const failedArgs = { task: "Investigate the flaky gateway test", label: "Investigate" };
-
-    const terminal = observe({
-      toolName: "sessions_spawn",
-      arguments: failedArgs,
-      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
-      outcome: "failure",
-      failure: { error: "cwd is outside the workspace" },
-    });
-
-    const payloads = buildPayloads({
-      assistantTexts: ["Started Investigate in a new session."],
-      lastToolError: terminal.lastToolError,
-    });
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "Started Investigate in a new session.",
-    ]);
-  });
-
   it("preserves durable memory recall side-effect evidence", () => {
     const observe = createToolTerminalObserver("run-memory");
 
@@ -184,6 +435,70 @@ describe("tool terminal outcome observer", () => {
       }),
     ).toMatchObject({ executionStarted: true, sideEffectEvidence: false });
   });
+
+  it.each([
+    {
+      name: "keyword fallback",
+      timedOut: true,
+      timeoutMs: 30_000,
+      results: [{ path: "memory/one.md" }, { path: "memory/two.md" }],
+      expected: "⚠️ Memory Search timed out after 30s; 2 partial results are available.",
+    },
+    {
+      name: "one keyword match",
+      timedOut: true,
+      timeoutMs: 30_000,
+      results: [{ path: "memory/one.md" }],
+      expected: "⚠️ Memory Search timed out after 30s; 1 partial result is available.",
+    },
+    {
+      name: "no fallback",
+      timedOut: true,
+      timeoutMs: 30_000,
+      results: [],
+      expected: "⚠️ Memory Search timed out after 30s.",
+    },
+    {
+      name: "provider error with timeout wording",
+      timedOut: false,
+      timeoutMs: 30_000,
+      results: [],
+      expected: "⚠️ Memory Search failed",
+    },
+    {
+      name: "invalid timeout metadata",
+      timedOut: true,
+      timeoutMs: -1,
+      results: [],
+      expected: "⚠️ Memory Search failed",
+    },
+  ])(
+    "preserves $name in the final timeout warning",
+    ({ timedOut, timeoutMs, results, expected }) => {
+      const terminal = createToolTerminalObserver("run-memory-timeout")({
+        toolName: "memory_search",
+        arguments: { query: "project notes" },
+        outcome: "failure",
+        result: {
+          details: {
+            timedOut,
+            timeoutMs,
+            partial: true,
+            results,
+            error: "memory_search timed out after 30s: PRIVATE_PROVIDER_DIAGNOSTIC",
+          },
+        },
+        failure: { error: "memory_search timed out after 30s: PRIVATE_PROVIDER_DIAGNOSTIC" },
+      });
+
+      const payloads = buildPayloads({
+        lastToolError: terminal.lastToolError,
+        verboseLevel: "off",
+      });
+      expect(payloads).toEqual([expect.objectContaining({ text: expected, isError: true })]);
+      expect(terminal.sideEffectEvidence).toBe(true);
+    },
+  );
 
   it("treats the assistant reply as authoritative after a failed persistence call", () => {
     const observation = {

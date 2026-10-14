@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -9,6 +10,7 @@ import {
   navigateInApp,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const DURABLE_ATTACHMENT_CAP_BYTES = 25 * 1024 * 1024;
@@ -75,11 +77,7 @@ async function rawDraftMatches(
 
 suite.define(() => {
   it("coalesces a burst of near-limit attachment draft mutations into one write", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const page = await context.newPage();
       await page.addInitScript(() => {
@@ -103,7 +101,11 @@ suite.define(() => {
           return originalTransaction.apply(this, args);
         } as IDBDatabase["transaction"];
       });
-      await installMockGateway(page, { attachmentMaxBytes: DURABLE_ATTACHMENT_CAP_BYTES });
+      // One send's frame bounds the staged batch too; give it room for the near-cap draft file.
+      await installMockGateway(page, {
+        attachmentMaxBytes: DURABLE_ATTACHMENT_CAP_BYTES,
+        maxPayload: 40 * 1024 * 1024,
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "near-durable-cap.txt",
@@ -118,7 +120,15 @@ suite.define(() => {
       });
 
       const message = page.locator(".new-session-page__message");
-      await message.pressSequentially("burst", { delay: 20 });
+      // Keep this burst in one browser task, independent of protocol or runner delays.
+      await message.evaluate((element: HTMLTextAreaElement) => {
+        for (const character of "burst") {
+          element.value += character;
+          element.dispatchEvent(
+            new InputEvent("input", { data: character, inputType: "insertText", bubbles: true }),
+          );
+        }
+      });
       await expect.poll(() => rawDraftMatches(page, "burst", 1)).toBe(true);
       const transactionCount = await page.evaluate(
         () =>
@@ -132,11 +142,7 @@ suite.define(() => {
   });
 
   it("starts an attachment write while an earlier text write is still pending", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const text = "keep the attachment added during the pending text write";
       const fileName = "favicon-32.png";
@@ -212,19 +218,30 @@ suite.define(() => {
         )
         .toBe(true);
 
+      await firstPage.evaluate((previewLabel) => {
+        const host = document.querySelector("openclaw-new-session-page")!;
+        const state = (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown;
+        // Remove in the ready-preview turn, before protocol latency can expire the debounce.
+        const observer = new MutationObserver(() => {
+          if (
+            host.querySelector(".chat-attachment-image-button")?.getAttribute("aria-label") !==
+            previewLabel
+          ) {
+            return;
+          }
+          observer.disconnect();
+          state.teardownActive = true;
+          // The next task closes this window before the 200 ms debounce can start a write.
+          globalThis.setTimeout(() => {
+            state.teardownActive = false;
+          }, 0);
+          host.remove();
+        });
+        observer.observe(host, { childList: true, subtree: true, attributes: true });
+      }, `Open image ${fileName}`);
       await firstPage
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
-      await firstPage.getByRole("button", { name: `Open image ${fileName}` }).waitFor();
-      await firstPage.evaluate(() => {
-        const state = (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown;
-        state.teardownActive = true;
-        // The next task closes this window before the 200 ms debounce can start a write.
-        globalThis.setTimeout(() => {
-          state.teardownActive = false;
-        }, 0);
-        document.querySelector("openclaw-new-session-page")?.remove();
-      });
       await expect
         .poll(() =>
           firstPage.evaluate(
@@ -249,11 +266,7 @@ suite.define(() => {
   });
 
   it("isolates route drafts and retires incognito and submitted drafts", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const page = await context.newPage();
       await installMockGateway(page, {
@@ -271,6 +284,7 @@ suite.define(() => {
       await expect.poll(() => message.inputValue()).toBe("main route draft");
 
       await page.getByRole("switch", { name: "Incognito" }).click();
+      await waitForCommittedNewSessionDraft(page, null, 0);
       await page.reload();
       await expect.poll(() => message.inputValue()).toBe("");
       await navigateInApp(page, "new-session", "?agent=writer");
@@ -279,6 +293,8 @@ suite.define(() => {
       await page.waitForURL(
         (url) => url.pathname === controlUiSessionPath("agent:main:retired-draft"),
       );
+      // Navigation no longer waits for this route's durable retirement.
+      await waitForCommittedComposerDraft(page, JSON.stringify(["writer", "", ""]), null, 0);
       await page.close();
       const restoredPage = await context.newPage();
       await installMockGateway(restoredPage);

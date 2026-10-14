@@ -1,13 +1,35 @@
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { ApplicationContext } from "../../app/context.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { activationTimeoutForKind } from "./state.ts";
+import { activationTimeoutForKind, type ModelSetupWizardRecovery } from "./state.ts";
 
 const FIRST_RUN_ACTIVATION_RECEIPT_KEY = "openclaw.modelSetup.pendingActivation.v1";
 const DEVICE_IDENTITY_KEY = "openclaw-device-identity-v1";
 const ACTIVATION_DEADLINE_SAFETY_MS = 5_000;
+const receiptClearedListeners = new Set<(receipt: string) => void>();
+
+export function subscribeFirstRunActivationCleared(
+  listener: (receipt: string) => void,
+): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (
+      event.key === FIRST_RUN_ACTIVATION_RECEIPT_KEY &&
+      event.newValue === null &&
+      event.oldValue
+    ) {
+      listener(event.oldValue);
+    }
+  };
+  receiptClearedListeners.add(listener);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    receiptClearedListeners.delete(listener);
+    window.removeEventListener("storage", onStorage);
+  };
+}
 
 type ActivationContext = Pick<ApplicationContext, "gateway" | "agentSelection">;
 
@@ -15,7 +37,9 @@ export type FirstRunActivationReceipt = {
   version: 1;
   gatewayUrl: string;
   agentId: string;
-  modelRef: string;
+  modelRef: string | null;
+  modelTarget?: "utility";
+  wizard?: ModelSetupWizardRecovery;
   kind: string;
   deadlineMs: number;
   owner: string;
@@ -49,7 +73,7 @@ function activationOwner(
     const values = [
       receipt.gatewayUrl,
       receipt.agentId,
-      receipt.modelRef,
+      receipt.modelRef ?? "",
       receipt.kind,
       String(receipt.deadlineMs),
       connection.token,
@@ -57,20 +81,32 @@ function activationOwner(
       connection.bootstrapToken,
       connection.bootstrapProfile ?? "",
       deviceToken ?? "",
+      ...(receipt.modelTarget ? [receipt.modelTarget] : []),
+      ...(receipt.wizard
+        ? [receipt.wizard.sessionId, receipt.wizard.authChoice, receipt.wizard.authKind ?? ""]
+        : []),
     ];
     const encoder = new TextEncoder();
     const framed = values.map((value) => `${encoder.encode(value).length}:${value}`).join("|");
-    return Array.from(hmac(sha256, encoder.encode(identity.privateKey), encoder.encode(framed)))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    return bytesToHex(hmac(sha256, encoder.encode(identity.privateKey), encoder.encode(framed)));
   } catch {
     return null;
   }
 }
 
-function clearReceipt(storage: Storage): void {
+function clearReceipt(storage: Storage, expected?: FirstRunActivationReceipt | null): void {
   try {
-    storage.removeItem(FIRST_RUN_ACTIVATION_RECEIPT_KEY);
+    // Late cancellation may only remove its captured receipt, never validate
+    // a replacement against the cancelled operation's old authentication context.
+    const previous = storage.getItem(FIRST_RUN_ACTIVATION_RECEIPT_KEY);
+    if (expected === undefined || (expected && previous === JSON.stringify(expected))) {
+      storage.removeItem(FIRST_RUN_ACTIVATION_RECEIPT_KEY);
+      if (previous) {
+        for (const listener of receiptClearedListeners) {
+          listener(previous);
+        }
+      }
+    }
   } catch {
     // Disabled or quota-blocked browser storage must never block onboarding.
   }
@@ -78,6 +114,7 @@ function clearReceipt(storage: Storage): void {
 
 export function readFirstRunActivationReceipt(
   context: ActivationContext,
+  expected?: FirstRunActivationReceipt,
 ): FirstRunActivationReceipt | null {
   const storage = getSafeLocalStorage();
   if (!storage || context.gateway.snapshot.phase !== "connected") {
@@ -85,7 +122,9 @@ export function readFirstRunActivationReceipt(
   }
   try {
     const raw = storage.getItem(FIRST_RUN_ACTIVATION_RECEIPT_KEY);
-    if (!raw) {
+    // An in-flight owner may validate only its own stored receipt. A replacement
+    // belongs to another context and must not be validated or removed here.
+    if (!raw || (expected && raw !== JSON.stringify(expected))) {
       return null;
     }
     const receipt: FirstRunActivationReceipt = JSON.parse(raw);
@@ -93,7 +132,19 @@ export function readFirstRunActivationReceipt(
       receipt?.version !== 1 ||
       typeof receipt.gatewayUrl !== "string" ||
       typeof receipt.agentId !== "string" ||
-      typeof receipt.modelRef !== "string" ||
+      (receipt.modelRef !== null && typeof receipt.modelRef !== "string") ||
+      (receipt.modelTarget !== undefined && receipt.modelTarget !== "utility") ||
+      (receipt.wizard !== undefined &&
+        (receipt.kind !== "provider-auth" ||
+          !receipt.wizard ||
+          typeof receipt.wizard.sessionId !== "string" ||
+          !receipt.wizard.sessionId ||
+          typeof receipt.wizard.authChoice !== "string" ||
+          !receipt.wizard.authChoice ||
+          (receipt.wizard.authKind !== undefined &&
+            receipt.wizard.authKind !== "secret" &&
+            receipt.wizard.authKind !== "oauth" &&
+            receipt.wizard.authKind !== "device-code"))) ||
       typeof receipt.kind !== "string" ||
       typeof receipt.deadlineMs !== "number" ||
       !Number.isFinite(receipt.deadlineMs) ||
@@ -117,9 +168,19 @@ export function readFirstRunActivationReceipt(
   }
 }
 
+export function firstRunActivationDeadline(kind: string): number {
+  return Date.now() + activationTimeoutForKind(kind) + ACTIVATION_DEADLINE_SAFETY_MS;
+}
+
 export function persistFirstRunActivationReceipt(
   context: ActivationContext,
-  candidate: { kind: string; modelRef: string },
+  candidate: {
+    kind: string;
+    modelRef?: string | null;
+    modelTarget?: "utility";
+    wizard?: ModelSetupWizardRecovery;
+    deadlineMs?: number;
+  },
 ): FirstRunActivationReceipt | null {
   const storage = getSafeLocalStorage();
   if (!storage || context.gateway.snapshot.phase !== "connected") {
@@ -130,10 +191,11 @@ export function persistFirstRunActivationReceipt(
       version: 1 as const,
       gatewayUrl: gatewayCredentialScope(context.gateway.connection.gatewayUrl),
       agentId: context.agentSelection.state.selectedId ?? "",
-      modelRef: candidate.modelRef,
+      modelRef: candidate.modelRef ?? null,
+      ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
+      ...(candidate.wizard ? { wizard: candidate.wizard } : {}),
       kind: candidate.kind,
-      deadlineMs:
-        Date.now() + activationTimeoutForKind(candidate.kind) + ACTIVATION_DEADLINE_SAFETY_MS,
+      deadlineMs: candidate.deadlineMs ?? firstRunActivationDeadline(candidate.kind),
     };
     const owner = activationOwner(context, receipt, storage);
     if (!owner) {
@@ -147,38 +209,9 @@ export function persistFirstRunActivationReceipt(
   }
 }
 
-export function clearFirstRunActivationReceipt(): void {
+export function clearFirstRunActivationReceipt(expected?: FirstRunActivationReceipt | null): void {
   const storage = getSafeLocalStorage();
   if (storage) {
-    clearReceipt(storage);
+    clearReceipt(storage, expected);
   }
-}
-
-export function resumeFirstRunActivation(
-  navigation: {
-    context: ActivationContext;
-    isStillDefaultLanding: () => boolean;
-    redirect: () => void;
-  },
-  ownerSnapshot: ActivationContext["gateway"]["snapshot"],
-  ownerRevision: number,
-  ownerAgentId: string | null,
-  isSettled: () => boolean,
-  settle: () => void,
-): void {
-  const { context } = navigation;
-  const snapshot = context.gateway.snapshot;
-  if (
-    !isSettled() &&
-    snapshot.phase === "connected" &&
-    snapshot.client === ownerSnapshot.client &&
-    snapshot.hello === ownerSnapshot.hello &&
-    context.gateway.connectionRevision === ownerRevision &&
-    (context.agentSelection.state.selectedId?.trim() || null) === ownerAgentId &&
-    navigation.isStillDefaultLanding() &&
-    readFirstRunActivationReceipt(context) !== null
-  ) {
-    navigation.redirect();
-  }
-  settle();
 }

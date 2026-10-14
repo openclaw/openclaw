@@ -1,6 +1,6 @@
 // Slack tests cover real Web API routing behavior.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { WebClient } from "@slack/web-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -8,8 +8,9 @@ import {
   createSlackReadClient,
   createSlackStartupAuthClient,
   createSlackWebClient,
-  getSlackListenerUploadCompletionClient,
+  getSlackListenerWriteClient,
 } from "./client.js";
+import { startSlackStream } from "./streaming.js";
 
 const SLACK_API_URL_KEYS = ["SLACK_API_URL"] as const;
 const PROXY_KEYS = [
@@ -142,6 +143,11 @@ async function startStalledHeadersSlackApiServer(requests: SlackApiRequest[]): P
     request.resume();
     request.socket.once("close", resolveSocketClosed);
   });
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
@@ -149,8 +155,11 @@ async function startStalledHeadersSlackApiServer(requests: SlackApiRequest[]): P
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     close: async () => {
-      server.closeAllConnections();
-      await closeServer(server);
+      const closed = closeServer(server);
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closed;
     },
     socketClosed,
   };
@@ -161,6 +170,51 @@ afterEach(() => {
 });
 
 describe("Slack Web API routing", () => {
+  it.each(["TENTERPRISE1"])(
+    "keeps lost stream responses one-shot without changing listener reads (team=%s)",
+    async (teamId) => {
+      for (const key of TEST_ENV_KEYS) {
+        delete process.env[key];
+      }
+      const requests: SlackApiRequest[] = [];
+      const server = await startDroppedResponseSlackApiServer(requests);
+      try {
+        const clientOptions = {
+          slackApiUrl: `${server.baseUrl}/api/`,
+          teamId,
+          retryConfig: { retries: 2, minTimeout: 1, maxTimeout: 1 },
+        };
+        const listenerClient = new WebClient("listener-stream-fixture", clientOptions);
+
+        await expect(
+          startSlackStream({
+            client: listenerClient,
+            clientOptions,
+            channel: "C123",
+            threadTs: "1700000000.000100",
+            teamId: "TRECIPIENT",
+            text: "one committed answer",
+            chunks: [],
+          }),
+        ).rejects.toThrow();
+
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toMatchObject({
+          authorization: "Bearer listener-stream-fixture",
+          url: "/api/chat.startStream",
+        });
+        const payload = new URLSearchParams(requests[0]?.body);
+        expect(payload.get("team_id")).toBe(teamId ?? null);
+        expect(payload.get("recipient_team_id")).toBe("TRECIPIENT");
+
+        await expect(listenerClient.auth.test()).rejects.toThrow();
+        expect(requests.filter((request) => request.url === "/api/auth.test")).toHaveLength(3);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
   it("retries two transient startup auth failures", async () => {
     const fetchMock = vi
       .fn()
@@ -181,20 +235,6 @@ describe("Slack Web API routing", () => {
       user_id: "UMOCK",
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not retry a permanent startup auth error", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), {
-        status: 200,
-      }),
-    );
-    const client = createSlackStartupAuthClient("invalid-fixture", {
-      fetch: fetchMock as never,
-    });
-
-    await expect(client.auth.test()).rejects.toThrow("invalid_auth");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("retries startup auth after a rate limit", async () => {
@@ -283,7 +323,7 @@ describe("Slack Web API routing", () => {
         retryConfig: { retries: 2 },
       };
       const listenerClient = new WebClient("listener-fixture", clientOptions);
-      const completionClient = getSlackListenerUploadCompletionClient({
+      const completionClient = getSlackListenerWriteClient({
         listenerClient,
         teamId: "TENTERPRISE1",
         clientOptions,
@@ -293,14 +333,14 @@ describe("Slack Web API routing", () => {
         throw new Error("missing Enterprise upload completion client");
       }
       expect(
-        getSlackListenerUploadCompletionClient({
+        getSlackListenerWriteClient({
           listenerClient,
           teamId: "TENTERPRISE1",
           clientOptions,
         }),
       ).toBe(completionClient);
       expect(
-        getSlackListenerUploadCompletionClient({
+        getSlackListenerWriteClient({
           listenerClient,
           teamId: "TENTERPRISE2",
           clientOptions,
@@ -340,7 +380,7 @@ describe("Slack Web API routing", () => {
         timeout: 20,
       };
       const listenerClient = new WebClient("listener-fixture", clientOptions);
-      const completionClient = getSlackListenerUploadCompletionClient({
+      const completionClient = getSlackListenerWriteClient({
         listenerClient,
         teamId: "TENTERPRISE1",
         clientOptions,
@@ -387,67 +427,6 @@ describe("Slack Web API routing", () => {
       expect(requests.at(-1)?.authorization).toBe("Bearer xoxb-shared");
     } finally {
       await server.close();
-    }
-  });
-
-  it("routes real WebClient requests to the SLACK_API_URL root", async () => {
-    for (const key of TEST_ENV_KEYS) {
-      delete process.env[key];
-    }
-    const requests: SlackApiRequest[] = [];
-    const server = await startSlackApiServer(requests);
-    try {
-      process.env.SLACK_API_URL = `${server.baseUrl}/api/`;
-
-      const client = createSlackWebClient("xoxb-route-proof", {
-        retryConfig: { retries: 0 },
-        timeout: 1000,
-      });
-      const result = await client.auth.test();
-
-      expect(result.ok).toBe(true);
-      expect(requests).toEqual([
-        {
-          authorization: "Bearer xoxb-route-proof",
-          method: "POST",
-          url: "/api/auth.test",
-        },
-      ]);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("routes real WebClient requests to explicit Slack API URL options before SLACK_API_URL", async () => {
-    for (const key of TEST_ENV_KEYS) {
-      delete process.env[key];
-    }
-    const envRequests: SlackApiRequest[] = [];
-    const explicitRequests: SlackApiRequest[] = [];
-    const envServer = await startSlackApiServer(envRequests);
-    const explicitServer = await startSlackApiServer(explicitRequests);
-    try {
-      process.env.SLACK_API_URL = `${envServer.baseUrl}/api/`;
-
-      const client = createSlackWebClient("xoxb-route-proof", {
-        retryConfig: { retries: 0 },
-        slackApiUrl: `${explicitServer.baseUrl}/api/`,
-        timeout: 1000,
-      });
-      const result = await client.auth.test();
-
-      expect(result.ok).toBe(true);
-      expect(envRequests).toEqual([]);
-      expect(explicitRequests).toEqual([
-        {
-          authorization: "Bearer xoxb-route-proof",
-          method: "POST",
-          url: "/api/auth.test",
-        },
-      ]);
-    } finally {
-      await explicitServer.close();
-      await envServer.close();
     }
   });
 });

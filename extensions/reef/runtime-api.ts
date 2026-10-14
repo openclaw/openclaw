@@ -1,1 +1,1 @@
-export { setReefRuntime, getReefRuntime, getActiveReef } from "./src/runtime.js";
+export { setReefRuntime } from "./src/runtime.js";

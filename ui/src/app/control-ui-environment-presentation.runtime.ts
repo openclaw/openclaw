@@ -1,13 +1,18 @@
+import type { AgentTabIconShape } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import {
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   type ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { getOrCreatePromise } from "../../../src/shared/lazy-promise.js";
+import { neutralMarkSvg } from "../components/neutral-mark-svg.ts";
 import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
+import { currentThemeBranding } from "./theme-branding.ts";
 
 export function applyControlUiPresentation(params: {
   environment: ControlUiEnvironment | null;
   seamColor?: string;
 }): void {
+  invalidateControlUiFaviconPalette();
   applyControlUiOperatorSeamColor(params.seamColor);
   const root = document.documentElement;
   const environment = params.environment;
@@ -24,24 +29,7 @@ export function applyControlUiPresentation(params: {
     root.style.removeProperty("--control-ui-environment-color");
     root.style.removeProperty("--control-ui-environment-ink");
     document.querySelector(".control-ui-environment-stripe")?.remove();
-    for (const icon of document.querySelectorAll<HTMLLinkElement>(
-      'link[rel="icon"][data-openclaw-original-favicon]',
-    )) {
-      const original: [string | null, string | null] = JSON.parse(
-        icon.dataset.openclawOriginalFavicon!,
-      );
-      for (const [attribute, value] of [
-        ["href", original[0]],
-        ["type", original[1]],
-      ] as const) {
-        if (value === null) {
-          icon.removeAttribute(attribute);
-        } else {
-          icon.setAttribute(attribute, value);
-        }
-      }
-      delete icon.dataset.openclawOriginalFavicon;
-    }
+    syncControlUiFavicon();
     return;
   }
   root.setAttribute(CONTROL_UI_ENVIRONMENT_ATTRIBUTE, JSON.stringify(environment));
@@ -63,19 +51,255 @@ export function applyControlUiPresentation(params: {
     document.title = `${document.title} · ${environment.label}`;
   }
 
-  const color = getComputedStyle(root)
-    .getPropertyValue(`--control-ui-environment-${environment.color}`)
-    .trim();
-  if (!color) {
+  syncControlUiFavicon();
+}
+
+type ControlUiFaviconStatus = "attention" | "working" | "done" | "disconnected" | "idle";
+
+let faviconStatus: ControlUiFaviconStatus = "idle";
+let faviconImage: HTMLImageElement | null = null;
+let faviconShape: AgentTabIconShape = "square";
+
+/** Decoded personal artwork is always rasterized here, including when idle. */
+export function applyControlUiFaviconImage(
+  image: HTMLImageElement | null,
+  shape: AgentTabIconShape = "square",
+): void {
+  if (faviconImage === image && faviconShape === shape) {
     return;
   }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><path fill="${color}" d="M60 10C30 10 15 35 15 55c0 20 15 40 30 45v10h10v-10h10v10h10v-10c15-5 30-25 30-45 0-20-15-45-45-45Z"/></svg>`;
+  faviconImage = image;
+  faviconShape = shape;
+  // Decoded personal images never enter the cached default-source loader.
+  syncControlUiFavicon();
+}
+let faviconPalette: ReturnType<typeof resolveFaviconPalette> | undefined;
+const faviconSources = new Map<string, Promise<FaviconSource>>();
+const faviconRequests = new WeakMap<
+  HTMLLinkElement,
+  { signature: string; image: HTMLImageElement | null }
+>();
+
+export function invalidateControlUiFaviconPalette(): void {
+  faviconPalette = undefined;
+}
+
+export function applyControlUiFaviconStatus(status: ControlUiFaviconStatus): void {
+  if (faviconStatus !== status) {
+    faviconStatus = status;
+    invalidateControlUiFaviconPalette();
+  }
+  syncControlUiFavicon();
+}
+
+function restoreFavicon(icon: HTMLLinkElement, original: [string | null, string | null]) {
+  for (const [attribute, value] of [
+    ["href", original[0]],
+    ["type", original[1]],
+  ] as const) {
+    if (value === null) {
+      icon.removeAttribute(attribute);
+    } else {
+      icon.setAttribute(attribute, value);
+    }
+  }
+}
+
+function resolveFaviconPalette() {
+  const root = document.documentElement;
+  const style = getComputedStyle(root);
+  const environmentValue = root.getAttribute(CONTROL_UI_ENVIRONMENT_ATTRIBUTE);
+  const environment: ControlUiEnvironment | null = environmentValue
+    ? JSON.parse(environmentValue)
+    : null;
+  const environmentColor = environment
+    ? style.getPropertyValue(`--control-ui-environment-${environment.color}`).trim()
+    : "";
+  const artwork =
+    currentThemeBranding().brandIcon !== "claw"
+      ? neutralMarkSvg({
+          fill: style.getPropertyValue("--primary").trim(),
+          glyph: style.getPropertyValue("--primary-foreground").trim(),
+        })
+      : environmentColor
+        ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><path fill="${environmentColor}" d="M60 10C30 10 15 35 15 55c0 20 15 40 30 45v10h10v-10h10v10h10v-10c15-5 30-25 30-45 0-20-15-45-45-45Z"/></svg>`
+        : null;
+  const baseSvg = artwork ? `data:image/svg+xml,${encodeURIComponent(artwork)}` : null;
+  const light = root.dataset.themeMode === "light";
+  const token = {
+    attention: light ? "--session-color-orange" : "--warn",
+    working: light ? "--info" : "--accent",
+    done: "--ok",
+    disconnected: "--muted",
+    idle: "",
+  }[faviconStatus];
+  const color = token ? style.getPropertyValue(token).trim() : "";
+  const ring = style.getPropertyValue("--bg").trim();
+  return { baseSvg, color, ring };
+}
+
+export function controlUiFaviconBaseSvg(): string | null {
+  return (faviconPalette ??= resolveFaviconPalette()).baseSvg;
+}
+
+export function syncControlUiFavicon(): void {
+  const { baseSvg, color, ring } = (faviconPalette ??= resolveFaviconPalette());
+  if (!color) {
+    faviconSources.clear();
+  }
   for (const icon of document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]')) {
+    if (!faviconImage && !baseSvg && !color) {
+      faviconRequests.delete(icon);
+      if (icon.dataset.openclawOriginalFavicon) {
+        restoreFavicon(icon, JSON.parse(icon.dataset.openclawOriginalFavicon));
+        delete icon.dataset.openclawOriginalFavicon;
+      }
+      continue;
+    }
+    // Snapshot only the static asset; theme and environment bases are rebuilt from the palette.
     icon.dataset.openclawOriginalFavicon ??= JSON.stringify([
       icon.getAttribute("href"),
       icon.getAttribute("type"),
     ]);
-    icon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
-    icon.type = "image/svg+xml";
+    const original: [string | null, string | null] = JSON.parse(
+      icon.dataset.openclawOriginalFavicon,
+    );
+    const image = faviconImage;
+    const href = image?.src ?? baseSvg ?? original[0];
+    const type = image || baseSvg ? "image/svg+xml" : original[1];
+    const shape = image ? faviconShape : "square";
+    const signature = JSON.stringify([href, type, color, ring, shape]);
+    const previous = faviconRequests.get(icon);
+    if (previous?.signature === signature && previous.image === image) {
+      continue;
+    }
+    const request = { signature, image };
+    faviconRequests.set(icon, request);
+    if ((!color && !image) || !href) {
+      restoreFavicon(icon, [href, type]);
+      continue;
+    }
+    void composeFavicon(href, type, color, ring, image, shape).then(
+      (result) => {
+        // Asset decoding may finish after idle, a palette change, or a context teardown.
+        if (icon.isConnected && faviconRequests.get(icon) === request) {
+          icon.href = result.href;
+          icon.type = result.type;
+        }
+      },
+      (error: unknown) => {
+        if (faviconRequests.get(icon) === request) {
+          faviconRequests.delete(icon);
+          if (image) {
+            applyControlUiFaviconImage(null);
+          } else {
+            restoreFavicon(icon, [href, type]);
+          }
+          console.warn("[openclaw] favicon status could not be composed", error);
+        }
+      },
+    );
   }
+}
+
+type FaviconSource = { svg: Element } | { image: HTMLImageElement };
+
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+async function loadSource(href: string, type: string | null): Promise<FaviconSource> {
+  if (type === "image/svg+xml" || /(?:\.svg(?:[?#]|$)|^data:image\/svg\+xml)/i.test(href)) {
+    const response = await fetch(href);
+    if (!response.ok) {
+      throw new Error(`Favicon loading failed (${response.status})`);
+    }
+    const parsed = new DOMParser().parseFromString(await response.text(), "image/svg+xml");
+    const svg = parsed.documentElement;
+    if (
+      parsed.querySelector("parsererror") ||
+      svg.localName !== "svg" ||
+      svg.namespaceURI !== SVG_NAMESPACE
+    ) {
+      throw new Error("Invalid SVG favicon");
+    }
+    return { svg };
+  }
+  const image = new Image();
+  image.src = href;
+  await image.decode();
+  return { image };
+}
+
+async function composeFavicon(
+  href: string,
+  type: string | null,
+  color: string,
+  ring: string,
+  image: HTMLImageElement | null,
+  shape: AgentTabIconShape,
+) {
+  const source: FaviconSource = image
+    ? { image }
+    : await getOrCreatePromise(
+        faviconSources,
+        JSON.stringify([href, type]),
+        () => loadSource(href, type),
+        { cacheRejections: false },
+      );
+  if ("svg" in source) {
+    const svg = new DOMParser().parseFromString(
+      `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><circle cx="25.5" cy="25.5" r="5" stroke-width="2"/></svg>`,
+      "image/svg+xml",
+    ).documentElement;
+    const dot = svg.firstElementChild!;
+    dot.setAttribute("fill", color);
+    dot.setAttribute("stroke", ring);
+    // Keep SMIL in the favicon document; SVG images cannot load external images.
+    const artwork = document.importNode(source.svg, true);
+    artwork.setAttribute("x", "0");
+    artwork.setAttribute("y", "0");
+    artwork.setAttribute("width", "32");
+    artwork.setAttribute("height", "32");
+    svg.prepend(artwork);
+    return {
+      href: `data:image/svg+xml,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`,
+      type: "image/svg+xml",
+    };
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 32;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Favicon canvas unavailable");
+  }
+  context.save();
+  if (shape !== "square") {
+    context.beginPath();
+    context.roundRect(0, 0, 32, 32, shape === "circle" ? 16 : 8);
+    context.clip();
+  }
+  const fit = shape === "square" ? Math.min : Math.max;
+  const scale = fit(32 / source.image.naturalWidth, 32 / source.image.naturalHeight);
+  const width = source.image.naturalWidth * scale;
+  const height = source.image.naturalHeight * scale;
+  context.drawImage(source.image, (32 - width) / 2, (32 - height) / 2, width, height);
+  context.restore();
+  if (color) {
+    context.beginPath();
+    context.arc(25.5, 25.5, 5, 0, Math.PI * 2);
+    context.fillStyle = color;
+    context.fill();
+    context.strokeStyle = ring;
+    context.lineWidth = 2;
+    context.stroke();
+  }
+  const png = canvas.toDataURL("image/png");
+  if (!image) {
+    return { href: png, type: "image/png" };
+  }
+  // Firefox batches icon candidates and prefers SVG over PNG, even when that
+  // SVG was a default briefly restored before the personal image decoded. Keep
+  // personal artwork SVG-preferred too; only our rasterized bytes are embedded.
+  const svg = `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><image width="32" height="32" href="${png}"/></svg>`;
+  return { href: `data:image/svg+xml,${encodeURIComponent(svg)}`, type: "image/svg+xml" };
 }

@@ -12,11 +12,9 @@ export function resolveCodexAppServerForModelProvider(params: {
   agentDir?: string;
   codexConfigToml?: string | null;
 }): CodexAppServerRuntimeOptions {
-  const explicitProvider = normalizeModelBackedReviewerProvider(params.provider);
-  if (
-    !isCodexModelBackedApprovalsReviewer(params.appServer.approvalsReviewer) ||
+  return params.appServer.approvalsReviewer === "user" ||
     canUseCodexModelBackedApprovalsReviewerForModel({
-      modelProvider: explicitProvider,
+      modelProvider: params.provider,
       model: params.model,
       config: params.config,
       // Reviewer trust follows the spawned process, not the gateway's ambient home or endpoint.
@@ -26,20 +24,6 @@ export function resolveCodexAppServerForModelProvider(params: {
       homeScope: params.appServer.start.homeScope,
       codexArgs: params.appServer.start.args,
     })
-  ) {
-    return params.appServer;
-  }
-  return {
-    ...params.appServer,
-    approvalsReviewer: "user",
-  };
-}
-
-function isCodexModelBackedApprovalsReviewer(value: string): boolean {
-  return value === "auto_review" || value === "guardian_subagent";
-}
-
-function normalizeModelBackedReviewerProvider(provider: string | undefined): string | undefined {
-  const normalized = provider?.trim().toLowerCase();
-  return normalized || undefined;
+    ? params.appServer
+    : { ...params.appServer, approvalsReviewer: "user" };
 }

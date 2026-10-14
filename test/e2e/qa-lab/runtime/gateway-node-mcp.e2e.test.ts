@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { describe, expect, it, vi } from "vitest";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import { createSessionMcpRuntime } from "../../../../src/agents/agent-bundle-mcp-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   MCP_SERVERS,
@@ -35,14 +36,15 @@ import {
   type ToolsEffectiveResult,
 } from "./gateway-node-mcp.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const QA_AGENT_ID = "qa";
 
 describe("Gateway and node-host MCP live process parity", () => {
   it(
     "connects, filters, inventories, invokes, withdraws, and cleans up all real transports",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async ({ signal, onTestFinished }) => {
+      // Finish hooks run in reverse order: join children before deleting their paths.
+      const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
       const repoRoot = process.cwd();
       const taskRoot = tempDirs.make("openclaw-gateway-node-mcp-");
       const taskPath = (...parts: string[]) => path.join(taskRoot, ...parts);
@@ -65,6 +67,8 @@ describe("Gateway and node-host MCP live process parity", () => {
 
       let sessionHttpFixture: HttpFixture | undefined;
       let nodeHttpFixture: HttpFixture | undefined;
+      let startingHttpFixtures: Promise<void> | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let node: CapturedChild | undefined;
       let sessionRuntime: ReturnType<typeof createSessionMcpRuntime> | undefined;
@@ -77,15 +81,57 @@ describe("Gateway and node-host MCP live process parity", () => {
         );
       }, 150_000);
       diagnosticTimer.unref();
+      let cleanupPromise: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          phase = "cleanup";
+          await startingHttpFixtures?.catch(() => {});
+          const stopped = [
+            ...(await Promise.allSettled([
+              ...(sessionRuntime ? [sessionRuntime.dispose()] : []),
+              ...(node ? [stopChild(node)] : []),
+            ])),
+            ...(await Promise.allSettled([
+              stopQaGatewayFixture(gatewayOwner),
+              stopChild(sessionHttpFixture),
+              stopChild(nodeHttpFixture),
+            ])),
+          ];
+          for (const result of stopped) {
+            if (result.status === "rejected") {
+              cleanupErrors.push(result.reason);
+            }
+          }
+          if (gateway && existsSync(gateway.tempRoot)) {
+            cleanupErrors.push(new Error(`Gateway temp root was not removed: ${gateway.tempRoot}`));
+          }
+          clearTimeout(diagnosticTimer);
+        })());
+      onTestFinished(cleanup);
 
       try {
         const sessionEnv = createChildEnv({ home: sessionHome, tempDir: sessionTempDir });
         const nodeFixtureEnv = createChildEnv({ home: nodeHome, tempDir: nodeTempDir });
         phase = "starting HTTP MCP fixtures";
-        [sessionHttpFixture, nodeHttpFixture] = await Promise.all([
-          startHttpFixture({ fixturePath, labelPrefix: "session", env: sessionEnv }),
-          startHttpFixture({ fixturePath, labelPrefix: "node", env: nodeFixtureEnv }),
-        ]);
+        // Retain the whole sequential acquisition so cleanup also joins a later startup.
+        startingHttpFixtures = (async () => {
+          sessionHttpFixture = await startHttpFixture({
+            fixturePath,
+            labelPrefix: "session",
+            env: sessionEnv,
+            signal,
+          });
+          nodeHttpFixture = await startHttpFixture({
+            fixturePath,
+            labelPrefix: "node",
+            env: nodeFixtureEnv,
+            signal,
+          });
+        })();
+        await startingHttpFixtures;
+        if (!sessionHttpFixture || !nodeHttpFixture) {
+          throw new Error("HTTP MCP fixtures did not start");
+        }
         const sessionMcpServers = createMcpServers({
           placement: "session",
           fixture: sessionHttpFixture,
@@ -109,7 +155,7 @@ describe("Gateway and node-host MCP live process parity", () => {
         await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig, null, 2)}\n`, "utf8");
 
         phase = "starting Gateway";
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot,
           command: {
             executablePath: process.execPath,
@@ -120,15 +166,14 @@ describe("Gateway and node-host MCP live process parity", () => {
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,
           runtimeEnvPatch: {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_SKIP_PROVIDERS: "1",
             OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           },
           mutateConfig: (cfg) => {
-            const { plugins: _plugins, ...withoutPlugins } = cfg;
             return {
-              ...withoutPlugins,
+              ...cfg,
+              plugins: { enabled: false },
               mcp: { servers: sessionMcpServers },
               agents: {
                 ...cfg.agents,
@@ -165,7 +210,6 @@ describe("Gateway and node-host MCP live process parity", () => {
             OPENCLAW_CONFIG_PATH: nodeConfigPath,
             OPENCLAW_GATEWAY_TOKEN: gateway.token,
             OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_SKIP_PROVIDERS: "1",
           },
@@ -478,34 +522,14 @@ describe("Gateway and node-host MCP live process parity", () => {
         await Promise.all([stopChild(sessionHttpFixture), stopChild(nodeHttpFixture)]);
         sessionHttpFixture = undefined;
         nodeHttpFixture = undefined;
-        await Promise.all(httpPids.map(waitForProcessExit));
+        expect(httpPids.map(processIsAlive)).toEqual([false, false]);
       } catch (error) {
         const message = error instanceof Error ? error.stack : String(error);
         proofError = new Error(`${message}\nnode logs:\n${node?.logs() ?? "not started"}`, {
           cause: error,
         });
       } finally {
-        phase = "cleanup";
-        const cleanup = [
-          ...(await Promise.allSettled([
-            ...(sessionRuntime ? [sessionRuntime.dispose()] : []),
-            ...(node ? [stopChild(node)] : []),
-          ])),
-          ...(await Promise.allSettled([
-            ...(gateway ? [Promise.resolve(gateway.stop())] : []),
-            ...(sessionHttpFixture ? [stopChild(sessionHttpFixture)] : []),
-            ...(nodeHttpFixture ? [stopChild(nodeHttpFixture)] : []),
-          ])),
-        ];
-        for (const result of cleanup) {
-          if (result.status === "rejected") {
-            cleanupErrors.push(result.reason);
-          }
-        }
-        if (gateway && existsSync(gateway.tempRoot)) {
-          cleanupErrors.push(new Error(`Gateway temp root was not removed: ${gateway.tempRoot}`));
-        }
-        clearTimeout(diagnosticTimer);
+        await cleanup();
       }
 
       const failures = proofError === undefined ? cleanupErrors : [proofError, ...cleanupErrors];

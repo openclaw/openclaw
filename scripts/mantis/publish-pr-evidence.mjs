@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Publishes evidence manifest artifacts and optional PR comments for Mantis proof.
 import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
@@ -9,8 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
-/** @typedef {{ mode: "absent" | "contains", target: "botApiRequests" | "observationEvents" | "providerRequests", value: string }} EvidenceAssertion */
-/** @typedef {Record<string, unknown> & { assertion?: EvidenceAssertion, assertionOccurrences?: number, detail?: string, digest?: string, expectationMet: boolean, expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
+/** @typedef {Record<string, unknown> & { detail?: string, digest?: string, expectationMet: boolean, expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
 /**
  * @typedef {{
  *   alt?: string,
@@ -37,24 +35,11 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
  *   title: string,
  * }} EvidenceManifest
  */
-/**
- * @typedef {{
- *   alt?: string,
- *   inline?: boolean,
- *   kind?: string,
- *   label?: string,
- *   lane?: string,
- *   path?: string,
- *   required?: boolean,
- *   targetPath?: string,
- *   width?: number,
- * }} ManifestArtifactEntry
- */
+/** @typedef {Partial<Omit<EvidenceArtifact, "source">>} ManifestArtifactEntry */
 /** @typedef {Omit<EvidenceManifest, "artifacts" | "manifestDir"> & { artifacts?: ManifestArtifactEntry[] }} EvidenceManifestFile */
 /** @typedef {{ accessKeyId: string, bucket: string, endpoint: string, publicBaseUrl: string, region: string, secretAccessKey: string }} ObjectStorageConfig */
 /** @typedef {(url: URL, init: { body: Buffer, headers: HeadersInit, method: string, signal: AbortSignal }) => Promise<Response>} ArtifactFetch */
 /** @typedef {{ body: Buffer, headers: HeadersInit, method: string, url: URL }} SignedPutRequest */
-/** @typedef {{ left: EvidenceArtifact, right: EvidenceArtifact }} EvidencePair */
 /**
  * @typedef {{
  *   artifactUrl?: string,
@@ -73,11 +58,6 @@ const MANTIS_ARTIFACT_UPLOAD_TIMEOUT_MS = 300_000;
 const MANTIS_UPLOAD_ERROR_BODY_MAX_BYTES = 64 * 1024;
 const COMMENT_GRAPHEME_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
 const MANTIS_EVIDENCE_SCHEMA_VERSION = 2;
-const TELEGRAM_ASSERTION_FACT_PATHS = {
-  botApiRequests: ["botApiRequests"],
-  observationEvents: ["observation", "events"],
-  providerRequests: ["providerRequests"],
-};
 
 /**
  * @param {string | undefined} value
@@ -125,10 +105,6 @@ function requireArg(args, name) {
     throw new Error(`Missing --${name.replaceAll("_", "-")}.`);
   }
   return value;
-}
-/** @returns {EvidenceManifestFile} */
-function readJson(filePath) {
-  return JSON.parse(readFileSync(filePath, "utf8"));
 }
 function assertInside(parentDir, candidatePath, label) {
   const relative = path.relative(parentDir, candidatePath);
@@ -200,68 +176,15 @@ function requireExpectationMet(comparison, laneName) {
   return lane.expectationMet;
 }
 
-function evaluateTelegramAssertion(manifest, manifestDir, laneName) {
-  const lane = manifest.comparison[laneName];
-  const assertion = lane?.assertion;
-  const validAssertion =
-    assertion &&
-    typeof assertion === "object" &&
-    !Array.isArray(assertion) &&
-    Object.keys(assertion).toSorted().join(",") === "mode,target,value" &&
-    Object.hasOwn(TELEGRAM_ASSERTION_FACT_PATHS, assertion.target) &&
-    (assertion.mode === "contains" || assertion.mode === "absent") &&
-    typeof assertion.value === "string" &&
-    assertion.value.length >= 1 &&
-    assertion.value.length <= 200;
-  if (!validAssertion) {
-    throw new Error(
-      `Telegram Desktop comparison.${laneName}.assertion must be exactly {target: providerRequests|botApiRequests|observationEvents, mode: contains|absent, value: 1..200 character literal}.`,
-    );
-  }
-  const factsPath = `${laneName}/mantis-lane-facts.json`;
-  const factsArtifact = (manifest.artifacts ?? []).find(
-    (artifact) => artifact?.lane === laneName && artifact?.path === factsPath,
-  );
-  if (!factsArtifact) {
-    throw new Error(`Telegram Desktop ${laneName} lane must list ${factsPath} as its artifact.`);
-  }
-  const factsSource = resolveArtifact(manifestDir, { ...factsArtifact, required: true }).source;
-  const facts = JSON.parse(readFileSync(factsSource, "utf8"));
-  const selectedFacts = TELEGRAM_ASSERTION_FACT_PATHS[assertion.target].reduce(
-    (value, key) => value?.[key],
-    facts,
-  );
-  if (!Array.isArray(selectedFacts)) {
-    throw new Error(
-      `Telegram Desktop ${laneName} facts target ${assertion.target} is not an array.`,
-    );
-  }
-  const assertionOccurrences = JSON.stringify(selectedFacts).split(assertion.value).length - 1;
-  const expectationMet =
-    assertion.mode === "contains" ? assertionOccurrences > 0 : assertionOccurrences === 0;
-  return { assertion, assertionOccurrences, expectationMet };
-}
-
 /**
  * @param {EvidenceManifestFile} manifest
- * @param {string} manifestDir
  */
-function reconcileEvidenceVerdict(manifest, manifestDir) {
+function reconcileEvidenceVerdict(manifest) {
   if (!manifest.comparison || typeof manifest.comparison !== "object") {
     throw new Error("Mantis evidence manifest requires a comparison.");
   }
   const laneNames = manifest.comparison.baseline ? ["baseline", "candidate"] : ["candidate"];
-  // Telegram Desktop judgments are agent-authored, so trusted code derives them from lane facts.
-  // Other scenario builders and jq producers are trusted and supply the boolean directly.
   const comparison = { ...manifest.comparison };
-  if (isTelegramDesktopProof(manifest)) {
-    for (const laneName of laneNames) {
-      comparison[laneName] = {
-        ...comparison[laneName],
-        ...evaluateTelegramAssertion(manifest, manifestDir, laneName),
-      };
-    }
-  }
   const unmetLanes = laneNames.filter((laneName) => !requireExpectationMet(comparison, laneName));
   const claimedPass = comparison.pass || comparison.outcome === "pass";
   const pass = comparison.pass && unmetLanes.length === 0;
@@ -287,32 +210,24 @@ function reconcileEvidenceVerdict(manifest, manifestDir) {
 export function validateEvidenceManifestFile(manifestPath) {
   const resolvedManifest = path.resolve(manifestPath);
   const manifestDir = path.dirname(resolvedManifest);
-  const manifest = validateEvidenceManifest(readJson(resolvedManifest), manifestDir);
-  for (const artifact of manifest.artifacts ?? []) {
-    resolveArtifact(manifestDir, artifact);
-  }
-  writeFileSync(resolvedManifest, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  return manifest;
-}
-
-/**
- * @param {EvidenceManifestFile} manifest
- * @param {string} manifestDir
- */
-function validateEvidenceManifest(manifest, manifestDir) {
+  /** @type {EvidenceManifestFile} */
+  const manifest = JSON.parse(readFileSync(resolvedManifest, "utf8"));
   if (manifest.schemaVersion !== MANTIS_EVIDENCE_SCHEMA_VERSION) {
     throw new Error(
-      `Unsupported Mantis evidence manifest schema: ${manifest.schemaVersion}. ${isTelegramDesktopProof(manifest) ? "Rerun the Mantis Telegram Desktop Proof workflow; saved version-1 artifacts are not migrated." : "Rerun the proof to create schema version 2 evidence."}`,
+      `Unsupported Mantis evidence manifest schema: ${manifest.schemaVersion}. Rerun the proof to create schema version 2 evidence.`,
     );
   }
   if (!manifest.id || !manifest.title || !manifest.scenario) {
     throw new Error("Mantis evidence manifest requires id, title, and scenario.");
   }
-  return reconcileEvidenceVerdict(manifest, manifestDir);
+  const reconciled = reconcileEvidenceVerdict(manifest);
+  for (const artifact of reconciled.artifacts ?? []) {
+    resolveArtifact(manifestDir, artifact);
+  }
+  writeFileSync(resolvedManifest, `${JSON.stringify(reconciled, null, 2)}\n`, "utf8");
+  return reconciled;
 }
 /**
- * Loads and validates an evidence manifest from disk.
- *
  * @param {string} manifestPath
  * @returns {EvidenceManifest}
  */
@@ -370,17 +285,11 @@ function digestHex(value) {
 function hmacBuffer(key, value) {
   return createHmac("sha256", key).update(value).digest();
 }
-function hmacHex(key, value) {
-  return createHmac("sha256", key).update(value).digest("hex");
-}
 function signingKey({ date, region, secretAccessKey }) {
   const dateKey = hmacBuffer(`AWS4${secretAccessKey}`, date);
   const regionKey = hmacBuffer(dateKey, region);
   const serviceKey = hmacBuffer(regionKey, "s3");
   return hmacBuffer(serviceKey, "aws4_request");
-}
-function s3Path({ bucket, key }) {
-  return `/${encodePathForUrl(bucket)}/${encodePathForUrl(key)}`;
 }
 function contentType(filePath) {
   const extension = path.extname(filePath).toLowerCase();
@@ -398,7 +307,9 @@ function contentType(filePath) {
 }
 /** @returns {SignedPutRequest} */
 function signedPutRequest({ artifact, body, config, key, now = new Date() }) {
-  const url = new URL(`${config.endpoint}${s3Path({ bucket: config.bucket, key })}`);
+  const url = new URL(
+    `${config.endpoint}/${encodePathForUrl(config.bucket)}/${encodePathForUrl(key)}`,
+  );
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/gu, "");
   const date = amzDate.slice(0, 8);
   const payloadHash = digestHex(body);
@@ -423,10 +334,10 @@ function signedPutRequest({ artifact, body, config, key, now = new Date() }) {
   ].join("\n");
   const scope = `${date}/${config.region}/s3/aws4_request`;
   const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, digestHex(canonicalRequest)].join("\n");
-  const signature = hmacHex(
+  const signature = hmacBuffer(
     signingKey({ date, region: config.region, secretAccessKey: config.secretAccessKey }),
     stringToSign,
-  );
+  ).toString("hex");
   return {
     body,
     headers: {
@@ -439,27 +350,17 @@ function signedPutRequest({ artifact, body, config, key, now = new Date() }) {
     url,
   };
 }
-function byLane(artifacts, kind) {
-  const lanes = new Map();
-  for (const artifact of artifacts) {
-    if (artifact.kind !== kind) {
-      continue;
-    }
-    lanes.set(artifact.lane, artifact);
-  }
-  return lanes;
-}
-function findPair(artifacts, kind, leftLane, rightLane) {
-  const lanes = byLane(artifacts, kind);
-  const left = lanes.get(leftLane);
-  const right = lanes.get(rightLane);
+function findPair(artifacts, kind) {
+  const left = artifacts.findLast(
+    (artifact) => artifact.kind === kind && artifact.lane === "baseline",
+  );
+  const right = artifacts.findLast(
+    (artifact) => artifact.kind === kind && artifact.lane === "candidate",
+  );
   return left && right ? { left, right } : null;
 }
 function renderPairTable({ pair, rawBase }) {
   const { left, right } = pair;
-  if (!left || !right) {
-    return "";
-  }
   return [
     '<table width="100%">',
     "  <thead>",
@@ -527,26 +428,6 @@ function laneLine(label, lane) {
   }
   return pieces.join("");
 }
-function laneAssertionLine(label, lane) {
-  if (!lane?.assertion || typeof lane.assertionOccurrences !== "number") {
-    return "";
-  }
-  const value = sanitizeCommentText(lane.assertion.value, 200);
-  return `- ${label} assertion: \`${lane.assertion.target}\` \`${lane.assertion.mode}\` "${value}" · occurrences: ${lane.assertionOccurrences} · ${lane.expectationMet ? "met" : "unmet"}`;
-}
-function hasVisibleProofArtifacts(manifest) {
-  return manifest.artifacts.some((artifact) =>
-    ["desktopScreenshot", "fullVideo", "motionClip", "motionPreview", "timeline"].includes(
-      artifact.kind,
-    ),
-  );
-}
-function isTelegramDesktopProof(manifest) {
-  return manifest.id === "telegram-desktop-proof" || manifest.scenario === "telegram-desktop-proof";
-}
-function publicSummary(manifest) {
-  return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
-}
 function overallStatus(manifest) {
   const outcome = manifest.comparison?.outcome;
   if (outcome === "blocked" || outcome === "fail" || outcome === "pass") {
@@ -554,22 +435,6 @@ function overallStatus(manifest) {
   }
   const pass = manifest.comparison?.pass;
   return typeof pass === "boolean" ? String(pass) : "";
-}
-/**
- * @param {EvidenceManifest} manifest
- * @param {{ requestSource?: string }} [options]
- */
-export function shouldPublishPrComment(manifest, { requestSource } = {}) {
-  if (!isTelegramDesktopProof(manifest) || hasVisibleProofArtifacts(manifest)) {
-    return true;
-  }
-  if (manifest.comparison?.outcome === "blocked") {
-    return true;
-  }
-  if (requestSource === "pull_request_target") {
-    return false;
-  }
-  return manifest.comparison.pass;
 }
 /** @param {RenderEvidenceCommentOptions} options */
 export function renderEvidenceComment({
@@ -585,9 +450,9 @@ export function renderEvidenceComment({
   const baseline = comparison.baseline;
   const candidate = comparison.candidate;
   const pairs = [
-    findPair(manifest.artifacts, "timeline", "baseline", "candidate"),
-    findPair(manifest.artifacts, "desktopScreenshot", "baseline", "candidate"),
-    findPair(manifest.artifacts, "motionPreview", "baseline", "candidate"),
+    findPair(manifest.artifacts, "timeline"),
+    findPair(manifest.artifacts, "desktopScreenshot"),
+    findPair(manifest.artifacts, "motionPreview"),
   ].filter((pair) => pair !== null);
   const pairedKeys = pairs.flatMap((pair) => [
     `${pair.left.kind}:${pair.left.lane}`,
@@ -597,7 +462,7 @@ export function renderEvidenceComment({
     marker,
     `## ${manifest.title}`,
     "",
-    `Summary: ${publicSummary(manifest)}`,
+    `Summary: ${manifest.summary ?? "Mantis captured QA evidence for this scenario."}`,
     "",
     `- Scenario: \`${manifest.scenario}\``,
   ];
@@ -610,17 +475,12 @@ export function renderEvidenceComment({
   if (actionsArtifactUrl) {
     lines.push(`- Artifact: ${actionsArtifactUrl}`);
   }
-  for (const { assertionLabel, lane, laneLabel } of [
-    { assertionLabel: "Baseline", lane: baseline, laneLabel: "Baseline" },
-    {
-      assertionLabel: "Candidate",
-      lane: candidate,
-      laneLabel: "Candidate (PR merged onto main)",
-    },
+  for (const { lane, laneLabel } of [
+    { lane: baseline, laneLabel: "Baseline" },
+    { lane: candidate, laneLabel: "Candidate (PR merged onto main)" },
   ]) {
     const laneSummary = laneLine(laneLabel, lane);
-    const assertionSummary = laneAssertionLine(assertionLabel, lane);
-    lines.push(...[laneSummary, assertionSummary].filter(Boolean));
+    lines.push(...[laneSummary].filter(Boolean));
   }
   if (comparison.differential) {
     lines.push(`- Differential (trusted facts): ${comparison.differential}`);
@@ -633,8 +493,7 @@ export function renderEvidenceComment({
     lines.push(`- Overall: \`${overall}\``);
   }
   lines.push("");
-  const pairedSections = pairs.map((pair) => renderPairTable({ pair, rawBase }));
-  lines.push(...pairedSections);
+  lines.push(...pairs.map((pair) => renderPairTable({ pair, rawBase })));
   const singleTables = renderSingleImageTables({
     artifacts: manifest.artifacts,
     pairedKeys,
@@ -643,23 +502,14 @@ export function renderEvidenceComment({
   if (singleTables) {
     lines.push(singleTables);
   }
-  const motionClips = renderLinkList({
-    artifacts: manifest.artifacts,
-    kind: "motionClip",
-    rawBase,
-    title: "Motion-trimmed clips",
-  });
-  if (motionClips) {
-    lines.push(motionClips);
-  }
-  const fullVideos = renderLinkList({
-    artifacts: manifest.artifacts,
-    kind: "fullVideo",
-    rawBase,
-    title: "Full videos",
-  });
-  if (fullVideos) {
-    lines.push(fullVideos);
+  for (const [kind, title] of [
+    ["motionClip", "Motion-trimmed clips"],
+    ["fullVideo", "Full videos"],
+  ]) {
+    const links = renderLinkList({ artifacts: manifest.artifacts, kind, rawBase, title });
+    if (links) {
+      lines.push(links);
+    }
   }
   lines.push(`Raw QA files: ${treeUrl ?? rawBase}`);
   return `${lines.join("\n").replace(/\n{3,}/gu, "\n\n")}\n`;
@@ -860,10 +710,6 @@ export async function publishEvidence(rawArgs = process.argv.slice(2)) {
     runUrl: args.run_url,
     treeUrl: published.treeUrl,
   });
-  if (!shouldPublishPrComment(manifest, { requestSource: args.request_source })) {
-    console.log("Skipped Mantis QA evidence PR comment because the run did not capture proof.");
-    return;
-  }
   upsertPrComment({
     body,
     createMissing: args.create_missing !== "false",

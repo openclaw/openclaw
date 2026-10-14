@@ -22,6 +22,8 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "get_goal",
   "tool_search",
   "tool_describe",
+  "skills_search",
+  "skills_read",
   "view_image",
 ]);
 

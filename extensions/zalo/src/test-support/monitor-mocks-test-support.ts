@@ -14,17 +14,19 @@ import {
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi, type Mock } from "vitest";
 import type { ResolvedZaloAccount } from "../types.js";
 
 type MonitorModule = typeof import("../monitor.js");
-type SecretInputModule = typeof import("../secret-input.js");
 type WebhookModule = typeof import("../monitor.webhook.js");
 
 const monitorModuleUrl = new URL("../monitor.ts", import.meta.url).href;
-const secretInputModuleUrl = new URL("../secret-input.ts", import.meta.url).href;
 const webhookModuleUrl = new URL("../monitor.webhook.ts", import.meta.url).href;
 const apiModuleId = new URL("../api.js", import.meta.url).pathname;
 const runtimeModuleId = new URL("../runtime.js", import.meta.url).pathname;
@@ -34,6 +36,7 @@ type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
 let lifecycleStateDir: string | undefined;
 let previousLifecycleStateDir: string | undefined;
+let waitForLifecycleIngressIdle: (() => Promise<void>) | undefined;
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -46,21 +49,19 @@ type ZaloLifecycleMocks = {
   getZaloRuntimeMock: UnknownMock;
 };
 
-const lifecycleMocks = vi.hoisted(
-  (): ZaloLifecycleMocks => ({
-    setWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-    deleteWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-    getWebhookInfoMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-    getUpdatesMock: vi.fn(() => new Promise(() => {})),
-    sendChatActionMock: vi.fn(async () => ({ ok: true })),
-    sendMessageMock: vi.fn(async () => ({
-      ok: true,
-      result: { message_id: "zalo-test-reply-1" },
-    })),
-    sendPhotoMock: vi.fn(async () => ({ ok: true })),
-    getZaloRuntimeMock: vi.fn(),
-  }),
-);
+const lifecycleMocks = vi.hoisted((): ZaloLifecycleMocks => ({
+  setWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
+  deleteWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
+  getWebhookInfoMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
+  getUpdatesMock: vi.fn(() => new Promise(() => {})),
+  sendChatActionMock: vi.fn(async () => ({ ok: true })),
+  sendMessageMock: vi.fn(async () => ({
+    ok: true,
+    result: { message_id: "zalo-test-reply-1" },
+  })),
+  sendPhotoMock: vi.fn(async () => ({ ok: true })),
+  getZaloRuntimeMock: vi.fn(),
+}));
 
 const setWebhookMock = lifecycleMocks.setWebhookMock;
 export const getUpdatesMock = lifecycleMocks.getUpdatesMock;
@@ -69,6 +70,21 @@ export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
 export const getZaloRuntimeMock: UnknownMock = lifecycleMocks.getZaloRuntimeMock;
 
 function installLifecycleModuleMocks() {
+  vi.doMock("openclaw/plugin-sdk/channel-outbound", async () => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-outbound")>(
+      "openclaw/plugin-sdk/channel-outbound",
+    );
+    return {
+      ...actual,
+      createChannelIngressMonitor: (
+        ...args: Parameters<typeof actual.createChannelIngressMonitor>
+      ) => {
+        const monitor = actual.createChannelIngressMonitor(...args);
+        waitForLifecycleIngressIdle = monitor.waitForIdle;
+        return monitor;
+      },
+    };
+  });
   vi.doMock(apiModuleId, async () => {
     const actual = await vi.importActual<object>(apiModuleId);
     return {
@@ -105,20 +121,17 @@ async function importMonitorModule(params: {
   return module;
 }
 
-async function importSecretInputModule(cacheBust: string): Promise<SecretInputModule> {
-  return (await import(
-    `${secretInputModuleUrl}?t=${cacheBust}-${Date.now()}`
-  )) as SecretInputModule;
-}
-
 const importCachedWebhookModule = createLazyRuntimeModule(
   () => import(webhookModuleUrl) as Promise<WebhookModule>,
 );
 
 export async function resetLifecycleTestState() {
+  waitForLifecycleIngressIdle = undefined;
   // Agent close releases leases through shared state; closing shared state first
   // can reopen it during teardown and leave Windows handles under the state dir.
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   if (lifecycleStateDir) {
     await fs.rm(lifecycleStateDir, {
@@ -207,7 +220,7 @@ export async function startWebhookLifecycleMonitor(params: {
       ? params.account.config.webhookUrl
       : undefined;
   const webhookUrl = params.webhookUrl ?? accountWebhookUrl;
-  const { normalizeSecretInputString } = await importSecretInputModule("secret-input");
+  const { normalizeSecretInputString } = await import("openclaw/plugin-sdk/secret-input");
   const webhookSecret =
     params.webhookSecret ?? normalizeSecretInputString(params.account.config?.webhookSecret);
   const { monitorZaloProvider } = params.cacheKey
@@ -238,6 +251,9 @@ export async function startWebhookLifecycleMonitor(params: {
   if (!route) {
     throw new Error("missing plugin HTTP route");
   }
+  if (!waitForLifecycleIngressIdle) {
+    throw new Error("missing Zalo webhook ingress monitor");
+  }
 
   return {
     abort,
@@ -245,6 +261,7 @@ export async function startWebhookLifecycleMonitor(params: {
     route,
     run,
     runtime,
+    waitForIdle: waitForLifecycleIngressIdle,
     stop: async () => {
       abort.abort();
       await run;

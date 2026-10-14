@@ -1,4 +1,3 @@
-import AVFoundation
 import Foundation
 import OpenClawKit
 import OpenClawProtocol
@@ -169,14 +168,8 @@ struct TalkGatewaySpeechClientTests {
 
     @Test func `gateway speech provider stays native and uses talk speak`() async {
         let parsed = Self.parseSpeechProvider("xiaomi")
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            providerSelection: .gatewayDefault,
-            defaultProvider: "elevenlabs",
-            defaultRealtimeModelId: "gpt-realtime-2")
-        #expect(routing.activeProvider == "xiaomi")
-        #expect(routing.executionMode == .native)
-        #expect(routing.route == .gatewayTalkSpeak)
+        #expect(parsed.snapshot.activeProvider == "xiaomi")
+        #expect(parsed.route == .gatewayTalkSpeak)
 
         let expectedAudio = Data([4, 5, 6])
         let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
@@ -188,11 +181,9 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = audioPlayer
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         #expect(manager._test_runtimeRoute() == .gatewayTalkSpeak)
-        #expect(manager._test_executionMode() == .native)
-        #expect(!manager.gatewayTalkUsesRealtime)
         #expect(manager.gatewayTalkTransportLabel == "Native")
 
         await manager._test_playAssistant(text: "Gateway voice")
@@ -211,7 +202,7 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = RecordingBufferedAudioPlayer()
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         await manager._test_playAssistant(text: "{\"voice\":\"alloy\",\"model\":\"expressive\"}\nFirst")
         await manager._test_playAssistant(text: "Second")
@@ -231,13 +222,12 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = RecordingBufferedAudioPlayer()
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         await manager._test_playAssistant(text: "No model override")
 
         #expect(synthesizer.requests.count == 1)
         #expect(synthesizer.requests[0].modelId == nil)
-        #expect(manager.gatewayTalkDefaultModelId == nil)
     }
 
     @Test func `stopped talk does not play completed gateway synthesis`() async {
@@ -248,7 +238,7 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = audioPlayer
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         let playback = Task { await manager._test_playAssistant(text: "Delayed voice") }
         while !synthesizer.hasPendingRequest {
@@ -259,22 +249,6 @@ struct TalkGatewaySpeechClientTests {
         await playback.value
 
         #expect(audioPlayer.payloads.isEmpty)
-    }
-
-    @Test func `stale buffered player callback does not finish replacement`() async throws {
-        let player = TalkBufferedAudioPlayer()
-        let wav = makeWav16Mono(sampleRate: 8000, samples: 8000)
-        let stalePlayer = try AVAudioPlayer(data: wav)
-        let stopAfterStaleCallback = Task { @MainActor in
-            player.audioPlayerDidFinishPlaying(stalePlayer, successfully: true)
-            return player.stop()
-        }
-
-        let result = await player.play(data: wav)
-        let interruptedAt = await stopAfterStaleCallback.value
-
-        #expect(interruptedAt != nil)
-        #expect(!result.finished)
     }
 
     @Test func `interrupted gateway playback stops speech recognition`() async {
@@ -288,7 +262,7 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = audioPlayer
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         let playback = Task { await manager._test_playAssistant(text: "Interrupt me") }
         while !audioPlayer.isPlaying {
@@ -306,35 +280,23 @@ struct TalkGatewaySpeechClientTests {
     @Test func `open AI speech provider without realtime config uses talk speak`() {
         let parsed = Self.parseSpeechProvider("openai")
 
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            providerSelection: .gatewayDefault,
-            defaultProvider: "elevenlabs",
-            defaultRealtimeModelId: "gpt-realtime-2")
-
-        #expect(routing.activeProvider == "openai")
-        #expect(routing.executionMode == .native)
-        #expect(routing.route == .gatewayTalkSpeak)
+        #expect(parsed.snapshot.activeProvider == "openai")
+        #expect(parsed.route == .gatewayTalkSpeak)
     }
 
     @Test func `system voice keeps BCP 47 locale separate from provider language`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_applyLoadedTalkConfig(
-            Self.parseSpeechProvider("elevenlabs", speechLocale: "tr_TR"),
-            providerSelection: .gatewayDefault)
+            Self.parseSpeechProvider("elevenlabs", speechLocale: "tr_TR"))
 
         let configured = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: nil,
-            localSelection: TalkSpeechLocale.automaticID)
+            directiveLanguage: nil)
         let directive = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: "de_DE",
-            localSelection: "fr-FR")
+            directiveLanguage: "de_DE")
         let providerCompatible = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: "tr",
-            localSelection: TalkSpeechLocale.automaticID)
+            directiveLanguage: "tr")
         let unavailableDirective = manager._test_resolvedSpeechLanguages(
             directiveLanguage: "zz-ZZ",
-            localSelection: TalkSpeechLocale.automaticID,
             isSystemVoiceAvailable: { $0 == "tr-TR" })
 
         #expect(configured.provider == nil)
@@ -377,16 +339,9 @@ struct TalkGatewaySpeechClientTests {
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
 
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            providerSelection: .gatewayDefault,
-            defaultProvider: "elevenlabs",
-            defaultRealtimeModelId: "gpt-realtime-2")
-
-        #expect(routing.executionMode == .realtimeRelay)
-        #expect(routing.route == .realtimeRelay)
-        #expect(!routing.route.usesGatewayTalkSpeak)
-        #expect(routing.route.gatewayOwnsCredentials)
+        #expect(parsed.route == .realtimeRelay)
+        #expect(!parsed.route.usesGatewayTalkSpeak)
+        #expect(parsed.route.gatewayOwnsCredentials)
     }
 
     private static func parseSpeechProvider(
@@ -414,42 +369,5 @@ struct TalkGatewaySpeechClientTests {
             defaultModelIdFallback: "eleven_v3",
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
-    }
-}
-
-private func makeWav16Mono(sampleRate: UInt32, samples: Int) -> Data {
-    let channels: UInt16 = 1
-    let bitsPerSample: UInt16 = 16
-    let blockAlign = channels * (bitsPerSample / 8)
-    let byteRate = sampleRate * UInt32(blockAlign)
-    let dataSize = UInt32(samples) * UInt32(blockAlign)
-
-    var data = Data()
-    data.append(contentsOf: [0x52, 0x49, 0x46, 0x46])
-    data.appendTestLEUInt32(36 + dataSize)
-    data.append(contentsOf: [0x57, 0x41, 0x56, 0x45])
-    data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20])
-    data.appendTestLEUInt32(16)
-    data.appendTestLEUInt16(1)
-    data.appendTestLEUInt16(channels)
-    data.appendTestLEUInt32(sampleRate)
-    data.appendTestLEUInt32(byteRate)
-    data.appendTestLEUInt16(blockAlign)
-    data.appendTestLEUInt16(bitsPerSample)
-    data.append(contentsOf: [0x64, 0x61, 0x74, 0x61])
-    data.appendTestLEUInt32(dataSize)
-    data.append(Data(repeating: 0, count: Int(dataSize)))
-    return data
-}
-
-extension Data {
-    fileprivate mutating func appendTestLEUInt16(_ value: UInt16) {
-        var value = value.littleEndian
-        Swift.withUnsafeBytes(of: &value) { self.append(contentsOf: $0) }
-    }
-
-    fileprivate mutating func appendTestLEUInt32(_ value: UInt32) {
-        var value = value.littleEndian
-        Swift.withUnsafeBytes(of: &value) { self.append(contentsOf: $0) }
     }
 }

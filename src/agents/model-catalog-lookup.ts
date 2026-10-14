@@ -9,13 +9,28 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
+import {
+  resolveProviderModelCatalogId,
+  resolveProviderModelPolicySurface,
+} from "../plugins/provider-model-routes.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
 type ModelThinkingCompat = {
   thinkingFormat?: ModelCompatConfig["thinkingFormat"];
   supportedReasoningEfforts?: readonly string[] | null;
+};
+
+type ModelRunCapabilityEntry = {
+  provider: string;
+  id: string;
+  api?: string;
+  baseUrl?: string;
+  input?: readonly ModelInputType[];
+  compat?: unknown;
 };
 
 export type PreparedModelThinkingCapability = Readonly<{
@@ -50,8 +65,8 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
 
 /** Freezes thinking capability from the selected prepared catalog row. */
 function prepareModelThinkingCapability(params: {
-  entry: ModelCatalogEntry | undefined;
-  route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
+  entry: ModelRunCapabilityEntry | undefined;
+  route?: Pick<ModelRunCapabilityEntry, "api" | "baseUrl">;
   agentRuntime: string;
 }): PreparedModelThinkingCapability | undefined {
   const compat = projectModelThinkingCompat(params.entry?.compat);
@@ -79,26 +94,50 @@ function prepareModelThinkingCapability(params: {
 /** Resolves prepared thinking metadata only for the exact final model route and harness. */
 export function resolvePreparedModelThinkingCompat(params: {
   capability?: PreparedModelThinkingCapability;
-  model: Pick<Model, "provider" | "id" | "api" | "baseUrl">;
+  model: Pick<Model, "provider" | "id" | "api" | "baseUrl"> & {
+    compat?: Model["compat"] | ModelThinkingCompat;
+  };
   agentRuntime: string;
-}): ModelThinkingCompat | undefined {
+}): Pick<ModelCompatConfig, "thinkingFormat" | "supportedReasoningEfforts"> | undefined {
   const capability = params.capability;
   if (!capability) {
     return undefined;
   }
   const runtimeModelId = canonicalizeProviderModelId(capability.provider, params.model.id);
   const preparedModelId = canonicalizeProviderModelId(capability.provider, capability.modelId);
-  return normalizeProviderId(params.model.provider) === capability.provider &&
-    runtimeModelId === preparedModelId &&
-    normalizeLowercaseStringOrEmpty(params.agentRuntime) === capability.agentRuntime &&
-    (!capability.route || modelTransportRoutesMatch(params.model, capability.route))
-    ? capability.compat
-    : undefined;
+  if (
+    normalizeProviderId(params.model.provider) !== capability.provider ||
+    runtimeModelId !== preparedModelId ||
+    normalizeLowercaseStringOrEmpty(params.agentRuntime) !== capability.agentRuntime ||
+    (capability.route && !modelTransportRoutesMatch(params.model, capability.route))
+  ) {
+    return undefined;
+  }
+  const { supportedReasoningEfforts: efforts, ...compat } = capability.compat;
+  if (efforts === undefined) {
+    return compat;
+  }
+  // "none" disables reasoning; it is not an enabled effort tier. Harness-wide
+  // tiers may cross auth routes, but only the selected route can allow "none".
+  const routeEfforts = projectModelThinkingCompat(params.model.compat)?.supportedReasoningEfforts;
+  const enabledEfforts = efforts?.filter((effort) => effort !== "none");
+  return {
+    ...compat,
+    // Unknown metadata clears earlier capabilities; runtime arrays belong to this model.
+    supportedReasoningEfforts: capability.route
+      ? efforts?.slice()
+      : routeEfforts?.includes("none")
+        ? ["none", ...(enabledEfforts ?? [])]
+        : enabledEfforts,
+  };
 }
 
 /** Projects the prepared capabilities needed by one selected run candidate. */
 export function prepareModelRunCapabilities(
-  [catalog, configuredCatalog]: readonly [ModelCatalogEntry[] | undefined, ModelCatalogEntry[]],
+  [catalog, configuredCatalog]: readonly [
+    readonly ModelRunCapabilityEntry[] | undefined,
+    readonly ModelRunCapabilityEntry[],
+  ],
   [provider, modelId, agentRuntime]: readonly [string, string, string],
 ) {
   const entry = findModelInCatalog(catalog ?? [], provider, modelId);
@@ -115,25 +154,54 @@ export function prepareModelRunCapabilities(
 
 /** Returns whether a catalog entry declares support for an input modality. */
 export function modelSupportsInput(
-  entry: ModelCatalogEntry | undefined,
+  entry: { input?: readonly ModelInputType[] } | undefined,
   input: ModelInputType,
 ): boolean {
   return entry?.input?.includes(input) ?? false;
 }
 
-/** Finds a provider-qualified model entry in a catalog. */
-export function findModelInCatalog(
-  catalog: ModelCatalogEntry[],
+/** Prefers canonical identity; the shipped SDK's case-insensitive fallback must be unique. */
+export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" | "id">>(
+  catalog: readonly T[],
   provider: string,
   modelId: string,
-): ModelCatalogEntry | undefined {
+): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
+  const trimmedModelId = modelId.trim();
+  const providerCatalog: T[] = [];
+  let literal: T | undefined;
+  catalog.some((entry) => {
+    if (normalizeProviderId(entry.provider) !== normalizedProvider) {
+      return false;
+    }
+    if (entry.id === trimmedModelId) {
+      literal = entry;
+      return true;
+    }
+    providerCatalog.push(entry);
+    return false;
+  });
+  if (literal) {
+    return literal;
+  }
+  // One synchronous lookup uses one policy owner instead of reloading it for every row.
+  const surface = resolveProviderModelPolicySurface(normalizedProvider);
+  const identityOf = (id: string) =>
+    resolveProviderModelCatalogId({
+      provider: normalizedProvider,
+      modelId: splitTrailingAuthProfile(id).model,
+      surface,
+    }) ?? id;
+  const identity = identityOf(trimmedModelId);
+  const exact = providerCatalog.find((entry) => identityOf(entry.id) === identity);
+  if (exact) {
+    return exact;
+  }
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  return catalog.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider &&
-      normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  const matches = providerCatalog.filter(
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
   );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** Finds a model entry, requiring uniqueness when provider is omitted. */
@@ -151,9 +219,13 @@ export function findModelCatalogEntry(
     return findModelInCatalog(catalog, provider, modelId);
   }
 
-  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  const matches = catalog.filter(
-    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const exact = catalog.filter(
+    (entry) => keyOf(entry) === keyOf({ provider: entry.provider, id: modelId }),
   );
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const matches = exact.length
+    ? exact
+    : catalog.filter((entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId);
   return matches.length === 1 ? matches[0] : undefined;
 }

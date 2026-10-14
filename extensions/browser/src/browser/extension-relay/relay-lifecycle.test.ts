@@ -66,6 +66,7 @@ function createState(token: string, existing?: ExtensionRelayHandle) {
 
 function createHandle(token: string, port = RELAY_PORT): ExtensionRelayHandle {
   return {
+    ownership: "owned",
     port,
     token,
     allowLegacyAuth: true,
@@ -88,6 +89,7 @@ describe("extension relay lifecycle", () => {
     vi.clearAllMocks();
     ensureExtensionRelayTokenMock.mockResolvedValue(ROTATED_TOKEN);
     startExtensionRelayServerMock.mockImplementation(async ({ port, token, allowLegacyAuth }) => ({
+      ownership: "owned",
       port,
       token,
       allowLegacyAuth,
@@ -95,28 +97,6 @@ describe("extension relay lifecycle", () => {
       bridge: {},
       close: vi.fn(async () => {}),
     }));
-  });
-
-  it("rebounds an existing relay when the host-local token rotates", async () => {
-    const oldRelay = createHandle(OLD_TOKEN);
-    const { profile, state } = createState(OLD_TOKEN, oldRelay);
-    expect(profile.cdpUrl).toContain(encodeURIComponent(oldRelay.internalToken));
-    expect(profile.cdpUrl).not.toContain(OLD_TOKEN);
-
-    const handle = await ensureExtensionRelayForProfile(state, profile);
-
-    expect(oldRelay.close).toHaveBeenCalledOnce();
-    expect(startExtensionRelayServerMock).toHaveBeenCalledWith({
-      port: RELAY_PORT,
-      token: ROTATED_TOKEN,
-      allowLegacyAuth: true,
-    });
-    expect(handle.token).toBe(ROTATED_TOKEN);
-    expect(state.resolved.extensionRelayToken).toBe(ROTATED_TOKEN);
-    expect(profile.cdpUrl).toContain("replacement-internal");
-    expect(profile.cdpUrl).not.toContain(ROTATED_TOKEN);
-    expect(resolveProfile(state.resolved, PROFILE_NAME)?.cdpUrl).toContain("replacement-internal");
-    expect(state.extensionRelays?.get(PROFILE_NAME)).toBe(handle);
   });
 
   it("retains and retries the exact stale relay when its first close fails", async () => {
@@ -195,7 +175,6 @@ describe("extension relay lifecycle", () => {
     const first = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       signal: firstController.signal,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
@@ -205,7 +184,6 @@ describe("extension relay lifecycle", () => {
     const sibling = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
     void sibling.catch(() => {});
@@ -240,7 +218,6 @@ describe("extension relay lifecycle", () => {
     const owner = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
     void owner.catch(() => {});
@@ -250,7 +227,6 @@ describe("extension relay lifecycle", () => {
     const sibling = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       signal: siblingController.signal,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
@@ -289,7 +265,6 @@ describe("extension relay lifecycle", () => {
     const pending = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
     void pending.catch(() => {});

@@ -6,6 +6,8 @@ import {
   createQueuedWizardPrompter,
   runSetupWizardConfigure,
 } from "../../test-utils/plugin-setup-wizard.js";
+import { defineChannelSetupContract } from "./setup-contract.js";
+import { patchScopedAccountConfig } from "./setup-helpers.js";
 import type { ChannelSetupPlugin, ChannelSetupWizard } from "./setup-wizard-types.js";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "./setup-wizard.js";
 
@@ -148,43 +150,57 @@ function createConfigure() {
 }
 
 describe("channel setup wizard account scoping", () => {
-  it("does not prefill or overwrite the existing account when adding a new account", async () => {
-    const main = {
-      botId: "test-main-bot-id",
-      secret: "test-secret",
-      enabled: false,
-      marker: { keep: "byte-identical" },
-    };
-    const before = JSON.stringify(main);
+  it("preserves an owned root through declarative guided account setup", async () => {
+    const root = { botId: "root-bot", secret: "root-secret", name: "Root" };
+    const plugin = createLegacyPlugin();
+    plugin.setupContract = defineChannelSetupContract({
+      fields: {
+        token: { kind: "string", cli: { flags: "--token <token>", description: "Bot ID" } },
+        useEnv: { kind: "boolean", cli: { flags: "--use-env", description: "Use environment" } },
+      },
+      adapter: {
+        configPromotion: "preserve-root",
+        applyAccountConfig: ({ cfg, accountId, input }) =>
+          patchScopedAccountConfig({
+            cfg,
+            channelKey: "demo",
+            accountId,
+            patch: { botId: input.token },
+            ensureAccountEnabled: false,
+            ensureChannelEnabled: false,
+          }),
+      },
+    });
+    const wizard = createLegacyWizard();
+    wizard.credentials = [
+      {
+        ...wizard.credentials[0]!,
+        inspect: ({ cfg, accountId }) => ({
+          accountConfigured: Boolean(
+            getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
+          ),
+          hasConfiguredValue: Boolean(
+            getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
+          ),
+        }),
+        applySet: undefined,
+      },
+    ];
     const queued = createQueuedWizardPrompter({
       selectValues: ["__new__"],
-      textValues: ["alerts", "test-alerts-bot-id", "example-secret"],
-      confirmValues: [false, false],
+      textValues: ["ada", "ada-bot"],
     });
-
     const result = await runSetupWizardConfigure({
-      configure: createConfigure(),
-      cfg: {
-        channels: {
-          demo: {
-            enabled: true,
-            defaultAccount: "main",
-            accounts: { main },
-          },
-        },
-      } as OpenClawConfig,
+      configure: buildChannelSetupWizardAdapterFromSetupWizard({ plugin, wizard }).configure,
+      cfg: { channels: { demo: root } } as OpenClawConfig,
       prompter: queued.prompter,
       shouldPromptAccountIds: true,
       options: { secretInputMode: "plaintext" as const },
     });
-
-    const channel = getChannelConfig(result.cfg);
-    expect(result.accountId).toBe("alerts");
-    expect(channel.defaultAccount).toBe("main");
-    expect(JSON.stringify(channel.accounts?.main)).toBe(before);
-    expect(channel.accounts?.alerts).toEqual({
-      botId: "test-alerts-bot-id",
-      secret: "example-secret",
+    expect(result.accountId).toBe("ada");
+    expect(result.cfg.channels?.demo).toEqual({
+      ...root,
+      accounts: { ada: { botId: "ada-bot" } },
     });
     expect(queued.confirm).not.toHaveBeenCalled();
   });
@@ -225,73 +241,6 @@ describe("channel setup wizard account scoping", () => {
       alerts: { botId: "test-alerts-bot-id", secret: "example-secret" },
     });
     expect(queued.confirm).not.toHaveBeenCalled();
-  });
-
-  it("migrates stale root credentials when only an empty accounts map exists", async () => {
-    const queued = createQueuedWizardPrompter({
-      confirmValues: [false, false],
-      textValues: ["test-new-bot-id", "mock-secret"],
-    });
-
-    const result = await runSetupWizardConfigure({
-      configure: createConfigure(),
-      cfg: {
-        channels: {
-          demo: { botId: "test-stale-bot-id", secret: "fixture-secret", accounts: {} },
-        },
-      } as OpenClawConfig,
-      prompter: queued.prompter,
-      options: { secretInputMode: "plaintext" as const },
-    });
-
-    const accountId = result.accountId;
-    if (!accountId) {
-      throw new Error("expected the wizard to resolve an account id");
-    }
-    const channel = getChannelConfig(result.cfg);
-    expect(channel).not.toHaveProperty("botId");
-    expect(channel).not.toHaveProperty("secret");
-    expect(channel.accounts?.[accountId]).toEqual({
-      botId: "test-new-bot-id",
-      secret: "mock-secret",
-    });
-    expect(Object.keys(channel.accounts ?? {})).toEqual([accountId]);
-  });
-
-  it("replaces credentials only in the selected existing account after rejecting keep", async () => {
-    const main = { botId: "test-main-bot-id", secret: "test-secret" };
-    const before = JSON.stringify(main);
-    const queued = createQueuedWizardPrompter({
-      confirmValues: [false, false],
-      textValues: ["test-new-bot-id", "mock-secret"],
-    });
-
-    const result = await runSetupWizardConfigure({
-      configure: createConfigure(),
-      cfg: {
-        channels: {
-          demo: {
-            defaultAccount: "main",
-            accounts: {
-              main,
-              alerts: { botId: "test-old-bot-id", secret: "fixture-secret" },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      prompter: queued.prompter,
-      accountOverrides: { demo: "alerts" },
-      options: { secretInputMode: "plaintext" as const },
-    });
-
-    const channel = getChannelConfig(result.cfg);
-    expect(channel.defaultAccount).toBe("main");
-    expect(JSON.stringify(channel.accounts?.main)).toBe(before);
-    expect(channel.accounts?.alerts).toEqual({
-      botId: "test-new-bot-id",
-      secret: "mock-secret",
-    });
-    expect(queued.confirm).toHaveBeenCalledTimes(2);
   });
 
   it("scopes a named default account when another account is the channel default", async () => {

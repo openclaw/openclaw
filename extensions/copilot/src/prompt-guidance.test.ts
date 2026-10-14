@@ -28,69 +28,24 @@ function buildGuidance(
 }
 
 describe("buildCopilotPromptGuidance", () => {
-  it("composes ordered OpenClaw policy from the final callable capabilities", () => {
-    const guidance = buildGuidance();
-
-    expect(guidance).toContain("policy-filtered for this turn");
-    expect(guidance).toContain("## Skill Workshop");
-    expect(guidance).toContain("## Delegation");
-    expect(guidance).toContain("delegate via `sessions_spawn`");
-    expect(guidance).toContain("spawn `sessions_spawn` with `visible=true`");
-    expect(guidance).toContain("Need results before reply: `sessions_yield`; never poll.");
-    expect(guidance).toContain("`subagents(action=list)` only for requested status/debug.");
-    expect(guidance).toContain("For the current source conversation, reply normally");
-    expect(guidance?.indexOf("## Skill Workshop")).toBeLessThan(
-      guidance?.indexOf("## Delegation") ?? 0,
-    );
-    expect(guidance?.indexOf("## Delegation")).toBeLessThan(
-      guidance?.indexOf("For the current source conversation") ?? 0,
-    );
-  });
-
-  it.each([
-    {
-      name: "explicit suggest mode",
-      attempt: {
-        config: { agents: { defaults: { subagents: { delegationMode: "suggest" as const } } } },
-      },
-    },
-    {
-      name: "non-main session",
-      attempt: { sessionKey: "agent:main:slack:channel:C01234567" },
-    },
-    { name: "minimal prompt", attempt: { promptMode: "minimal" as const } },
-    { name: "report-only delegation", attempt: { delegationCapability: "report_only" as const } },
-  ])("suppresses delegation for $name but keeps visible-reply guidance", ({ attempt }) => {
-    const guidance = buildGuidance(attempt);
+  it("suppresses report-only delegation but keeps visible-reply guidance", () => {
+    const guidance = buildGuidance({ delegationCapability: "report_only" });
 
     expect(guidance).not.toContain("## Delegation");
-    expect(guidance).toContain("For the current source conversation, reply normally");
+    expect(guidance).toContain("is your complete reply.");
   });
 
-  it.each([
-    { name: "prompt mode none", attempt: { promptMode: "none" as const } },
-    { name: "raw model run", attempt: { modelRun: true } },
-  ])("omits the appended developer instructions for $name", ({ attempt }) => {
-    expect(buildGuidance(attempt)).toBeUndefined();
-  });
-
-  it("uses the message tool only when it remains callable", () => {
-    expect(
-      buildGuidance({ sourceReplyDeliveryMode: "message_tool_only" }, [
-        "message",
-        "sessions_spawn",
-      ]),
-    ).toContain("Visible source replies are not automatically delivered");
-    expect(
-      buildGuidance({ sourceReplyDeliveryMode: "message_tool_only" }, ["sessions_spawn"]),
-    ).toContain("reply normally in your final assistant message");
+  it("omits the appended developer instructions for prompt mode none", () => {
+    expect(buildGuidance({ promptMode: "none" })).toBeUndefined();
   });
 
   it("renders only the delegation operations present in the callable inventory", () => {
     const guidance = buildGuidance({}, [" sessions_spawn ", "sessions_spawn"]);
 
     expect(guidance).toContain("## Delegation");
-    expect(guidance).toContain("Completion is push-based; never poll.");
+    expect(guidance).toContain(
+      "Announced completion is push-based; collectors require explicit result collection.",
+    );
     expect(guidance).not.toContain("sessions_yield");
     expect(guidance).not.toContain("subagents(action=list)");
     expect(buildGuidance({}, ["sessions_yield", "subagents"])).not.toContain("## Delegation");

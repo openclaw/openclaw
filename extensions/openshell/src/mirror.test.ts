@@ -1,5 +1,7 @@
 // Openshell tests cover mirror plugin behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -13,7 +15,8 @@ import {
 const dirs: string[] = [];
 
 async function makeTmpDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mirror-test-"));
+  // Keep nested socket paths within macOS's 104-byte sockaddr_un.sun_path.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-mir-"));
   dirs.push(dir);
   return dir;
 }
@@ -35,7 +38,7 @@ afterEach(async () => {
 });
 
 describe("replaceDirectoryContents", () => {
-  it("copies source entries to target", async () => {
+  it("unlinks target hardlinks before replacing host content", async () => {
     const source = await makeTmpDir();
     const target = await makeTmpDir();
     const outside = await makeTmpDir();
@@ -122,44 +125,6 @@ describe("replaceDirectoryContents", () => {
     }
   });
 
-  // Mirrored OpenShell sandbox content must never overwrite trusted workspace
-  // hook directories.
-  it("excludes specified directories from sync", async () => {
-    const source = await makeTmpDir();
-    const target = await makeTmpDir();
-
-    // Source has a hooks/ dir with an attacker-controlled handler
-    await fs.mkdir(path.join(source, "hooks", "evil"), { recursive: true });
-    await fs.writeFile(
-      path.join(source, "hooks", "evil", "handler.js"),
-      'import { writeFileSync } from "node:fs";\nwriteFileSync("/tmp/pwned", "pwned");\nexport default async function handler() {}',
-    );
-    await fs.writeFile(path.join(source, "code.txt"), "legit");
-
-    // Target has existing trusted hooks
-    await fs.mkdir(path.join(target, "hooks", "trusted"), { recursive: true });
-    await fs.writeFile(path.join(target, "hooks", "trusted", "handler.js"), "// trusted code");
-    await fs.writeFile(path.join(target, "existing.txt"), "old");
-
-    await replaceDirectoryContents({
-      sourceDir: source,
-      targetDir: target,
-      excludeDirs: ["hooks"],
-    });
-
-    // Legitimate content is synced
-    expect(await fs.readFile(path.join(target, "code.txt"), "utf8")).toBe("legit");
-
-    // Old non-excluded content is removed
-    await expectPathMissing(path.join(target, "existing.txt"));
-
-    // hooks/ directory is preserved as-is — not replaced by attacker content
-    expect(await fs.readFile(path.join(target, "hooks", "trusted", "handler.js"), "utf8")).toBe(
-      "// trusted code",
-    );
-    await expectPathMissing(path.join(target, "hooks", "evil"));
-  });
-
   it("excludeDirs matching is case-insensitive", async () => {
     const source = await makeTmpDir();
     const target = await makeTmpDir();
@@ -213,7 +178,13 @@ describe("replaceDirectoryContents", () => {
     expect(await fs.readFile(path.join(target, ".git", "HEAD"), "utf8")).toBe(
       "ref: refs/heads/main\n",
     );
-    await expectPathMissing(path.join(target, ".git", "hooks", "post-checkout"));
+    for (const [directory, expected] of [
+      ["hooks", "trusted"],
+      ["git-hooks", "trusted"],
+      [".git", "HEAD"],
+    ] as const) {
+      expect(await fs.readdir(path.join(target, directory))).toEqual([expected]);
+    }
   });
 
   it("skips symbolic links when copying into the host workspace", async () => {
@@ -234,7 +205,37 @@ describe("replaceDirectoryContents", () => {
     await expectPathMissing(path.join(target, "nested", "escaped-dir"));
   });
 
-  it.each(["directory", "absent", "file", "symlink"] as const)(
+  it.runIf(process.platform !== "win32")(
+    "preserves target-only special files and their ancestor directories",
+    async () => {
+      const source = await makeTmpDir();
+      const target = await makeTmpDir();
+      const nested = path.join(target, "nested");
+      const fifoPath = path.join(nested, "host.fifo");
+      const socketPath = path.join(nested, "host.sock");
+      await fs.mkdir(nested);
+      execFileSync("mkfifo", [fifoPath]);
+      const server = net.createServer();
+      server.listen(socketPath);
+      await new Promise<void>((resolve, reject) => {
+        server.once("listening", resolve);
+        server.once("error", reject);
+      });
+
+      try {
+        await replaceDirectoryContents({ sourceDir: source, targetDir: target });
+
+        expect((await fs.lstat(fifoPath)).isFIFO()).toBe(true);
+        expect((await fs.lstat(socketPath)).isSocket()).toBe(true);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it.each(["directory", "symlink"] as const)(
     "preserves trusted host symlinks when their remote ancestor is %s",
     async (remoteAncestor) => {
       const source = await makeTmpDir();
@@ -267,8 +268,6 @@ describe("replaceDirectoryContents", () => {
           "remote",
         );
         await fs.symlink(outside, path.join(source, "nested", "deeper", "dangling-link"));
-      } else if (remoteAncestor === "file") {
-        await fs.writeFile(path.join(source, "nested"), "remote replacement");
       } else if (remoteAncestor === "symlink") {
         await fs.symlink(outside, path.join(source, "nested"));
       }

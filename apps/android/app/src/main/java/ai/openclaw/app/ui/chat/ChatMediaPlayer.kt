@@ -86,9 +86,7 @@ internal class ChatMediaPlaybackClaims<T>(
 
   fun claim(value: T) {
     if (active === value) return
-    val previous = active
-    active = null
-    previous?.let(release)
+    releaseActive()
     active = value
   }
 
@@ -99,16 +97,12 @@ internal class ChatMediaPlaybackClaims<T>(
     return true
   }
 
-  fun pauseIf(predicate: (T) -> Boolean): Boolean {
-    val current = active?.takeIf(predicate) ?: return false
-    pause(current)
-    return true
+  fun pauseIf(predicate: (T) -> Boolean) {
+    active?.takeIf(predicate)?.let(pause)
   }
 
   fun releaseActive() {
-    val previous = active ?: return
-    active = null
-    release(previous)
+    releaseIf { true }
   }
 }
 
@@ -130,10 +124,8 @@ internal class ChatMediaSessionLifecycle<T : Any, S : Any>(
     }
   }
 
-  fun release(owner: T): Boolean {
-    if (activeOwner !== owner) return false
-    releaseActive()
-    return true
+  fun release(owner: T) {
+    if (activeOwner === owner) releaseActive()
   }
 
   private fun releaseActive() {
@@ -264,7 +256,7 @@ private object ChatMediaPlaybackArbiter {
   }
 
   @Synchronized
-  fun pause(player: ExoPlayer): Boolean = claims.pauseIf { it.player === player }
+  fun pause(player: ExoPlayer) = claims.pauseIf { it.player === player }
 
   @Synchronized
   fun release(player: ExoPlayer): Boolean = claims.releaseIf { it.player === player }
@@ -283,37 +275,9 @@ private object ChatMediaPlaybackArbiter {
   }
 }
 
-@Composable
-internal fun ChatAudioPlayerCard(
-  content: ChatMessageContent,
-  playbackBlocked: Boolean,
-  loadMedia: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
-) {
-  ChatMediaPlayerCard(
-    content = content,
-    kind = GatewayMediaKind.Audio,
-    playbackBlocked = playbackBlocked,
-    loadMedia = loadMedia,
-  )
-}
-
-@Composable
-internal fun ChatVideoPlayerCard(
-  content: ChatMessageContent,
-  playbackBlocked: Boolean,
-  loadMedia: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
-) {
-  ChatMediaPlayerCard(
-    content = content,
-    kind = GatewayMediaKind.Video,
-    playbackBlocked = playbackBlocked,
-    loadMedia = loadMedia,
-  )
-}
-
 @OptIn(UnstableApi::class)
 @Composable
-private fun ChatMediaPlayerCard(
+internal fun ChatMediaPlayerCard(
   content: ChatMessageContent,
   kind: GatewayMediaKind,
   playbackBlocked: Boolean,
@@ -336,11 +300,14 @@ private fun ChatMediaPlayerCard(
     released: ExoPlayer,
     releasedFile: File?,
   ) {
-    if (player === released) player = null
+    if (player === released) {
+      player = null
+      loading = false
+      isPlaying = false
+      positionMs = 0L
+    }
     if (tempFile === releasedFile) tempFile = null
     releasedFile?.delete()
-    isPlaying = false
-    positionMs = 0L
   }
 
   fun disposeUnclaimedPlayer(
@@ -362,21 +329,6 @@ private fun ChatMediaPlayerCard(
       intentGeneration = intentGeneration,
       onReleased = { clearPlayerState(requested, requestedFile) },
     )
-
-  fun registerPrepared(
-    prepared: ExoPlayer,
-    preparedFile: File?,
-    intentGeneration: Long,
-  ): Boolean =
-    ChatMediaPlaybackArbiter.registerPrepared(
-      player = prepared,
-      intentGeneration = intentGeneration,
-      onReleased = { clearPlayerState(prepared, preparedFile) },
-    )
-
-  fun pause() {
-    player?.let(ChatMediaPlaybackArbiter::pause)
-  }
 
   fun play() {
     if (playbackBlocked) return
@@ -456,7 +408,6 @@ private fun ChatMediaPlayerCard(
           }
 
           override fun onPlayerError(playbackException: PlaybackException) {
-            loading = false
             if (!ChatMediaPlaybackArbiter.release(created)) {
               disposeUnclaimedPlayer(created, prepared.tempFile)
             }
@@ -466,7 +417,13 @@ private fun ChatMediaPlayerCard(
       )
       player = created
       if (content.playback != "transcode") loading = false
-      if (!registerPrepared(created, prepared.tempFile, intentGeneration)) {
+      if (
+        !ChatMediaPlaybackArbiter.registerPrepared(
+          player = created,
+          intentGeneration = intentGeneration,
+          onReleased = { clearPlayerState(created, prepared.tempFile) },
+        )
+      ) {
         disposeUnclaimedPlayer(created, prepared.tempFile)
         return@launch
       }
@@ -514,28 +471,21 @@ private fun ChatMediaPlayerCard(
     }
   }
 
-  if (kind == GatewayMediaKind.Video) {
-    VideoPlayerSurface(
+  val presentation =
+    MediaPlaybackPresentation(
       content = content,
-      player = player,
       loading = loading,
-      preparingPlayback = loading && content.playback == "transcode",
       isPlaying = isPlaying,
       playbackBlocked = playbackBlocked,
       error = error,
-      onToggle = { if (isPlaying) pause() else play() },
+      onToggle = { if (isPlaying) player?.let(ChatMediaPlaybackArbiter::pause) else play() },
     )
+  if (kind == GatewayMediaKind.Video) {
+    presentation.VideoPlayerSurface(player)
   } else {
-    AudioPlayerSurface(
-      content = content,
-      loading = loading,
-      preparingPlayback = loading && content.playback == "transcode",
-      isPlaying = isPlaying,
-      playbackBlocked = playbackBlocked,
-      error = error,
+    presentation.AudioPlayerSurface(
       positionMs = positionMs,
       durationMs = durationMs,
-      onToggle = { if (isPlaying) pause() else play() },
       onSeek = { value ->
         val target = value.toLong().coerceIn(0L, durationMs.coerceAtLeast(0L))
         positionMs = target
@@ -546,17 +496,19 @@ private fun ChatMediaPlayerCard(
   }
 }
 
+private data class MediaPlaybackPresentation(
+  val content: ChatMessageContent,
+  val loading: Boolean,
+  val isPlaying: Boolean,
+  val playbackBlocked: Boolean,
+  val error: String?,
+  val onToggle: () -> Unit,
+)
+
 @Composable
-private fun AudioPlayerSurface(
-  content: ChatMessageContent,
-  loading: Boolean,
-  preparingPlayback: Boolean,
-  isPlaying: Boolean,
-  playbackBlocked: Boolean,
-  error: String?,
+private fun MediaPlaybackPresentation.AudioPlayerSurface(
   positionMs: Long,
   durationMs: Long,
-  onToggle: () -> Unit,
   onSeek: (Float) -> Unit,
   seekEnabled: Boolean,
 ) {
@@ -599,21 +551,14 @@ private fun AudioPlayerSurface(
             style = ClawTheme.type.body,
             color = ClawTheme.colors.text,
           )
-          val status =
-            when {
-              error != null -> error
-              preparingPlayback -> nativeString("Preparing playback…")
-              playbackBlocked -> nativeString("Paused for voice playback")
-              else -> null
-            }
-          status?.let { Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted) }
+          MediaPlaybackStatus()
         }
       }
       Slider(
         value = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L)).toFloat(),
         onValueChange = onSeek,
         valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
-        enabled = seekEnabled && durationMs > 0L && playerControlsAvailable(error, playbackBlocked),
+        enabled = seekEnabled && durationMs > 0L && error == null && !playbackBlocked,
       )
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(formatVoiceNoteDuration(positionMs), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
@@ -625,16 +570,7 @@ private fun AudioPlayerSurface(
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun VideoPlayerSurface(
-  content: ChatMessageContent,
-  player: ExoPlayer?,
-  loading: Boolean,
-  preparingPlayback: Boolean,
-  isPlaying: Boolean,
-  playbackBlocked: Boolean,
-  error: String?,
-  onToggle: () -> Unit,
-) {
+private fun MediaPlaybackPresentation.VideoPlayerSurface(player: ExoPlayer?) {
   val ratio =
     remember(content.width, content.height) {
       val width = content.width?.takeIf { it > 0 }
@@ -683,23 +619,21 @@ private fun VideoPlayerSurface(
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
-    val status =
-      when {
-        error != null -> error
-        preparingPlayback -> nativeString("Preparing playback…")
-        playbackBlocked -> nativeString("Paused for voice playback")
-        else -> null
-      }
-    status?.let {
-      Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-    }
+    MediaPlaybackStatus()
   }
 }
 
-private fun playerControlsAvailable(
-  error: String?,
-  playbackBlocked: Boolean,
-): Boolean = error == null && !playbackBlocked
+@Composable
+private fun MediaPlaybackPresentation.MediaPlaybackStatus() {
+  val status =
+    when {
+      error != null -> error
+      loading && content.playback == "transcode" -> nativeString("Preparing playback…")
+      playbackBlocked -> nativeString("Paused for voice playback")
+      else -> null
+    }
+  status?.let { Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted) }
+}
 
 @OptIn(UnstableApi::class)
 private suspend fun prepareMediaSource(
@@ -718,7 +652,8 @@ private suspend fun prepareMediaSource(
         retryPreparingPlayback = false,
       )
     }
-    is GatewayLoadedMedia.Streaming ->
+
+    is GatewayLoadedMedia.Streaming -> {
       PreparedMediaSource(
         uri = loaded.url,
         mimeType = loaded.mimeType,
@@ -727,6 +662,7 @@ private suspend fun prepareMediaSource(
         tempFile = null,
         retryPreparingPlayback = loaded.retryPreparingPlayback,
       )
+    }
   }
 }
 
@@ -742,11 +678,9 @@ private suspend fun writeBufferedMediaFile(
         file.writeBytes(bytes)
       }
     }
-  } catch (error: CancellationException) {
+  } catch (error: Throwable) {
     withContext(NonCancellable + Dispatchers.IO) { created?.delete() }
-    throw error
-  } catch (_: Throwable) {
-    withContext(NonCancellable + Dispatchers.IO) { created?.delete() }
+    if (error is CancellationException) throw error
     null
   }
 }

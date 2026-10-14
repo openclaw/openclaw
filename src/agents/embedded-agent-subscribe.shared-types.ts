@@ -1,8 +1,9 @@
+import type { PreparedReplyTranscriptStart } from "../auto-reply/get-reply-options.types.js";
 /**
  * Shared display and chunking types for embedded-agent subscription handlers.
  */
 import type { AgentCommandOutputEventFields } from "../infra/agent-activity-events.js";
-import type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
+export type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 
 /** Rendering mode for completed tool results in subscribed replies. */
 export type ToolResultFormat = "markdown" | "plain";
@@ -11,6 +12,8 @@ export type ToolProgressDetailMode = "explain" | "raw";
 
 export type EmbeddedAgentEvent = {
   stream: string;
+  /** Internal callback facts; never included in publicly emitted event data. */
+  transcriptStart?: PreparedReplyTranscriptStart | null;
   data: Record<string, unknown> &
     Omit<Partial<AgentCommandOutputEventFields>, "phase" | "status"> & {
       phase?: string;
@@ -22,5 +25,3 @@ export type EmbeddedAgentEvent = {
     };
   sessionKey?: string;
 };
-
-export type { BlockReplyChunking };

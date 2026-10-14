@@ -19,14 +19,18 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatQuestionTest {
   private val json = chatControllerTestJson
   private val ChatController.onlyQuestion: ChatQuestionPrompt
@@ -52,6 +56,97 @@ class ChatQuestionTest {
 
     assertEquals(mapOf("meal" to listOf("Pizza", "Tacos", "Salad")), draft.answers(listOf(question)))
   }
+
+  @Test
+  fun richChoicesSubmitCanonicalValuesAndKeepCustomTitles() {
+    val parts =
+      question.copy(
+        options = listOf(QuestionOption("Bolt", value = "part:m4"), QuestionOption("Bolt", value = "part:m6")),
+        presentation = "form",
+      )
+    val draft = ChatQuestionDraft().toggle(parts, "part:m6").toggle(parts, "part:m4").setOther(parts, "Bolt")
+    assertEquals(mapOf("meal" to listOf("part:m4", "part:m6", "Bolt")), draft.answers(listOf(parts)))
+    assertEquals(ChatQuestionDraft(), ChatQuestionDraft().toggle(parts, "Bolt"))
+    val prompt =
+      ChatQuestionPrompt(
+        record(status = "answered").copy(
+          questions = listOf(parts),
+          answers = QuestionAnswers(mapOf("meal" to listOf("part:m6"))),
+        ),
+      )
+    assertEquals("Bolt", terminalQuestionAnswer(prompt, parts, ChatQuestionStatus.Answered))
+  }
+
+  @Test
+  fun richDefaultsPreserveWhitespaceAndClearedOptionalAnswers() {
+    val tags = question.copy(options = emptyList(), presentation = "form", answerFormat = "lines", allowEmpty = true, defaultAnswers = listOf(" first ", "second"))
+    val draft = ChatQuestionDraft.fromQuestions(listOf(tags))
+    assertEquals(mapOf("meal" to listOf(" first ", "second")), draft.answers(listOf(tags)))
+    assertEquals(mapOf("meal" to emptyList<String>()), draft.setOther(tags, "").answers(listOf(tags)))
+    val legacy = json.decodeFromString<Question>("""{"questionId":"q","header":"Q","question":"Question","options":[]}""")
+    assertEquals(null, legacy.presentation)
+    assertEquals(null, legacy.answerFormat)
+  }
+
+  @Test
+  fun secretDraftPreservesBytesWhileNormalAnswersTrim() {
+    for (isSecret in listOf(false, true)) {
+      val textQuestion = question.copy(options = emptyList(), isSecret = isSecret)
+      for (value in listOf(" synthetic-value \t\n", "   ", "")) {
+        val normalized = if (isSecret) value else value.trim()
+        val expected = if (normalized.isEmpty()) null else mapOf("meal" to listOf(normalized))
+        assertEquals(expected, ChatQuestionDraft().setOther(textQuestion, value).answers(listOf(textQuestion)))
+      }
+    }
+  }
+
+  @Test
+  fun credentialSubmissionSendsEditedHostsAndRetainsOnlyStoredMarker() =
+    runTest {
+      val secret = question.copy(options = emptyList(), isSecret = true, secretStore = QuestionSecretStore("TASK_TOKEN", "secret", listOf("api.example.test")))
+      val pending = record().copy(questions = listOf(secret))
+      for (hosts in listOf(null, "uploads.example.test,\n api.example.test", "")) {
+        var request: String? = null
+        val controller =
+          createScriptedChatController {
+            respond("question.list", json.encodeToString(QuestionListResult(listOf(pending))))
+            respond("question.resolve") { params ->
+              request = params
+              """{"status":"answered","answers":{"answers":{"meal":["stored"]}}}"""
+            }
+          }
+        controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+        runCurrent()
+        controller.updateQuestionDraft(controller.onlyQuestion) {
+          it.setOther(secret, "  synthetic-value  ").copy(secretStoreAllowedHostsText = hosts)
+        }
+        controller.resolveQuestion(controller.onlyQuestion, checkNotNull(controller.onlyQuestion.draft.answers(pending.questions)))
+        runCurrent()
+        val params = json.parseToJsonElement(checkNotNull(request)).jsonObject
+        val expectedHosts =
+          when (hosts) {
+            null -> listOf("api.example.test")
+            "" -> emptyList()
+            else -> listOf("uploads.example.test", "api.example.test")
+          }
+        assertEquals(expectedHosts, params.getValue("secretStoreAllowedHosts").jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(
+          "  synthetic-value  ",
+          params
+            .getValue("answers")
+            .jsonObject
+            .getValue("answers")
+            .jsonObject
+            .getValue("meal")
+            .jsonArray
+            .single()
+            .jsonPrimitive.content,
+        )
+        assertEquals(QuestionAnswers(mapOf("meal" to listOf("stored"))), controller.onlyQuestion.record.answers)
+        assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
+        assertEquals("Answered", terminalQuestionAnswer(controller.onlyQuestion, secret, ChatQuestionStatus.Answered))
+      }
+    }
 
   @Test
   fun statusDistinguishesLocalRemoteAndExpiry() {
@@ -438,13 +533,18 @@ class ChatQuestionTest {
                 .content
             getCalls[id] = getCalls.getOrDefault(id, 0) + 1
             when (id) {
-              recoveredPending.id ->
+              recoveredPending.id -> {
                 json.encodeToString(
                   QuestionGetResult(
                     if (getCalls.getValue(id) == 1) recoveredPending else recoveredAnswered,
                   ),
                 )
-              newlyMissingPending.id -> json.encodeToString(QuestionGetResult(newlyMissingAnswered))
+              }
+
+              newlyMissingPending.id -> {
+                json.encodeToString(QuestionGetResult(newlyMissingAnswered))
+              }
+
               failingPending.id -> {
                 if (getCalls.getValue(id) == 1) {
                   fallbackFailed = true
@@ -452,7 +552,10 @@ class ChatQuestionTest {
                 }
                 json.encodeToString(QuestionGetResult(failingAnswered))
               }
-              else -> error("unexpected question id")
+
+              else -> {
+                error("unexpected question id")
+              }
             }
           }
         }

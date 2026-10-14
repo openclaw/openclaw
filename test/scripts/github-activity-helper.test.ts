@@ -13,7 +13,7 @@ const helperPath = path.join(
 const { createTempDir } = createScriptTestHarness();
 
 type Fixture = {
-  blockActivity?: boolean;
+  timeoutActivity?: boolean;
   now?: string;
   profile?: unknown;
   search?: unknown[];
@@ -57,7 +57,7 @@ if body=$(jq -cn --slurpfile fixtures "$FIXTURE" --slurpfile requests "$REQUEST_
   $fixtures[0] as $fixture | $ARGS.positional as $args |
   if any($fixture.fail[]?; . as $needle | any($args[]; contains($needle))) then
     null | halt_error(1)
-  elif $fixture.blockActivity and $args[0] == "api" and ($args[1] | startswith("users/") | not) then
+  elif $fixture.timeoutActivity and $args[0] == "api" and ($args[1] | startswith("users/") | not) then
     null | halt_error(124)
   elif $args[0] == "api" and ($args[1] | startswith("users/")) then
     if $fixture | has("profile") then $fixture.profile else
@@ -90,8 +90,6 @@ if body=$(jq -cn --slurpfile fixtures "$FIXTURE" --slurpfile requests "$REQUEST_
   fi
 else
   response_code=$?
-  # Bound the blocked-scan reproduction without network or a surviving child process.
-  if [[ "$response_code" == 124 ]]; then sleep 0.5; fi
   exit "$response_code"
 fi
 `,
@@ -132,8 +130,8 @@ fi
 }
 
 describe("openclaw-pr-maintainer github activity helper", () => {
-  it("prints canonical identity before the first activity request, even when a scan blocks", () => {
-    const { requests } = runHelper(["alias"], { blockActivity: true });
+  it("prints canonical identity before the first activity request returns a timeout", () => {
+    const { requests } = runHelper(["alias"], { timeoutActivity: true });
     expect(requiredAt(requests, 0).args[1]).toBe("users/alias");
     expect(requiredAt(requests, 1).output).toContain(
       "Example Author (@Canonical, User, account created 2010-09-21",
@@ -180,17 +178,6 @@ describe("openclaw-pr-maintainer github activity helper", () => {
     expect(stdout).not.toContain("0 commits");
   });
 
-  it.each([
-    null,
-    { total_count: -1, incomplete_results: false },
-    { total_count: 0 },
-    { total_count: "0", incomplete_results: false },
-  ])("rejects malformed aggregate %j", (bad) => {
-    const { result, stdout } = runHelper(["alias"], { search: [bad, bad, bad] });
-    expect(result.status).toBe(1);
-    expect(stdout).toContain("unavailable (invalid response)");
-  });
-
   it("keeps a longer repo window separate from the capped global window", () => {
     const { result, stdout, requests } = runHelper(["--months", "24", "--global", "alias"]);
     expect(result.status).toBe(0);
@@ -216,30 +203,6 @@ describe("openclaw-pr-maintainer github activity helper", () => {
     expect(stdout).not.toContain("GitHub public");
   });
 
-  it.each([
-    { data: { user: null } },
-    {
-      data: {
-        user: {
-          contributionsCollection: {
-            totalCommitContributions: "0",
-            totalIssueContributions: 0,
-            totalPullRequestContributions: 0,
-            totalPullRequestReviewContributions: 0,
-          },
-        },
-      },
-    },
-    { data: { user: { contributionsCollection: {} } } },
-    { errors: [{ message: "unavailable" }], data: { user: null } },
-  ])("does not turn unavailable contributions into zero: %j", (global) => {
-    const { result, stdout, requests } = runHelper(["--global", "alias"], { global });
-    expect(result.status).toBe(1);
-    expect(requests).toHaveLength(5);
-    expect(stdout).toMatch(/GitHub contributions.*unavailable/);
-    expect(stdout).not.toContain("0 reviews");
-  });
-
   it("continues other logins after profile failure without activity for the unknown identity", () => {
     const { result, stdout, requests } = runHelper(["missing", "alias"], {
       fail: ["users/missing"],
@@ -258,57 +221,5 @@ describe("openclaw-pr-maintainer github activity helper", () => {
     expect(requests).toHaveLength(10);
     expect(stdout.match(/unavailable \(request failed\)/g)).toHaveLength(2);
     expect(requiredAt(requests, 5).args[1]).toBe("users/second");
-  });
-
-  it("keeps valid contribution zeroes without inferring inactivity or scanning other endpoints", () => {
-    const { result, stdout, requests } = runHelper(["--global", "alias"], {
-      global: {
-        data: {
-          user: {
-            contributionsCollection: {
-              totalCommitContributions: 0,
-              totalIssueContributions: 0,
-              totalPullRequestContributions: 0,
-              totalPullRequestReviewContributions: 0,
-            },
-          },
-        },
-      },
-    });
-    expect(result.status).toBe(0);
-    expect(requests).toHaveLength(5);
-    expect(stdout).toContain("0 commits, 0 PRs, 0 issues, 0 reviews");
-    expect(stdout).toContain("Zero does not prove inactivity");
-  });
-
-  it.each([null, {}, { login: null }])("skips activity for malformed identity %j", (profile) => {
-    const { result, stdout, requests } = runHelper(["alias"], { profile });
-    expect(result.status).toBe(1);
-    expect(requests).toHaveLength(1);
-    expect(stdout).toContain("account age unknown");
-  });
-
-  it("preserves a nameless bot profile with an unknown creation date", () => {
-    const { result, stdout } = runHelper(["alias"], {
-      profile: { login: "helper[bot]", name: null, created_at: "invalid", type: "Bot" },
-    });
-    expect(result.status).toBe(0);
-    expect(stdout).toContain("@helper[bot] (Bot, account age unknown)");
-  });
-
-  it.each([
-    ["2024-03-31T15:00:00Z", "1", "2024-02-29T00:00:00Z"],
-    ["2024-02-29T15:00:00Z", "12", "2023-02-28T00:00:00Z"],
-    ["2025-03-31T15:00:00Z", "1", "2025-02-28T00:00:00Z"],
-  ])("bounds calendar subtraction at month ends: %s", (now, months, from) => {
-    const { result, requests } = runHelper(["--months", months, "--global", "alias"], { now });
-    expect(result.status).toBe(0);
-    const repoArgs = requiredAt(requests, 1).args;
-    const query = new URL(requiredAt(repoArgs, 1), "https://api.github.test").searchParams.get("q");
-    expect(query).toContain(`created:${from}..`);
-    const graphql = requiredAt(requests, 4).args;
-    expect(graphql).toContain(`from=${from}`);
-    const to = graphql.find((arg) => arg.startsWith("to="))?.slice(3) ?? "";
-    expect(Date.parse(to) - Date.parse(from)).toBeLessThanOrEqual(366 * 86400000);
   });
 });

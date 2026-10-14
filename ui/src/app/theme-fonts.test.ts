@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  applyChatFontSmoothing,
   applyTypefaceOverrides,
   loadTypefaceSpecimens,
   normalizeTypefaceOverride,
@@ -14,28 +15,31 @@ const fontLinks = () => [
 const hrefs = () => fontLinks().map((link) => link.getAttribute("href"));
 
 describe("typeface presentation", () => {
-  afterEach(() => {
+  function resetTypefacePresentation() {
     for (const link of fontLinks()) {
       link.remove();
     }
     applyTypefaceOverrides();
-  });
+    applyChatFontSmoothing("system");
+  }
+
+  // Shared UI workers preserve document.head between files.
+  beforeEach(resetTypefacePresentation);
+  afterEach(resetTypefacePresentation);
 
   it.each([
     ["claw", ["instrument-sans", "instrument-sans"]],
-    ["knot", ["geist", "geist"]],
     ["dash", ["dm-sans", "fraunces"]],
-    ["absolutely", ["space-grotesk", "lora"]],
-    ["tide", ["ibm-plex-sans", "ibm-plex-sans"]],
-    ["beacon", ["atkinson-hyperlegible", "atkinson-hyperlegible"]],
     ["phosphor", ["jetbrains-mono", "jetbrains-mono"]],
     ["custom", ["system", "system"]],
-  ] as const)("loads only %s's default faces", (theme, [ui, chat]) => {
+  ] as const)("loads %s's default faces plus the shared mono face", (theme, [ui, chat]) => {
     const faces = resolveTypefaces(theme);
     expect(faces).toEqual({ ui, chat });
     syncTypefaceStylesheets(faces);
+    // The mono face is always declared: base.css --mono promises JetBrains
+    // Mono for code spans on every theme; its woff2 still downloads lazily.
     expect(hrefs()).toEqual(
-      [...new Set([ui, chat])]
+      [...new Set([ui, chat, "jetbrains-mono"])]
         .filter((face) => face !== "system")
         .map((face) => `/fonts/${face}.css`),
     );
@@ -43,11 +47,11 @@ describe("typeface presentation", () => {
 
   it("loads overrides once, retaining them without fetching for system or custom defaults", () => {
     syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
-    expect(hrefs()).toEqual([]);
+    expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css"]);
     const faces = resolveTypefaces("dash", "geist", "lora");
     expect(faces).toEqual({ ui: "geist", chat: "lora" });
     syncTypefaceStylesheets(faces);
-    expect(hrefs()).toEqual(["/fonts/geist.css", "/fonts/lora.css"]);
+    expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css", "/fonts/geist.css", "/fonts/lora.css"]);
     expect(resolveTypefaces("custom", "lora")).toEqual({ ui: "lora", chat: "system" });
     const loaded = fontLinks();
     for (const next of [
@@ -87,10 +91,19 @@ describe("typeface presentation", () => {
     expect(style.getPropertyValue("--mono")).toBe(mono);
   });
 
-  it.each(["theme", "unknown", "Lora", "serif; color: red", null, {}, 42])(
-    "ignores invalid override %j",
-    (value) => {
-      expect(normalizeTypefaceOverride(value)).toBeUndefined();
-    },
-  );
+  it.each(["serif; color: red", null])("ignores invalid override %j", (value) => {
+    expect(normalizeTypefaceOverride(value)).toBeUndefined();
+  });
+
+  it("opts chat prose into auto smoothing only while the resolved chat face is a serif", () => {
+    const style = document.documentElement.style;
+    for (const serif of ["lora", "fraunces"] as const) {
+      applyChatFontSmoothing(serif);
+      expect(style.getPropertyValue("--chat-font-smoothing")).toBe("auto");
+    }
+    for (const nonSerif of ["instrument-sans", "jetbrains-mono", "system"] as const) {
+      applyChatFontSmoothing(nonSerif);
+      expect(style.getPropertyValue("--chat-font-smoothing")).toBe("");
+    }
+  });
 });

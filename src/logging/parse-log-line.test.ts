@@ -85,6 +85,22 @@ describe("parseLogLine", () => {
     expect(parsed?.level).toBe("warn");
   });
 
+  it("preserves JSON console fields without overriding tslog metadata", () => {
+    const record = { level: "warn", subsystem: "gateway", message: "console warning" };
+    expect(parseLogLine(JSON.stringify(record))).toMatchObject(record);
+    expect(
+      parseLogLine(
+        JSON.stringify({
+          ...record,
+          _meta: { logLevelName: "ERROR", name: '{"subsystem":"worker"}' },
+        }),
+      ),
+    ).toMatchObject({ level: "error", subsystem: "worker" });
+    expect(
+      parseLogLine(JSON.stringify({ level: 4, subsystem: false, message: "control" })),
+    ).toMatchObject({ level: undefined, subsystem: undefined, message: "control" });
+  });
+
   it("returns null for invalid JSON", () => {
     expect(parseLogLine("not-json")).toBeNull();
     expect(parseLogLine("null")).toBeNull();

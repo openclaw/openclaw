@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements channel.adapters behavior.
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -24,7 +23,11 @@ export const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
   sectionKey: "nextcloud-talk",
   listAccountIds: listNextcloudTalkAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveNextcloudTalkAccount),
-  inspectAccount: adaptScopedAccountAccessor(inspectNextcloudTalkAccount),
+  inspectAccount: (cfg, accountId) => {
+    const account = inspectNextcloudTalkAccount({ cfg, accountId });
+    // Diagnostics expose presence only; operational callers retain the actual server URL.
+    return { ...account, baseUrl: account.baseUrl ? "[set]" : "[missing]" };
+  },
   defaultAccountId: resolveDefaultNextcloudTalkAccountId,
   clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,

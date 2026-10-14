@@ -88,7 +88,7 @@ describe("createScopedAuthProfileStore", () => {
   };
 
   it("forwards only the selected persisted profile to a transport-owning harness", () => {
-    expect(createScopedAuthProfileStore(store, "openai:work")).toEqual({
+    expect(createScopedAuthProfileStore(store, ["openai:work"])).toEqual({
       version: 1,
       profiles: { "openai:work": store.profiles["openai:work"] },
       runtimePersistedProfileIds: ["openai:work"],
@@ -97,21 +97,8 @@ describe("createScopedAuthProfileStore", () => {
     });
   });
 
-  it("preserves an authoritative external profile classification", () => {
-    expect(createScopedAuthProfileStore(store, ["openai:external", "anthropic:work"])).toEqual({
-      version: 1,
-      profiles: {
-        "openai:external": store.profiles["openai:external"],
-        "anthropic:work": store.profiles["anthropic:work"],
-      },
-      runtimePersistedProfileIds: ["anthropic:work"],
-      runtimeExternalProfileIds: ["openai:external"],
-      runtimeExternalProfileIdsAuthoritative: true,
-    });
-  });
-
   it("returns an empty store when no requested profile exists", () => {
-    expect(createScopedAuthProfileStore(store, "openai:missing")).toEqual({
+    expect(createScopedAuthProfileStore(store, ["openai:missing"])).toEqual({
       version: 1,
       profiles: {},
     });

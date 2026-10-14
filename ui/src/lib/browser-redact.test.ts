@@ -1,10 +1,10 @@
 // @vitest-environment node
 // Control UI tests cover browser redact behavior.
 import { describe, expect, it } from "vitest";
-import { redactToolDetail, redactToolPayloadText } from "./browser-redact.ts";
+import { redactToolDetail } from "./browser-redact.ts";
 
 describe("browser tool detail redaction", () => {
-  it("redacts tool detail credential families without Node config imports", () => {
+  it("redacts credentials while preserving diagnostic paths", () => {
     const redacted = redactToolDetail(
       [
         "Authorization: Basic dXNlcjpzdXBlcnNlY3JldHBhc3N3b3Jk",
@@ -28,7 +28,6 @@ describe("browser tool detail redaction", () => {
     expect(redacted).toContain("[redacted private key]");
     expect(redacted).toContain("cookie: [redacted]");
     expect(redacted).toContain("Bearer [redacted]");
-    expect(redacted).toContain("[redacted path]");
     expect(redacted).not.toContain("supersecretpassword");
     expect(redacted).not.toContain("longOAuthRefreshTokenValue");
     expect(redacted).not.toContain("clientSecretValueThatShouldNotRender");
@@ -39,7 +38,7 @@ describe("browser tool detail redaction", () => {
     expect(redacted).not.toContain("abc123");
     expect(redacted).not.toContain("verySensitiveCookieValue");
     expect(redacted).not.toContain("abcdefghijkl");
-    expect(redacted).not.toContain("/Users/alice/private/config.json");
+    expect(redacted).toContain("/Users/alice/private/config.json");
     for (const masked of ["fw-CCC...CCCC", "fw_AAA...AAAA", "fpk_BB...BBBB"]) {
       expect(redactToolDetail(masked)).toBe(masked);
     }
@@ -87,42 +86,34 @@ describe("browser tool detail redaction", () => {
     expect(redactToolDetail(`{"awsSecretAccessKey":"${secret}"}`)).not.toContain(secret);
   });
 
-  it("exposes the tool payload redaction name used by shared display modules", () => {
-    expect(redactToolPayloadText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
-      "OPENAI_API_KEY=sk-123...cdef",
-    );
-  });
-
   it.each([
     ["leading split", "abcde😀xxxxxxxxwxyz", "abcde...wxyz"],
     ["trailing split", "abcdefghijklm😀xyz", "abcdef...xyz"],
     ["intact leading pair", "abcd😀xxxxxxxxwxyz", "abcd😀...wxyz"],
     ["intact trailing pair", "abcdefghijklmn😀xy", "abcdef...😀xy"],
   ])("masks tool payload tokens with a UTF-16-safe %s", (_label, token, masked) => {
-    expect(redactToolPayloadText(`{"accessToken":"${token}"}`)).toBe(`{"accessToken":"${masked}"}`);
+    expect(redactToolDetail(`{"accessToken":"${token}"}`)).toBe(`{"accessToken":"${masked}"}`);
   });
 
   it("does not trust mask-shaped input as already redacted", () => {
-    expect(redactToolPayloadText("OPENAI_API_KEY=abcde...wxyz")).toBe(
-      "OPENAI_API_KEY=abcde....wxyz",
-    );
+    expect(redactToolDetail("OPENAI_API_KEY=abcde...wxyz")).toBe("OPENAI_API_KEY=abcde....wxyz");
   });
 
   it("redacts replacement-template text literally without changing surrounding text", () => {
     const markerLike = "\u{e000}0\u{e001}";
-    expect(redactToolPayloadText(`${markerLike} OPENAI_API_KEY=$\`abcdxxxxxxxxwxyz`)).toBe(
+    expect(redactToolDetail(`${markerLike} OPENAI_API_KEY=$\`abcdxxxxxxxxwxyz`)).toBe(
       `${markerLike} OPENAI_API_KEY=$\`abcd...wxyz`,
     );
   });
 
   it("redacts the captured value when key and value repeat", () => {
-    expect(redactToolPayloadText("LONG_LONG_LONG_TOKEN=LONG_LONG_LONG_TOKEN")).toBe(
+    expect(redactToolDetail("LONG_LONG_LONG_TOKEN=LONG_LONG_LONG_TOKEN")).toBe(
       "LONG_LONG_LONG_TOKEN=LONG_L...OKEN",
     );
   });
 
   it("fully redacts a nested credential after the outer match", () => {
-    expect(redactToolPayloadText('client_secret: "TOKEN=abcdefghijklmno&abcdefghij"')).toBe(
+    expect(redactToolDetail('client_secret: "TOKEN=abcdefghijklmno&abcdefghij"')).toBe(
       'client_secret: "TOKEN=[redacted]"',
     );
   });

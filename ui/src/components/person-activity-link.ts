@@ -9,7 +9,7 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
  */
 export type PersonActivityRouting = {
   basePath: string;
-  navigate: (personId: string) => void;
+  navigate: (personId: string, label?: string) => void;
 };
 
 type PersonActivityLink = { href: string; open: (event: MouseEvent) => void };
@@ -27,30 +27,30 @@ export function personActivityRouting(
 ): PersonActivityRouting {
   return {
     basePath: context.basePath,
-    navigate: (personId: string) => {
+    navigate: (personId: string, label?: string) => {
       beforeNavigate?.();
-      context.navigate("activity", activityPersonLocation(personId, context.basePath));
+      context.navigate("activity", activityPersonLocation(personId, context.basePath, label));
     },
   };
 }
 
-/** Null when the host supplied no routing, or the actor carries no usable person id. */
 export function personActivityLink(
   personId: string | null | undefined,
   routing: PersonActivityRouting | undefined,
+  label?: string,
 ): PersonActivityLink | null {
   const id = personId?.trim();
   if (!id || !routing) {
     return null;
   }
   return {
-    href: activityPersonLocation(id, routing.basePath).href,
+    href: activityPersonLocation(id, routing.basePath, label).href,
     open: (event: MouseEvent) => {
       if (!shouldHandleNavigationClick(event)) {
         return;
       }
       event.preventDefault();
-      routing.navigate(id);
+      routing.navigate(id, label);
     },
   };
 }
@@ -71,7 +71,7 @@ export function renderPersonName(
 /**
  * Wraps an avatar that already sits beside its own labelled name link. The twin is hidden
  * from assistive tech and the tab order so one identity never yields two targets; see the
- * focusable filter in session-progress-hovercard.runtime.ts.
+ * focusable filter in session-progress-hovercard.runtime.tsx.
  */
 export function renderPersonAvatarLink(avatar: unknown, link: PersonActivityLink | null) {
   return link

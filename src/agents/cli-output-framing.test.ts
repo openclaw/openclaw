@@ -2,16 +2,7 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { describe, expect, it, vi } from "vitest";
 import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
+import { claudeStreamEvent, joinJsonlFrames } from "./cli-output.test-helpers.js";
 
 function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number) {
   return claudeStreamEvent({
@@ -524,6 +515,46 @@ describe("createCliJsonlStreamingParser framing", () => {
   });
 
   it.each([
+    {
+      name: "uses complete tool args from content_block_start when no deltas arrive",
+      frames: [
+        claudeBlockStart(
+          {
+            type: "tool_use",
+            id: "toolu_start",
+            name: "Bash",
+            input: { command: "ls -la" },
+          },
+          0,
+        ),
+        claudeBlockStop(0),
+      ],
+      expected: [
+        {
+          toolCallId: "toolu_start",
+          name: "Bash",
+          kind: "tool_use",
+          args: { command: "ls -la" },
+        },
+      ],
+    },
+    {
+      name: "keeps an explicit empty streamed input over the start snapshot",
+      frames: [
+        claudeBlockStart(
+          {
+            type: "tool_use",
+            id: "toolu_empty",
+            name: "Bash",
+            input: { command: "stale --from-start-block" },
+          },
+          0,
+        ),
+        claudeInputJsonDelta("{}", 0),
+        claudeBlockStop(0),
+      ],
+      expected: [{ toolCallId: "toolu_empty", name: "Bash", kind: "tool_use", args: {} }],
+    },
     {
       name: "reassembles streamed tool args from input_json_delta chunks",
       frames: [

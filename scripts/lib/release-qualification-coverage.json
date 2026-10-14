@@ -1,0 +1,109 @@
+{
+  "schema": "openclaw.release-qualification-policy/v1",
+  "children": [
+    {
+      "key": "normalCi",
+      "workflow": "ci.yml",
+      "name": "CI",
+      "parentJobName": "Run normal full CI",
+      "dispatchName": "Dispatch CI",
+      "suffix": "-ci",
+      "requiredJobs": [
+        "openclaw/ci-gate"
+      ]
+    },
+    {
+      "key": "pluginPrereleaseIndependent",
+      "workflow": "plugin-prerelease.yml",
+      "name": "Plugin Prerelease",
+      "parentJobName": "Run plugin prerelease independent validation",
+      "dispatchName": "Dispatch plugin prerelease independent phase",
+      "suffix": "-plugin-prerelease-independent",
+      "requiredJobs": [
+        "Resolve target ref",
+        "Build plugin prerelease plan",
+        "plugin-prerelease-suite"
+      ]
+    },
+    {
+      "key": "pluginPrereleaseCandidate",
+      "workflow": "plugin-prerelease.yml",
+      "name": "Plugin Prerelease",
+      "parentJobName": "Run plugin prerelease candidate validation",
+      "dispatchName": "Dispatch plugin prerelease candidate phase",
+      "suffix": "-plugin-prerelease-candidate",
+      "requiredJobs": [
+        "Resolve target ref",
+        "Build plugin prerelease plan",
+        "plugin-prerelease-suite"
+      ]
+    },
+    {
+      "key": "releaseChecksIndependent",
+      "workflow": "openclaw-release-checks.yml",
+      "name": "OpenClaw Release Checks",
+      "parentJobName": "Run release checks independent validation",
+      "dispatchName": "Dispatch release checks independent phase",
+      "suffix": "-release-checks-independent",
+      "requiredJobs": [
+        "Verify release checks"
+      ]
+    },
+    {
+      "key": "releaseChecksCandidate",
+      "workflow": "openclaw-release-checks.yml",
+      "name": "OpenClaw Release Checks",
+      "parentJobName": "Run release checks candidate validation",
+      "dispatchName": "Dispatch release checks candidate phase",
+      "suffix": "-release-checks-candidate",
+      "requiredJobs": [
+        "Verify release checks"
+      ]
+    },
+    {
+      "key": "productPerformance",
+      "workflow": "openclaw-performance.yml",
+      "name": "OpenClaw Performance",
+      "parentJobName": "Run product performance evidence",
+      "dispatchName": "Dispatch OpenClaw Performance",
+      "suffix": "",
+      "requiredJobs": [
+        "Resolve target ref",
+        "OpenClaw source performance probes",
+        "Kova mock provider performance",
+        "Kova mock provider deep profile",
+        "Kova live OpenAI GPT 5.6 agent turn",
+        "Verify artifact-only report mode"
+      ]
+    }
+  ],
+  "requiredParentJobs": [
+    "Resolve target ref",
+    "Acquire full release candidate"
+  ],
+  "profiles": {
+    "beta": [
+      "normalCi",
+      "pluginPrereleaseIndependent",
+      "pluginPrereleaseCandidate",
+      "releaseChecksIndependent",
+      "releaseChecksCandidate"
+    ],
+    "stable": [
+      "normalCi",
+      "pluginPrereleaseIndependent",
+      "pluginPrereleaseCandidate",
+      "releaseChecksIndependent",
+      "releaseChecksCandidate",
+      "productPerformance"
+    ],
+    "full": [
+      "normalCi",
+      "pluginPrereleaseIndependent",
+      "pluginPrereleaseCandidate",
+      "releaseChecksIndependent",
+      "releaseChecksCandidate",
+      "productPerformance"
+    ]
+  }
+}

@@ -53,7 +53,6 @@ import {
   registerPiNodeHostCommands,
   type TestSessionCatalogProvider,
 } from "./pi-session-catalog.test-support.js";
-import { listPiSummaryPage } from "./pi-session-store.js";
 
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
@@ -140,24 +139,24 @@ describe("Pi session catalog", () => {
 
     const transcript = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 });
     expect(transcript.items.map((item) => [item.type, item.text])).toEqual([
-      ["userMessage", "hello"],
-      ["reasoning", "thinking"],
-      ["agentMessage", "hi"],
-      ["toolCall", 'bash\n{"command":"pwd"}'],
       ["toolResult", "bash\n/workspace"],
+      ["toolCall", 'bash\n{"command":"pwd"}'],
+      ["agentMessage", "hi"],
+      ["reasoning", "thinking"],
+      ["userMessage", "hello"],
     ]);
     const itemIds = transcript.items.flatMap((item) => (item.id ? [item.id] : []));
     expect(new Set(itemIds).size).toBe(itemIds.length);
 
     const latest = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 2 });
-    expect(latest.items.map((item) => item.type)).toEqual(["toolCall", "toolResult"]);
+    expect(latest.items.map((item) => item.type)).toEqual(["toolResult", "toolCall"]);
     expect(latest.nextCursor).toBeTruthy();
     const older = await readLocalPiTranscriptPage({
       threadId: "pi-session",
       limit: 2,
       cursor: latest.nextCursor,
     });
-    expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+    expect(older.items.map((item) => item.type)).toEqual(["agentMessage", "reasoning"]);
     const nonEmitted = Buffer.from(JSON.stringify({ offset: 2, extra: true }), "utf8").toString(
       "base64url",
     );
@@ -220,104 +219,6 @@ describe("Pi session catalog", () => {
         "local Pi sessions are unavailable in isolated state",
       );
     }
-  });
-
-  it("recognizes Pi sessions when the agent directory uses a symlinked path", async () => {
-    const sessionDirectory = await createPiStore();
-    const agentDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-real-"));
-    const symlinkParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-link-"));
-    const linkedAgentDirectory = path.join(symlinkParent, "agent");
-    temporaryDirectories.push(agentDirectory, symlinkParent);
-    await fs.mkdir(path.join(agentDirectory, "sessions"), { recursive: true });
-    await fs.rename(sessionDirectory, path.join(agentDirectory, "sessions", "project"));
-    await fs.symlink(
-      agentDirectory,
-      linkedAgentDirectory,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    process.env.PI_CODING_AGENT_SESSION_DIR = path.join(agentDirectory, "sessions", "project");
-    process.env.PI_CODING_AGENT_DIR = linkedAgentDirectory;
-
-    await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toEqual({
-      sessions: [expect.objectContaining({ threadId: "pi-session", canContinue: true })],
-    });
-  });
-
-  it("refreshes cached continuation eligibility without mutating prior summaries", async () => {
-    const sessionDirectory = await createPiStore(
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
-    const agentDirectory = path.dirname(path.dirname(sessionDirectory));
-    const unrelatedAgentDirectory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-pi-agent-unrelated-"),
-    );
-    temporaryDirectories.push(unrelatedAgentDirectory);
-    const baseEnv = {
-      ...process.env,
-      PI_CODING_AGENT_SESSION_DIR: sessionDirectory,
-      PI_CODING_AGENT_DIR: agentDirectory,
-    };
-
-    const first = await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
-    const firstSummary = first.summaries[0];
-    expect(firstSummary?.canContinue).toBe(true);
-
-    const second = await listPiSummaryPage(
-      { ...baseEnv, PI_CODING_AGENT_DIR: unrelatedAgentDirectory },
-      { offset: 0, limit: 20 },
-    );
-    expect(second.summaries[0]?.canContinue).toBe(false);
-    expect(second.summaries[0]).not.toBe(firstSummary);
-    expect(firstSummary?.canContinue).toBe(true);
-
-    const third = await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
-    expect(third.summaries[0]?.canContinue).toBe(true);
-    expect(firstSummary?.canContinue).toBe(true);
-  });
-
-  it("memoizes file candidates across cadence and re-walks after expiry", async () => {
-    const sessionDirectory = await createPiStore();
-    const baseEnv = {
-      ...process.env,
-      PI_CODING_AGENT_SESSION_DIR: sessionDirectory,
-      PI_CODING_AGENT_DIR: path.dirname(path.dirname(sessionDirectory)),
-    };
-    let now = 1_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const readdirSpy = vi.spyOn(fs, "readdir");
-    const statSpy = vi.spyOn(fs, "stat");
-    try {
-      await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
-      const readdirCount = readdirSpy.mock.calls.length;
-      const statCount = statSpy.mock.calls.length;
-
-      now += 31_999;
-      await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
-      expect(readdirSpy).toHaveBeenCalledTimes(readdirCount);
-      expect(statSpy).toHaveBeenCalledTimes(statCount);
-
-      now += 2;
-      await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
-      expect(readdirSpy.mock.calls.length).toBeGreaterThan(readdirCount);
-      expect(statSpy.mock.calls.length).toBeGreaterThan(statCount);
-    } finally {
-      nowSpy.mockRestore();
-      readdirSpy.mockRestore();
-      statSpy.mockRestore();
-    }
-  });
-
-  it("summarizes and pages a large session within transport limits", async () => {
-    await createPiStore("x".repeat(600 * 1024));
-    const listed = await listLocalPiSessionPage({ limit: 20 });
-    expect(listed.sessions[0]?.name).toBe("Pi catalog session");
-    const transcript = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 });
-    const answer = transcript.items.find((item) => item.type === "agentMessage");
-    expect(answer?.text?.endsWith("…")).toBe(true);
-    expect(Buffer.byteLength(JSON.stringify(transcript), "utf8")).toBeLessThan(20 * 1024 * 1024);
   });
 
   it("keeps truncated tool arguments on a valid UTF-16 boundary", async () => {
@@ -384,58 +285,13 @@ describe("Pi session catalog", () => {
 
     const transcript = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 });
     expect(transcript.items.map((item) => [item.type, item.text])).toEqual([
-      ["userMessage", "legacy hello"],
-      ["userMessage", "[image: image/png]"],
-      ["toolCall", "bash\npwd"],
-      ["toolResult", "/workspace"],
-      ["other", "review\nvisible note"],
       ["other", "legacy-review\nlegacy visible note"],
+      ["other", "review\nvisible note"],
+      ["toolResult", "/workspace"],
+      ["toolCall", "bash\npwd"],
+      ["userMessage", "[image: image/png]"],
+      ["userMessage", "legacy hello"],
     ]);
-  });
-
-  it("resolves names anywhere in the file and honors a later clear", async () => {
-    const directory = await createPiStore();
-    const file = path.join(directory, "session.jsonl");
-    const entries = [
-      {
-        type: "session",
-        version: 3,
-        id: "pi-session",
-        timestamp: "2026-07-13T10:00:00Z",
-        cwd: "/workspace",
-      },
-      {
-        type: "message",
-        id: "u",
-        parentId: null,
-        timestamp: "2026-07-13T10:00:01Z",
-        message: { role: "user", content: "fallback title" },
-      },
-      {
-        type: "session_info",
-        id: "n",
-        parentId: "u",
-        timestamp: "2026-07-13T10:00:02Z",
-        name: "Assigned title",
-      },
-      {
-        type: "message",
-        id: "a",
-        parentId: "n",
-        timestamp: "2026-07-13T10:00:03Z",
-        message: { role: "assistant", content: [{ type: "text", text: "x".repeat(40 * 1024) }] },
-      },
-    ];
-    await fs.writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
-    const expireCandidates = usePiCandidateCacheClock();
-    expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe("Assigned title");
-
-    await fs.appendFile(
-      file,
-      `${JSON.stringify({ type: "session_info", id: "clear", parentId: "a", timestamp: "2026-07-13T10:00:04Z", name: "" })}\n`,
-    );
-    expireCandidates();
-    expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe("fallback title");
   });
 
   it("indexes final records without a trailing newline", async () => {
@@ -468,66 +324,6 @@ describe("Pi session catalog", () => {
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe(
       "No final newline",
     );
-  });
-
-  it("rebuilds metadata after a same-file replacement grows", async () => {
-    const directory = await createPiStore("old session");
-    const file = path.join(directory, "session.jsonl");
-    const expireCandidates = usePiCandidateCacheClock();
-    await listLocalPiSessionPage({ limit: 20 });
-
-    const entries = [
-      {
-        type: "session",
-        version: 3,
-        id: "pi-replaced-session",
-        timestamp: "2026-07-13T11:00:00Z",
-        cwd: "/workspace/replaced",
-      },
-      {
-        type: "message",
-        id: "replacement-user",
-        parentId: null,
-        timestamp: "2026-07-13T11:00:01Z",
-        message: { role: "user", content: `replacement ${"x".repeat(4_096)}` },
-      },
-      {
-        type: "session_info",
-        id: "replacement-name",
-        parentId: "replacement-user",
-        timestamp: "2026-07-13T11:00:02Z",
-        name: "Replacement session",
-      },
-    ];
-    await fs.writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
-    expireCandidates();
-
-    await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toMatchObject({
-      sessions: [
-        expect.objectContaining({
-          threadId: "pi-replaced-session",
-          name: "Replacement session",
-          cwd: "/workspace/replaced",
-        }),
-      ],
-    });
-  });
-
-  it("does not reuse transcript paths after the configured store changes", async () => {
-    await createPiStore("old store");
-    await listLocalPiSessionPage({ limit: 20 });
-    await expect(
-      readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 }),
-    ).resolves.toMatchObject({
-      items: expect.arrayContaining([expect.objectContaining({ text: "old store" })]),
-    });
-
-    await createPiStore("new store");
-    await expect(
-      readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 }),
-    ).resolves.toMatchObject({
-      items: expect.arrayContaining([expect.objectContaining({ text: "new store" })]),
-    });
   });
 
   it("paginates, searches, and reads beyond the newest summary batch", async () => {
@@ -874,6 +670,7 @@ describe("Pi session catalog", () => {
       kind: "node",
       nodeId: "node-1",
       command: PI_TERMINAL_RESUME_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ threadId: "pi-remote" }),
       cwd: "/remote/workspace",
       title: "pi --session pi-remote…",

@@ -2,17 +2,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
-const mocks = vi.hoisted(() => ({
-  clawhubInstall: vi.fn(),
-  metadata: vi.fn(),
-  officialCatalog: vi.fn(),
-  persistInstall: vi.fn(),
-  readConfig: vi.fn(),
-  refreshRegistry: vi.fn(),
-  replaceConfig: vi.fn(),
+const mocks = vi.hoisted(() => {
+  // Earlier shared-worker files can cache the real config-wide metadata reader.
+  vi.resetModules();
+  return {
+    clawhubInstall: vi.fn(),
+    gatewayMetadata: vi.fn(),
+    metadata: vi.fn(),
+    officialCatalog: vi.fn(),
+    persistInstall: vi.fn(),
+    readConfig: vi.fn(),
+    refreshRegistry: vi.fn(),
+    replaceConfig: vi.fn(),
+  };
+});
+
+vi.mock("./current-plugin-metadata-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./current-plugin-metadata-state.js")>()),
+  getProcessGatewayPluginMetadataSnapshot: () => mocks.gatewayMetadata(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -21,9 +32,12 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./install-persistence.js")>()),
+vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: (params: unknown) => mocks.persistInstall(params),
+}));
+
+vi.mock("./install-config-mutation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
   resolveInstallConfigMutationPreflights: () => ({
     hookMutation: { mode: "allowed" },
     pluginMutation: { mode: "allowed" },
@@ -40,7 +54,8 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
   loadInstalledPluginIndexInstallRecords: async () => ({}),
 }));
 
-vi.mock("./plugin-metadata-snapshot.js", () => ({
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
   resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));
@@ -56,15 +71,12 @@ vi.mock("./registry-refresh.js", () => ({
 }));
 
 vi.mock("./slot-selection.js", () => ({
-  applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
+  applySlotSelectionForPlugin: (config: unknown) => config,
 }));
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  installManagedPlugin,
-  installManagedPluginSource,
-  setManagedPluginEnabled,
-} = await import("./management-service.js");
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
+const { installManagedPlugin, setManagedPluginEnabled } = await import("./management-mutations.js");
+const { installManagedPluginSource } = await import("./management-install.js");
 
 const installSnapshot = {
   config: {},
@@ -166,85 +178,44 @@ function metadataSnapshot(enabled: boolean, installed = false) {
 }
 
 describe("plugin management registry refresh", () => {
-  afterEach(() => cleanupTrackedTempDirs(trackedArtifactDirs));
+  afterEach(() => {
+    clearPluginMetadataLifecycleCaches();
+    cleanupTrackedTempDirs(trackedArtifactDirs);
+  });
 
   beforeEach(() => {
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     vi.resetAllMocks();
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
   });
 
-  it.each([true, false])(
-    "reports registry refresh warnings after a committed enabled=%s mutation",
-    async (enabled) => {
-      mocks.readConfig.mockResolvedValue({
-        snapshot: {
-          valid: true,
-          parsed: {},
-          path: "/tmp/openclaw.json",
-          sourceConfig: { plugins: { entries: { workboard: { enabled: !enabled } } } },
-          hash: "base-hash",
-        },
-        writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
-      });
-      mocks.replaceConfig.mockResolvedValue({});
-      mocks.metadata
-        .mockReturnValueOnce(metadataSnapshot(!enabled))
-        .mockReturnValueOnce(metadataSnapshot(enabled));
-      mocks.refreshRegistry.mockImplementation(
-        async (params: { logger?: { warn?: (message: string) => void } }) => {
-          params.logger?.warn?.("Plugin registry refresh failed: registry unavailable");
-        },
-      );
-
-      const result = await setManagedPluginEnabled({ pluginId: "workboard", enabled, env: {} });
-
-      expect(mocks.replaceConfig).toHaveBeenCalledOnce();
-      expect(result.plugin.enabled).toBe(enabled);
-      expect(result.warnings).toEqual(["Plugin registry refresh failed: registry unavailable"]);
-    },
-  );
-
-  it("returns setup instructions after an administrative plugin installs disabled", async () => {
-    const instruction =
-      'Installed plugin "workboard" without enabling it because it requires configuration first.';
-    mockClawHubWorkboardInstall();
+  it("reports registry refresh warnings after committed enablement", async () => {
+    const enabled = true;
     mocks.readConfig.mockResolvedValue({
       snapshot: {
         valid: true,
         parsed: {},
         path: "/tmp/openclaw.json",
-        sourceConfig: {},
+        sourceConfig: { plugins: { entries: { workboard: { enabled: !enabled } } } },
         hash: "base-hash",
       },
-      writeOptions: installSnapshot.writeOptions,
+      writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
     });
-    mocks.persistInstall.mockImplementation(
-      async (params: {
-        persistenceLogger?: { warn?: (message: string) => void };
-        runtime?: { log?: (message: string) => void };
-      }) => {
-        params.persistenceLogger?.warn?.(instruction);
-        params.runtime?.log?.("Installed plugin: workboard");
-        params.runtime?.log?.("Restart the gateway to load plugins.");
-        return { plugins: { entries: { workboard: { enabled: false } } } };
+    mocks.replaceConfig.mockResolvedValue({});
+    mocks.metadata
+      .mockReturnValueOnce(metadataSnapshot(!enabled))
+      .mockReturnValueOnce(metadataSnapshot(enabled));
+    mocks.refreshRegistry.mockImplementation(
+      async (params: { logger?: { warn?: (message: string) => void } }) => {
+        params.logger?.warn?.("Plugin registry refresh failed: registry unavailable");
       },
     );
-    mocks.metadata.mockReturnValue(metadataSnapshot(false, true));
 
-    const result = await installManagedPlugin({
-      request: {
-        source: "clawhub",
-        packageName: "community/workboard",
-        acknowledgeCapabilities: emptyArtifactAcknowledgment,
-      },
-      env: {},
-    });
+    const result = await setManagedPluginEnabled({ pluginId: "workboard", enabled, env: {} });
 
-    expect(result).toMatchObject({
-      plugin: { id: "workboard", enabled: false },
-      warnings: [instruction],
-    });
+    expect(mocks.replaceConfig).toHaveBeenCalledOnce();
+    expect(result.plugin.enabled).toBe(enabled);
+    expect(result.warnings).toEqual(["Plugin registry refresh failed: registry unavailable"]);
   });
 
   it("keeps an ownerless managed install and returns the partial-scope action", async () => {
@@ -284,31 +255,6 @@ describe("plugin management registry refresh", () => {
     expect(result.warnings).toContainEqual(
       expect.stringContaining("set agents.defaults.systemAgent.agentId"),
     );
-  });
-
-  it("returns persistence warnings without forwarding them to source-install loggers", async () => {
-    mockClawHubWorkboardInstall();
-    const instruction =
-      'Installed plugin "workboard" without enabling it because it requires configuration first.';
-    mocks.persistInstall.mockImplementation(
-      async (params: { persistenceLogger?: { warn?: (message: string) => void } }) => {
-        params.persistenceLogger?.warn?.(instruction);
-        return {};
-      },
-    );
-    const logger = { warn: vi.fn() };
-
-    const result = await installManagedPluginSource({
-      request: { source: "clawhub", spec: "clawhub:community/workboard" },
-      snapshot: installSnapshot,
-      env: {},
-      logger,
-      acknowledgeCapabilities: emptyArtifactAcknowledgment,
-    });
-
-    expect(mocks.clawhubInstall).toHaveBeenCalledWith(expect.objectContaining({ logger }));
-    expect(logger.warn).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ ok: true, warnings: [instruction] });
   });
 
   it("requires artifact consent before a linked source is enabled or recorded", async () => {

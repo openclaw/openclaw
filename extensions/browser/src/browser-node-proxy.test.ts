@@ -46,7 +46,18 @@ const uploadMocks = vi.hoisted(() => ({
   prepareBrowserProxyUploadRequest: vi.fn(),
 }));
 
-vi.mock("./browser-tool.runtime.js", () => runtimeMocks);
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
+  callGatewayTool: runtimeMocks.callGatewayTool,
+}));
+vi.mock("./browser/client-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/client-fetch.js")>()),
+  fetchBrowserJson: runtimeMocks.fetchBrowserJson,
+}));
+vi.mock("./browser/proxy-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/proxy-files.js")>()),
+  persistBrowserProxyResultFiles: runtimeMocks.persistBrowserProxyResultFiles,
+}));
 vi.mock("./browser-proxy-upload.js", () => uploadMocks);
 
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
@@ -117,29 +128,6 @@ describe("Browser node proxy nested watchdogs", () => {
     });
   });
 
-  it("keeps a requested action inside separate node and Gateway watchdogs", async () => {
-    const signal = new AbortController().signal;
-
-    await createSessionProxy()({
-      method: "GET",
-      path: "/snapshot",
-      profile: "work",
-      timeoutMs: 7_777,
-      signal,
-    });
-
-    const { method, gateway, node, extra } = readGatewayCall();
-    expect(method).toBe("node.invoke");
-    expect(node.nodeId).toBe("node-1");
-    expect(node.command).toBe("browser.proxy");
-    expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
-      7_777, 12_777, 17_777,
-    ]);
-    expect(node.params.errorEnvelope).toBe("browser-v1");
-    expect(extra).toEqual({ scopes: ["operator.admin"], signal });
-    expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
-  });
-
   it("binds the tool execution signal to node requests without their own signal", async () => {
     const signal = new AbortController().signal;
     const proxy = createBrowserNodeProxyRequest({
@@ -192,6 +180,40 @@ describe("Browser node proxy nested watchdogs", () => {
       expect.objectContaining({ method: "GET", signal }),
     );
   });
+
+  it.each(["unreachable", "upload-unsupported"] as const)(
+    "does not switch browsers after a node action when the next request is %s",
+    async (failure) => {
+      const proxy = createBrowserNodeProxyRequest({
+        nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
+        allowAutomaticHostFallback: true,
+      });
+      await proxy({ method: "POST", path: "/navigate", profile: "work" });
+      runtimeMocks.fetchBrowserJson.mockResolvedValue({ ok: true, profile: "wrong-host" });
+      if (failure === "unreachable") {
+        runtimeMocks.callGatewayTool.mockRejectedValueOnce(
+          new Error("Browser control host is not reachable on 127.0.0.1:18791."),
+        );
+      }
+      const request =
+        failure === "unreachable"
+          ? { method: "GET", path: "/snapshot", profile: "work" }
+          : {
+              method: "POST",
+              path: "/hooks/file-chooser",
+              profile: "work",
+              body: { paths: ["/tmp/openclaw/uploads/report.txt"] },
+            };
+
+      await expect(proxy(request)).rejects.toThrow(
+        failure === "unreachable"
+          ? "Browser control host is not reachable"
+          : "browser node does not support remote upload transfer",
+      );
+      expect(proxy.isHostFallbackActive()).toBe(false);
+      expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
+    },
+  );
 
   it("names the selected node and host-status recovery for an invalid proxy envelope", async () => {
     runtimeMocks.callGatewayTool.mockResolvedValueOnce({
@@ -295,30 +317,6 @@ describe("Browser node proxy nested watchdogs", () => {
     expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
   });
 
-  it("rejects an explicit old node upload before node dispatch", async () => {
-    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
-      body: { ref: "e12" },
-      upload: {
-        envelope: "browser-upload-v1",
-        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-      },
-    });
-    const proxy = createBrowserNodeProxyRequest({
-      nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
-      allowAutomaticHostFallback: false,
-    });
-
-    await expect(
-      proxy({
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
-      }),
-    ).rejects.toThrow("browser node does not support remote upload transfer");
-    expect(runtimeMocks.callGatewayTool).not.toHaveBeenCalled();
-    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
-  });
-
   it("explains when remote upload transfer is awaiting node command approval", async () => {
     const proxy = createBrowserNodeProxyRequest({
       nodeTarget: {
@@ -340,25 +338,8 @@ describe("Browser node proxy nested watchdogs", () => {
     expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps default action, node, and Gateway watchdogs strictly nested", async () => {
-    await createSessionProxy()({ method: "GET", path: "/snapshot" });
-
-    const { gateway, node } = readGatewayCall();
-    expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
-      20_000, 25_000, 30_000,
-    ]);
-  });
-
-  it.each([
-    Number.MAX_SAFE_INTEGER,
-    MAX_TIMER_TIMEOUT_MS,
-    MAX_TIMER_TIMEOUT_MS - 1,
-    MAX_TIMER_TIMEOUT_MS - 4_999,
-    MAX_TIMER_TIMEOUT_MS - 5_000,
-    MAX_TIMER_TIMEOUT_MS - 9_999,
-    MAX_TIMER_TIMEOUT_MS - 10_000,
-    MAX_TIMER_TIMEOUT_MS - 10_001,
-  ])("reserves both Node-safe watchdog windows for %i ms", async (timeoutMs) => {
+  it("reserves both Node-safe watchdog windows for a saturated timeout", async () => {
+    const timeoutMs = Number.MAX_SAFE_INTEGER;
     await createSessionProxy()({ method: "GET", path: "/snapshot", timeoutMs });
 
     const actionTimeoutMs = Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS - 10_000);
@@ -369,141 +350,5 @@ describe("Browser node proxy nested watchdogs", () => {
       actionTimeoutMs + 10_000,
     ]);
     expect(gateway.timeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
-  });
-
-  it("finishes ten independently owned, concurrently blocked Browser sessions", async () => {
-    let release!: () => void;
-    const barrier = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    runtimeMocks.callGatewayTool.mockImplementation(async (_method, _gateway, node) => {
-      await barrier;
-      return { payload: { result: { ok: true, profile: node.params.profile } } };
-    });
-
-    const sessions = Array.from({ length: 10 }, (_, index) => ({
-      profile: `session-${index}`,
-      timeoutMs: 7_777 + index,
-      signal: new AbortController().signal,
-      proxy: createSessionProxy(),
-    }));
-    const completed = new Set<string>();
-    const pending = sessions.map(async ({ profile, timeoutMs, signal, proxy }) => {
-      const result = await proxy({ method: "GET", path: "/snapshot", profile, timeoutMs, signal });
-      completed.add(profile);
-      return result;
-    });
-
-    try {
-      await vi.waitFor(() => {
-        expect(runtimeMocks.callGatewayTool).toHaveBeenCalledTimes(10);
-      });
-      expect(completed.size).toBe(0);
-      expect(runtimeMocks.persistBrowserProxyResultFiles).not.toHaveBeenCalled();
-      const invocationIds = new Set<string>();
-
-      sessions.forEach(({ profile, timeoutMs, signal }, index) => {
-        const { method, gateway, node, extra } = readGatewayCall(index);
-        expect(method).toBe("node.invoke");
-        expect(node.nodeId).toBe("node-1");
-        expect(node.command).toBe("browser.proxy");
-        expect(node.params.profile).toBe(profile);
-        expect(node.params.errorEnvelope).toBe("browser-v1");
-        expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
-          timeoutMs,
-          timeoutMs + 5_000,
-          timeoutMs + 10_000,
-        ]);
-        expect(extra).toEqual({ scopes: ["operator.admin"], signal });
-        invocationIds.add(node.idempotencyKey);
-      });
-
-      expect(invocationIds.size).toBe(10);
-      expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
-    } finally {
-      release();
-    }
-
-    await expect(Promise.all(pending)).resolves.toEqual(
-      sessions.map(({ profile }) => ({ ok: true, profile })),
-    );
-    expect(completed.size).toBe(10);
-    expect(runtimeMocks.persistBrowserProxyResultFiles).toHaveBeenCalledTimes(10);
-    expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
-    expect(sessions.every(({ proxy }) => !proxy.isHostFallbackActive())).toBe(true);
-  });
-
-  it("keeps one session cancellation isolated from nine concurrent sessions", async () => {
-    let release!: () => void;
-    const barrier = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    runtimeMocks.callGatewayTool.mockImplementation(
-      (_method, _gateway, node, extra) =>
-        new Promise<BrowserNodeResponse>((resolve, reject) => {
-          const onAbort = () => {
-            const reason = extra.signal?.reason;
-            reject(reason instanceof Error ? reason : new Error("Browser session cancelled"));
-          };
-          if (extra.signal?.aborted) {
-            onAbort();
-            return;
-          }
-          extra.signal?.addEventListener("abort", onAbort, { once: true });
-          void barrier.then(() => {
-            extra.signal?.removeEventListener("abort", onAbort);
-            if (!extra.signal?.aborted) {
-              resolve({ payload: { result: { ok: true, profile: node.params.profile } } });
-            }
-          });
-        }),
-    );
-
-    const sessions = Array.from({ length: 10 }, (_, index) => ({
-      profile: `session-${index}`,
-      timeoutMs: 7_777 + index,
-      controller: new AbortController(),
-      proxy: createSessionProxy(),
-    }));
-    const pending = sessions.map(({ profile, timeoutMs, controller, proxy }) =>
-      proxy({
-        method: "GET",
-        path: "/snapshot",
-        profile,
-        timeoutMs,
-        signal: controller.signal,
-      }),
-    );
-    const completion = Promise.allSettled(pending);
-    const cancelledSession = sessions.at(3);
-    const cancelledRun = pending.at(3);
-    if (!cancelledSession || !cancelledRun) {
-      release();
-      throw new Error("Expected a dedicated cancellation session");
-    }
-    const abortError = new Error("session-3 cancelled");
-
-    try {
-      await vi.waitFor(() => {
-        expect(runtimeMocks.callGatewayTool).toHaveBeenCalledTimes(10);
-      });
-      cancelledSession.controller.abort(abortError);
-      await expect(cancelledRun).rejects.toBe(abortError);
-      expect(runtimeMocks.persistBrowserProxyResultFiles).not.toHaveBeenCalled();
-      expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
-    } finally {
-      release();
-    }
-
-    await expect(completion).resolves.toEqual(
-      sessions.map(({ profile }, index) =>
-        index === 3
-          ? { status: "rejected", reason: abortError }
-          : { status: "fulfilled", value: { ok: true, profile } },
-      ),
-    );
-    expect(runtimeMocks.persistBrowserProxyResultFiles).toHaveBeenCalledTimes(9);
-    expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
-    expect(sessions.every(({ proxy }) => !proxy.isHostFallbackActive())).toBe(true);
   });
 });

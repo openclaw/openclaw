@@ -1,6 +1,7 @@
 // MCP channels Docker client drives the QA-owned channel bridge smoke.
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { hasExpectedSeededMcpAttachment } from "../../../../scripts/e2e/lib/mcp-channels-attachment-contract.mjs";
 import {
   assert,
   assertGatewayScopes,
@@ -234,19 +235,8 @@ async function main() {
       "expected one seeded attachment",
     );
     assert(
-      JSON.stringify(attachments.structuredContent?.attachments?.[0]) ===
-        JSON.stringify({
-          type: "openclaw_media",
-          media: {
-            url: "media://inbound/seeded-image.png",
-            contentType: "image/png",
-            kind: "image",
-            fileName: "seeded-image.png",
-            sizeBytes: 3,
-            transcribed: false,
-          },
-        }),
-      `expected canonical persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
+      hasExpectedSeededMcpAttachment(attachments.structuredContent?.attachments?.[0]),
+      `expected persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
     );
 
     let waitCursor = 0;
@@ -513,7 +503,7 @@ async function main() {
           nonOwnerReplyForwarded: true,
           nonOwnerPermissionBlocked: true,
           ownerPermissionAllowed: permission.behavior === "allow",
-          canonicalMediaAttachmentFound: true,
+          mediaAttachmentFound: true,
           rawNotifications: connectedMcp.rawMessages.filter(
             (entry) =>
               ClaudeChannelNotificationSchema.safeParse(entry).success ||
@@ -524,6 +514,26 @@ async function main() {
         2,
       ) + "\n",
     );
+  } catch (error) {
+    process.stderr.write(
+      `[mcp-channels] failure ${JSON.stringify({
+        error: formatUnknownError(error),
+        mcpConnected: Boolean(mcpHandle),
+        gatewayEvents: gateway.events.slice(-10).map((entry) => ({
+          event: entry.event,
+          sessionKey: entry.payload.sessionKey,
+        })),
+        channelNotifications: (mcpHandle?.rawMessages ?? [])
+          .map((entry) => ClaudeChannelNotificationSchema.safeParse(entry))
+          .flatMap((entry) => (entry.success ? [entry.data.params] : []))
+          .slice(-5),
+        permissionNotifications: (mcpHandle?.rawMessages ?? [])
+          .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
+          .flatMap((entry) => (entry.success ? [entry.data.params] : []))
+          .slice(-5),
+      })}\n`,
+    );
+    throw error;
   } finally {
     const closeTasks: Array<Promise<unknown>> = [gateway.close()];
     if (nonOwnerGateway) {

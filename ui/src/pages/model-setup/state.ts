@@ -1,4 +1,5 @@
 import type {
+  ProviderLoginOption,
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
@@ -8,9 +9,9 @@ import type {
 import { formatUiExternalText } from "../../lib/format-error.ts";
 
 export const MODEL_SETUP_DETECT_TIMEOUT_MS = 40_000;
-export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 30_000;
-const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
-const MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS = 480_000;
+// Match native setup: the Gateway's 90-second inference probe also needs startup allowance.
+export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 150_000;
+const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 export const MODEL_SETUP_AUTH_START_TIMEOUT_MS = 30_000;
 export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
 
@@ -19,43 +20,132 @@ export type ModelSetupPageState =
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
   | { phase: "detect-error"; message: string };
 
+export function preparedModelPageState(
+  result: SystemAgentSetupDetectResult,
+  modelTarget?: "utility",
+): ModelSetupPageState {
+  // Preparation may persist an unverified model; hide only the prepared role.
+  return {
+    phase: "ready",
+    result:
+      modelTarget === "utility"
+        ? { ...result, utilityModel: undefined, setupModel: undefined }
+        : { ...result, configuredModel: undefined, setupComplete: false },
+  };
+}
+
 export type ModelSetupActivationState =
   | { phase: "idle" }
-  | { phase: "testing"; targetId: string; modelRef: string }
+  | { phase: "testing"; targetId: string }
   | {
       phase: "failure";
       targetId: string;
       status: Exclude<NonNullable<SystemAgentSetupActivateResult["status"]>, "ok">;
       error: string;
     }
-  | { phase: "success"; modelRef: string; latencyMs?: number; warning?: string };
+  | {
+      phase: "success";
+      modelRef: string;
+      modelTarget?: "utility";
+      latencyMs?: number;
+      warning?: string;
+    };
 
 type ModelSetupVerifyFailure = Extract<SystemAgentSetupVerifyResult, { ok: false }>;
 
 export type ModelSetupVerifyState =
   | { phase: "idle" }
   | { phase: "checking" }
-  | { phase: "ok"; modelRef: string; latencyMs?: number }
+  | { phase: "ok"; modelRef: string; modelTarget?: "utility"; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
-export type ModelSetupWizardState =
+export type ModelSetupWizardResult =
+  | WizardNextResult
+  | { done: true; status: "not-admitted"; error: string };
+
+export type ModelSetupWizardRecovery = {
+  sessionId: string;
+  authChoice: string;
+  authKind?: ProviderLoginOption["kind"];
+};
+
+type ModelSetupWizardPhase =
   | { phase: "idle" }
-  | { phase: "starting"; authChoice: string }
+  | { phase: "starting"; authChoice: string; notice?: string }
   | {
       phase: "step";
       authChoice: string;
       step: WizardStep;
+      externalAuthInput?: boolean;
       busy: boolean;
       validationError: string | null;
     }
-  | { phase: "done"; authChoice: string; preparedModelRef?: string }
+  | { phase: "done" }
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
 
+export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
+export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
+
+export type ModelSetupState = {
+  pageState: ModelSetupPageState;
+  activationState: ModelSetupActivationState;
+  verifyState: ModelSetupVerifyState;
+  wizardState: ModelSetupWizardState;
+  wizardMode: "auth" | "prepare" | "activate";
+  wizardDraft: ModelSetupWizardDraft;
+  manualProviderId: string;
+  manualApiKey: string;
+  manualError: string | null;
+  moreSignInOpen: boolean;
+  nativeSessionCatalogsEnabled: boolean;
+  iconUrls: Record<string, string>;
+  setupRefreshWarning: string | null;
+  detectionError: string | null;
+  detectionRequest: object | null;
+  cancellationNotice: string | null;
+};
+
+export function createModelSetupState(): ModelSetupState {
+  return {
+    pageState: { phase: "loading" },
+    activationState: { phase: "idle" },
+    verifyState: { phase: "idle" },
+    wizardState: { phase: "idle" },
+    wizardMode: "auth",
+    wizardDraft: { stepId: null, value: undefined },
+    manualProviderId: "",
+    manualApiKey: "",
+    manualError: null,
+    moreSignInOpen: false,
+    nativeSessionCatalogsEnabled: false,
+    iconUrls: {},
+    setupRefreshWarning: null,
+    detectionError: null,
+    detectionRequest: null,
+    cancellationNotice: null,
+  };
+}
+
+export function updateModelSetupWizardDraft(
+  draft: ModelSetupWizardDraft,
+  state: ModelSetupWizardState,
+): ModelSetupWizardDraft {
+  if (state.phase === "idle") {
+    return { stepId: null, value: undefined };
+  }
+  if (state.phase === "step" && state.step.id !== draft.stepId) {
+    return { stepId: state.step.id, value: initialWizardValue(state.step) };
+  }
+  return draft;
+}
+
 export function activationTimeoutForKind(kind: string): number {
-  return kind === "codex-cli"
-    ? MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS
-    : MODEL_SETUP_ACTIVATE_TIMEOUT_MS;
+  // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.
+  if (kind === "provider-auth") {
+    return 25 * 60 * 1000;
+  }
+  return MODEL_SETUP_ACTIVATE_TIMEOUT_MS;
 }
 
 export function activationTargetId(kind: string, modelRef: string): string {
@@ -66,13 +156,23 @@ export function mapActivationResult(params: {
   result: SystemAgentSetupActivateResult;
   targetId: string;
   fallbackError: string;
+  restartWarning: string;
+  refreshWarning?: string | null;
 }): ModelSetupActivationState {
   const { result } = params;
   if (result.ok && result.modelRef) {
+    const warning = [
+      result.gatewayRestartRequired ? params.restartWarning : null,
+      params.refreshWarning,
+    ]
+      .filter(Boolean)
+      .join("\n");
     return {
       phase: "success",
       modelRef: result.modelRef,
+      ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+      ...(warning ? { warning } : {}),
     };
   }
   return {
@@ -88,6 +188,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
     return {
       phase: "ok",
       modelRef: result.modelRef,
+      ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
     };
   }
@@ -96,7 +197,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
 
 export function wizardStateFromResult(
   authChoice: string,
-  result: WizardNextResult,
+  result: ModelSetupWizardResult,
   fallbackError: string,
 ): ModelSetupWizardState {
   if (!result.done && result.step) {
@@ -108,17 +209,13 @@ export function wizardStateFromResult(
       validationError: result.error?.trim() ? formatUiExternalText(result.error) : null,
     };
   }
-  if (result.status === "done") {
-    return {
-      phase: "done",
-      authChoice,
-      ...(result.preparedModelRef ? { preparedModelRef: result.preparedModelRef } : {}),
-    };
+  if (result.done && result.status === "done") {
+    return { phase: "done" };
   }
-  if (result.status === "cancelled") {
-    return { phase: "cancelled", message: formatUiExternalText(result.error, fallbackError) };
-  }
-  return { phase: "error", message: formatUiExternalText(result.error, fallbackError) };
+  return {
+    phase: result.status === "cancelled" ? "cancelled" : "error",
+    message: formatUiExternalText(result.error, fallbackError),
+  };
 }
 
 export function initialWizardValue(step: WizardStep): unknown {

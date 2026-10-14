@@ -31,7 +31,6 @@ type SignalIngressEnvelope = {
 type SignalIngressEventFacts = {
   eventId: string;
   laneKey: string;
-  numberAliasEventId?: string;
 };
 
 type SignalPreparedIngressEvent = [
@@ -49,21 +48,18 @@ type SignalIngressBody = Omit<SignalIngressPayload, "version">;
 
 export type SignalIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-type SignalIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
-
 type SignalIngressDispatch = (
   event: SignalSseEvent,
   lifecycle: SignalIngressLifecycle,
   parsedPayload: SignalReceivePayload,
-) => Promise<SignalIngressDispatchResult | void> | SignalIngressDispatchResult | void;
+) =>
+  | Promise<ChannelIngressMonitorDeliveryResult | void>
+  | ChannelIngressMonitorDeliveryResult
+  | void;
 
 const SignalIngressPermanentError = createChannelIngressError<
   "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event"
 >("SignalIngressPermanentError", { withReason: true });
-
-function normalizeTimestamp(value: unknown): number | null {
-  return asPositiveSafeInteger(value) ?? null;
-}
 
 function parseReceivePayload(event: SignalSseEvent): SignalReceivePayload | null {
   if (event.event !== "receive" || !event.data) {
@@ -126,8 +122,8 @@ function inspectSignalIngressEvent(
     );
   }
   const timestamp =
-    normalizeTimestamp(envelope.timestamp) ?? normalizeTimestamp(dataMessage?.timestamp);
-  if (timestamp === null) {
+    asPositiveSafeInteger(envelope.timestamp) ?? asPositiveSafeInteger(dataMessage?.timestamp);
+  if (timestamp === undefined) {
     throw new SignalIngressPermanentError(
       "missing-timestamp",
       "Signal dispatchable envelope is missing a stable timestamp",
@@ -140,9 +136,6 @@ function inspectSignalIngressEvent(
   return {
     eventId: JSON.stringify([senderKey, timestamp]),
     laneKey: groupId ? `group:${groupId}` : `direct:${senderKey}`,
-    ...(senderUuid && senderNumber
-      ? { numberAliasEventId: JSON.stringify([`number:${senderNumber}`, timestamp]) }
-      : {}),
   };
 }
 
@@ -182,7 +175,7 @@ export async function startSignalIngressMonitor(params: {
     SignalIngressPayload
   >({
     queue: ingressQueue,
-    inspect: (prepared) => inspectSignalIngressEvent(prepared),
+    inspect: inspectSignalIngressEvent,
     payload: {
       version: 1,
       // Parsed JSON remains transient; durable rows retain the exact raw event shape.
@@ -198,22 +191,10 @@ export async function startSignalIngressMonitor(params: {
     },
     deliver: ([event, parsedPayload], lifecycle) =>
       parsedPayload ? params.dispatch(event, lifecycle, parsedPayload) : undefined,
-    onDurableAdmission: async (_event, { facts }) => {
-      const { numberAliasEventId } = facts as SignalIngressEventFacts;
-      if (!numberAliasEventId) {
-        return;
-      }
-      // signal-cli can learn or forget a UUID between redeliveries; bridge both
-      // shipped sender IDs before the monitor releases its admission/claim lock.
-      if (!(await ingressQueue.complete(numberAliasEventId))) {
-        await ingressQueue.complete(facts.eventId);
-      }
-    },
     pollIntervalMs: SIGNAL_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
       // Signal previously pruned before every enqueue rather than on a timed cadence.
       pruneIntervalMs: 0,
-      // At most two tombstones per message preserve the prior 1,000-message window.
       completedMaxEntries: 2_000,
       failedMaxEntries: 1_000,
     },

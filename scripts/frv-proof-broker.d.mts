@@ -1,7 +1,7 @@
 export type BrokerContext = {
   actor: string;
   correlation: string;
-  headSha: string;
+  landedSha: string;
   prNumber: number;
   repository: "openclaw/openclaw";
   runId: number;
@@ -12,22 +12,13 @@ export type GitHubApi = {
   request(method: string, path: string, body?: unknown): Promise<unknown>;
 };
 
-export type FixtureRunExpectation = {
-  attempt: number;
-  branch: string;
-  conclusion: "failure" | "success";
-  correlation: string;
-  headSha: string;
-  repository: string;
-  runId?: number;
-};
-
 export type ProofReceipt = {
   actor: string;
   correlation: string;
+  fixtureJobId: number;
   fixtureRunAttempt: 2;
   fixtureRunId: number;
-  headSha: string;
+  landedSha: string;
   operation: "noop";
   prNumber: number;
   repository: "openclaw/openclaw";
@@ -36,10 +27,6 @@ export type ProofReceipt = {
 };
 
 export function validateBrokerRequest(event: unknown, env: NodeJS.ProcessEnv): BrokerContext;
-export function validateFixtureRun(
-  value: unknown,
-  expected: FixtureRunExpectation,
-): Record<string, unknown>;
 export function runProofBroker(options: {
   api: GitHubApi;
   env: NodeJS.ProcessEnv;

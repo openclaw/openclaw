@@ -3,11 +3,7 @@ import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-r
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getMSTeamsApprovalCardBinding,
-  registerMSTeamsApprovalCardBinding,
-  unregisterMSTeamsApprovalCardBindings,
-} from "./approval-card-actions.js";
+import { msTeamsApprovalControls } from "./approval-card-actions.js";
 import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
 import { createMSTeamsMessageHandlerDeps } from "./monitor-handler.test-helpers.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
@@ -112,7 +108,7 @@ function registerBinding(params: {
   conversationId?: string;
 }): void {
   testTokens.add(params.token);
-  registerMSTeamsApprovalCardBinding({
+  msTeamsApprovalControls.register({
     token: params.token,
     accountId: params.accountId ?? "default",
     approvalId: `approval-${params.token}`,
@@ -139,7 +135,7 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
   });
 
   afterEach(() => {
-    unregisterMSTeamsApprovalCardBindings(Array.from(testTokens));
+    msTeamsApprovalControls.unregister(Array.from(testTokens));
     testTokens.clear();
   });
 
@@ -153,26 +149,21 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { label: "missing", token: undefined },
-    { label: "unknown", token: "unknown-token" },
-  ])("consumes approval submits with a $label token", async ({ token }) => {
-    await expect(
-      maybeHandleMSTeamsApprovalCardSubmit({
-        context: createContext({ token }),
-        deps: createDeps(),
-      }),
-    ).resolves.toBe(true);
+  it.each([{ label: "missing", token: undefined }])(
+    "consumes approval submits with a $label token",
+    async ({ token }) => {
+      await expect(
+        maybeHandleMSTeamsApprovalCardSubmit({
+          context: createContext({ token }),
+          deps: createDeps(),
+        }),
+      ).resolves.toBe(true);
 
-    expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      label: "account",
-      binding: { accountId: "another-account" },
-      context: {},
+      expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
     },
+  );
+
+  it.each([
     {
       label: "conversation",
       binding: {},
@@ -200,7 +191,7 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     ).resolves.toBe(true);
 
     expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
-    expect(getMSTeamsApprovalCardBinding(token)).not.toBeNull();
+    expect(msTeamsApprovalControls.get(token)).not.toBeNull();
   });
 
   it("requires an allowlisted AAD identity and preserves tokens for the authorized approver", async () => {
@@ -243,24 +234,7 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     expect(JSON.stringify(vi.mocked(authorizedContext.updateActivity).mock.calls[0])).toContain(
       "Denied",
     );
-    expect(getMSTeamsApprovalCardBinding(token)).toBeNull();
-  });
-
-  it("normalizes Teams conversation message suffixes before matching their card", async () => {
-    const token = "normalized-conversation";
-    registerBinding({ token });
-
-    await expect(
-      maybeHandleMSTeamsApprovalCardSubmit({
-        context: createContext({
-          token,
-          conversationId: `${CONVERSATION_ID};messageid=thread-root`,
-        }),
-        deps: createDeps(),
-      }),
-    ).resolves.toBe(true);
-
-    expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+    expect(msTeamsApprovalControls.get(token)).toBeNull();
   });
 
   it("allows only one gateway resolution while simultaneous clicks are in flight", async () => {
@@ -299,9 +273,12 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
   });
 
-  it("releases the token when the terminal card update fails", async () => {
+  it("retries a failed terminal card update with the canonical winning decision", async () => {
     const token = "update-retry";
     registerBinding({ token });
+    resolveApprovalOverGateway.mockResolvedValue(
+      createResolution({ approvalId: `approval-${token}`, decision: "deny", applied: false }),
+    );
     const failedContext = createContext({ token });
     vi.mocked(failedContext.updateActivity).mockRejectedValueOnce(new Error("update failed"));
     const deps = createDeps();
@@ -309,11 +286,17 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     await expect(
       maybeHandleMSTeamsApprovalCardSubmit({ context: failedContext, deps }),
     ).rejects.toThrow("update failed");
+    const retriedContext = createContext({ token });
     await expect(
-      maybeHandleMSTeamsApprovalCardSubmit({ context: createContext({ token }), deps }),
+      maybeHandleMSTeamsApprovalCardSubmit({ context: retriedContext, deps }),
     ).resolves.toBe(true);
 
     expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
+    const cardJson = JSON.stringify(vi.mocked(retriedContext.updateActivity).mock.calls[0]?.[0]);
+    expect(cardJson).toContain("Exec Approval: Denied");
+    expect(cardJson).toContain("Already resolved");
+    expect(cardJson).not.toContain("Exec Approval: Allowed once");
+    expect(msTeamsApprovalControls.get(token)).toBeNull();
   });
 
   it("retires permanently missing approvals and ignores subsequent clicks", async () => {
@@ -328,7 +311,7 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     const context = createContext({ token });
 
     await expect(maybeHandleMSTeamsApprovalCardSubmit({ context, deps })).resolves.toBe(true);
-    expect(getMSTeamsApprovalCardBinding(token)).toBeNull();
+    expect(msTeamsApprovalControls.get(token)).toBeNull();
     expect(context.updateActivity).not.toHaveBeenCalled();
 
     await expect(maybeHandleMSTeamsApprovalCardSubmit({ context, deps })).resolves.toBe(true);

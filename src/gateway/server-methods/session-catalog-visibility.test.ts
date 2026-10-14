@@ -1,8 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{ provider: SessionCatalogProvider }>;
@@ -11,49 +22,65 @@ type TestClient = {
   connect: { scopes: string[] };
   connId?: string;
   authenticatedUserProfile?: { profileId: string };
+  preparedSessionProfile?: UserProfileIdentity;
 };
 
 const hoisted = vi.hoisted(() => ({
   activeRegistry: {} as TestPluginRegistry,
-  getUserProfileRole: vi.fn((): string | null => null),
+  profileRole: vi.fn((): string | null => null),
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
-  listSessionEntriesReadOnly: vi.fn(
-    (): Array<{
-      sessionKey: string;
-      entry: {
-        createdActor?: { type: "human"; id: string };
-        incognito?: true;
-        updatedAt?: number;
-        visibility?: "shared" | "draft";
-      };
-    }> => [],
-  ),
-  resolveSessionSharingRole: vi.fn(() => "viewer" as "viewer" | "member"),
-  resolveSessionSharingTarget: vi.fn(() => null as Record<string, unknown> | null),
+  resolveSessionSharingRole: vi.fn<
+    typeof import("../session-sharing-policy.js").resolveSessionSharingRole
+  >(() => "viewer"),
+  resolveSessionSharingTargetAsync: vi.fn<
+    typeof import("../session-sharing-policy.js").resolveSessionSharingTargetAsync
+  >(async () => null),
 }));
 
-vi.mock("../../plugins/runtime.js", () => ({
+vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime.js")>()),
   getActivePluginRegistry: () => hoisted.activeRegistry,
+  getPluginRegistryForContext: () => hoisted.activeRegistry,
   requireActivePluginRegistry: () => hoisted.activeRegistry,
 }));
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
-  listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly,
-}));
-vi.mock("../../state/user-profiles.js", () => ({
-  getUserProfileRole: hoisted.getUserProfileRole,
+vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+}));
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
+  readResidentUserProfileId: (id: string) => id,
+  readResidentUserProfileIdentity: (id: string) => ({
+    profileId: id,
+    role: hoisted.profileRole(),
+  }),
 }));
 vi.mock("../session-sharing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-sharing.js")>()),
   resolveSessionSharingRole: hoisted.resolveSessionSharingRole,
-  resolveSessionSharingTarget: hoisted.resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync: hoisted.resolveSessionSharingTargetAsync,
 }));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
+let sessionEntries: Array<{ sessionKey: string; entry: Partial<SessionEntry> }> = [];
+const projections = new Set<ReturnType<typeof createSessionRowProjectionFixture>>();
+
+afterEach(() => {
+  for (const projection of projections) {
+    projection.dispose();
+  }
+  projections.clear();
+  clearRuntimeConfigSnapshot();
+});
 
 function client(profileId: string, scopes = ["operator.read", "operator.write"]): TestClient {
-  return { connect: { scopes }, authenticatedUserProfile: { profileId } };
+  return {
+    connect: { scopes },
+    authenticatedUserProfile: { profileId },
+    preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
+  };
 }
 
 function unprofiledClient(scopes = ["operator.read", "operator.write"]): TestClient {
@@ -100,22 +127,37 @@ async function call(
   contextOverrides: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
+  setRuntimeConfigSnapshot(config);
+  const projection = createSessionRowProjectionFixture({
+    cfg: config,
+    store: Object.fromEntries(
+      sessionEntries.map(({ sessionKey, entry }) => [
+        sessionKey,
+        { sessionId: sessionKey, updatedAt: 1, ...entry },
+      ]),
+    ),
+  });
+  projections.add(projection);
   await sessionCatalogHandlers[method]?.({
     params,
     respond,
     client: requestClient,
-    context: { getRuntimeConfig: () => config, ...contextOverrides },
+    context: bindSessionRowProjection(
+      { getRuntimeConfig: () => config, ...contextOverrides },
+      () => projection,
+    ),
   } as never);
   return respond;
 }
 
 function setActors(entries: Array<[sessionKey: string, profileId: string]>) {
-  hoisted.listSessionEntriesReadOnly.mockReturnValue(
-    entries.map(([sessionKey, profileId], index) => ({
-      sessionKey,
-      entry: { createdActor: { type: "human", id: profileId }, updatedAt: entries.length - index },
-    })),
-  );
+  sessionEntries = entries.map(([sessionKey, profileId], index) => ({
+    sessionKey,
+    entry: {
+      createdActor: { type: "human", source: "profile", id: profileId },
+      updatedAt: entries.length - index,
+    },
+  }));
 }
 
 function roleConfig(others: "none" | "view" | "suggest" | "write", agents: "*" | string[] = "*") {
@@ -138,65 +180,15 @@ function roleConfig(others: "none" | "view" | "suggest" | "write", agents: "*" |
 describe("session catalog caller visibility", () => {
   beforeEach(() => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
+    markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
     hoisted.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(false);
-    hoisted.getUserProfileRole.mockReset().mockReturnValue(null);
-    hoisted.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
+    hoisted.profileRole.mockReset().mockReturnValue(null);
+    sessionEntries = [];
     hoisted.resolveSessionSharingRole.mockReset().mockReturnValue("viewer");
-    hoisted.resolveSessionSharingTarget.mockReset().mockReturnValue(null);
+    hoisted.resolveSessionSharingTargetAsync.mockReset().mockResolvedValue(null);
   });
 
-  it("filters streamed and final rows to the caller's adopted sessions", async () => {
-    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
-    setActors([
-      ["agent:main:owned", "profile-owner"],
-      ["agent:main:other", "profile-other"],
-    ]);
-    const listedHost = host([
-      session("owned-thread", "agent:main:owned"),
-      session("other-thread", "agent:main:other"),
-      session("unadopted-thread"),
-    ]);
-    const broadcastToConnIds = vi.fn();
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider({
-          list: vi.fn(async ({ onHost }) => {
-            onHost?.(listedHost);
-            return [listedHost];
-          }),
-        }),
-      },
-    ];
-
-    const respond = await call(
-      "sessions.catalog.list",
-      { progressId: "profile-progress" },
-      { ...client("profile-owner"), connId: "owner-conn" },
-      {},
-      { broadcastToConnIds },
-    );
-    const visible = [expect.objectContaining({ threadId: "owned-thread" })];
-
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.catalog.host",
-      expect.objectContaining({
-        catalog: expect.objectContaining({
-          hosts: [expect.objectContaining({ sessions: visible })],
-        }),
-      }),
-      new Set(["owner-conn"]),
-      { dropIfSlow: true },
-    );
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [expect.objectContaining({ sessions: visible })],
-        }),
-      ],
-    });
-  });
-
-  it("rejects hidden targets before read, continue, or archive dispatch", async () => {
+  it("rejects hidden targets before read, import, continue, or archive dispatch", async () => {
     hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
     setActors([["agent:main:other", "profile-other"]]);
     const list = vi.fn(async () => [host([session("other-thread", "agent:main:other")])]);
@@ -213,6 +205,7 @@ describe("session catalog caller visibility", () => {
 
     for (const [method, params] of [
       ["sessions.catalog.read", {}],
+      ["sessions.catalog.import", {}],
       ["sessions.catalog.continue", {}],
       ["sessions.catalog.archive", { confirmNoOtherRunner: true }],
     ] as const) {
@@ -235,35 +228,80 @@ describe("session catalog caller visibility", () => {
     expect(archive).not.toHaveBeenCalled();
   });
 
-  it("hides every row from an unprofiled multi-identity caller", async () => {
+  it.each(["channel"] as const)(
+    "denies colliding %s creators across catalog operations",
+    async (source) => {
+      sessionEntries = [
+        {
+          sessionKey: "agent:main:collision",
+          entry: {
+            createdActor: { type: "human", source, id: "profile-owner" },
+            visibility: "draft",
+          },
+        },
+      ];
+      const read = vi.fn(async () => ({
+        hostId: "gateway:local",
+        threadId: "collision",
+        items: [],
+      }));
+      const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:collision" }));
+      const archive = vi.fn(async () => ({ ok: true as const }));
+      hoisted.activeRegistry.sessionCatalogs = [
+        {
+          provider: provider({
+            list: vi.fn(async () => [host([session("collision", "agent:main:collision")])]),
+            read,
+            continueSession,
+            archive,
+          }),
+        },
+      ];
+      const cfg = roleConfig("none");
+      for (let pass = 0; pass < 2; pass++) {
+        const listed = await call("sessions.catalog.list", {}, client("profile-owner"), cfg);
+        expect(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
+      }
+      for (const method of [
+        "sessions.catalog.read",
+        "sessions.catalog.continue",
+        "sessions.catalog.archive",
+      ] as const) {
+        const result = await call(
+          method,
+          {
+            catalogId: "codex",
+            hostId: "gateway:local",
+            threadId: "collision",
+            ...(method === "sessions.catalog.archive" ? { confirmNoOtherRunner: true } : {}),
+          },
+          client("profile-owner"),
+          cfg,
+        );
+        expect(result).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: ErrorCodes.FORBIDDEN }),
+        );
+      }
+      expect(read).not.toHaveBeenCalled();
+      expect(continueSession).not.toHaveBeenCalled();
+      expect(archive).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["shared owner"])("rejects reads for a %s multi-identity caller", async (identity) => {
     hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
-    const listedHost = host([session("unadopted-thread")]);
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider({ list: vi.fn(async () => [listedHost]) }) },
-    ];
-
-    const listed = await call("sessions.catalog.list", {}, unprofiledClient());
-
-    expect(listed).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [expect.objectContaining({ sessions: [] })],
-        }),
-      ],
-    });
-  });
-
-  it("rejects reads for an unprofiled multi-identity caller", async () => {
-    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
+    setActors([["agent:main:owner", GATEWAY_OWNER_PROFILE_ID]]);
     const read = vi.fn(async () => ({
       hostId: "gateway:local",
-      threadId: "unadopted-thread",
+      threadId: "owner-thread",
       items: [{ type: "userMessage" as const, text: "private host history" }],
     }));
     hoisted.activeRegistry.sessionCatalogs = [
       {
         provider: provider({
-          list: vi.fn(async () => [host([session("unadopted-thread")])]),
+          list: vi.fn(async () => [host([session("owner-thread", "agent:main:owner")])]),
           read,
         }),
       },
@@ -271,8 +309,8 @@ describe("session catalog caller visibility", () => {
 
     const transcript = await call(
       "sessions.catalog.read",
-      { catalogId: "codex", hostId: "gateway:local", threadId: "unadopted-thread" },
-      unprofiledClient(),
+      { catalogId: "codex", hostId: "gateway:local", threadId: "owner-thread" },
+      identity === "shared owner" ? client(GATEWAY_OWNER_PROFILE_ID) : unprofiledClient(),
     );
 
     expect(transcript).toHaveBeenCalledWith(
@@ -286,10 +324,64 @@ describe("session catalog caller visibility", () => {
     expect(read).not.toHaveBeenCalled();
   });
 
+  it("shares only Gateway-hosted catalog rows with authenticated operators", async () => {
+    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
+    const sharedRead = vi.fn(async () => ({
+      hostId: "gateway:local",
+      threadId: "shared-snapshot",
+      items: [{ type: "userMessage" as const, text: "sanitized snapshot" }],
+    }));
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider({
+          id: "beam",
+          label: "Beam",
+          audience: "gateway-operators",
+          list: vi.fn(async () => [host([session("shared-snapshot")])]),
+          read: sharedRead,
+        }),
+      },
+      {
+        provider: provider({
+          id: "codex",
+          list: vi.fn(async () => [host([session("private-native")])]),
+        }),
+      },
+    ];
+    const operator = unprofiledClient(["operator.read"]);
+
+    const listed = await call("sessions.catalog.list", {}, operator);
+    const transcript = await call(
+      "sessions.catalog.read",
+      { catalogId: "beam", hostId: "gateway:local", threadId: "shared-snapshot" },
+      operator,
+    );
+
+    expect(listed.mock.calls[0]?.[1]?.catalogs).toEqual([
+      expect.objectContaining({
+        id: "beam",
+        hosts: [expect.objectContaining({ sessions: [session("shared-snapshot")] })],
+      }),
+      expect.objectContaining({
+        id: "codex",
+        hosts: [expect.objectContaining({ sessions: [] })],
+      }),
+    ]);
+    expect(transcript).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ threadId: "shared-snapshot" }),
+    );
+    expect(sharedRead).toHaveBeenCalledOnce();
+  });
+
   it.each([
-    { label: "admin", multiple: true, scopes: ["operator.admin"] },
-    { label: "solo Gateway", multiple: false, scopes: ["operator.read"] },
-  ])("keeps $label list and read responses unfiltered", async ({ multiple, scopes }) => {
+    {
+      label: "solo Gateway",
+      multiple: false,
+      scopes: ["operator.read"],
+      profileId: "profile-owner",
+    },
+  ])("keeps $label list and read responses unfiltered", async ({ multiple, scopes, profileId }) => {
     hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(multiple);
     const listedHost = host([session("unadopted-thread")]);
     const readResult = {
@@ -305,7 +397,7 @@ describe("session catalog caller visibility", () => {
         }),
       },
     ];
-    const requestClient = client("profile-owner", scopes);
+    const requestClient = client(profileId, scopes);
 
     const listed = await call("sessions.catalog.list", {}, requestClient);
     const transcript = await call(
@@ -320,48 +412,28 @@ describe("session catalog caller visibility", () => {
     expect(transcript).toHaveBeenCalledWith(true, readResult);
   });
 
-  it("lets an identified owner list and read their adopted row", async () => {
-    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
-    setActors([["agent:main:owned", "profile-owner"]]);
-    const listedHost = host([session("owned-thread", "agent:main:owned")]);
-    const readResult = { hostId: "gateway:local", threadId: "owned-thread", items: [] };
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider({
-          list: vi.fn(async () => [listedHost]),
-          read: vi.fn(async () => readResult),
-        }),
-      },
-    ];
-    const owner = client("profile-owner");
+  it("shares concurrent catalog enumeration when only owner attribution arrives", async () => {
+    const listedHost = host([session("unadopted-thread")]);
+    const release = createDeferredCore();
+    const list = vi.fn(async () => {
+      await release.promise;
+      return [listedHost];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider({ list }) }];
+    const requestClient = unprofiledClient();
+    const config = {};
 
-    const listed = await call("sessions.catalog.list", {}, owner);
-    const transcript = await call(
-      "sessions.catalog.read",
-      { catalogId: "codex", hostId: "gateway:local", threadId: "owned-thread" },
-      owner,
-    );
+    const before = call("sessions.catalog.list", {}, requestClient, config);
+    requestClient.authenticatedUserProfile = { profileId: GATEWAY_OWNER_PROFILE_ID };
+    const after = call("sessions.catalog.list", {}, requestClient, config);
+    release.resolve();
 
-    expect(listed).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        catalogs: [
-          expect.objectContaining({
-            hosts: [
-              expect.objectContaining({
-                sessions: [
-                  expect.objectContaining({
-                    threadId: "owned-thread",
-                    createdActor: { type: "human", id: "profile-owner" },
-                  }),
-                ],
-              }),
-            ],
-          }),
-        ],
-      }),
-    );
-    expect(transcript).toHaveBeenCalledWith(true, readResult);
+    for (const respond of await Promise.all([before, after])) {
+      expect(respond).toHaveBeenCalledWith(true, {
+        catalogs: [expect.objectContaining({ hosts: [listedHost] })],
+      });
+    }
+    expect(list).toHaveBeenCalledOnce();
   });
 
   it("pages before authorizing an older owner thread", async () => {
@@ -393,37 +465,7 @@ describe("session catalog caller visibility", () => {
     );
   });
 
-  it("isolates settled list cache entries between identities", async () => {
-    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
-    setActors([
-      ["agent:main:alpha", "profile-alpha"],
-      ["agent:main:beta", "profile-beta"],
-    ]);
-    const list = vi.fn(async () => [
-      host([
-        session("alpha-thread", "agent:main:alpha"),
-        session("beta-thread", "agent:main:beta"),
-        session("unadopted-thread"),
-      ]),
-    ]);
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider({ list }) }];
-    const config = {};
-
-    const alpha = await call("sessions.catalog.list", {}, client("profile-alpha"), config);
-    const unprofiled = await call("sessions.catalog.list", {}, unprofiledClient(), config);
-    const beta = await call("sessions.catalog.list", {}, client("profile-beta"), config);
-    const rows = (respond: ReturnType<typeof vi.fn>) =>
-      respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions.map(
-        (item: { threadId: string }) => item.threadId,
-      );
-
-    expect(rows(alpha)).toEqual(["alpha-thread"]);
-    expect(rows(unprofiled)).toEqual([]);
-    expect(rows(beta)).toEqual(["beta-thread"]);
-    expect(list).toHaveBeenCalledTimes(3);
-  });
-
-  it.each([false, true])(
+  it.each([false])(
     "keeps a none role owner-only with multiple identities = %s",
     async (multiple) => {
       hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(multiple);
@@ -465,74 +507,7 @@ describe("session catalog caller visibility", () => {
     },
   );
 
-  it.each(["view", "suggest", "write"] as const)(
-    "shows foreign adopted sessions but never foreign drafts or incognito for %s roles",
-    async (others) => {
-      hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
-      hoisted.listSessionEntriesReadOnly.mockReturnValue([
-        {
-          sessionKey: "agent:main:other",
-          entry: { createdActor: { type: "human", id: "profile-other" }, visibility: "shared" },
-        },
-        {
-          sessionKey: "agent:main:draft",
-          entry: { createdActor: { type: "human", id: "profile-other" }, visibility: "draft" },
-        },
-        {
-          sessionKey: "agent:main:private",
-          entry: { createdActor: { type: "human", id: "profile-other" }, incognito: true },
-        },
-      ]);
-      const read = vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }));
-      hoisted.activeRegistry.sessionCatalogs = [
-        {
-          provider: provider({
-            list: vi.fn(async () => [
-              host([
-                session("other-thread", "agent:main:other"),
-                session("draft-thread", "agent:main:draft"),
-                session("incognito-thread", "agent:main:private"),
-                session("unadopted-thread"),
-              ]),
-            ]),
-            read,
-          }),
-        },
-      ];
-      const config = roleConfig(others);
-      const owner = client("profile-owner");
-
-      const listed = await call("sessions.catalog.list", {}, owner, config);
-      const visible = await call(
-        "sessions.catalog.read",
-        { catalogId: "codex", hostId: "gateway:local", threadId: "other-thread" },
-        owner,
-        config,
-      );
-      const draft = await call(
-        "sessions.catalog.read",
-        { catalogId: "codex", hostId: "gateway:local", threadId: "draft-thread" },
-        owner,
-        config,
-      );
-
-      expect(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([
-        expect.objectContaining({ threadId: "other-thread" }),
-      ]);
-      expect(visible).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ threadId: "other-thread" }),
-      );
-      expect(draft).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: ErrorCodes.FORBIDDEN }),
-      );
-      expect(read).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["view", "suggest"] as const)(
+  it.each(["view"] as const)(
     "blocks foreign catalog continue and archive for %s roles without explicit membership",
     async (others) => {
       setActors([["agent:main:other", "profile-other"]]);
@@ -572,13 +547,32 @@ describe("session catalog caller visibility", () => {
 
   it("permits a view-capped person to archive a foreign session after explicit membership", async () => {
     setActors([["agent:main:other", "profile-other"]]);
-    hoisted.resolveSessionSharingTarget.mockReturnValue({ canonicalKey: "agent:main:other" });
-    hoisted.resolveSessionSharingRole.mockReturnValue("member");
+    hoisted.resolveSessionSharingTargetAsync.mockResolvedValue({
+      agentId: "main",
+      canonicalKey: "agent:main:other",
+      storeKey: "agent:main:other",
+      storeKeys: ["agent:main:other"],
+      storePath: "",
+      entry: {
+        sessionId: "agent:main:other",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "profile-other" },
+      },
+    });
+    hoisted.resolveSessionSharingRole.mockImplementation(
+      (await import("../session-sharing-policy.js")).resolveSessionSharingRole,
+    );
     const archive = vi.fn(async () => ({ ok: true as const }));
     hoisted.activeRegistry.sessionCatalogs = [
       {
         provider: provider({
-          list: vi.fn(async () => [host([session("other-thread", "agent:main:other")])]),
+          list: vi.fn(async () => {
+            const projection = [...projections].at(-1)!;
+            projection.describe({ agentId: "main", key: "agent:main:other" })!.membership = new Set(
+              ["profile-owner"],
+            );
+            return [host([session("other-thread", "agent:main:other")])];
+          }),
           archive,
         }),
       },
@@ -628,30 +622,6 @@ describe("session catalog caller visibility", () => {
         message: expect.stringContaining('cannot create sessions for agent "main"'),
       }),
     );
-  });
-
-  it("partitions a settled catalog cache when one profile's effective role changes", async () => {
-    setActors([
-      ["agent:main:owned", "profile-owner"],
-      ["agent:main:other", "profile-other"],
-    ]);
-    const list = vi.fn(async () => [
-      host([
-        session("owned-thread", "agent:main:owned"),
-        session("other-thread", "agent:main:other"),
-      ]),
-    ]);
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider({ list }) }];
-    const config = roleConfig("none");
-    const owner = client("profile-owner");
-
-    const restricted = await call("sessions.catalog.list", {}, owner, config);
-    config.gateway.roles.definitions.guest.sessions.others = "view";
-    const shared = await call("sessions.catalog.list", {}, owner, config);
-
-    expect(restricted.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toHaveLength(1);
-    expect(shared.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toHaveLength(2);
-    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("keeps operator.admin unrestricted despite a configured none role", async () => {

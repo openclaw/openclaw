@@ -1,133 +1,99 @@
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ClientOptions, WebSocket } from "ws";
+import { z } from "zod";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
-import {
-  buildCloudflareAccessHeaders,
-  type CloudflareAccessCredentials,
-} from "../../packages/gateway-client/src/cloudflare-access.js";
+import { buildCloudflareAccessHeaders } from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
   GatewayWebSocketTransportConfigurationError,
   resolveGatewayWebSocketTransport,
 } from "../../packages/gateway-client/src/websocket-transport.js";
+import type { GatewayWebSocketClientOptions } from "../../packages/gateway-client/src/websocket.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { workerProtocolObject } from "./protocol-record.js";
+
+const ENDPOINT_FIELD_MAX_LENGTH = 4_096;
+// JSON needs at most six bytes per UTF-16 code unit (control/lone-surrogate escapes).
+// These closed shapes cover both endpoints; parsed TLS pins are 64 ASCII hex digits.
+export const WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES = Math.max(
+  Buffer.byteLength(
+    JSON.stringify({
+      kind: "unix",
+      socketPath: "\0".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH),
+    }),
+  ),
+  Buffer.byteLength(
+    JSON.stringify({
+      kind: "websocket",
+      url: "\0".repeat(ENDPOINT_FIELD_MAX_LENGTH),
+      tlsFingerprint: "0".repeat(64),
+      cloudflareAccess: {
+        clientId: "\0".repeat(ENDPOINT_FIELD_MAX_LENGTH),
+        clientSecret: "\0".repeat(ENDPOINT_FIELD_MAX_LENGTH),
+      },
+    }),
+  ),
+);
 
 export class WorkerConnectionEndpointError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WorkerConnectionEndpointError";
-  }
+  override name = "WorkerConnectionEndpointError";
 }
 
-export type WorkerConnectionEndpoint =
-  | { kind: "unix"; socketPath: string }
-  | {
-      kind: "websocket";
-      url: string;
-      tlsFingerprint?: string;
-      cloudflareAccess?: CloudflareAccessCredentials;
-    };
+const AccessCredential = z
+  .string()
+  .refine((value) => Boolean(value.trim()) && value.length <= ENDPOINT_FIELD_MAX_LENGTH);
+const EndpointSchema = z.union([
+  workerProtocolObject({
+    kind: z.literal("unix"),
+    socketPath: z
+      .string()
+      .refine(
+        (value) =>
+          value.length <= WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH &&
+          path.isAbsolute(value) &&
+          !value.includes(":"),
+      ),
+  }),
+  workerProtocolObject({
+    kind: z.literal("websocket"),
+    url: z.string().refine((value) => value.length <= ENDPOINT_FIELD_MAX_LENGTH),
+    tlsFingerprint: z.string().transform(normalizeTlsFingerprint).refine(Boolean).optional(),
+    cloudflareAccess: workerProtocolObject({
+      clientId: AccessCredential,
+      clientSecret: AccessCredential,
+    }).optional(),
+  })
+    .refine((value) => {
+      const url = URL.parse(value.url);
+      return (
+        url !== null &&
+        (url.protocol === "ws:" || url.protocol === "wss:") &&
+        url.username === "" &&
+        url.password === "" &&
+        url.search === "" &&
+        url.hash === "" &&
+        url.pathname.endsWith(WORKER_PUBLIC_INGRESS_PATH) &&
+        ((value.tlsFingerprint === undefined && value.cloudflareAccess === undefined) ||
+          url.protocol === "wss:")
+      );
+    })
+    .transform(({ tlsFingerprint, cloudflareAccess, ...endpoint }) => ({
+      ...endpoint,
+      ...(tlsFingerprint ? { tlsFingerprint } : {}),
+      ...(cloudflareAccess ? { cloudflareAccess } : {}),
+    })),
+]);
 
-function hasExactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => key in value) && Object.keys(value).every((key) => allowed.has(key))
-  );
-}
-
-function parseUnixEndpoint(value: Record<string, unknown>): WorkerConnectionEndpoint | undefined {
-  if (
-    !hasExactKeys(value, ["kind", "socketPath"]) ||
-    value.kind !== "unix" ||
-    typeof value.socketPath !== "string" ||
-    value.socketPath.length > WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH ||
-    !path.isAbsolute(value.socketPath) ||
-    value.socketPath.includes(":")
-  ) {
-    return undefined;
-  }
-  return { kind: "unix", socketPath: value.socketPath };
-}
-
-function parseWebSocketEndpoint(
-  value: Record<string, unknown>,
-): WorkerConnectionEndpoint | undefined {
-  const tlsFingerprint =
-    typeof value.tlsFingerprint === "string"
-      ? normalizeTlsFingerprint(value.tlsFingerprint)
-      : undefined;
-  if (
-    !hasExactKeys(value, ["kind", "url"], ["tlsFingerprint", "cloudflareAccess"]) ||
-    value.kind !== "websocket" ||
-    typeof value.url !== "string" ||
-    value.url.length > 4_096 ||
-    (value.tlsFingerprint !== undefined && !tlsFingerprint)
-  ) {
-    return undefined;
-  }
-  const cloudflareAccess = parseCloudflareAccessCredentials(value.cloudflareAccess);
-  if (value.cloudflareAccess !== undefined && !cloudflareAccess) {
-    return undefined;
-  }
-  let url: URL;
-  try {
-    url = new URL(value.url);
-  } catch {
-    return undefined;
-  }
-  if (
-    (url.protocol !== "ws:" && url.protocol !== "wss:") ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.search !== "" ||
-    url.hash !== "" ||
-    !url.pathname.endsWith(WORKER_PUBLIC_INGRESS_PATH) ||
-    (value.tlsFingerprint !== undefined && url.protocol !== "wss:") ||
-    (cloudflareAccess !== undefined && url.protocol !== "wss:")
-  ) {
-    return undefined;
-  }
-  return {
-    kind: "websocket",
-    url: value.url,
-    ...(tlsFingerprint ? { tlsFingerprint } : {}),
-    ...(cloudflareAccess ? { cloudflareAccess } : {}),
-  };
-}
-
-function parseCloudflareAccessCredentials(value: unknown): CloudflareAccessCredentials | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, ["clientId", "clientSecret"]) ||
-    typeof value.clientId !== "string" ||
-    value.clientId.trim().length === 0 ||
-    value.clientId.length > 4_096 ||
-    typeof value.clientSecret !== "string" ||
-    value.clientSecret.trim().length === 0 ||
-    value.clientSecret.length > 4_096
-  ) {
-    return undefined;
-  }
-  return { clientId: value.clientId, clientSecret: value.clientSecret };
-}
+export type WorkerConnectionEndpoint = z.infer<typeof EndpointSchema>;
 
 export function parseWorkerConnectionEndpoint(
   value: unknown,
 ): WorkerConnectionEndpoint | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  return parseUnixEndpoint(value) ?? parseWebSocketEndpoint(value);
+  return EndpointSchema.safeParse(value).data;
 }
 
 type WorkerConnectionTarget = {
   url: string;
-  options: ClientOptions;
-  validateSocket(socket: WebSocket): Error | null;
+  options: GatewayWebSocketClientOptions;
 };
 
 export function resolveWorkerConnectionTarget(
@@ -138,7 +104,6 @@ export function resolveWorkerConnectionTarget(
     return {
       url: `ws+unix://${endpoint.socketPath}:/`,
       options: {},
-      validateSocket: () => null,
     };
   }
   if (endpoint.cloudflareAccess && new URL(endpoint.url).protocol !== "wss:") {

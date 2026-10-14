@@ -1,9 +1,9 @@
-// Qa Lab plugin module implements manual lane behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { toQaError } from "./errors.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import type { QaProviderMode } from "./model-selection.js";
@@ -32,20 +32,6 @@ type ManualLaneResult = {
   watchUrl: string;
 };
 
-async function stopManualLaneResource(
-  resource: { stop: () => Promise<void> | void } | null | undefined,
-): Promise<Error | undefined> {
-  if (!resource) {
-    return undefined;
-  }
-  try {
-    await resource.stop();
-    return undefined;
-  } catch (error) {
-    return toQaError(error);
-  }
-}
-
 async function stopManualLaneAuxiliaryResources(resources: {
   lab?: { stop: () => Promise<void> | void };
   mock?: { stop: () => Promise<void> | void } | null;
@@ -58,33 +44,9 @@ async function stopManualLaneAuxiliaryResources(resources: {
   return failed ? toQaError(failed.reason) : undefined;
 }
 
-function resolveManualLaneTimeoutMs(params: {
-  providerMode: QaProviderMode;
-  primaryModel: string;
-  alternateModel: string;
-  timeoutMs?: number;
-}) {
-  if (
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-  ) {
-    return params.timeoutMs;
-  }
-  return resolveQaLiveTurnTimeoutMs(
-    {
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      alternateModel: params.alternateModel,
-    },
-    120_000,
-    params.primaryModel,
-  );
-}
-
 export async function runQaManualLane(params: QaManualLaneParams) {
   const sessionSuffix = params.primaryModel.replace(/[^a-z0-9._-]+/gi, "-");
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
   let lab: Awaited<ReturnType<typeof startQaLabServer>> | undefined;
   let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
   let transportCleanupBeforeGatewayStop: (() => Promise<void>) | undefined;
@@ -110,7 +72,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     mock = await startQaProviderServer(params.providerMode, {
       modelRefs: [params.primaryModel, params.alternateModel],
     });
-    gateway = await startQaGatewayChild({
+    const gateway = await gatewayOwner.start({
       repoRoot: params.repoRoot,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
       transport,
@@ -123,12 +85,9 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       controlUiEnabled: false,
     });
 
-    const timeoutMs = resolveManualLaneTimeoutMs({
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      alternateModel: params.alternateModel,
-      timeoutMs: params.timeoutMs,
-    });
+    const timeoutMs =
+      asPositiveFiniteNumber(params.timeoutMs) ??
+      resolveQaLiveTurnTimeoutMs(params, 120_000, params.primaryModel);
     const delivery = transport.buildAgentDelivery({
       target: "dm:qa-operator",
     });
@@ -182,9 +141,15 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     await transportCleanupBeforeGatewayStop?.().catch((error: unknown) => {
       transportCleanupBeforeError = toQaError(error);
     });
-    const gatewayCleanupError = await stopManualLaneResource(gateway);
+    const gatewayStop = await gatewayOwner.stop();
+    const gatewayCleanupError = gatewayStop.errors.length
+      ? new AggregateError(
+          gatewayStop.errors,
+          `qa gateway child cleanup failed: ${gatewayStop.errors.map(formatErrorMessage).join("; ")}`,
+        )
+      : undefined;
     let transportCleanupAfterError: Error | undefined;
-    if (!gatewayCleanupError) {
+    if (gatewayStop.process !== "unconfirmed") {
       await transportCleanupAfterGatewayStop?.().catch((error: unknown) => {
         transportCleanupAfterError = toQaError(error);
       });
@@ -195,6 +160,11 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       gatewayCleanupError ??
       transportCleanupAfterError ??
       auxiliaryCleanupError;
+  }
+  if (runError && cleanupError) {
+    throw new AggregateError([runError, cleanupError], "qa manual lane and cleanup failed", {
+      cause: runError,
+    });
   }
   if (runError) {
     throw new Error(formatErrorMessage(runError), { cause: runError });

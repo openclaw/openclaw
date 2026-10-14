@@ -63,7 +63,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       respondDeviceRequired(respond);
       return;
     }
-    const requestedScopes = normalizeDeviceAuthScopes((params as { scopes: string[] }).scopes);
+    const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
     if (!requestedScopes.every(isOperatorScope)) {
       respond(
         false,
@@ -76,7 +76,14 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       return;
     }
     const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
-    if (rolePolicy && requestedScopes.some((scope) => !rolePolicy.scopes.includes(scope))) {
+    if (
+      rolePolicy &&
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes,
+        allowedScopes: rolePolicy.scopes,
+      })
+    ) {
       respond(
         false,
         undefined,
@@ -173,8 +180,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       respondDeviceRequired(respond);
       return;
     }
-    const requestId = (params as { requestId: string }).requestId;
-    const result = await context.scopeUpgradeCoordinator?.wait(requestId, owner);
+    const result = await context.scopeUpgradeCoordinator?.wait(params.requestId, owner);
     if (!result) {
       respond(
         false,
@@ -183,13 +189,27 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (result.status === "insufficient-scopes") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Pairing was approved, but this browser's previously narrowed token still lacks the requested access. Run openclaw dashboard --json on the Gateway host for a fresh one-time owner pairing link. Open its browserUrl in this browser using the same Control UI address and Gateway URL to restore administrator access.",
+        ),
+      );
+      return;
+    }
     if (result.status === "approved") {
+      // Approval may outlive a role change; use the current ceiling before releasing the token.
       const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
       if (
         rolePolicy &&
-        result.scopes.some(
-          (scope) => !rolePolicy.scopes.some((allowedScope) => allowedScope === scope),
-        )
+        !roleScopesAllow({
+          role: "operator",
+          requestedScopes: result.scopes,
+          allowedScopes: rolePolicy.scopes,
+        })
       ) {
         respond(
           false,

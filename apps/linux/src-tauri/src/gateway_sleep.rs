@@ -17,26 +17,27 @@ pub(crate) enum SleepPrepareOutcome {
     Busy,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GatewaySleepRoute {
+    pub(crate) ws_url: String,
+    pub(crate) generation: u64,
+}
+
 struct HeldSuspension {
     id: String,
-    route: String,
+    route: GatewaySleepRoute,
 }
 
-#[derive(Default)]
-struct CycleState {
-    suspension: Option<HeldSuspension>,
-    generation: u64,
-}
-
+#[derive(Clone)]
 pub(crate) struct GatewaySleepCycleController {
     request_id: String,
-    current_route: Arc<dyn Fn() -> Option<String> + Send + Sync>,
-    prepare: Arc<dyn Fn(String) -> PrepareFuture + Send + Sync>,
-    resume: Arc<dyn Fn(String) -> ResumeFuture + Send + Sync>,
+    current_route: Arc<dyn Fn() -> Option<GatewaySleepRoute> + Send + Sync>,
+    prepare: Arc<dyn Fn(String, GatewaySleepRoute) -> PrepareFuture + Send + Sync>,
+    resume: Arc<dyn Fn(String, GatewaySleepRoute) -> ResumeFuture + Send + Sync>,
     refresh: Arc<dyn Fn() -> RefreshFuture + Send + Sync>,
     retry_delay: Arc<dyn Fn(Duration) -> DelayFuture + Send + Sync>,
     log: Arc<dyn Fn(String) + Send + Sync>,
-    state: Mutex<CycleState>,
+    suspension: Arc<Mutex<Option<HeldSuspension>>>,
 }
 
 impl GatewaySleepCycleController {
@@ -50,13 +51,13 @@ impl GatewaySleepCycleController {
         log: L,
     ) -> Self
     where
-        P: Fn(String) -> PF + Send + Sync + 'static,
+        P: Fn(String, GatewaySleepRoute) -> PF + Send + Sync + 'static,
         PF: Future<Output = Result<SleepPrepareOutcome, String>> + Send + 'static,
-        R: Fn(String) -> RF + Send + Sync + 'static,
+        R: Fn(String, GatewaySleepRoute) -> RF + Send + Sync + 'static,
         RF: Future<Output = Result<(), String>> + Send + 'static,
         F: Fn() -> FF + Send + Sync + 'static,
         FF: Future<Output = ()> + Send + 'static,
-        C: Fn() -> Option<String> + Send + Sync + 'static,
+        C: Fn() -> Option<GatewaySleepRoute> + Send + Sync + 'static,
         D: Fn(Duration) -> DF + Send + Sync + 'static,
         DF: Future<Output = ()> + Send + 'static,
         L: Fn(String) + Send + Sync + 'static,
@@ -64,51 +65,33 @@ impl GatewaySleepCycleController {
         Self {
             request_id,
             current_route: Arc::new(current_route),
-            prepare: Arc::new(move |request_id| Box::pin(prepare(request_id))),
-            resume: Arc::new(move |suspension_id| Box::pin(resume(suspension_id))),
+            prepare: Arc::new(move |request_id, route| Box::pin(prepare(request_id, route))),
+            resume: Arc::new(move |suspension_id, route| Box::pin(resume(suspension_id, route))),
             refresh: Arc::new(move || Box::pin(refresh())),
             retry_delay: Arc::new(move |delay| Box::pin(retry_delay(delay))),
             log: Arc::new(log),
-            state: Mutex::new(CycleState::default()),
+            suspension: Arc::new(Mutex::new(None)),
         }
     }
 
     pub(crate) async fn will_sleep(&self) {
-        // The production route closure exposes only configured loopback gateways.
+        // The listener awaits preparation before it can consume the wake signal.
         let Some(route) = (self.current_route)() else {
             return;
         };
-        let generation = {
-            let mut state = self
-                .state
-                .lock()
-                .expect("gateway sleep state mutex poisoned");
-            state.generation = state.generation.wrapping_add(1);
-            state.generation
-        };
-        match (self.prepare)(self.request_id.clone()).await {
+        match (self.prepare)(self.request_id.clone(), route.clone()).await {
             Ok(SleepPrepareOutcome::Ready { suspension_id }) => {
-                let late = {
-                    let mut state = self
-                        .state
-                        .lock()
-                        .expect("gateway sleep state mutex poisoned");
-                    if generation == state.generation {
-                        state.suspension = Some(HeldSuspension {
-                            id: suspension_id.clone(),
-                            route,
-                        });
-                        false
-                    } else {
-                        true
-                    }
-                };
-                if late {
-                    // Wake or a newer cycle won the race; do not leave the late lease active.
-                    if let Err(error) = (self.resume)(suspension_id).await {
-                        (self.log)(format!("gateway sleep preparation failed: {error}"));
-                    }
+                if (self.current_route)().as_ref() != Some(&route) {
+                    self.log_route_changed();
+                    return;
                 }
+                *self
+                    .suspension
+                    .lock()
+                    .expect("gateway sleep state mutex poisoned") = Some(HeldSuspension {
+                    id: suspension_id,
+                    route,
+                });
             }
             Ok(SleepPrepareOutcome::Busy) => {
                 (self.log)("gateway sleep preparation skipped because the gateway is busy".into());
@@ -119,54 +102,42 @@ impl GatewaySleepCycleController {
         }
     }
 
-    pub(crate) async fn did_wake(&self) {
-        // Clear first so a second wake or failed resume cannot reuse this cycle's lease.
-        let (suspension, generation) = {
-            let mut state = self
-                .state
-                .lock()
-                .expect("gateway sleep state mutex poisoned");
-            let suspension = state.suspension.take();
-            state.generation = state.generation.wrapping_add(1);
-            (suspension, state.generation)
-        };
-        if (self.current_route)().is_none() {
-            if suspension.is_some() {
-                (self.log)(
-                    "dropping gateway sleep lease: route/mode changed across sleep; lease will self-expire"
-                        .into(),
-                );
+    pub(crate) fn did_wake(&self) -> impl Future<Output = ()> + Send + 'static {
+        // Take the lease at the signal, before the recovery task is scheduled.
+        let suspension = self
+            .suspension
+            .lock()
+            .expect("gateway sleep state mutex poisoned")
+            .take();
+        let controller = self.clone();
+        async move {
+            if (controller.current_route)().is_none() {
+                if suspension.is_some() {
+                    controller.log_route_changed();
+                }
+                return;
             }
-            return;
-        }
-
-        // The pre-sleep transport is normally dead; reconnect before attempting resume.
-        (self.refresh)().await;
-        if let Some(suspension) = suspension {
-            if (self.current_route)().as_ref() == Some(&suspension.route) {
-                self.resume_with_retries(suspension.id, generation).await;
-            } else {
-                (self.log)(
-                    "dropping gateway sleep lease: route/mode changed across sleep; lease will self-expire"
-                        .into(),
-                );
+            (controller.refresh)().await;
+            if let Some(suspension) = suspension {
+                controller.resume_with_retries(suspension).await;
             }
         }
     }
 
-    async fn resume_with_retries(&self, suspension_id: String, generation: u64) {
+    fn log_route_changed(&self) {
+        (self.log)(
+            "dropping gateway sleep lease: route/mode changed across sleep; lease will self-expire"
+                .into(),
+        );
+    }
+
+    async fn resume_with_retries(&self, suspension: HeldSuspension) {
         for attempt in 1..=RESUME_ATTEMPTS {
-            // A new sleep cycle owns the connection; abandoned leases self-expire.
-            if generation
-                != self
-                    .state
-                    .lock()
-                    .expect("gateway sleep state mutex poisoned")
-                    .generation
-            {
+            if (self.current_route)().as_ref() != Some(&suspension.route) {
+                self.log_route_changed();
                 return;
             }
-            match (self.resume)(suspension_id.clone()).await {
+            match (self.resume)(suspension.id.clone(), suspension.route.clone()).await {
                 Ok(()) => return,
                 Err(error) => {
                     (self.log)(format!(
@@ -186,15 +157,21 @@ impl GatewaySleepCycleController {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::sync::oneshot;
 
-    fn route_state(value: Option<&str>) -> Arc<Mutex<Option<String>>> {
-        Arc::new(Mutex::new(value.map(str::to_string)))
+    fn local_route(url: &str, generation: u64) -> GatewaySleepRoute {
+        GatewaySleepRoute {
+            ws_url: url.to_string(),
+            generation,
+        }
+    }
+
+    fn route_state(value: Option<&str>) -> Arc<Mutex<Option<GatewaySleepRoute>>> {
+        Arc::new(Mutex::new(value.map(|url| local_route(url, 1))))
     }
 
     fn current_route(
-        route: &Arc<Mutex<Option<String>>>,
-    ) -> impl Fn() -> Option<String> + Send + Sync + 'static {
+        route: &Arc<Mutex<Option<GatewaySleepRoute>>>,
+    ) -> impl Fn() -> Option<GatewaySleepRoute> + Send + Sync + 'static {
         let route = Arc::clone(route);
         move || route.lock().expect("route mutex poisoned").clone()
     }
@@ -215,7 +192,7 @@ mod tests {
         let controller = GatewaySleepCycleController::new(
             "linux-sleep-test-run".into(),
             current_route(&route),
-            move |request_id| {
+            move |request_id, _| {
                 prepared_ids.lock().unwrap().push(request_id);
                 prepare_events.lock().unwrap().push("prepare");
                 async {
@@ -224,7 +201,7 @@ mod tests {
                     })
                 }
             },
-            move |_| {
+            move |_, _| {
                 resume_events.lock().unwrap().push("resume");
                 async { Ok(()) }
             },
@@ -259,8 +236,8 @@ mod tests {
         let controller = GatewaySleepCycleController::new(
             "linux-sleep-test-run".into(),
             current_route(&route),
-            |_| async { Ok(SleepPrepareOutcome::Busy) },
-            move |_| {
+            |_, _| async { Ok(SleepPrepareOutcome::Busy) },
+            move |_, _| {
                 resumed.fetch_add(1, Ordering::SeqCst);
                 async { Ok(()) }
             },
@@ -295,8 +272,8 @@ mod tests {
         let controller = GatewaySleepCycleController::new(
             "linux-sleep-test-run".into(),
             current_route(&route),
-            |_| async { Err("prepare failed".into()) },
-            move |_| {
+            |_, _| async { Err("prepare failed".into()) },
+            move |_, _| {
                 resumed.fetch_add(1, Ordering::SeqCst);
                 async { Ok(()) }
             },
@@ -331,12 +308,12 @@ mod tests {
         let controller = GatewaySleepCycleController::new(
             "linux-sleep-test-run".into(),
             current_route(&route),
-            |_| async {
+            |_, _| async {
                 Ok(SleepPrepareOutcome::Ready {
                     suspension_id: "suspension-1".into(),
                 })
             },
-            move |_| {
+            move |_, _| {
                 resumed.fetch_add(1, Ordering::SeqCst);
                 async { Ok(()) }
             },
@@ -349,7 +326,7 @@ mod tests {
         );
 
         controller.will_sleep().await;
-        *route.lock().unwrap() = Some("ws://127.0.0.1:19001".into());
+        *route.lock().unwrap() = Some(local_route("ws://127.0.0.1:19001", 2));
         controller.did_wake().await;
 
         assert_eq!(resumes.load(Ordering::SeqCst), 0);
@@ -372,12 +349,12 @@ mod tests {
         let controller = GatewaySleepCycleController::new(
             "linux-sleep-test-run".into(),
             current_route(&route),
-            |_| async {
+            |_, _| async {
                 Ok(SleepPrepareOutcome::Ready {
                     suspension_id: "suspension-1".into(),
                 })
             },
-            move |_| {
+            move |_, _| {
                 resumed.fetch_add(1, Ordering::SeqCst);
                 async { Ok(()) }
             },
@@ -392,7 +369,7 @@ mod tests {
         controller.will_sleep().await;
         *route.lock().unwrap() = None;
         controller.did_wake().await;
-        *route.lock().unwrap() = Some("ws://127.0.0.1:18789".into());
+        *route.lock().unwrap() = Some(local_route("ws://127.0.0.1:18789", 3));
         controller.did_wake().await;
 
         assert_eq!(resumes.load(Ordering::SeqCst), 0);
@@ -401,95 +378,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn late_prepare_response_resumes_immediately() {
-        let route = route_state(Some("ws://127.0.0.1:18789"));
-        let (release, receiver) = oneshot::channel();
-        let (started, prepare_started) = oneshot::channel();
-        let receiver = Arc::new(Mutex::new(Some(receiver)));
-        let prepare_receiver = Arc::clone(&receiver);
-        let started = Arc::new(Mutex::new(Some(started)));
-        let prepare_started_sender = Arc::clone(&started);
-        let resumed_ids = Arc::new(Mutex::new(Vec::new()));
-        let resumed = Arc::clone(&resumed_ids);
-        let controller = Arc::new(GatewaySleepCycleController::new(
-            "linux-sleep-test-run".into(),
-            current_route(&route),
-            move |_| {
-                let receiver = prepare_receiver.lock().unwrap().take().unwrap();
-                prepare_started_sender
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .unwrap()
-                    .send(())
-                    .unwrap();
-                async move {
-                    let _ = receiver.await;
+    async fn resume_retries_only_on_its_original_route() {
+        for (replacement, unchanged) in [
+            (Some(local_route("ws://127.0.0.1:18789", 1)), true),
+            (Some(local_route("ws://127.0.0.1:19001", 2)), false),
+            (None, false),
+            (Some(local_route("ws://127.0.0.1:18789", 3)), false),
+        ] {
+            let route = route_state(Some("ws://127.0.0.1:18789"));
+            let delay_route = route.clone();
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let attempted = Arc::clone(&attempts);
+            let delays = Arc::new(AtomicUsize::new(0));
+            let delayed = Arc::clone(&delays);
+            let controller = GatewaySleepCycleController::new(
+                "linux-sleep-test-run".into(),
+                current_route(&route),
+                |_, _| async {
                     Ok(SleepPrepareOutcome::Ready {
-                        suspension_id: "late-suspension".into(),
+                        suspension_id: "suspension-retry".into(),
                     })
-                }
-            },
-            move |id| {
-                resumed.lock().unwrap().push(id);
-                async { Ok(()) }
-            },
-            || async {},
-            no_delay,
-            |_| {},
-        ));
-
-        let sleeping = {
-            let controller = Arc::clone(&controller);
-            tokio::spawn(async move { controller.will_sleep().await })
-        };
-        prepare_started.await.unwrap();
-        controller.did_wake().await;
-        release.send(()).unwrap();
-        sleeping.await.unwrap();
-        controller.did_wake().await;
-
-        assert_eq!(*resumed_ids.lock().unwrap(), ["late-suspension"]);
-    }
-
-    #[tokio::test]
-    async fn resume_retries_then_succeeds() {
-        let route = route_state(Some("ws://127.0.0.1:18789"));
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let attempted = Arc::clone(&attempts);
-        let delays = Arc::new(AtomicUsize::new(0));
-        let delayed = Arc::clone(&delays);
-        let controller = GatewaySleepCycleController::new(
-            "linux-sleep-test-run".into(),
-            current_route(&route),
-            |_| async {
-                Ok(SleepPrepareOutcome::Ready {
-                    suspension_id: "suspension-retry".into(),
-                })
-            },
-            move |_| {
-                let attempt = attempted.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if attempt == 0 {
-                        Err("transport failed".into())
-                    } else {
-                        Ok(())
+                },
+                move |_, _| {
+                    let attempt = attempted.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if attempt == 0 {
+                            Err("transport failed".into())
+                        } else {
+                            Ok(())
+                        }
                     }
-                }
-            },
-            || async {},
-            move |_| {
-                delayed.fetch_add(1, Ordering::SeqCst);
-                async {}
-            },
-            |_| {},
-        );
+                },
+                || async {},
+                move |_| {
+                    delayed.fetch_add(1, Ordering::SeqCst);
+                    *delay_route.lock().unwrap() = replacement.clone();
+                    async {}
+                },
+                |_| {},
+            );
 
-        controller.will_sleep().await;
-        controller.did_wake().await;
+            controller.will_sleep().await;
+            controller.did_wake().await;
 
-        assert_eq!(attempts.load(Ordering::SeqCst), 2);
-        assert_eq!(delays.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                attempts.load(Ordering::SeqCst),
+                if unchanged { 2 } else { 1 }
+            );
+            assert_eq!(delays.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[tokio::test]
@@ -502,12 +439,12 @@ mod tests {
         let controller = GatewaySleepCycleController::new(
             "linux-sleep-test-run".into(),
             current_route(&route),
-            |_| async {
+            |_, _| async {
                 Ok(SleepPrepareOutcome::Ready {
                     suspension_id: "suspension-exhaust".into(),
                 })
             },
-            move |_| {
+            move |_, _| {
                 attempted.fetch_add(1, Ordering::SeqCst);
                 async { Err("transport failed".into()) }
             },
@@ -528,40 +465,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_sleep_cycle_aborts_in_flight_retries() {
-        let route = route_state(Some("ws://127.0.0.1:18789"));
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let attempted = Arc::clone(&attempts);
-        let controller_slot = Arc::new(Mutex::new(None::<Arc<GatewaySleepCycleController>>));
-        let delay_slot = Arc::clone(&controller_slot);
-        let controller = Arc::new(GatewaySleepCycleController::new(
-            "linux-sleep-test-run".into(),
-            current_route(&route),
-            |_| async {
-                Ok(SleepPrepareOutcome::Ready {
-                    suspension_id: "suspension-abort".into(),
-                })
-            },
-            move |_| {
-                attempted.fetch_add(1, Ordering::SeqCst);
-                async { Err("transport failed".into()) }
-            },
-            || async {},
-            move |_| {
-                let controller = delay_slot.lock().unwrap().as_ref().unwrap().clone();
-                async move { controller.will_sleep().await }
-            },
-            |_| {},
-        ));
-        *controller_slot.lock().unwrap() = Some(Arc::clone(&controller));
-
-        controller.will_sleep().await;
-        controller.did_wake().await;
-
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
     async fn wake_always_clears_the_held_lease() {
         let route = route_state(Some("ws://127.0.0.1:18789"));
         let attempts = Arc::new(AtomicUsize::new(0));
@@ -569,12 +472,12 @@ mod tests {
         let controller = GatewaySleepCycleController::new(
             "linux-sleep-test-run".into(),
             current_route(&route),
-            |_| async {
+            |_, _| async {
                 Ok(SleepPrepareOutcome::Ready {
                     suspension_id: "suspension-failure".into(),
                 })
             },
-            move |_| {
+            move |_, _| {
                 attempted.fetch_add(1, Ordering::SeqCst);
                 async { Err("transport failed".into()) }
             },

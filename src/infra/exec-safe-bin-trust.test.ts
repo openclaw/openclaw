@@ -19,7 +19,7 @@ function swapAsciiCase(value: string): string {
 
 describe("exec safe bin trust", () => {
   it("keeps default trusted dirs limited to immutable system paths", () => {
-    const dirs = getTrustedSafeBinDirs({ refresh: true });
+    const dirs = getTrustedSafeBinDirs();
 
     expect(dirs.has(path.resolve("/bin"))).toBe(true);
     expect(dirs.has(path.resolve("/usr/bin"))).toBe(true);
@@ -31,29 +31,12 @@ describe("exec safe bin trust", () => {
     const dirs = getTrustedSafeBinDirs({
       baseDirs: ["/usr/bin"],
       extraDirs: ["/custom/bin", "/alt/bin", "/custom/bin"],
-      refresh: true,
     });
 
     expect(dirs.has(path.resolve("/usr/bin"))).toBe(true);
     expect(dirs.has(path.resolve("/custom/bin"))).toBe(true);
     expect(dirs.has(path.resolve("/alt/bin"))).toBe(true);
     expect(dirs.size).toBe(3);
-  });
-
-  it("memoizes trusted dirs per explicit trusted-dir snapshot", () => {
-    const a = getTrustedSafeBinDirs({
-      extraDirs: ["/first/bin"],
-      refresh: true,
-    });
-    const b = getTrustedSafeBinDirs({
-      extraDirs: ["/first/bin"],
-    });
-    const c = getTrustedSafeBinDirs({
-      extraDirs: ["/second/bin"],
-    });
-
-    expect(a).toBe(b);
-    expect(c).not.toBe(b);
   });
 
   it("validates resolved paths using injected trusted dirs", () => {
@@ -92,7 +75,6 @@ describe("exec safe bin trust", () => {
       const dirs = getTrustedSafeBinDirs({
         baseDirs: [],
         extraDirs: [swapped],
-        refresh: true,
       });
 
       expect(
@@ -118,7 +100,6 @@ describe("exec safe bin trust", () => {
       const dirs = getTrustedSafeBinDirs({
         baseDirs: [],
         extraDirs: [trustedDir],
-        refresh: true,
       });
 
       expect(
@@ -134,7 +115,7 @@ describe("exec safe bin trust", () => {
     const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
 
     withEnv({ PATH: `${injected}${path.delimiter}${process.env.PATH ?? ""}` }, () => {
-      const refreshed = getTrustedSafeBinDirs({ refresh: true });
+      const refreshed = getTrustedSafeBinDirs();
       expect(refreshed.has(path.resolve(injected))).toBe(false);
     });
   });

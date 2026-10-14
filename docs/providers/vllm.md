@@ -20,7 +20,13 @@ vLLM serves open-source (and some custom) models through an **OpenAI-compatible*
 
 <Steps>
   <Step title="Start vLLM with an OpenAI-compatible server">
-    Your base URL must expose `/v1` endpoints (`/v1/models`, `/v1/chat/completions`). vLLM commonly runs on:
+    Your base URL must expose `/v1` endpoints (`/v1/models`, `/v1/chat/completions`). Start the server with the model you want to serve:
+
+    ```bash
+    vllm serve <model-id>
+    ```
+
+    See the [vLLM online serving docs](https://docs.vllm.ai/en/latest/serving/online_serving/) for flags. vLLM commonly runs on:
 
     ```text
     http://127.0.0.1:8000/v1
@@ -124,6 +130,58 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
 
 ## Advanced configuration
 
+### Prioritize interactive requests
+
+When interactive and background work share one vLLM engine, enable native
+priority scheduling on the server:
+
+```bash
+vllm serve <model-id> --scheduling-policy priority
+```
+
+Then opt in for that model in OpenClaw:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "vllm/your-model-id": { params: { priorityScheduling: true } },
+      },
+    },
+  },
+}
+```
+
+`priorityScheduling` is an optional boolean, disabled by default. It applies
+only to the selected `vllm/*` model's params; agent-specific model params can
+override it. Global or agent-wide params do not enable it. Other providers and
+fallback models do not inherit the opt-in.
+
+| Request                                              | Native `priority` |
+| ---------------------------------------------------- | ----------------: |
+| Interactive user turn or manual `/compact`           |            `-100` |
+| Delegated or unclassified work                       |               `0` |
+| Cron, heartbeat, memory, or simple helper completion |             `100` |
+
+Run-triggered compaction inherits the originating urgency. Independent automatic
+compaction uses background priority. Simple helper completions include utility
+summaries and tool-side model calls, even when a user is waiting for their result.
+
+Lower numbers are scheduled first under contention; arrival order breaks ties.
+OpenClaw sends the native field and does not maintain another queue, reserve
+capacity, or isolate model memory. See the [vLLM scheduler reference](https://docs.vllm.ai/en/stable/api/vllm/config/scheduler/).
+
+When enabled, dynamic priority takes precedence over an explicit
+`extraBody.priority` or `extra_body.priority`. When disabled, OpenClaw adds no
+scheduling field and preserves existing literal priority overrides, including
+zero. Numeric `priority: 0` never enables scheduling.
+
+The vLLM request contract requires priority scheduling for nonzero priorities.
+Before switching the server back to FCFS, disable `priorityScheduling` and remove
+any explicit nonzero priority overrides. This new optional field needs no Doctor
+migration.
+
 <AccordionGroup>
   <Accordion title="Proxy-style behavior">
     vLLM is treated as a proxy-style OpenAI-compatible `/v1` backend, not a native OpenAI endpoint:
@@ -173,6 +231,23 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
     ```
 
     Non-`off` thinking levels send `enable_thinking: true`. If your endpoint expects DashScope-style top-level flags instead, use `compat.thinkingFormat: "qwen"` to send `enable_thinking` at the request root.
+
+    If your served template accepts effort levels, declare them in `compat.supportedReasoningEfforts`, for example `["low", "medium", "xhigh"]`. OpenClaw then exposes those `/think` choices plus `off`. The shared reasoning resolver maps the selected level to the declared wire value. With `qwen-chat-template`, that value goes in `chat_template_kwargs.reasoning_effort`; with `qwen`, it goes in root `reasoning_effort`.
+
+    Provider-native values are case-sensitive. Use `compat.reasoningEffortMap`, such as `{ low: "LOW", high: "HIGH" }`, to map logical choices to a declared native list such as `["LOW", "HIGH"]`. Unmapped native labels are not advertised as effort choices. Missing, empty, or unusable lists keep binary thinking, as does `compat.supportsReasoningEffort: false`.
+
+    The plugin prepares these mappings as model capabilities before session setup, so advanced choices such as `xhigh` and `max` also survive session-level clamping when their native wire labels differ.
+
+    The default remains `off`, including after upgrading an existing configured model. An explicit enabled level now sends its declared effort instead of silently using the template's default. Ordinary binary Qwen models keep their existing request shape. Per-model `params.extra_body` remains the final request-body override.
+
+  </Accordion>
+
+  <Accordion title="DeepSeek V4 thinking controls">
+    For vLLM model IDs containing `deepseek-v4` or `deepseek_v4`, configure `reasoning: true`. OpenClaw sends the selected effort through `chat_template_kwargs.reasoning_effort`, with both `thinking` and `enable_thinking` set to `true`. Declared efforts and `reasoningEffortMap` use the same shared resolver as other OpenAI-compatible models.
+
+    `/think off` sends both template flags as `false`, because vLLM enables DeepSeek thinking when either flag is true. Hosted DeepSeek's root `thinking` object and root `reasoning_effort` are removed. Existing explicit template kwargs and the final `params.extra_body` override remain authoritative. Explicit Qwen thinking formats take precedence over the model-name match.
+
+    This request shaping does not enable reasoning for catalog rows marked `reasoning: false` or change discovery heuristics. Configure the model explicitly if discovery does not recognize its reasoning capability.
 
   </Accordion>
 
@@ -299,7 +374,7 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
     }
     ```
 
-    `timeoutSeconds` applies to vLLM model HTTP requests only: connection setup, response headers, body streaming, and the total guarded-fetch abort. It also raises the LLM idle/stream watchdog ceiling above the implicit ~120s default for this provider. Prefer this over increasing `agents.defaults.timeoutSeconds`, which controls the whole agent run.
+    `timeoutSeconds` applies to vLLM model HTTP requests only: connection setup, response headers, body streaming, and the total guarded-fetch abort. It also raises the LLM idle/stream watchdog ceiling above the implicit ~120s default for this provider. Prefer this over increasing `agents.defaults.timeoutSeconds`, which controls each model attempt's execution budget. A lower agent or run-specific timeout still caps the attempt; each configured fallback gets a fresh budget.
 
   </Accordion>
 

@@ -11,23 +11,16 @@ export function validateWorkerProviderContract(
   provider: WorkerProvider,
   declaredIds: readonly string[],
 ): WorkerProviderValidation {
-  const missingMethod = (["provision", "inspect", "destroy"] as const).find(
+  const missingMethod = (["resolveAllocation", "provision", "inspect", "destroy"] as const).find(
     (method) => typeof provider[method] !== "function",
   );
   if (missingMethod) {
     return { ok: false, message: `worker provider registration missing method: ${missingMethod}` };
   }
-  if (provider.renew !== undefined && typeof provider.renew !== "function") {
-    return { ok: false, message: "worker provider registration renew must be a function" };
-  }
-  if (
-    provider.listMachineOptions !== undefined &&
-    typeof provider.listMachineOptions !== "function"
-  ) {
-    return {
-      ok: false,
-      message: "worker provider registration listMachineOptions must be a function",
-    };
+  for (const method of ["renew", "maintain", "prepareProvision", "listMachineOptions"] as const) {
+    if (provider[method] !== undefined && typeof provider[method] !== "function") {
+      return { ok: false, message: `worker provider registration ${method} must be a function` };
+    }
   }
   if (
     provider.provisionBeforeInstallation !== undefined &&

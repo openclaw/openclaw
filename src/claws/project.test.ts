@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { lstat, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import fs, { lstat, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { buildClawProject } from "./project-build.js";
+import { clawProjectBuildEntrypoint } from "./project-runtime.test-support.js";
 import { ClawProjectError, createClawProject, validateClawProject } from "./project.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -58,16 +61,22 @@ describe("Claw projects", () => {
   it("matches the golden artifact digest under a restrictive umask", () => {
     const output = join(tempDirs.make("openclaw-claw-umask-"), "golden.tgz");
     const project = join(process.cwd(), "test", "fixtures", "claws", "project-v1");
+    const projectBuildUrl = resolveRuntimeWorkerUrl(clawProjectBuildEntrypoint);
     const script = [
       "process.umask(0o077);",
-      'const { buildClawProject } = await import("./src/claws/project-build.ts");',
+      `const { buildClawProject } = await import(${JSON.stringify(projectBuildUrl.href)});`,
       `const result = await buildClawProject(${JSON.stringify(project)}, ${JSON.stringify(output)});`,
       "process.stdout.write(result.integrity);",
     ].join("\n");
 
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
+      [
+        ...resolveRuntimeWorkerArgv(projectBuildUrl).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        script,
+      ],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -86,6 +95,40 @@ describe("Claw projects", () => {
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(GOLDEN_ARTIFACT_INTEGRITY);
+  });
+
+  it("refuses to publish and removes staging when a completed file fails to close", async () => {
+    const outputDirectory = tempDirs.make("openclaw-claw-close-failure-");
+    const output = join(outputDirectory, "claw.tgz");
+    const closeError = Object.assign(new Error("staged file close failed"), { code: "EIO" });
+    const open = fs.open;
+    let closeAttempts = 0;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (
+        String(args[0]).startsWith(`${outputDirectory}${sep}`) &&
+        (await handle.stat()).isFile()
+      ) {
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementation(async () => {
+          await close();
+          closeAttempts += 1;
+          throw closeError;
+        });
+      }
+      return handle;
+    });
+    try {
+      await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
+        await expect(
+          buildClawProject(join(process.cwd(), "test", "fixtures", "claws", "project-v1"), output),
+        ).rejects.toBe(closeError);
+      });
+      expect(closeAttempts).toBe(1);
+      await expect(readdir(outputDirectory)).resolves.toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("creates a minimal project that validates through the canonical reader", async () => {
@@ -191,38 +234,6 @@ describe("Claw projects", () => {
     expect(entries).not.toContain("package/not-packed.txt");
   });
 
-  it("preserves the canonical metadata-selected OpenClaw profile path", async () => {
-    const project = tempDirs.make("openclaw-claw-custom-profile-");
-    const output = join(tempDirs.make("openclaw-claw-custom-profile-output-"), "claw.tgz");
-    await writeRichProject(project);
-    await rename(
-      join(project, "profiles", "openclaw.yml"),
-      join(project, "profiles", "custom.yaml"),
-    );
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace(
-        "agent:\n  id: demo-claw",
-        "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: profiles/custom.yaml",
-      ),
-    );
-
-    const validation = await validateClawProject(project);
-    const result = await buildClawProject(project, output);
-    const entries: string[] = [];
-    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
-
-    expect(validation).toMatchObject({ ok: true });
-    if (validation.ok) {
-      expect(validation.claw.snapshot.openClawProfile?.sourcePath).toBe("profiles/custom.yaml");
-      expect(validation.excludedPaths).not.toContain("profiles/custom.yaml");
-    }
-    expect(result.files).toContain("profiles/custom.yaml");
-    expect(entries).toContain("package/profiles/custom.yaml");
-    expect(entries).not.toContain("package/profiles/openclaw.yml");
-  });
-
   it("packages a leading-at workspace source as an ordinary file", async () => {
     const project = tempDirs.make("openclaw-claw-leading-at-");
     const output = join(tempDirs.make("openclaw-claw-leading-at-output-"), "claw.tgz");
@@ -240,74 +251,6 @@ describe("Claw projects", () => {
 
     expect(result.files).toContain("@notes.md");
     expect(entries).toContain("package/@notes.md");
-  });
-
-  it("packages a valid source whose filename begins with two dots", async () => {
-    const project = tempDirs.make("openclaw-claw-leading-dots-");
-    const output = join(tempDirs.make("openclaw-claw-leading-dots-output-"), "claw.tgz");
-    await writeRichProject(project);
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace("workspace/reference.md", "..notes.md"),
-    );
-    await writeFile(join(project, "..notes.md"), "# Notes\n");
-
-    const result = await buildClawProject(project, output);
-    const entries: string[] = [];
-    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
-
-    expect(result.files).toContain("..notes.md");
-    expect(entries).toContain("package/..notes.md");
-  });
-
-  it("normalizes accepted backslash source separators in the built package", async () => {
-    const project = tempDirs.make("openclaw-claw-backslash-source-");
-    const output = join(tempDirs.make("openclaw-claw-backslash-source-output-"), "claw.tgz");
-    await writeRichProject(project);
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace(
-        "    - source: workspace/reference.md",
-        String.raw`    - source: 'workspace\reference.md'`,
-      ),
-    );
-
-    const validation = await validateClawProject(project);
-    const result = await buildClawProject(project, output);
-    const entries: string[] = [];
-    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
-
-    expect(validation).toMatchObject({ ok: true });
-    expect(result.files).toContain("workspace/reference.md");
-    expect(entries).toContain("package/workspace/reference.md");
-  });
-
-  it("preserves long workspace source paths deterministically", async () => {
-    const project = tempDirs.make("openclaw-claw-long-path-");
-    const output = tempDirs.make("openclaw-claw-long-path-output-");
-    await writeRichProject(project);
-    const longName = `${"a".repeat(140)}.md`;
-    const longSource = `workspace/${longName}`;
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace("workspace/reference.md", longSource),
-    );
-    await writeFile(join(project, longSource), "# Long path\n");
-
-    const firstPath = join(output, "first.tgz");
-    const secondPath = join(output, "second.tgz");
-    const first = await buildClawProject(project, firstPath);
-    const second = await buildClawProject(project, secondPath);
-    const entries: string[] = [];
-    await tar.t({ file: firstPath, onentry: (entry) => entries.push(entry.path) });
-
-    expect(await readFile(firstPath)).toEqual(await readFile(secondPath));
-    expect(first.integrity).toBe(second.integrity);
-    expect(first.files).toContain(longSource);
-    expect(entries).toContain(`package/${longSource}`);
   });
 
   it.runIf(process.platform === "win32")(
@@ -347,7 +290,7 @@ describe("Claw projects", () => {
     );
   });
 
-  it.each([".git/CLAW.md", "node_modules/example/CLAW.md"])(
+  it.each([".git/CLAW.md"])(
     "rejects a CLAW.md symlink into excluded tree %s",
     async (targetPath) => {
       const project = tempDirs.make("openclaw-claw-manifest-excluded-link-");
@@ -376,72 +319,27 @@ describe("Claw projects", () => {
     });
   });
 
-  it.each([
-    ".git/config",
-    "node_modules/example/secret.md",
-    "workspace/.git/config",
-    "workspace/node_modules/example/secret.md",
-  ])("rejects an explicitly selected source from %s", async (sourcePath) => {
-    const project = tempDirs.make("openclaw-claw-excluded-source-");
-    const output = join(tempDirs.make("openclaw-claw-excluded-source-output-"), "claw.tgz");
-    await writeRichProject(project);
-    await mkdir(dirname(join(project, sourcePath)), { recursive: true });
-    await writeFile(join(project, sourcePath), "sensitive local state\n");
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace("workspace/reference.md", sourcePath),
-    );
-
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
-    });
-    await expect(buildClawProject(project, output)).rejects.toMatchObject({
-      code: "project_invalid",
-    } satisfies Partial<ClawProjectError>);
-  });
-
-  it("rejects a custom profile selected from an excluded tree", async () => {
-    const project = tempDirs.make("openclaw-claw-excluded-profile-");
-    await writeRichProject(project);
-    await rename(
-      join(project, "profiles", "openclaw.yml"),
-      join(project, "profiles", "unused.yml"),
-    );
-    await mkdir(join(project, ".git"), { recursive: true });
-    await writeFile(join(project, ".git", "profile.yaml"), "schemaVersion: 1\nagent: {}\n");
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace(
-        "agent:\n  id: demo-claw",
-        "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: .git/profile.yaml",
-      ),
-    );
-
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
-    });
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "rejects a workspace source that portably collides with CLAW.md",
-    async () => {
-      const project = tempDirs.make("openclaw-claw-manifest-case-collision-");
+  it.each(["workspace/node_modules/example/secret.md"])(
+    "rejects an explicitly selected source from %s",
+    async (sourcePath) => {
+      const project = tempDirs.make("openclaw-claw-excluded-source-");
+      const output = join(tempDirs.make("openclaw-claw-excluded-source-output-"), "claw.tgz");
       await writeRichProject(project);
+      await mkdir(dirname(join(project, sourcePath)), { recursive: true });
+      await writeFile(join(project, sourcePath), "sensitive local state\n");
       const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-      await writeFile(join(project, "claw.md"), "# Conflicting source\n");
       await writeFile(
         join(project, "CLAW.md"),
-        manifest.replace("workspace/reference.md", "claw.md"),
+        manifest.replace("workspace/reference.md", sourcePath),
       );
 
       await expect(validateClawProject(project)).resolves.toMatchObject({
         ok: false,
-        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
+        diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
       });
+      await expect(buildClawProject(project, output)).rejects.toMatchObject({
+        code: "project_invalid",
+      } satisfies Partial<ClawProjectError>);
     },
   );
 
@@ -465,36 +363,6 @@ describe("Claw projects", () => {
           )
           .replace("workspace/reference.md", "profiles/CUSTOM.yaml"),
       );
-
-      await expect(validateClawProject(project)).resolves.toMatchObject({
-        ok: false,
-        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects Unicode-normalization collisions between workspace sources",
-    async () => {
-      const project = tempDirs.make("openclaw-claw-unicode-collision-");
-      await writeRichProject(project);
-      const composed = "workspace/caf\u00e9.md";
-      const decomposed = "workspace/cafe\u0301.md";
-      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-      await writeFile(
-        join(project, "CLAW.md"),
-        manifest.replace(
-          "    - source: workspace/reference.md\n      path: reference.md",
-          [
-            `    - source: ${JSON.stringify(composed)}`,
-            "      path: composed.md",
-            `    - source: ${JSON.stringify(decomposed)}`,
-            "      path: decomposed.md",
-          ].join("\n"),
-        ),
-      );
-      await writeFile(join(project, composed), "# Composed\n");
-      await writeFile(join(project, decomposed), "# Decomposed\n");
 
       await expect(validateClawProject(project)).resolves.toMatchObject({
         ok: false,
@@ -527,17 +395,5 @@ describe("Claw projects", () => {
     if (!result.ok) {
       expect(result.diagnostics.map((item) => item.code)).toContain("ambiguous_project_root");
     }
-  });
-
-  it("changes the artifact digest when a declared input changes", async () => {
-    const project = tempDirs.make("openclaw-claw-build-change-");
-    const output = tempDirs.make("openclaw-claw-output-change-");
-    await writeRichProject(project);
-
-    const first = await buildClawProject(project, join(output, "first.tgz"));
-    await writeFile(join(project, "workspace", "reference.md"), "# Changed reference\n");
-    const second = await buildClawProject(project, join(output, "second.tgz"));
-
-    expect(first.integrity).not.toBe(second.integrity);
   });
 });

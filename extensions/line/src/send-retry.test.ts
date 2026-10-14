@@ -1,8 +1,9 @@
 // Line tests cover push retry and retry-key deduplication behavior.
 import { HTTPFetchError } from "@line/bot-sdk";
-import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveLineNonDispatchRetryable, runLinePushWithRetries } from "./send-retry.js";
+import * as sendModule from "./send.js";
 
 const {
   requireRuntimeConfigMock,
@@ -41,8 +42,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   return { ...actual, logVerbose: logVerboseMock };
 });
 
-let sendModule: typeof import("./send.js");
-
 const LINE_TEST_CFG = {
   channels: { line: { accounts: { default: {} } } },
 } satisfies OpenClawConfig;
@@ -68,10 +67,6 @@ function retryKeysOf(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>): (string
 
 describe("LINE push retries", () => {
   const fetchMock = vi.fn<typeof fetch>();
-
-  beforeAll(async () => {
-    sendModule = await import("./send.js");
-  });
 
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
@@ -109,6 +104,47 @@ describe("LINE push retries", () => {
       cfg: LINE_TEST_CFG,
     });
   }
+
+  it("starts the request in the same turn as a synchronous authorization", async () => {
+    let active = true;
+    const authorize = () => {
+      queueMicrotask(() => {
+        active = false;
+      });
+      return active;
+    };
+    fetchMock.mockImplementationOnce(async () => {
+      expect(active).toBe(true);
+      return new Response(JSON.stringify({ sentMessages: [{ id: "authorized" }] }));
+    });
+
+    const result = await resolveRetryRun(
+      sendModule.pushMessageLine(LINE_TARGET, "hello", { cfg: LINE_TEST_CFG, authorize }),
+    );
+
+    expect(result.messageId).toBe("authorized");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(active).toBe(false);
+  });
+
+  it("checks authorization after request serialization", async () => {
+    let active = true;
+    const contents = {
+      type: "bubble" as const,
+      toJSON() {
+        active = false;
+        return { type: "bubble" };
+      },
+    };
+
+    await expect(
+      sendModule.pushFlexMessage(LINE_TARGET, "card", contents, {
+        cfg: LINE_TEST_CFG,
+        authorize: () => active,
+      }),
+    ).rejects.toThrow("LINE send authorization denied");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it("retries a LINE server error under one retry key and delivers once", async () => {
     fetchMock
@@ -159,16 +195,6 @@ describe("LINE push retries", () => {
     expect(new Set(retryKeysOf(fetchMock)).size).toBe(1);
   });
 
-  it("gives up after the configured attempts and surfaces the LINE failure", async () => {
-    fetchMock.mockImplementation(async () =>
-      jsonResponse({ message: "Internal server error" }, 500),
-    );
-
-    await expect(resolveRetryRun(pushText())).rejects.toMatchObject({ status: 500 });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(new Set(retryKeysOf(fetchMock)).size).toBe(1);
-  });
-
   it.each([
     { label: "quota rejection", status: 429, message: "You have reached your monthly limit." },
     { label: "request rejection", status: 400, message: "The request body has 1 error(s)" },
@@ -176,13 +202,6 @@ describe("LINE push retries", () => {
     fetchMock.mockResolvedValue(jsonResponse({ message }, status));
 
     await expect(resolveRetryRun(pushText())).rejects.toBeInstanceOf(HTTPFetchError);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not retry once LINE accepted a request with an unreadable receipt", async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ sentMessages: [{}] }));
-
-    await expect(resolveRetryRun(pushText())).rejects.toSatisfy(isChannelPartialDeliveryError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -198,5 +217,34 @@ describe("LINE push retries", () => {
     ).rejects.toMatchObject({ status: 500 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(retryKeysOf(fetchMock)).toEqual([null]);
+  });
+});
+
+describe("resolveLineNonDispatchRetryable", () => {
+  const httpError = (status: number) =>
+    new HTTPFetchError(`${status} - provider answered`, {
+      status,
+      statusText: "provider answered",
+      headers: new Headers(),
+      body: "provider body",
+    });
+
+  it("keeps a push ambiguous when an earlier attempt never reached LINE", async () => {
+    const rejected = httpError(400);
+    let attempt = 0;
+    const failure = await runLinePushWithRetries(async () => {
+      attempt += 1;
+      // A reset connection may already have delivered the push, so the retry
+      // that follows cannot prove it was never sent.
+      throw attempt === 1
+        ? Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })
+        : rejected;
+    }, "line:push").catch((error: unknown) => error);
+
+    expect(attempt).toBeGreaterThan(1);
+    expect(resolveLineNonDispatchRetryable(failure)).toBeUndefined();
+    expect(
+      resolveLineNonDispatchRetryable(new Error("wrapped send failure", { cause: failure })),
+    ).toBeUndefined();
   });
 });

@@ -5,7 +5,10 @@ import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { postTrustedWebToolsJson, throwWebSearchApiError } from "./web-search-provider-common.js";
 
 const realFetch = globalThis.fetch;
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function postSearch(overrides: Partial<Parameters<typeof postTrustedWebToolsJson>[0]> = {}) {
   return postTrustedWebToolsJson(
@@ -49,7 +52,11 @@ describe("web provider HTTP errors", () => {
             (cause: unknown) => cause,
           );
           expect(authorization).toBe(`Bearer ${apiKey}`);
-          expect(error).toEqual(new Error(`Search API error (401): ${expected}`));
+          expect(error).toMatchObject({
+            message: `Search API error (401): ${expected}`,
+            status: 401,
+            statusCode: 401,
+          });
         },
       );
     },
@@ -96,6 +103,21 @@ describe("web provider HTTP errors", () => {
 });
 
 describe("web_search shared cache", () => {
+  it("honors the reader TTL while preserving the shipped one-argument reader", async () => {
+    const { readCachedSearchPayload, writeCachedSearchPayload } =
+      await import("./web-search-provider-common.js");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const key = "query:reader-ttl";
+    writeCachedSearchPayload(key, { text: "original" }, 900_000);
+    expect(readCachedSearchPayload(key, 0)).toBeUndefined();
+    writeCachedSearchPayload(key, { text: "disabled" }, 0);
+    clock.mockReturnValue(61_000);
+    expect(readCachedSearchPayload(key, 60_000)).toBeUndefined();
+    expect(readCachedSearchPayload(key)).toEqual({ text: "original", cached: true });
+    clock.mockReturnValue(901_001);
+    expect(readCachedSearchPayload(key)).toBeUndefined();
+  });
+
   it("keeps cache entries module-local instead of exposing them on a global symbol", async () => {
     // Cache state should die with the module instance; a global symbol would
     // leak search payloads across tests, sessions, and plugin reloads.

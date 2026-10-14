@@ -1,12 +1,16 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
-import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
+import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
+import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import {
   handleInlineSlashArgKeydown,
   handleSlashMenuKeydown,
   type SlashMenuHost,
-} from "./chat-composer-slash-menu.ts";
+} from "./chat-composer-slash-menu.tsx";
+import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 type ComposerKeyDownDeps = {
@@ -14,13 +18,18 @@ type ComposerKeyDownDeps = {
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
   slashMenuHost: SlashMenuHost;
+  mentionMenuHost: HumanMentionMenuHost;
   requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
-  commitDraft: (draft: string) => void;
-  syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
+  submitDraft: (
+    draft: string,
+    event: KeyboardEvent,
+    followUpModeOverride?: ChatFollowUpMode,
+  ) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
+  goalComposer: GoalComposerController;
 };
 
 export function createComposerKeyDownHandler({
@@ -28,13 +37,14 @@ export function createComposerKeyDownHandler({
   props,
   skillMenuHost,
   slashMenuHost,
+  mentionMenuHost,
   requestUpdate,
   sendShortcut,
   canSubmitDraft,
-  commitDraft,
-  syncDraftAfterSend,
+  submitDraft,
   showAbortableUi,
   alternateFollowUpMode,
+  goalComposer,
 }: ComposerKeyDownDeps): (event: KeyboardEvent) => void {
   return (event) => {
     // The handler only ever binds to the composer textarea; narrowing here
@@ -43,32 +53,49 @@ export function createComposerKeyDownHandler({
     if (!(target instanceof HTMLTextAreaElement)) {
       return;
     }
-    if (state.composerComposing || event.isComposing || event.keyCode === 229) {
+    if (state.composerComposing || isComposingKeyboardEvent(event)) {
       return;
     }
 
-    if (props.connected && handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate)) {
+    if (state.emojiMenu.handleKeydown(event, props.paneId, requestUpdate)) {
+      return;
+    }
+
+    if (state.mentionMenu.handleKeydown(event, mentionMenuHost, requestUpdate)) {
+      return;
+    }
+
+    if (goalComposer.active) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        goalComposer.cancel();
+      } else if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        (sendShortcut === "enter" || event.metaKey || event.ctrlKey) &&
+        canSubmitDraft(target.value)
+      ) {
+        event.preventDefault();
+        submitDraft(target.value, event);
+      }
       return;
     }
 
     if (
       props.connected &&
-      handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut)
+      (handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate) ||
+        handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut) ||
+        handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate))
     ) {
       return;
     }
 
-    if (props.connected && handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate)) {
-      return;
-    }
-
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {
-      commitDraft(target.value);
+      commitComposerDraft(props, target.value);
       const result = props.onHistoryKeydown({
         key: event.key,
         selectionStart: target.selectionStart,
         selectionEnd: target.selectionEnd,
-        valueLength: target.value.length,
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
@@ -77,6 +104,7 @@ export function createComposerKeyDownHandler({
         keyCode: event.keyCode,
       });
       if (result.handled) {
+        state.editRevision += 1;
         if (result.preventDefault) {
           event.preventDefault();
         }
@@ -94,6 +122,7 @@ export function createComposerKeyDownHandler({
       event.key === "Escape" &&
       !state.skillMenuOpen &&
       !state.slashMenuOpen &&
+      !state.mentionMenu.open &&
       !props.replyTarget &&
       !state.dictation?.active &&
       showAbortableUi &&
@@ -106,6 +135,11 @@ export function createComposerKeyDownHandler({
 
     const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
+      // Holding send is one action, even after the draft clears into the queue.
+      if (event.repeat) {
+        event.preventDefault();
+        return;
+      }
       const attachments = props.getAttachments?.() ?? props.attachments ?? [];
       const hasComposedContent = Boolean(target.value.trim() || attachments.length);
       if (!hasComposedContent) {
@@ -113,8 +147,12 @@ export function createComposerKeyDownHandler({
         // connected + composable gate), or offline Enter would swallow the key
         // and invoke a lifecycle that returns with no visible outcome.
         const queued =
-          showAbortableUi && props.connected && props.canSend && props.onQueueSteer
-            ? steerableQueuedMessage(props.queue)
+          showAbortableUi &&
+          props.connected &&
+          props.canSend &&
+          !props.submitDisabledReason &&
+          props.onQueueSteer
+            ? steerableQueuedMessage(props.displayQueue ?? props.queue)
             : undefined;
         if (queued) {
           event.preventDefault();
@@ -130,11 +168,9 @@ export function createComposerKeyDownHandler({
         return;
       }
       event.preventDefault();
-      commitDraft(target.value);
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
-      props.onSend(followUpModeOverride, event);
-      syncDraftAfterSend(target);
+      submitDraft(target.value, event, followUpModeOverride);
     }
   };
 }

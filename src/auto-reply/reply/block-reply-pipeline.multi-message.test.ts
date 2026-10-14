@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 function blockFor(text: string, assistantMessageIndex: number) {
@@ -84,6 +85,8 @@ describe("block reply pipeline multi-assistant-message suppression", () => {
 
       pipeline.enqueue(blockFor("Same answer", 0));
       await pipeline.flush({ force: true });
+      expect(pipeline.didStreamTerminalReply?.(0)).toBe(true);
+      expect(pipeline.didStreamTerminalReply?.(1)).toBe(false);
       const finalPayload = blockFor("Same answer", 1);
       const { replyPayloads } = await buildReplyPayloads({
         payloads: [finalPayload],
@@ -100,16 +103,34 @@ describe("block reply pipeline multi-assistant-message suppression", () => {
     },
   );
 
-  it("suppresses a single message split into multiple blocks", async () => {
+  it("retries a later message's unsent answer that matches an earlier delivered message", async () => {
+    let sends = 0;
     const pipeline = createBlockReplyPipeline({
-      onBlockReply: async () => {},
+      onBlockReply: () => {
+        if (++sends === 2) {
+          setBlockReplyDelivery(Promise.resolve({ outcome: "failed-before-deliver" }));
+        }
+      },
       timeoutMs: 5000,
     });
+    const block = (assistantMessageIndex: number) =>
+      setReplyPayloadMetadata(
+        { text: "Done." },
+        { assistantMessageIndex, assistantMessageStartIndex: assistantMessageIndex },
+      );
 
-    pipeline.enqueue(blockFor("Gamma one.", 0));
-    pipeline.enqueue(blockFor("Gamma two.", 0));
+    pipeline.enqueue(block(0));
+    pipeline.enqueue(block(1));
     await pipeline.flush({ force: true });
+    const { replyPayloads } = await buildReplyPayloads({
+      payloads: [setReplyPayloadMetadata({ text: "Done." }, { assistantMessageIndex: 1 })],
+      isHeartbeat: false,
+      didLogHeartbeatStrip: false,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      replyToMode: "off",
+    });
 
-    expect(pipeline.hasSentPayload({ text: "Gamma one. Gamma two." })).toBe(true);
+    expect(replyPayloads).toEqual([expect.objectContaining({ text: "Done." })]);
   });
 });

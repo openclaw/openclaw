@@ -1,4 +1,3 @@
-// Slack plugin module implements events behavior.
 import type { SlackMonitorContext } from "./context.js";
 import { registerSlackAgentEvents } from "./events/agent.js";
 import { registerSlackAssistantEvents } from "./events/assistant.js";

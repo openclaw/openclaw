@@ -1,4 +1,3 @@
-// Zalouser plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
@@ -40,6 +39,7 @@ const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserA
     "dmPolicy",
     "allowFrom",
     "historyLimit",
+    "mediaMaxMb",
     "groupAllowFrom",
     "groupPolicy",
     "groups",

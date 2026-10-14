@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345524,
-  "reason": "typography picker module on the boot path (+301 B) plus unpinned boot growth from #131335 tooltips and #131336 new-session tab controls (~1.2 KiB) that predates this branch; measured on main 515c3d8ff3f",
-  "updatedAt": "2026-08-28"
+  "startupJsGzipBytes": 374285,
+  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
+  "updatedAt": "2026-10-12"
 }

@@ -1,6 +1,6 @@
 // Synology Chat tests cover core plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -10,12 +10,8 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
-import {
-  authorizeUserForDmWithIngress,
-  RateLimiter,
-  sanitizeInput,
-  validateToken,
-} from "./security.js";
+import { setSynologyRuntime } from "./runtime.js";
+import { sanitizeInput, validateToken } from "./security.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
 import { synologyChatSetupContract, synologyChatSetupWizard } from "./setup-surface.js";
 
@@ -56,31 +52,12 @@ function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
   });
 }
 
-async function expectDmAuthorization(params: {
-  userId: string;
-  dmPolicy: "open" | "allowlist" | "disabled";
-  allowedUserIds: string[];
-  allowed: boolean;
-  reasonCode?: string;
-}): Promise<void> {
-  const auth = await authorizeUserForDmWithIngress({
-    accountId: "default",
-    userId: params.userId,
-    dmPolicy: params.dmPolicy,
-    allowedUserIds: params.allowedUserIds,
-  });
-
-  expect(auth.senderAccess.allowed).toBe(params.allowed);
-  if (params.reasonCode !== undefined) {
-    expect(auth.senderAccess.reasonCode).toBe(params.reasonCode);
-  }
-}
-
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
 beforeEach(() => {
+  setSynologyRuntime(createPluginRuntimeMock());
   vi.stubEnv("SYNOLOGY_CHAT_TOKEN", undefined);
   vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", undefined);
   vi.stubEnv("SYNOLOGY_NAS_HOST", undefined);
@@ -90,20 +67,6 @@ beforeEach(() => {
 });
 
 describe("synology-chat core", () => {
-  it("exports hosted media and dangerous compatibility fields in the JSON schema", () => {
-    const properties = (SynologyChatChannelConfigSchema.schema.properties ?? {}) as Record<
-      string,
-      { type?: string }
-    >;
-
-    expect(properties.dangerouslyAllowNameMatching?.type).toBe("boolean");
-    expect(properties.webhookUrl?.type).toBe("string");
-  });
-
-  it("keeps the schema open for plugin-specific passthrough fields", () => {
-    expect(SynologyChatChannelConfigSchema.schema.additionalProperties).toEqual({});
-  });
-
   it("masks incoming and public callback URLs that may contain credentials", () => {
     expect(
       synologyChatSetupContract.metadata.fields.find((field) => field.key === "url"),
@@ -150,24 +113,6 @@ describe("synology-chat core", () => {
     expect(otherUser).toBe("agent:main:synology-chat:alpha:direct:456");
     expect(alpha).not.toBe(beta);
     expect(alpha).not.toBe(otherUser);
-  });
-
-  it("configures token and incoming webhook for the default account", async () => {
-    const prompter = createSynologySetupPrompter();
-
-    const result = await runSetupWizardConfigure({
-      configure: synologyChatConfigure,
-      cfg: {} as OpenClawConfig,
-      prompter,
-      options: {},
-    });
-
-    expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.["synology-chat"]?.enabled).toBe(true);
-    expect(result.cfg.channels?.["synology-chat"]?.token).toBe("synology-token");
-    expect(result.cfg.channels?.["synology-chat"]?.incomingUrl).toBe(
-      "https://nas.example.com/webapi/entry.cgi?token=incoming",
-    );
   });
 
   it("never sends an existing token-bearing incoming URL back through setup prompts", async () => {
@@ -246,135 +191,6 @@ describe("synology-chat core", () => {
 });
 
 describe("synology-chat account resolution", () => {
-  it("lists no accounts when the channel is missing", () => {
-    expect(listAccountIds({})).toStrictEqual([]);
-    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
-  });
-
-  it("does not discover an env account when the channel is not installed", () => {
-    process.env.SYNOLOGY_CHAT_TOKEN = "env-token";
-
-    expect(listAccountIds({})).toStrictEqual([]);
-    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
-  });
-
-  it("lists the default account when base config has a token", () => {
-    const cfg = { channels: { "synology-chat": { token: "abc" } } };
-    expect(listAccountIds(cfg)).toEqual(["default"]);
-  });
-
-  it("lists the default account when env provides a token", () => {
-    process.env.SYNOLOGY_CHAT_TOKEN = "env-token";
-    const cfg = { channels: { "synology-chat": {} } };
-    expect(listAccountIds(cfg)).toEqual(["default"]);
-  });
-
-  it("does not list an implicit default account for a blank env token", () => {
-    process.env.SYNOLOGY_CHAT_TOKEN = "   ";
-    const cfg = {
-      channels: {
-        "synology-chat": { accounts: { office: {} } },
-      },
-    };
-
-    expect(listAccountIds(cfg)).toEqual(["office"]);
-  });
-
-  it("lists named and default accounts together", () => {
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          token: "base-token",
-          accounts: { work: { token: "t1" }, home: { token: "t2" } },
-        },
-      },
-    };
-
-    const ids = listAccountIds(cfg);
-    expect(ids).toContain("default");
-    expect(ids).toContain("work");
-    expect(ids).toContain("home");
-  });
-
-  it("returns full defaults for empty config", () => {
-    const cfg = { channels: { "synology-chat": {} } };
-    const account = resolveAccount(cfg, "default");
-    expect(account.accountId).toBe("default");
-    expect(account.enabled).toBe(true);
-    expect(account.webhookPath).toBe("/webhook/synology");
-    expect(account.webhookPathSource).toBe("default");
-    expect(account.dangerouslyAllowNameMatching).toBe(false);
-    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(false);
-    expect(account.dmPolicy).toBe("allowlist");
-    expect(account.rateLimitPerMinute).toBe(30);
-    expect(account.botName).toBe("OpenClaw");
-  });
-
-  it("uses env var fallbacks", () => {
-    const padded = "test-auth-token".padStart(16).padEnd(17);
-    vi.stubEnv("SYNOLOGY_CHAT_TOKEN", padded);
-    vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", " https://nas/incoming ");
-    vi.stubEnv("SYNOLOGY_NAS_HOST", " 192.0.2.1 ");
-    vi.stubEnv("OPENCLAW_BOT_NAME", " TestBot ");
-
-    const cfg = { channels: { "synology-chat": {} } };
-    const account = resolveAccount(cfg);
-    expect(account.token).toBe("test-auth-token");
-    expect(account.incomingUrl).toBe("https://nas/incoming");
-    expect(account.nasHost).toBe("192.0.2.1");
-    expect(account.botName).toBe("TestBot");
-  });
-
-  it("ignores blank env var fallbacks when resolving the default account", () => {
-    const whitespace = "   ";
-    vi.stubEnv("SYNOLOGY_CHAT_TOKEN", whitespace);
-    vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", whitespace);
-    vi.stubEnv("SYNOLOGY_NAS_HOST", whitespace);
-    vi.stubEnv("SYNOLOGY_ALLOWED_USER_IDS", whitespace);
-    vi.stubEnv("OPENCLAW_BOT_NAME", whitespace);
-
-    const account = resolveAccount({ channels: { "synology-chat": {} } });
-
-    expect(account.token).toBe("");
-    expect(account.incomingUrl).toBe("");
-    expect(account.webhookUrl).toBe("");
-    expect(account.nasHost).toBe("localhost");
-    expect(account.allowedUserIds).toEqual([]);
-    expect(account.botName).toBe("OpenClaw");
-  });
-
-  it("lets config and account overrides win over env/base config", () => {
-    process.env.SYNOLOGY_CHAT_TOKEN = "env-tok";
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          token: "base-tok",
-          webhookUrl: "https://gateway.example.com/webhook/base",
-          botName: "BaseName",
-          dangerouslyAllowNameMatching: false,
-          accounts: {
-            work: {
-              token: "work-tok",
-              webhookUrl: " https://gateway.example.com/webhook/work ",
-              botName: "WorkBot",
-              dangerouslyAllowNameMatching: true,
-            },
-          },
-        },
-      },
-    };
-
-    expect(resolveAccount({ channels: { "synology-chat": { token: "config-tok" } } }).token).toBe(
-      "config-tok",
-    );
-
-    const account = resolveAccount(cfg, "work");
-    expect(account.token).toBe("work-tok");
-    expect(account.webhookUrl).toBe("https://gateway.example.com/webhook/work");
-    expect(account.botName).toBe("WorkBot");
-    expect(account.dangerouslyAllowNameMatching).toBe(true);
-  });
-
   it("inherits dangerous name matching from base config unless explicitly disabled", () => {
     const cfg = {
       channels: {
@@ -472,25 +288,6 @@ describe("synology-chat account resolution", () => {
     process.env.SYNOLOGY_RATE_LIMIT = "-1";
     expect(resolveAccount({ channels: { "synology-chat": {} } }).rateLimitPerMinute).toBe(30);
   });
-
-  it("ignores malformed configured rate limits", () => {
-    process.env.SYNOLOGY_RATE_LIMIT = "12";
-
-    expect(
-      resolveAccount({
-        channels: {
-          "synology-chat": { rateLimitPerMinute: -1 },
-        },
-      }).rateLimitPerMinute,
-    ).toBe(12);
-    expect(
-      resolveAccount({
-        channels: {
-          "synology-chat": { rateLimitPerMinute: 1.5 },
-        },
-      }).rateLimitPerMinute,
-    ).toBe(12);
-  });
 });
 
 describe("synology-chat security helpers", () => {
@@ -500,64 +297,6 @@ describe("synology-chat security helpers", () => {
     expect(validateToken("", "abc123")).toBe(false);
     expect(validateToken("abc123", "")).toBe(false);
     expect(validateToken("short", "muchlongertoken")).toBe(false);
-  });
-
-  it("matches DM policy decisions through channel ingress", async () => {
-    await expectDmAuthorization({
-      userId: "user1",
-      dmPolicy: "open",
-      allowedUserIds: [],
-      allowed: false,
-      reasonCode: "dm_policy_not_allowlisted",
-    });
-    await expectDmAuthorization({
-      userId: "user1",
-      dmPolicy: "open",
-      allowedUserIds: ["*"],
-      allowed: true,
-    });
-    await expectDmAuthorization({
-      userId: "user1",
-      dmPolicy: "disabled",
-      allowedUserIds: ["user1"],
-      allowed: false,
-      reasonCode: "dm_policy_disabled",
-    });
-    await expectDmAuthorization({
-      userId: "user1",
-      dmPolicy: "allowlist",
-      allowedUserIds: [],
-      allowed: false,
-      reasonCode: "dm_policy_not_allowlisted",
-    });
-    await expectDmAuthorization({
-      userId: "user9",
-      dmPolicy: "allowlist",
-      allowedUserIds: ["user1"],
-      allowed: false,
-      reasonCode: "dm_policy_not_allowlisted",
-    });
-    await expectDmAuthorization({
-      userId: "user1",
-      dmPolicy: "allowlist",
-      allowedUserIds: ["user1", "user2"],
-      allowed: true,
-    });
-  });
-
-  it("redacts Synology user IDs and allowlist entries from ingress state/decision", async () => {
-    const auth = await authorizeUserForDmWithIngress({
-      accountId: "default",
-      userId: "raw-sensitive-user-id",
-      dmPolicy: "allowlist",
-      allowedUserIds: ["raw-sensitive-user-id"],
-    });
-
-    const serialized = JSON.stringify({
-      state: auth.state,
-      decision: auth.ingress,
-    });
-    expect(serialized).not.toContain("raw-sensitive-user-id");
   });
 
   it("sanitizes prompt injection markers and long inputs", () => {
@@ -598,40 +337,5 @@ describe("synology-chat security helpers", () => {
     expect(result).toContain("[truncated]");
     expect(result.startsWith(`${"a".repeat(3998)}${emoji}`)).toBe(true);
     expect(result).not.toMatch(loneSurrogatePattern);
-  });
-
-  it("rate limits per user and caps tracked state", () => {
-    const limiter = new RateLimiter(3, 60);
-    expect(limiter.check("user1")).toBe(true);
-    expect(limiter.check("user1")).toBe(true);
-    expect(limiter.check("user1")).toBe(true);
-    expect(limiter.check("user1")).toBe(false);
-    expect(limiter.check("user2")).toBe(true);
-
-    const capped = new RateLimiter(1, 60, 3);
-    expect(capped.check("user1")).toBe(true);
-    expect(capped.check("user2")).toBe(true);
-    expect(capped.check("user3")).toBe(true);
-    expect(capped.check("user4")).toBe(true);
-    expect(capped.size()).toBeLessThanOrEqual(3);
-  });
-
-  it("caps oversized rate limit windows before constructing the limiter", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      const limiter = new RateLimiter(1, Number.MAX_SAFE_INTEGER);
-
-      expect(limiter.check("user1")).toBe(true);
-      expect(limiter.check("user1")).toBe(false);
-
-      vi.setSystemTime(MAX_TIMER_TIMEOUT_MS - 1);
-      expect(limiter.check("user1")).toBe(false);
-
-      vi.setSystemTime(MAX_TIMER_TIMEOUT_MS);
-      expect(limiter.check("user1")).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

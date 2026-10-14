@@ -1,8 +1,10 @@
-// Normalization core tests cover shared error coercion and formatting behavior.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
   coerceErrorMessage,
+  collectNestedErrorCandidates,
   formatErrorMessage,
+  ProviderAuthPersistenceError,
   stringifyNonErrorCause,
   toErrorObject,
   toStructuredErrorObject,
@@ -13,6 +15,112 @@ const keepText = (text: string): string => text;
 const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
 
 describe("formatErrorMessage", () => {
+  it("preserves error content when no diagnostic redaction policy is supplied", () => {
+    expect(
+      formatErrorMessage(
+        new Error("API_TOKEN = computeToken()", {
+          cause: new Error("sk-abc123456789012345678"),
+        }),
+      ),
+    ).toBe("API_TOKEN = computeToken() | sk-abc123456789012345678");
+  });
+
+  it("keeps provider persistence diagnostics in initiating order without reordering other errors", () => {
+    const persistence = new Error("write secret", { cause: new Error("write root") });
+    const cleanup = new AggregateError([new Error("cleanup root")], "cleanup secret");
+    const failure = new ProviderAuthPersistenceError("persistence failed", persistence, {
+      cause: cleanup,
+    });
+    const redact = (text: string) => text.replaceAll("secret", "[REDACTED]");
+
+    expect(formatErrorMessage(new Error("outer", { cause: failure }), { redact })).toBe(
+      "outer | persistence failed | write [REDACTED] | cleanup [REDACTED] | write root | cleanup root",
+    );
+    expect(String(failure)).toBe("AggregateError: persistence failed");
+
+    const plain = new AggregateError([persistence, cleanup], "persistence failed", {
+      cause: cleanup,
+    });
+    plain.name = "ProviderAuthPersistenceError";
+    expect(formatErrorMessage(new Error("outer", { cause: plain }), { redact })).toBe(
+      "outer | persistence failed | cleanup [REDACTED] | write [REDACTED] | cleanup root | write root",
+    );
+  });
+
+  it("retains both failures from actual async disposal", async () => {
+    const body = new Error("body secret");
+    const cleanup = new Error("cleanup secret");
+    const run = async () => {
+      await using resource = {
+        [Symbol.asyncDispose]: async () => {
+          throw cleanup;
+        },
+      };
+      void resource;
+      throw body;
+    };
+    const failure: unknown = await run().catch((error: unknown) => error);
+    expect(collectNestedErrorCandidates(failure)).toEqual([failure, cleanup, body]);
+    const redact = vi.fn((text: string) => text.replaceAll("secret", "[REDACTED]"));
+
+    expect(formatErrorMessage(failure, { redact })).toContain(
+      "cleanup [REDACTED] | body [REDACTED]",
+    );
+    expect(redact).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, null])("retains a downlevel suppressed value %s", (suppressed) => {
+    const failure = Object.assign(new Error("disposal failed"), {
+      name: "SuppressedError",
+      error: new Error("cleanup failed"),
+      suppressed,
+    });
+
+    expect(format(failure)).toBe(`disposal failed | cleanup failed | ${String(suppressed)}`);
+  });
+
+  it("isolates inaccessible messages on VM errors", () => {
+    const error: unknown = runInNewContext("new Error('')");
+    Object.defineProperty(error, "message", {
+      get() {
+        throw new Error("diagnostic field unavailable");
+      },
+    });
+    const redact = vi.fn(keepText);
+
+    expect(formatErrorMessage(error, { redact })).toBe("Error");
+    expect(redact).toHaveBeenCalledExactlyOnceWith("Error");
+    expect(format(new Error("outer failure", { cause: error }))).toBe("outer failure");
+  });
+
+  it("retains VM error messages, causes and aggregate branches", () => {
+    const foreign: unknown = runInNewContext(`
+      const leaf = Object.assign(new Error("native close failed"), {
+        code: "EIO",
+        name: "AggregateError",
+        errors: [new Error("display-only metadata")],
+      });
+      Object.assign(new AggregateError([leaf], "cleanup failed", {
+        cause: new Error("primary failure"),
+      }), { name: "CustomCleanupError" });
+    `);
+
+    expect(format(foreign)).toBe("cleanup failed | primary failure | native close failed | EIO");
+  });
+
+  it("retains aggregate branches, nested causes and codes once despite cycles", () => {
+    const native = Object.assign(new Error("native close failed"), { code: "EIO" });
+    const cleanup = new AggregateError([native, native, "second failure"], "cleanup failed");
+    const outer = new AggregateError([cleanup, native], "turn failed", {
+      cause: new Error("primary failure"),
+    });
+    native.cause = outer;
+
+    expect(format(outer)).toBe(
+      "turn failed | primary failure | cleanup failed | native close failed | EIO | second failure",
+    );
+  });
+
   it("walks and deduplicates Error cause chains while preserving codes", () => {
     const root = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
     const inner = new Error("request failed", { cause: root });
@@ -55,11 +163,7 @@ describe("formatErrorMessage", () => {
     expect(format(new Error("request failed", { cause: { status: 429 } }))).toBe(
       "request failed | status=429 code=unknown",
     );
-    // A non-Error cause carrying recognized status/code fields alongside extra
-    // keys used to be dropped entirely: formatStatusAndCode returns undefined
-    // for any object with keys beyond status/code, and the cause-chain branch
-    // had no stringifyUnknown fallback (unlike the top-level branch). The
-    // structured detail now survives instead of being swallowed.
+    // Extra fields must survive when status/code formatting declines the cause.
     expect(format(new Error("request failed", { cause: { statusCode: 429 } }))).toBe(
       'request failed | {"statusCode":429}',
     );
@@ -81,10 +185,6 @@ describe("formatErrorMessage", () => {
     expect(format(123n)).toBe("123");
     expect(format(circular)).toBe("[object Object]");
   });
-
-  it("requires an owner-supplied redactor", () => {
-    expect(formatErrorMessage("sensitive", { redact: () => "redacted" })).toBe("redacted");
-  });
 });
 
 describe("toErrorObject", () => {
@@ -96,7 +196,7 @@ describe("toErrorObject", () => {
 
   it("preserves structured details from non-Error objects", () => {
     const value = { code: "EPIPE", status: 500 };
-    const error = toErrorObject(value, "request failed") as Error & typeof value;
+    const error = toErrorObject(value, "request failed");
 
     expect(error).toMatchObject({ message: "request failed", code: "EPIPE", status: 500 });
     expect(error.cause).toBe(value);
@@ -128,16 +228,6 @@ describe("toStructuredErrorObject", () => {
       expect(Object.hasOwn(error, "cause")).toBe(true);
       expect(error.cause).toBe(value);
     }
-  });
-
-  it("preserves hostile stringification failures", () => {
-    const failure = {
-      [Symbol.toPrimitive]() {
-        throw new Error("stringification failed");
-      },
-    };
-
-    expect(() => toStructuredErrorObject(failure)).toThrow("stringification failed");
   });
 
   it("copies enumerable string and symbol details while retaining the original cause", () => {
@@ -183,28 +273,6 @@ describe("toStructuredErrorObject", () => {
     expect(Reflect.get(functionError, detailKey)).toBe("function symbol detail");
   });
 
-  it("skips fields whose definition fails and continues copying later details", () => {
-    const originalDefineProperty = Object.defineProperty;
-    const defineProperty = vi
-      .spyOn(Object, "defineProperty")
-      .mockImplementation(
-        (target: unknown, key: PropertyKey, attributes: PropertyDescriptor): unknown => {
-          if (target instanceof Error && key === "blocked") {
-            throw new Error("definition rejected");
-          }
-          return originalDefineProperty(target as object, key, attributes);
-        },
-      );
-
-    try {
-      const error = toStructuredErrorObject({ before: 1, blocked: 2, after: 3 });
-      expect(error).toMatchObject({ before: 1, after: 3 });
-      expect(error).not.toHaveProperty("blocked");
-    } finally {
-      defineProperty.mockRestore();
-    }
-  });
-
   it("skips throwing fields and preserves the base Error for enumeration failures", () => {
     const throwingGetter = {
       get details(): never {
@@ -248,26 +316,19 @@ describe("toStructuredErrorObject", () => {
   it("protects Error-owned and prototype-mutating fields without reading them", () => {
     let protectedReads = 0;
     const cause = {
-      get name() {
-        protectedReads += 1;
-        return "SpoofedError";
-      },
-      get message() {
-        protectedReads += 1;
-        return "spoofed message";
-      },
-      get cause() {
-        protectedReads += 1;
-        return "spoofed cause";
-      },
-      get stack() {
-        protectedReads += 1;
-        return "spoofed stack";
-      },
       constructor: { polluted: true },
       prototype: { polluted: true },
       code: "EIO",
     };
+    for (const key of ["name", "message", "cause", "stack"]) {
+      Object.defineProperty(cause, key, {
+        enumerable: true,
+        get() {
+          protectedReads += 1;
+          return "spoofed";
+        },
+      });
+    }
     Object.defineProperty(cause, "__proto__", {
       value: { polluted: true },
       enumerable: true,
@@ -310,6 +371,7 @@ describe("coerceErrorMessage", () => {
 
 describe("stringifyNonErrorCause", () => {
   it("renders primitive and structured values", () => {
+    expect(stringifyNonErrorCause("hi")).toBe("hi");
     expect(stringifyNonErrorCause(null)).toBe("null");
     expect(stringifyNonErrorCause(42)).toBe("42");
     expect(stringifyNonErrorCause({ ok: true })).toBe('{"ok":true}');
@@ -318,5 +380,6 @@ describe("stringifyNonErrorCause", () => {
   it("falls back to object tags when JSON has no string result", () => {
     expect(stringifyNonErrorCause(undefined)).toBe("[object Undefined]");
     expect(stringifyNonErrorCause(Symbol("value"))).toBe("[object Symbol]");
+    expect(stringifyNonErrorCause(() => {})).toBe("[object Function]");
   });
 });

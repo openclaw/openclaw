@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  IncognitoSessionEndedError,
+  IncognitoSessionSyncAccessError,
+} from "../../state/incognito-session-error.js";
 
 const mocks = vi.hoisted(() => ({
-  listSessionEntryKeysReadOnly: vi.fn((): string[] => []),
-  loadExactSessionEntryReadOnly: vi.fn(),
+  loadSessionEntryReadOnly: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntryKeysReadOnly: mocks.listSessionEntryKeysReadOnly,
-  loadExactSessionEntryReadOnly: mocks.loadExactSessionEntryReadOnly,
+  loadSessionEntryReadOnly: mocks.loadSessionEntryReadOnly,
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -30,8 +32,22 @@ function explicitFleet(): OpenClawConfig {
 
 describe("ACP session metadata store ownership", () => {
   beforeEach(() => {
-    mocks.listSessionEntryKeysReadOnly.mockClear();
-    mocks.loadExactSessionEntryReadOnly.mockReset();
+    mocks.loadSessionEntryReadOnly.mockReset();
+  });
+
+  it.each([
+    new IncognitoSessionSyncAccessError("readAcpSessionEntry", "readAcpSessionEntryAsync"),
+    new AggregateError([new IncognitoSessionEndedError()], "Session read failed"),
+  ])("propagates incognito refusal instead of reporting an unreadable store: %s", (error) => {
+    mocks.loadSessionEntryReadOnly.mockImplementation(() => {
+      throw error;
+    });
+    expect(() =>
+      readSessionEntryFromStore({
+        cfg: explicitFleet(),
+        sessionKey: "agent:ops:dashboard:incognito-read",
+      }),
+    ).toThrow(error);
   });
 
   it("returns a typed selection error for an ownerless bare key", () => {
@@ -41,21 +57,21 @@ describe("ACP session metadata store ownership", () => {
         sessionKey: "global",
       }),
     ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-    expect(mocks.loadExactSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
   });
 
-  it("reads a persisted fixed-store owner's store after restart", () => {
+  it.each(["persisted", "sole"] as const)("reads the %s owner's global session", (owner) => {
     const cfg = {
       ...explicitFleet(),
       session: { store: "/stores/shared.sqlite" },
       agents: {
         ...explicitFleet().agents,
-        defaults: { sessionStore: { agentId: "ops" } },
+        ...(owner === "persisted"
+          ? { defaults: { sessionStore: { agentId: "ops" } } }
+          : { entries: { ops: {} } }),
       },
     } satisfies OpenClawConfig;
-    mocks.loadExactSessionEntryReadOnly.mockReturnValue({
-      entry: { sessionId: "ops-session" },
-    });
+    mocks.loadSessionEntryReadOnly.mockReturnValue({ sessionId: "ops-session" });
 
     const result = readSessionEntryFromStore({ cfg, sessionKey: "global" });
 
@@ -64,7 +80,7 @@ describe("ACP session metadata store ownership", () => {
       storePath: "/stores/ops.json",
       entry: { sessionId: "ops-session" },
     });
-    expect(mocks.loadExactSessionEntryReadOnly).toHaveBeenCalledWith(
+    expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "ops", storePath: "/stores/ops.json" }),
     );
   });
@@ -85,23 +101,7 @@ describe("ACP session metadata store ownership", () => {
     expect(() =>
       readSessionEntryFromStore({ cfg, agentId: "research", sessionKey: "global" }),
     ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-    expect(mocks.loadExactSessionEntryReadOnly).not.toHaveBeenCalled();
-  });
-
-  it("rejects a supplied agent that conflicts with a bare fixed-store owner", () => {
-    const cfg = {
-      ...explicitFleet(),
-      session: { store: "/stores/shared.sqlite" },
-      agents: {
-        ...explicitFleet().agents,
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(() =>
-      readSessionEntryFromStore({ cfg, agentId: "research", sessionKey: "global" }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-    expect(mocks.loadExactSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
   });
 
   it("rejects a supplied agent that conflicts with an agent-qualified key", () => {

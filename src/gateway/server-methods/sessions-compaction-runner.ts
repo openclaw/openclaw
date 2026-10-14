@@ -1,4 +1,3 @@
-// Model-backed compaction request construction.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
@@ -8,11 +7,9 @@ import { isIndexedSessionEntry } from "../../agents/sessions/session-manager-cod
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import {
-  loadTranscriptEvents,
-  resolveSessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCurrentSessionPrimaryConversation } from "../../config/sessions/conversation-registry.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -24,13 +21,18 @@ type GatewaySessionCompactionParams = {
   agentId: string;
   cfg: OpenClawConfig;
   entry: SessionEntry;
+  abortSignal?: AbortSignal;
+  runId?: string;
   sessionId: string;
   sessionKey: string;
   sessionStoreKey: string;
   storePath: string;
 };
 
-function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): boolean {
+/** Returns only definitive legacy-runtime no-op verdicts; other runtimes decide for themselves. */
+export async function preflightGatewaySessionCompaction(
+  params: GatewaySessionCompactionParams,
+): Promise<{ reason: "Already compacted" | "Nothing to compact (session too small)" } | undefined> {
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const persistedRuntime = resolveManualCompactionCliTarget({
     provider: resolvedModel.provider,
@@ -38,26 +40,10 @@ function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): b
     cfg: params.cfg,
   }).agentHarnessId;
   const contextEngine = params.cfg.plugins?.slots?.contextEngine?.trim();
-  return (
-    (!persistedRuntime || persistedRuntime === "openclaw") &&
-    (!contextEngine || contextEngine === "legacy")
-  );
-}
-
-async function resolveGatewayCompactionTranscriptTarget(params: GatewaySessionCompactionParams) {
-  return await resolveSessionTranscriptRuntimeTarget({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionStoreKey,
-    storePath: params.storePath,
-  });
-}
-
-/** Returns only definitive legacy-runtime no-op verdicts; other runtimes decide for themselves. */
-export async function preflightGatewaySessionCompaction(
-  params: GatewaySessionCompactionParams,
-): Promise<{ reason: "Already compacted" | "Nothing to compact (session too small)" } | undefined> {
-  if (!usesLegacyOpenClawCompaction(params)) {
+  if (
+    (persistedRuntime && persistedRuntime !== "openclaw") ||
+    (contextEngine && contextEngine !== "legacy")
+  ) {
     return undefined;
   }
   try {
@@ -85,8 +71,15 @@ export async function preflightGatewaySessionCompaction(
 
 export async function runGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
+  host: Parameters<typeof compactEmbeddedAgentSession>[1],
 ): Promise<Awaited<ReturnType<typeof compactEmbeddedAgentSession>>> {
-  const transcriptTarget = await resolveGatewayCompactionTranscriptTarget(params);
+  // The lifecycle owner already selected and revalidated this exact current window.
+  const transcriptTarget = {
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionStoreKey,
+    storePath: params.storePath,
+  };
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const workspaceDir =
     resolveIngressWorkspaceOverrideForSessionRun({
@@ -99,39 +92,49 @@ export async function runGatewaySessionCompaction(
     entry: params.entry,
     cfg: params.cfg,
   });
-  return await compactEmbeddedAgentSession({
-    contextEngineAgentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    sessionTarget: {
-      agentId: params.agentId,
+  const primaryConversation = await resolveCurrentSessionPrimaryConversation(transcriptTarget);
+  params.abortSignal?.throwIfAborted();
+  return await compactEmbeddedAgentSession(
+    {
+      abortSignal: params.abortSignal,
+      contextEngineAgentId: params.agentId,
+      runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      agentId: params.agentId,
+      sessionTarget: transcriptTarget,
+      allowGatewaySubagentBinding: true,
+      sessionFile: transcriptTarget.sessionKey,
+      workspaceDir,
+      cwd: normalizeOptionalString(params.entry.spawnedCwd),
+      config: params.cfg,
+      // Current delivery owns the account; origin can retain historical identity.
+      // Group session keys do not carry an account themselves.
+      agentAccountId:
+        params.entry.delivery?.kind === "external"
+          ? params.entry.delivery.context?.accountId
+          : undefined,
+      conversationRoutePeerId: primaryConversation?.routeContext?.peerId,
+      chatType: primaryConversation?.kind,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model,
+      authProfileId:
+        compactionCliTarget.cliSessionBinding?.authProfileId ?? params.entry.authProfileOverride,
+      authProfileIdSource: resolveCollapsedSessionAuthPinSource(params.entry),
+      agentHarnessId: compactionCliTarget.agentHarnessId,
+      cliSessionId: compactionCliTarget.cliSessionId,
+      cliSessionBinding: compactionCliTarget.cliSessionBinding,
+      sessionEntry: params.entry,
+      modelSelectionLocked: params.entry.modelSelectionLocked === true,
+      thinkLevel: normalizeThinkLevel(params.entry.thinkingLevel),
+      reasoningLevel: normalizeReasoningLevel(params.entry.reasoningLevel),
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      trigger: "manual",
     },
-    allowGatewaySubagentBinding: true,
-    sessionFile: transcriptTarget.sessionKey,
-    workspaceDir,
-    cwd: normalizeOptionalString(params.entry.spawnedCwd),
-    config: params.cfg,
-    provider: resolvedModel.provider,
-    model: resolvedModel.model,
-    authProfileId:
-      compactionCliTarget.cliSessionBinding?.authProfileId ?? params.entry.authProfileOverride,
-    authProfileIdSource: resolveSessionAuthProfileOverrideSource(params.entry),
-    agentHarnessId: compactionCliTarget.agentHarnessId,
-    cliSessionId: compactionCliTarget.cliSessionId,
-    cliSessionBinding: compactionCliTarget.cliSessionBinding,
-    sessionEntry: params.entry,
-    modelSelectionLocked: params.entry.modelSelectionLocked === true,
-    thinkLevel: normalizeThinkLevel(params.entry.thinkingLevel),
-    reasoningLevel: normalizeReasoningLevel(params.entry.reasoningLevel),
-    bashElevated: {
-      enabled: false,
-      allowed: false,
-      defaultLevel: "off",
-    },
-    trigger: "manual",
-  });
+    host,
+  );
 }

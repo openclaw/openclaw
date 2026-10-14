@@ -1,4 +1,3 @@
-// Venice provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { VENICE_BASE_URL, VENICE_MODEL_CATALOG } from "./models.js";
 

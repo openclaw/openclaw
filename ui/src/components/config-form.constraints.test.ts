@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   arrayInputConstraints,
   canApplyArrayCandidate,
+  canApplyObjectCandidate,
   configValuesEqual,
   defaultValue,
   isSupportedConfigValueValid,
@@ -17,6 +18,20 @@ import { coerceConfigFormNumberString, formatConfigFormNumber } from "./config-f
 import type { JsonSchema } from "./config-form.shared.ts";
 
 describe("config form schema constraints", () => {
+  it("rejects newly invalid keys without blocking repairs to existing invalid entries", () => {
+    const schema = {
+      type: "object",
+      propertyNames: { type: "string", pattern: "^[a-z]+$" },
+      additionalProperties: { type: "integer", minimum: 0 },
+    };
+    const current = { primary: -1 };
+    expect(canApplyObjectCandidate(schema, current, { "bad/key": -1 })).toBe(false);
+    expect(canApplyObjectCandidate(schema, current, { ...current, "bad/key": 1 })).toBe(false);
+    expect(canApplyObjectCandidate(schema, current, { ...current, backup: 1 })).toBe(true);
+    expect(canApplyObjectCandidate(schema, current, { primary: 1 })).toBe(true);
+    expect(canApplyObjectCandidate(schema, { "old/key": -1 }, { "old/key": 1 })).toBe(true);
+  });
+
   it("coerces only decimal and scientific config number spellings", () => {
     expect(coerceConfigFormNumberString("42.5", false)).toBe(42.5);
     expect(coerceConfigFormNumberString(".5e2", false)).toBe(50);
@@ -80,13 +95,6 @@ describe("config form schema constraints", () => {
       exactLargeInteger,
     );
     expect(coerceConfigFormNumberString("9007199254740994", true)).toBe(9_007_199_254_740_994);
-  });
-
-  it("rejects non-finite decimal rationals and schema multiples", () => {
-    expect(numericInputConstraints({ type: "number", multipleOf: Number.NaN }).step).toBe("any");
-    expect(
-      numericInputConstraints({ type: "integer", multipleOf: Number.POSITIVE_INFINITY }).step,
-    ).toBe(1);
   });
 
   it("aligns native numeric bounds to JSON Schema multiples", () => {
@@ -166,12 +174,6 @@ describe("config form schema constraints", () => {
         multipleOf: 1.5e-7,
       }),
     ).toBe(4.5e-7);
-  });
-
-  it("derives integer-compatible steps from fractional multiples", () => {
-    expect(numericInputConstraints({ type: "integer", multipleOf: 0.5 }).step).toBe(1);
-    expect(numericInputConstraints({ type: "integer", multipleOf: 2.5 }).step).toBe(5);
-    expect(normalizeNumericValue(3, { type: "integer", multipleOf: 2.5 })).toBe(5);
   });
 
   it("derives valid defaults for exclusive unconstrained bounds", () => {

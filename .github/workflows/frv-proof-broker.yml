@@ -5,11 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: Open OpenClaw pull request containing the FRV recovery candidate
+        description: Merged OpenClaw pull request containing the FRV recovery controller
         required: true
         type: string
-      head_sha:
-        description: Exact lowercase 40-character pull request head SHA
+      landed_sha:
+        description: Exact lowercase 40-character commit landed on main
         required: true
         type: string
 permissions: {}
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   prove:
-    name: Prove failed-job rerun boundary
+    name: Prove targeted job rerun boundary
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

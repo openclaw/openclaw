@@ -30,13 +30,24 @@ function snapshot(params: {
 }
 
 describe("readSessionMethodAccess", () => {
-  it("allows a write-scoped operator to create ordinary sessions", () => {
-    expect(
-      readSessionMethodAccess(snapshot({}), {
-        method: "sessions.create",
-        params: { agentId: "main" },
-      }),
-    ).toEqual({ allowed: true, requiredScope: "operator.write" });
+  it("admits ordinary scoped creation before an owned row exists", () => {
+    const scoped = snapshot({ scopes: ["operator.sessions.write"] });
+    const request = { method: "sessions.create", params: { agentId: "main", message: "Hello" } };
+    expect(readSessionMethodAccess(scoped, request)).toMatchObject({ allowed: false });
+    expect(readSessionMethodAccess(scoped, { ...request, sessionScope: true })).toEqual({
+      allowed: true,
+      requiredScope: "operator.sessions.write",
+    });
+    for (const params of [
+      { incognito: true },
+      { permissionMode: "full" },
+      { execNode: "worker" },
+      { toolOverrides: {} },
+    ]) {
+      expect(
+        readSessionMethodAccess(scoped, { ...request, params, sessionScope: true }),
+      ).toMatchObject({ allowed: false, requiredScope: "operator.admin" });
+    }
   });
 
   it("requires admin for privileged create params", () => {
@@ -51,24 +62,9 @@ describe("readSessionMethodAccess", () => {
     });
   });
 
-  it.each([
-    ["sessions.dispatch", { key: "agent:main:device", deviceId: "runner" }],
-    ["sessions.dispatch", { key: "agent:main:auto", autoDevice: true }],
-    ["sessions.move", { key: "agent:main:device", target: { kind: "device", deviceId: "runner" } }],
-  ])("allows write-scoped device placement through %s", (method, params) => {
-    expect(
-      readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.write"] }), {
-        method,
-        params,
-        requiredScope: "operator.write",
-      }),
-    ).toEqual({ allowed: true, requiredScope: "operator.write" });
-  });
-
-  it.each([
-    ["sessions.dispatch", { key: "agent:main:cloud", profileId: "aws" }],
-    ["sessions.move", { key: "agent:main:cloud", target: { kind: "profile", profileId: "aws" } }],
-  ])("keeps profile placement admin-only through %s", (method, params) => {
+  it("keeps profile placement admin-only through the caller's scope", () => {
+    const method = "sessions.dispatch";
+    const params = { key: "agent:main:cloud", profileId: "aws" };
     expect(
       readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.write"] }), {
         method,
@@ -85,33 +81,100 @@ describe("readSessionMethodAccess", () => {
     ).toEqual({ allowed: true, requiredScope: "operator.admin" });
   });
 
-  it("keeps model and effort patch access independent", () => {
-    const writeOnly = snapshot({ methods: ["sessions.patch"], scopes: ["operator.write"] });
+  it.each(["model"])(
+    "allows write-scoped %s changes while keeping read-only clients read-only",
+    (field) => {
+      for (const scope of [
+        "operator.read",
+        "operator.sessions.read",
+        "operator.sessions.write",
+        "operator.write",
+        "operator.admin",
+      ]) {
+        expect(
+          readSessionMethodAccess(snapshot({ methods: ["sessions.patch"], scopes: [scope] }), {
+            method: "sessions.patch",
+            params: { key: "agent:main:main", [field]: null },
+          }),
+        ).toMatchObject({
+          allowed: scope === "operator.write" || scope === "operator.admin",
+          requiredScope: "operator.write",
+        });
+      }
+    },
+  );
+
+  it("requires explicit opt-in and ownership for narrow session actions", () => {
+    const request = { method: "sessions.patch", params: { key: "agent:main:notes", label: null } };
+    const scoped = snapshot({ methods: [request.method], scopes: ["operator.sessions.write"] });
     expect(
-      readSessionMethodAccess(writeOnly, {
-        method: "sessions.patch",
-        params: { key: "agent:main:main", model: null },
-      }),
-    ).toEqual({ allowed: true, requiredScope: "operator.write" });
+      readSessionMethodAccess(scoped, { ...request, session: { sharingRole: "owner" } }),
+    ).toMatchObject({ allowed: false, requiredScope: "operator.write", cause: "missing-scope" });
     expect(
-      readSessionMethodAccess(writeOnly, {
-        method: "sessions.patch",
-        params: { key: "agent:main:main", thinkingLevel: null },
+      readSessionMethodAccess(scoped, {
+        ...request,
+        sessionScope: true,
+        session: { sharingRole: "owner" },
       }),
-    ).toMatchObject({
-      allowed: false,
-      cause: "missing-scope",
-      requiredScope: "operator.admin",
-    });
+    ).toEqual({ allowed: true, requiredScope: "operator.sessions.write" });
+    for (const session of [
+      { sharingRole: "member" },
+      { sharingRole: "viewer" },
+      undefined,
+    ] as const) {
+      expect(
+        readSessionMethodAccess(scoped, { ...request, sessionScope: true, session }),
+      ).toMatchObject({
+        allowed: false,
+        requiredScope: "operator.sessions.write",
+        cause: "session-not-owned",
+      });
+    }
+    expect(
+      readSessionMethodAccess(snapshot({ methods: [request.method], scopes: ["operator.write"] }), {
+        ...request,
+        sessionScope: true,
+        session: { sharingRole: "viewer" },
+      }),
+    ).toEqual({ allowed: true, requiredScope: "operator.sessions.write" });
   });
 
-  it("allows admin to satisfy write-scoped actions", () => {
+  it("keeps context-window changes separate from write-scoped effort access", () => {
     expect(
       readSessionMethodAccess(
-        snapshot({ methods: ["sessions.groups.put"], scopes: ["operator.admin"] }),
-        { method: "sessions.groups.put", requiredScope: "operator.write" },
-      ).allowed,
-    ).toBe(true);
+        snapshot({ methods: ["sessions.patch"], scopes: ["operator.write"] }),
+        {
+          method: "sessions.patch",
+          params: { key: "agent:main:main", contextWindow: null },
+        },
+      ),
+    ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.admin" });
+  });
+
+  it("limits communication overrides and resets to write-scoped creators or admins", () => {
+    for (const communication of [null, { send: "always" }, { receive: null }]) {
+      for (const sharingRole of ["owner", "admin", "member", "viewer", undefined] as const) {
+        for (const scope of [
+          "operator.read",
+          "operator.sessions.write",
+          "operator.write",
+          "operator.admin",
+        ]) {
+          const access = readSessionMethodAccess(
+            snapshot({ methods: ["sessions.patch"], scopes: [scope] }),
+            {
+              method: "sessions.patch",
+              params: { communication },
+              session: { sharingRole },
+            },
+          );
+          expect(access.allowed).toBe(
+            scope === "operator.admin" ||
+              (scope === "operator.write" && (sharingRole === "owner" || sharingRole === "admin")),
+          );
+        }
+      }
+    }
   });
 
   it("allows read, write, and admin scopes to satisfy read-scoped actions", () => {
@@ -140,17 +203,17 @@ describe("readSessionMethodAccess", () => {
     });
   });
 
-  it.each([
-    ["auth", { includeAuth: false }],
-    ["scopes", { includeScopes: false }],
-  ])("rejects snapshots without advertised %s", (_name, params) => {
-    expect(
-      readSessionMethodAccess(snapshot(params), {
-        method: "sessions.create",
-        params: { agentId: "main" },
-      }),
-    ).toMatchObject({ allowed: false, cause: "missing-scope" });
-  });
+  it.each([["auth", { includeAuth: false }]])(
+    "rejects snapshots without advertised %s",
+    (_name, params) => {
+      expect(
+        readSessionMethodAccess(snapshot(params), {
+          method: "sessions.create",
+          params: { agentId: "main" },
+        }),
+      ).toMatchObject({ allowed: false, cause: "missing-scope" });
+    },
+  );
 
   it("rejects disconnected and unadvertised calls before scope checks", () => {
     expect(

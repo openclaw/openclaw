@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { isPidDefinitelyDead } from "openclaw/plugin-sdk/process-runtime";
 import { inspectLinuxProcessGroupStats } from "./posix-process-stat.js";
 
 type QaLinuxProcessGroupInspection = ReturnType<typeof inspectLinuxProcessGroupStats>;
@@ -27,12 +28,13 @@ export function inspectLinuxProcessGroup(
     try {
       stats.push(readFileSync(path.join("/proc", entry.name, "stat"), "utf8"));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      // Exit can race either opening stat (ENOENT) or reading its open fd (ESRCH).
+      if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) {
         return null;
       }
     }
   }
-  return inspectLinuxProcessGroupStats(processGroupId, stats);
+  return inspectLinuxProcessGroupStats(processGroupId, stats, isPidDefinitelyDead);
 }
 
 export function isQaPosixProcessGroupAlive(
@@ -41,13 +43,13 @@ export function isQaPosixProcessGroupAlive(
 ) {
   try {
     process.kill(-processGroupId, 0);
+    // Inconclusive snapshots stay alive until the next shutdown check.
+    return (
+      process.platform !== "linux" || (inspectLinuxProcessGroupFn(processGroupId)?.alive ?? true)
+    );
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
-  if (process.platform !== "linux") {
-    return true;
-  }
-  return inspectLinuxProcessGroupFn(processGroupId)?.alive ?? true;
 }
 
 export function signalQaPosixProcessGroup(

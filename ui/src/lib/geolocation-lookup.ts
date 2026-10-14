@@ -1,5 +1,11 @@
-import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
-import { readAvatarGatewayContext, registerAvatarGatewayReset } from "./identity-avatar.ts";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
+import {
+  fetchGatewayContextResource,
+  readAvatarGatewayContext,
+  registerAvatarGatewayReset,
+} from "./identity-avatar-context.ts";
 
 /** Coarse placement for one address, plus the credit its data license requires. */
 export type ClientGeolocation = {
@@ -9,45 +15,31 @@ export type ClientGeolocation = {
   attribution?: { text: string; url: string };
 };
 
-/**
- * Lookups have three outcomes and callers must tell them apart: a database that
- * cannot answer yet is retryable, while an address the database does not place
- * is final. Collapsing them caches a permanent blank for a Gateway that was
- * merely still downloading.
- */
+// An unavailable database is retryable; an address it cannot place is a final miss.
 type ClientGeolocationResult =
   | { status: "located"; location: ClientGeolocation }
   | { status: "absent" }
   | { status: "unavailable" };
 
 const LOOKUP_TIMEOUT_MS = 15_000;
-// Presence rosters are small; the cap only stops an unbounded map on a busy
-// gateway where entries churn.
 const LOOKUP_CACHE_MAX_ENTRIES = 256;
 
 const lookupCache = new Map<string, Promise<ClientGeolocationResult>>();
 
-function clearClientGeolocationCache(): void {
-  lookupCache.clear();
-}
-
-// Endpoint and credentials both come from the shared Gateway context, so a
-// switch must drop cached placements instead of showing the previous Gateway's
-// answer for the same address.
-registerAvatarGatewayReset(clearClientGeolocationCache);
+// Gateway switches must not reuse placements from the previous credential context.
+registerAvatarGatewayReset(() => lookupCache.clear());
 
 function readLocation(payload: unknown): ClientGeolocationResult {
   const record = asOptionalRecord(payload);
   if (record?.found !== true) {
     return { status: "absent" };
   }
-  const text = (value: string | undefined) => (value?.trim() ? value : undefined);
   const attribution = asOptionalRecord(record.attribution);
-  const attributionText = text(readStringField(attribution, "text"));
-  const attributionUrl = text(readStringField(attribution, "url"));
-  const city = text(readStringField(record, "city"));
-  const region = text(readStringField(record, "region"));
-  const country = text(readStringField(record, "country"));
+  const attributionText = readNonBlankString(attribution?.text);
+  const attributionUrl = readNonBlankString(attribution?.url);
+  const city = readNonBlankString(record.city);
+  const region = readNonBlankString(record.region);
+  const country = readNonBlankString(record.country);
   const location: ClientGeolocation = {
     ...(city ? { city } : {}),
     ...(region ? { region } : {}),
@@ -60,15 +52,11 @@ function readLocation(payload: unknown): ClientGeolocationResult {
 }
 
 async function requestGeolocation(ip: string): Promise<ClientGeolocationResult> {
-  const { origin, authHeader } = readAvatarGatewayContext();
+  const { origin } = readAvatarGatewayContext();
   try {
-    const response = await fetch(
+    const response = await fetchGatewayContextResource(
       `${origin ?? ""}/plugins/geolocation/lookup?ip=${encodeURIComponent(ip)}`,
-      {
-        credentials: "include",
-        ...(authHeader ? { headers: { Authorization: authHeader } } : {}),
-        signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
-      },
+      LOOKUP_TIMEOUT_MS,
     );
     // Only a 200 is a real answer. 503 means the database is still downloading
     // or missing, which the caller may retry.
@@ -89,17 +77,13 @@ export function lookupClientGeolocation(ip: string): Promise<ClientGeolocationRe
     return cached;
   }
   const pending = requestGeolocation(ip).then((result) => {
-    if (result.status === "unavailable") {
+    // An old context's aborted lookup must not evict its replacement.
+    if (result.status === "unavailable" && lookupCache.get(ip) === pending) {
       lookupCache.delete(ip);
     }
     return result;
   });
-  if (lookupCache.size >= LOOKUP_CACHE_MAX_ENTRIES) {
-    const oldest = lookupCache.keys().next();
-    if (!oldest.done) {
-      lookupCache.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(lookupCache, LOOKUP_CACHE_MAX_ENTRIES - 1);
   lookupCache.set(ip, pending);
   return pending;
 }

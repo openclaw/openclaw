@@ -1,16 +1,18 @@
 /** Canonical projection from heartbeat config to system-owned cron monitor jobs. */
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import {
   resolveHeartbeatPhaseMs,
-  resolveHeartbeatSchedulerSeed,
+  resolveHeartbeatSchedulerSeedAsync,
 } from "../infra/heartbeat-schedule.js";
+import { isCronAgentDeletionBlockedError } from "./agent-availability.js";
 import type { CronService } from "./service.js";
+import { partitionSystemMonitors } from "./system-monitor-jobs.js";
+import { HEARTBEAT_DECLARATION_PREFIX } from "./system-owned-declaration.js";
 import type { CronJob, CronJobCreate } from "./types.js";
-
-const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
 
 type HeartbeatMonitorSpec = { agentId: string; input: CronJobCreate };
 
@@ -71,17 +73,14 @@ function heartbeatMonitorDeclarativeFields(job: CronJob | CronJobCreate) {
 export function resolveHeartbeatMonitorPlan(
   cfg: OpenClawConfig,
   existingJobs: readonly CronJob[],
-  options: { schedulerSeed?: string } = {},
+  options: { schedulerSeed: string },
 ): HeartbeatMonitorPlan {
-  const existingByAgentId = new Map<string, CronJob>();
-  for (const job of existingJobs) {
-    const agentId = heartbeatMonitorAgentId(job);
-    if (agentId) {
-      existingByAgentId.set(agentId, job);
-    }
-  }
+  const { retained: existingByAgentId, duplicates } = partitionSystemMonitors(
+    existingJobs,
+    heartbeatMonitorAgentId,
+  );
 
-  const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
+  const { schedulerSeed } = options;
   const specs: HeartbeatMonitorSpec[] = resolveHeartbeatAgents(cfg).flatMap((agent) => {
     // Unset config already resolves to the 30m default here, so this is null
     // only for an explicitly disabled cadence ("0m"/invalid). The fallbacks
@@ -122,7 +121,13 @@ export function resolveHeartbeatMonitorPlan(
     ];
   });
 
-  const changes: HeartbeatMonitorChange[] = [];
+  // Remove duplicate declaration keys before declarative upserts, which reject
+  // ambiguous matches by design.
+  const changes: HeartbeatMonitorChange[] = duplicates.map(({ agentId, job }) => ({
+    kind: "remove",
+    agentId,
+    job,
+  }));
   for (const spec of specs) {
     const existing = existingByAgentId.get(spec.agentId);
     if (!existing) {
@@ -161,13 +166,18 @@ export async function applyHeartbeatMonitorJobs(params: {
     return { ok: false, applied: [], failures: [{ error }] };
   }
   params.commitGuard?.();
-
+  const schedulerSeed = await resolveHeartbeatSchedulerSeedAsync(params.schedulerSeed);
+  params.commitGuard?.();
   const { changes } = resolveHeartbeatMonitorPlan(params.cfg, jobs, {
-    schedulerSeed: params.schedulerSeed,
+    schedulerSeed,
   });
   const applied: HeartbeatMonitorChange[] = [];
   const failures: HeartbeatMonitorReconcileResult["failures"] = [];
   for (const change of changes) {
+    // Settled CRUD promises do not yield to I/O; reject a superseded pass
+    // after the event-loop turn, before entering its next mutation wrapper.
+    await yieldToEventLoop();
+    params.commitGuard?.();
     try {
       if (change.kind === "remove") {
         await params.cron.remove(change.job.id, {
@@ -200,7 +210,13 @@ export async function reconcileHeartbeatMonitorJobs(
   params: Parameters<typeof applyHeartbeatMonitorJobs>[0] & {
     logger: { warn: (obj: unknown, msg?: string) => void };
   },
-): Promise<{ ok: boolean }> {
-  const { ok } = await applyHeartbeatMonitorJobs(params);
-  return { ok };
+): Promise<{ ok: boolean; lifecycleDeferred?: true }> {
+  const { ok, failures } = await applyHeartbeatMonitorJobs(params);
+  const lifecycleDeferred =
+    !ok &&
+    failures.every(
+      ({ change, error }) =>
+        change !== undefined && change.kind !== "remove" && isCronAgentDeletionBlockedError(error),
+    );
+  return { ok, ...(lifecycleDeferred ? { lifecycleDeferred: true } : {}) };
 }

@@ -126,23 +126,25 @@ describe("normalizeApiKeyTokenProviderAuthChoice", () => {
       resolvePluginProviders.mockImplementation((params) =>
         params?.workspaceDir === workspaceDir ? [provider] : [],
       );
-      prepareAuthChoiceLoadedPluginProvider.mockImplementation(async (params) =>
-        params.authChoice === "workspace-provider-auth"
-          ? {
-              config: params.config,
-              authProfiles: [
-                {
-                  profileId: "workspace-provider:default",
-                  credential: {
-                    type: "api_key",
-                    provider: "workspace-provider",
-                    key: "fixture-workspace-key",
+      prepareAuthChoiceLoadedPluginProvider.mockImplementation(async (params, consume) =>
+        consume(
+          params.authChoice === "workspace-provider-auth"
+            ? {
+                config: params.config,
+                authProfiles: [
+                  {
+                    profileId: "workspace-provider:default",
+                    credential: {
+                      type: "api_key",
+                      provider: "workspace-provider",
+                      key: "fixture-workspace-key",
+                    },
                   },
-                },
-              ],
-              persistAuthProfiles: async () => {},
-            }
-          : null,
+                ],
+                persistAuthProfiles: async () => {},
+              }
+            : null,
+        ),
       );
 
       const prepared = await prepareAuthChoice({
@@ -172,6 +174,9 @@ describe("normalizeApiKeyTokenProviderAuthChoice", () => {
     "resolves workspace-only deprecated auth choices from the %s",
     async (source) => {
       const workspaceDir = "/tmp/selected-agent-workspace";
+      prepareAuthChoiceLoadedPluginProvider.mockImplementation(async (_params, consume) =>
+        consume(null),
+      );
       vi.spyOn(
         providerAuthChoices,
         "resolveManifestDeprecatedProviderAuthChoice",

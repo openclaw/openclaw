@@ -1,31 +1,11 @@
-import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  ensureProviderLocalService,
-  stopManagedProviderLocalServices,
-} from "./provider-local-service.js";
-
-async function freePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() => {
-        if (address && typeof address === "object") {
-          resolve(address.port);
-        } else {
-          reject(new Error("missing test port"));
-        }
-      });
-    });
-  });
-}
+import { ensureProviderLocalService } from "./provider-local-service.js";
+import { createProviderLocalServiceTestFixture } from "./provider-local-service.test-support.js";
 
 async function readSpawnedLocalServiceEnv(
   env: Record<string, string>,
+  port: number,
 ): Promise<Record<string, string | undefined>> {
-  const port = await freePort();
   const healthUrl = `http://127.0.0.1:${port}/v1/models`;
   const lease = await ensureProviderLocalService({
     providerId: `local-env-${port}`,
@@ -52,20 +32,22 @@ async function readSpawnedLocalServiceEnv(
 }
 
 describe("provider local service environment", () => {
-  afterEach(() => {
-    stopManagedProviderLocalServices();
-  });
+  const fixture = createProviderLocalServiceTestFixture();
+  afterEach(fixture.cleanup);
 
   it.runIf(process.platform === "win32")(
     "lets configured env override inherited keys case-insensitively on Windows",
     async () => {
       vi.stubEnv("OPENCLAW_LOCAL_SERVICE_CASE_TEST", "inherited");
       try {
-        const observed = await readSpawnedLocalServiceEnv({
-          path: "C:\\operator-bin",
-          openclaw_local_service_case_test: "configured",
-          OPENCLAW_LOCAL_SERVICE_EXACT_TEST: "exact",
-        });
+        const observed = await readSpawnedLocalServiceEnv(
+          {
+            path: "C:\\operator-bin",
+            openclaw_local_service_case_test: "configured",
+            OPENCLAW_LOCAL_SERVICE_EXACT_TEST: "exact",
+          },
+          await fixture.claimPort(),
+        );
 
         expect(observed).toEqual({
           pathUpper: "C:\\operator-bin",
@@ -85,11 +67,14 @@ describe("provider local service environment", () => {
     async () => {
       vi.stubEnv("OPENCLAW_LOCAL_SERVICE_CASE_TEST", "inherited");
       try {
-        const observed = await readSpawnedLocalServiceEnv({
-          path: "/operator-bin",
-          openclaw_local_service_case_test: "configured",
-          OPENCLAW_LOCAL_SERVICE_EXACT_TEST: "exact",
-        });
+        const observed = await readSpawnedLocalServiceEnv(
+          {
+            path: "/operator-bin",
+            openclaw_local_service_case_test: "configured",
+            OPENCLAW_LOCAL_SERVICE_EXACT_TEST: "exact",
+          },
+          await fixture.claimPort(),
+        );
 
         expect(observed).toEqual({
           pathUpper: process.env.PATH,

@@ -15,6 +15,7 @@ import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.j
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 
+export { mergeMissing } from "../config/merge-missing.js";
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
 export {
@@ -53,6 +54,13 @@ export type {
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 export type {
+  PluginDoctorCronChange,
+  PluginDoctorCronInventory,
+  PluginDoctorCronJob,
+  PluginDoctorChannelIngressQueueAccess,
+  PluginDoctorMigrationBackupResource,
+  PluginDoctorMigrationBackupWarning,
+  PluginDoctorProviderRename,
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
@@ -60,8 +68,13 @@ export {
   archiveLegacyStateSource,
   legacyStateFileExists,
 } from "../plugins/doctor-state-migration-fs.js";
+export { backupLegacyStateSource } from "../infra/state-migrations.source-backup.js";
+export { resolveLegacyMigrationSourcePath } from "../infra/state-migrations.source-path.js";
+export type { ChannelIngressLegacyEntry } from "../channels/message/ingress-queue.migration.js";
 export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";
+export { defineRetiredPluginStateMigration } from "../plugins/doctor-retired-state.js";
+export { createLegacyWebhookListenerDoctorContract } from "./legacy-webhook-listener-migration.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 
 type KeyMoveValue = { value: unknown };
@@ -193,34 +206,25 @@ export function defineKeyMoveMigration(params: {
     changes: string[];
   }) => CompatMutationResult;
 } {
-  const visitScopes = (
-    entry: Record<string, unknown>,
-    scope: readonly string[],
-    visit: (scopeEntry: Record<string, unknown>, scopePath: readonly string[]) => boolean,
-    scopePath: readonly string[] = [],
-  ): boolean => {
+  const visitScopes = (entry: Record<string, unknown>, scope: readonly string[]): boolean => {
     const [segment, ...rest] = scope;
     if (!segment) {
-      return visit(entry, scopePath);
+      const source = readKeyMovePath(entry, params.from, params.sourceOwn);
+      return Boolean(source && (params.match?.(source.value) ?? true));
     }
     if (segment === "*") {
-      return Object.entries(entry).some(([key, value]) => {
+      return Object.values(entry).some((value) => {
         const child = asObjectRecord(value);
-        return child ? visitScopes(child, rest, visit, [...scopePath, key]) : false;
+        return child ? visitScopes(child, rest) : false;
       });
     }
     const child = asObjectRecord(entry[segment]);
-    return child ? visitScopes(child, rest, visit, [...scopePath, segment]) : false;
+    return child ? visitScopes(child, rest) : false;
   };
 
   const hasLegacy = (value: unknown): boolean => {
     const entry = asObjectRecord(value);
-    return entry
-      ? visitScopes(entry, params.scope ?? [], (scopeEntry) => {
-          const source = readKeyMovePath(scopeEntry, params.from, params.sourceOwn);
-          return Boolean(source && (params.match?.(source.value) ?? true));
-        })
-      : false;
+    return entry ? visitScopes(entry, params.scope ?? []) : false;
   };
 
   const normalizeScope = (
@@ -297,6 +301,95 @@ export function defineKeyMoveMigration(params: {
     hasLegacy,
     normalize: ({ entry, pathPrefix, changes }) =>
       normalizeScopes(entry, params.scope ?? [], pathPrefix, changes),
+  };
+}
+
+/**
+ * Defines the repair for channel config parked under `plugins.entries.<id>.config`.
+ * Channel plugins read `channels.<channelId>` only, but retired rich plugin-entry
+ * schemas let config UIs park values in the unread plugin-entry location.
+ */
+export function defineStrayPluginEntryConfigMigration(params: {
+  pluginId: string;
+  channelId: string;
+  validateMergedChannelConfig: (merged: Record<string, unknown>) => boolean;
+}): {
+  legacyConfigRule: {
+    path: string[];
+    message: string;
+    match: (value: unknown) => boolean;
+  };
+  normalizeConfig: (params: { cfg: OpenClawConfig }) => {
+    config: OpenClawConfig;
+    changes: string[];
+  };
+} {
+  const { pluginId, channelId } = params;
+  const entryConfigPath = `plugins.entries.${pluginId}.config`;
+  const readStrayEntryConfig = (cfg: OpenClawConfig): Record<string, unknown> | null => {
+    const entries = asObjectRecord(asObjectRecord(cfg.plugins)?.entries);
+    const config = asObjectRecord(asObjectRecord(entries?.[pluginId])?.config);
+    return config && Object.keys(config).length > 0 ? config : null;
+  };
+  return {
+    legacyConfigRule: {
+      path: ["plugins", "entries", pluginId, "config"],
+      message: `${entryConfigPath} is not read by the ${channelId} channel; run "openclaw doctor --fix" to move its keys to channels.${channelId}.`,
+      match: (value) => {
+        const record = asObjectRecord(value);
+        return Boolean(record && Object.keys(record).length > 0);
+      },
+    },
+    // Existing channel keys stay authoritative, and the move only commits when
+    // the merged record validates, so a doctor fix can never turn a valid
+    // channels.<id> invalid — unmergeable values stay in place and keep
+    // surfacing through the legacy rule message.
+    normalizeConfig: ({ cfg }) => {
+      const stray = readStrayEntryConfig(cfg);
+      if (!stray) {
+        return { config: cfg, changes: [] };
+      }
+      const next = structuredClone(cfg);
+      const currentChannel = asObjectRecord(asObjectRecord(next.channels)?.[channelId]) ?? {};
+      const staged: string[] = [];
+      const dropped: string[] = [];
+      const merged = { ...currentChannel };
+      for (const [key, value] of Object.entries(stray)) {
+        if (Object.hasOwn(currentChannel, key)) {
+          dropped.push(key);
+        } else {
+          merged[key] = value;
+          staged.push(key);
+        }
+      }
+      if (!params.validateMergedChannelConfig(merged)) {
+        return { config: cfg, changes: [] };
+      }
+      const channels = asObjectRecord(next.channels) ?? {};
+      channels[channelId] = merged;
+      // Doctor migrations operate on the raw parsed config; the merged channel
+      // record was just validated by validateMergedChannelConfig.
+      // SAFETY: widening past ChannelsConfig only reattaches the same runtime shape.
+      (next as Record<string, unknown>).channels = channels;
+      const entry = asObjectRecord(
+        asObjectRecord(asObjectRecord(next.plugins)?.entries)?.[pluginId],
+      );
+      if (entry) {
+        delete entry.config;
+      }
+      return {
+        config: next,
+        changes: [
+          ...staged.map(
+            (key) => `Moved ${entryConfigPath}.${key} to channels.${channelId}.${key}.`,
+          ),
+          ...dropped.map(
+            (key) =>
+              `Removed ${entryConfigPath}.${key}; channels.${channelId}.${key} is authoritative.`,
+          ),
+        ],
+      };
+    },
   };
 }
 

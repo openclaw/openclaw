@@ -3,12 +3,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CliSessionBinding, CliSessionReseedReceipt, SessionEntry } from "./types.js";
 
-const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
-type CliSessionBindingEntry = Pick<
-  SessionEntry,
-  "claudeCliSessionId" | "cliSessionBindings" | "cliSessionIds"
->;
+type CliSessionBindingEntry = Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds">;
 
 export function normalizeCliSessionReseedReceipt(
   value: CliSessionReseedReceipt | undefined,
@@ -65,7 +61,7 @@ export function rebindCliSessionReseedReceiptsForReset(
   return rebound ?? bindings;
 }
 
-/** Read the stored CLI session binding for a provider, including legacy Claude state. */
+/** Read the stored provider-keyed CLI session binding. */
 export function getCliSessionBinding(
   entry: CliSessionBindingEntry | undefined,
   provider: string,
@@ -99,22 +95,28 @@ export function getCliSessionBinding(
   if (normalizedFromMap) {
     return { sessionId: normalizedFromMap };
   }
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    // Keep accepting the shipped Claude-only field until stored sessions migrate.
-    const legacy = normalizeOptionalString(entry.claudeCliSessionId);
-    if (legacy) {
-      return { sessionId: legacy };
-    }
-  }
   return undefined;
 }
 
-/** Read just the reusable CLI session ID for a provider. */
-export function getCliSessionId(
-  entry: CliSessionBindingEntry | undefined,
-  provider: string,
-): string | undefined {
-  return getCliSessionBinding(entry, provider)?.sessionId;
+// A copied binding must branch at the recorded checkpoint even if the parent advances.
+// Retain account/environment validation; force-reuse and reseed receipts belong to the parent.
+export function forkCliSessionBindings(
+  parent: CliSessionBindingEntry | undefined,
+  supportsFork: (provider: string) => boolean,
+): Record<string, CliSessionBinding> | undefined {
+  const providers = new Set([
+    ...Object.keys(parent?.cliSessionBindings ?? {}),
+    ...Object.keys(parent?.cliSessionIds ?? {}),
+  ]);
+  const forked: Record<string, CliSessionBinding> = {};
+  for (const provider of providers) {
+    const binding = getCliSessionBinding(parent, provider);
+    if (binding?.resumeCheckpointId && supportsFork(provider)) {
+      const { reseedReceipt: _reseedReceipt, forceReuse: _forceReuse, ...inherited } = binding;
+      forked[normalizeProviderId(provider)] = { ...inherited, forkNextResume: true };
+    }
+  }
+  return Object.keys(forked).length > 0 ? forked : undefined;
 }
 
 export function clearAllCliSessions(

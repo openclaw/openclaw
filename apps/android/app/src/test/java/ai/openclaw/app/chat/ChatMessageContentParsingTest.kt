@@ -1,5 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayCanvasHostRoute
+import ai.openclaw.app.ui.chat.completedToolDisplayName
 import ai.openclaw.app.ui.chat.readBoundedWidgetDocument
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -11,6 +13,61 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ChatMessageContentParsingTest {
+  @Test
+  fun dispatcherCallsDisplayTheCalledToolWithoutChangingCallIdentity() {
+    val cases =
+      listOf(
+        Triple("web_search", "web_search", "Web Search"),
+        Triple("mcp:github:search_issues", "search_issues", "Search Issues"),
+        Triple(" openclaw:core:web_search ", "web_search", "Web Search"),
+        Triple("client:client:exec", "exec", "Exec"),
+        Triple("custom:tool", "custom:tool", "Custom:tool"),
+      )
+    for ((id, name, title) in cases) {
+      val content =
+        Json.parseToJsonElement(
+          """{"type":"toolCall","id":"call-1","name":" TOOL_CALL ","arguments":{"id":"$id","query":"outer query","args":{"query":"OpenClaw release notes October 2026","token":"hidden"}}}""",
+        )
+      val tool = checkNotNull(parseChatMessageContent(content)?.toolActivity)
+      assertEquals("call-1", tool.toolCallId)
+      assertEquals(name, tool.name)
+      assertEquals(title, completedToolDisplayName(tool.name))
+      assertEquals("query: OpenClaw release notes October 2026", tool.detail)
+      assertEquals(Json.parseToJsonElement("""{"query":"OpenClaw release notes October 2026"}"""), tool.arguments)
+    }
+  }
+
+  @Test
+  fun invalidDispatcherIdsKeepTheOriginalDisplayArguments() {
+    for (idField in listOf("", "\"id\":\"\",", "\"id\":\" \",", "\"id\":3,", "\"id\":null,", "\"id\":{},", "\"id\":[],")) {
+      val tool =
+        checkNotNull(
+          parseChatMessageContent(
+            Json.parseToJsonElement("""{"type":"toolCall","id":"call-1","name":"tool_call","arguments":{$idField"query":"outer query","args":{"query":"no id"}}}"""),
+          )?.toolActivity,
+        )
+      assertEquals("tool_call", tool.name)
+      assertEquals("Tool Call", completedToolDisplayName(tool.name))
+      assertEquals("query: outer query", tool.detail)
+      assertEquals(Json.parseToJsonElement("""{"query":"outer query"}"""), tool.arguments)
+    }
+  }
+
+  @Test
+  fun ordinaryToolsDoNotInterpretDispatcherShapedArguments() {
+    for (name in listOf("web_search", "tool_search", "tool_describe")) {
+      val tool =
+        checkNotNull(
+          parseChatMessageContent(
+            Json.parseToJsonElement("""{"type":"toolCall","id":"call-1","name":"$name","arguments":{"id":"read","query":"outer query","args":{"path":"README.md"}}}"""),
+          )?.toolActivity,
+        )
+      assertEquals(name, tool.name)
+      assertEquals("query: outer query", tool.detail)
+      assertEquals(Json.parseToJsonElement("""{"query":"outer query"}"""), tool.arguments)
+    }
+  }
+
   @Test
   fun boundedWidgetDocumentReadAcceptsAtMostLimitAndRejectsOverflow() {
     assertArrayEquals(
@@ -25,13 +82,137 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
-  fun dropsInternalToolBlocksFromDisplayHistory() {
+  fun projectsToolResultsIntoBoundedDisplayActivity() {
     val content =
       Json.parseToJsonElement(
-        """{"type":"toolResult","content":"large internal output"}""",
+        """{"type":"toolResult","toolCallId":"call-1","name":"read","content":"useful output"}""",
       )
 
-    assertNull(parseChatMessageContent(content))
+    assertEquals(
+      ChatMessageContent(
+        type = "toolResult",
+        toolActivity = ChatToolActivity("call-1", "read", null, "useful output", false),
+      ),
+      parseChatMessageContent(content),
+    )
+  }
+
+  @Test
+  fun preservesWebToolNameAndCallIdentityAliases() {
+    for (nameKey in listOf("toolName", "tool_name")) {
+      for (idKey in listOf("toolUseId", "tool_use_id", "callId")) {
+        val parsed =
+          parseChatMessageContent(
+            Json.parseToJsonElement(
+              """{"type":"toolResult","name":" ","toolCallId":" ","$nameKey":"bash","$idKey":"call-1","content":"output"}""",
+            ),
+          )
+        assertEquals(ChatToolActivity("call-1", "bash", null, "output", false), parsed?.toolActivity)
+      }
+    }
+  }
+
+  @Test
+  fun browserPresentationRequiresSuccessfulBrowserResultAndCompleteRoute() {
+    val host = """{"target":"host","profile":"openclaw","targetId":"t1","title":"Travel checklist","url":"https://example.test/travel"}"""
+    val node = """{"target":"node","node":"workstation","profile":"work","targetId":"t2"}"""
+
+    fun parse(
+      tab: String,
+      name: String = "browser",
+      type: String = "toolResult",
+      error: Boolean = false,
+    ) = parseChatMessageContent(
+      Json.parseToJsonElement("""{"type":"$type","toolName":"$name","toolCallId":"browser-1","isError":$error,"details":{"browserTab":$tab},"content":"https://example.test/travel"}"""),
+    )?.toolActivity?.browserTab
+
+    assertEquals(ChatBrowserTab("host", null, "openclaw", "t1", "https://example.test/travel", "Travel checklist"), parse(host))
+    assertEquals(ChatBrowserTab("node", "workstation", "work", "t2", null, null), parse(node))
+    for (invalid in listOf(
+      """{"target":"host","targetId":"t1"}""",
+      """{"target":"node","profile":"work","targetId":"t1"}""",
+      """{"target":"host","node":"workstation","profile":"work","targetId":"t1"}""",
+      """{"target":"host","profile":"work","targetId":" "}""",
+      """{"target":"sandbox","profile":"work","targetId":"t1"}""",
+    )) {
+      assertNull(parse(invalid))
+    }
+    assertNull(parse(host, name = "web_fetch"))
+    assertNull(parse(host, type = "toolCall"))
+    assertNull(parse(host, error = true))
+    val dispatched =
+      checkNotNull(
+        parseChatMessageContent(
+          Json.parseToJsonElement("""{"type":"toolResult","name":"tool_call","toolCallId":"browser-1","arguments":{"id":"browser","args":{}},"details":{"browserTab":$host},"content":"raw result","isError":false}"""),
+        )?.toolActivity,
+      )
+    assertEquals("browser", dispatched.name)
+    assertEquals("raw result", dispatched.result)
+    assertEquals(false, dispatched.isError)
+    assertNull(dispatched.browserTab)
+  }
+
+  @Test
+  fun preservesUnnamedResultsForMatchingWithoutInventingCallIdentity() {
+    val parsed =
+      parseChatMessageContent(
+        Json.parseToJsonElement("""{"type":"tool_result","tool_use_id":"call-1","content":"failure details","isError":true}"""),
+      )
+    assertEquals(ChatToolActivity("call-1", "tool", null, "failure details", true), parsed?.toolActivity)
+    assertNull(parseChatMessageContent(Json.parseToJsonElement("""{"type":"toolResult","content":""}""")))
+  }
+
+  @Test
+  fun boundsToolResultTextAndOnlyProjectsMeaningfulArguments() {
+    val longResult = "x".repeat(2_100)
+    val result =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolResult","toolCallId":"call-1","name":"exec","content":"$longResult","details":{"secret":"hidden"}}""",
+        ),
+      )
+    val call =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolCall","id":"call-1","name":"exec","arguments":{"command":"./gradlew test","token":"hidden"}}""",
+        ),
+      )
+
+    assertEquals(2_001, result?.toolActivity?.result?.length)
+    assertEquals("command: ./gradlew test", call?.toolActivity?.detail)
+    assertEquals(null, call?.toolActivity?.result)
+  }
+
+  @Test
+  fun toolResultsKeepAllMeaningfulTextBlocksInOrderWithinTheDisplayLimit() {
+    val parsed =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolResult","toolCallId":"call-1","content":[{"text":" "},{"text":"first"},{"type":"image","data":"hidden"},{"text":"second"}]}""",
+        ),
+      )
+    assertEquals("first\nsecond", parsed?.toolActivity?.result)
+    val bounded =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolResult","toolCallId":"call-1","content":[{"text":"${"x".repeat(1_999)}"},{"text":"second"}]}""",
+        ),
+      )
+    assertEquals("x".repeat(1_999) + "…", bounded?.toolActivity?.result)
+  }
+
+  @Test
+  fun progressPresentationRejectsUnknownAndUnboundedPlanStatuses() {
+    val parsed =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolCall","id":"progress-1","name":"progress_card","arguments":{"plan":[{"step":"Ready","status":"pending"},{"step":"Working","status":"in_progress"},{"step":"Done","status":"completed"},{"step":"Invalid","status":"${"x".repeat(10_000)}"}]}}""",
+        ),
+      )
+    assertEquals(
+      Json.parseToJsonElement("""[{"step":"Ready","status":"pending"},{"step":"Working","status":"in_progress"},{"step":"Done","status":"completed"}]"""),
+      parsed?.toolActivity?.arguments?.get("plan"),
+    )
   }
 
   @Test
@@ -114,7 +295,7 @@ class ChatMessageContentParsingTest {
     val surfaces =
       ChatWidgetSurfaceUrls(
         node = null,
-        operator = ChatWidgetSurface(url = fallbackSurface, tlsFingerprintSha256 = null),
+        operator = GatewayCanvasHostRoute(url = fallbackSurface, tlsFingerprintSha256 = null),
       )
 
     val resolved = ChatWidgetUrlResolver.resolvePreferred(surfaces, target, excluding = null)
@@ -131,10 +312,10 @@ class ChatMessageContentParsingTest {
       val oldPin = "aa".repeat(32)
       val newPin = "bb".repeat(32)
       val failedUrl = ChatWidgetUrlResolver.resolve(oldSurface, target)
-      val failedResource = ChatWidgetResource(url = requireNotNull(failedUrl), tlsFingerprintSha256 = oldPin)
+      val failedResource = ChatWidgetResource(url = requireNotNull(failedUrl), tlsFingerprintSha256 = oldPin, surfaceRole = ChatWidgetSurfaceRole.NODE)
       var current =
         ChatWidgetSurfaceUrls(
-          node = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = oldPin),
+          node = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = oldPin),
           operator = null,
         )
 
@@ -146,7 +327,7 @@ class ChatMessageContentParsingTest {
           refreshNodeSurface = {
             current =
               ChatWidgetSurfaceUrls(
-                node = ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = newPin),
+                node = GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = newPin),
                 operator = null,
               )
             null
@@ -166,10 +347,10 @@ class ChatMessageContentParsingTest {
       val oldPin = "aa".repeat(32)
       val newPin = "bb".repeat(32)
       val url = requireNotNull(ChatWidgetUrlResolver.resolve(surface, target))
-      val failedResource = ChatWidgetResource(url = url, tlsFingerprintSha256 = oldPin)
+      val failedResource = ChatWidgetResource(url = url, tlsFingerprintSha256 = oldPin, surfaceRole = ChatWidgetSurfaceRole.NODE)
       var current =
         ChatWidgetSurfaceUrls(
-          node = ChatWidgetSurface(url = surface, tlsFingerprintSha256 = oldPin),
+          node = GatewayCanvasHostRoute(url = surface, tlsFingerprintSha256 = oldPin),
           operator = null,
         )
 
@@ -181,7 +362,7 @@ class ChatMessageContentParsingTest {
           refreshNodeSurface = {
             current =
               ChatWidgetSurfaceUrls(
-                node = ChatWidgetSurface(url = surface, tlsFingerprintSha256 = newPin),
+                node = GatewayCanvasHostRoute(url = surface, tlsFingerprintSha256 = newPin),
                 operator = null,
               )
             null
@@ -203,8 +384,8 @@ class ChatMessageContentParsingTest {
       var refreshCount = 0
       var current =
         ChatWidgetSurfaceUrls(
-          node = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = null),
-          operator = ChatWidgetSurface(url = fallbackSurface, tlsFingerprintSha256 = null),
+          node = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = null),
+          operator = GatewayCanvasHostRoute(url = fallbackSurface, tlsFingerprintSha256 = null),
         )
       val initialNode = ChatWidgetUrlResolver.resolvePreferred(current, target, excluding = null)
 
@@ -215,7 +396,7 @@ class ChatMessageContentParsingTest {
           currentSurfaceUrls = { current },
           refreshNodeSurface = {
             refreshCount += 1
-            current = current.copy(node = ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = null))
+            current = current.copy(node = GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = null))
             null
           },
           refreshOperatorSurface = { null },
@@ -249,12 +430,13 @@ class ChatMessageContentParsingTest {
         ChatWidgetResource(
           url = requireNotNull(ChatWidgetUrlResolver.resolve(oldSurface, target)),
           tlsFingerprintSha256 = null,
+          surfaceRole = ChatWidgetSurfaceRole.OPERATOR,
         )
       var operatorRefreshCount = 0
       var current =
         ChatWidgetSurfaceUrls(
           node = null,
-          operator = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = null),
+          operator = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = null),
         )
 
       val resolved =
@@ -265,7 +447,7 @@ class ChatMessageContentParsingTest {
           refreshNodeSurface = { null },
           refreshOperatorSurface = {
             operatorRefreshCount += 1
-            ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = null).also {
+            GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = null).also {
               current = current.copy(operator = it)
             }
           },

@@ -1,36 +1,20 @@
-// Internal error-graph traversal shared by runtime classifiers.
-import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
+export {
+  collectNestedErrorCandidates,
+  extractErrorCodeOrErrno,
+} from "@openclaw/normalization-core/error-coercion";
 
-export function extractErrorCodeOrErrno(err: unknown): string | undefined {
-  const code = extractErrorCode(err);
-  if (code) {
-    return code.trim().toUpperCase();
-  }
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const errno = (err as { errno?: unknown }).errno;
-  if (typeof errno === "string" && errno.trim()) {
-    return errno.trim().toUpperCase();
-  }
-  if (typeof errno === "number" && Number.isFinite(errno)) {
-    return String(errno);
-  }
-  return undefined;
-}
-
-export function collectNestedErrorCandidates(err: unknown): unknown[] {
-  return collectErrorGraphCandidates(err, (current) => {
-    const nested: unknown[] = [
-      current.cause,
-      current.reason,
-      current.original,
-      current.error,
-      current.data,
-    ];
-    if (Array.isArray(current.errors)) {
-      nested.push(...current.errors);
+/** Retained errors must not keep callers alive through V8's lazy stack frames. */
+export function materializeErrorStack(failure: unknown): void {
+  let error = failure;
+  const seen = new Set<Error>();
+  while (error instanceof Error && !seen.has(error)) {
+    seen.add(error);
+    try {
+      error.stack = String(error.stack);
+    } catch {
+      // The setter releases private frames even when a custom formatter throws.
+      error.stack = "Stack trace unavailable: custom formatter failed";
     }
-    return nested;
-  });
+    error = error.cause;
+  }
 }

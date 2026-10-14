@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { GatewayClientRequestError } from "@openclaw/gateway-client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -6,7 +7,8 @@ import {
   createQaChannelTransport,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const CHANNEL_ID = "qa-channel";
 const PRIMARY_AGENT_ID = "main";
@@ -16,8 +18,9 @@ const SIBLING_ACCOUNT_ID = "finance";
 const PRIMARY_PEER_ID = "primary-peer";
 const SIBLING_PEER_ID = "finance-peer";
 
-type GatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
+type GatewayHarness = Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>;
 
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
 let harness: GatewayHarness | undefined;
 let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
 
@@ -64,12 +67,27 @@ async function waitForConversation(params: {
   const deadline = Date.now() + 30_000;
   let latest: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
-    latest = await listConversations(params.gateway, params.agentId);
+    try {
+      latest = await listConversations(params.gateway, params.agentId);
+    } catch (error) {
+      const cause = error instanceof Error ? error.cause : undefined;
+      if (
+        !(cause instanceof GatewayClientRequestError) ||
+        cause.code !== "UNAVAILABLE" ||
+        cause.message !== "Conversation binding ownership changed. Retry the request."
+      ) {
+        throw error;
+      }
+      // Seed binding publications can invalidate this read while ownership is converging.
+      latest = [];
+    }
     const match = findConversation(latest, params.accountId, params.targetIncludes);
     if (match) {
       return match;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   throw new Error(
     `timed out waiting for ${params.agentId} to own ${params.accountId}/${params.targetIncludes}: ${JSON.stringify(latest)}`,
@@ -87,7 +105,9 @@ async function waitForAppliedConfig(gateway: GatewayHarness["gateway"], hash: st
     ) {
       return;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   throw new Error(`Gateway did not apply config revision ${hash}`);
 }
@@ -124,11 +144,14 @@ async function sendConversation(params: {
 afterEach(async () => {
   const cleanupErrors: unknown[] = [];
   try {
-    await harness?.stop();
+    if (gatewayOwner) {
+      await stopQaGatewayFixture(gatewayOwner);
+    }
   } catch (error) {
     cleanupErrors.push(error);
   } finally {
     harness = undefined;
+    gatewayOwner = undefined;
   }
   try {
     await bus?.stop();
@@ -150,7 +173,8 @@ describe("conversation route ownership clean-machine proof", () => {
       const state = createQaBusState();
       const transport = createQaChannelTransport(state);
       bus = await startQaBusServer({ state });
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",

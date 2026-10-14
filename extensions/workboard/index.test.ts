@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 
@@ -12,7 +13,12 @@ describe("Workboard plugin registration", () => {
     const captured = capturePluginRegistration({
       id: "workboard",
       name: "Workboard",
-      register: plugin.register,
+      register(api) {
+        plugin.register({
+          ...api,
+          runtimeSource: fileURLToPath(new URL("./index.ts", import.meta.url)),
+        });
+      },
     });
 
     expect(captured.controlUiDescriptors).toContainEqual({

@@ -1,7 +1,6 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
 import { buildApprovalPresentation } from "./approval-presentation.js";
-import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;
 
@@ -21,6 +20,10 @@ function buildPluginPresentation(request: {
   pluginId?: string;
   toolName?: string;
   agentId?: string;
+  externalResolution?: {
+    label: string;
+    decisions?: readonly ("allow-once" | "allow-always")[];
+  };
 }) {
   return buildApprovalPresentation({ kind: "plugin", request, allowedDecisions });
 }
@@ -74,7 +77,7 @@ describe("buildApprovalPresentation", () => {
       host: "gate\\u{A}way\\u{202E}",
       nodeId: "node\\u{0}id",
     });
-    expect(JSON.stringify(presentation)).not.toContain(githubToken);
+    expect(presentation).toMatchObject({ agentId: githubToken });
     expect(
       buildExecPresentation({
         command: "printf safe",
@@ -106,8 +109,8 @@ describe("buildApprovalPresentation", () => {
     });
   });
 
-  it("redacts secret-like content before applying presentation length limits", () => {
-    const githubToken = `ghp_${"a".repeat(100)}`;
+  it("preserves secret-shaped content within presentation length limits", () => {
+    const githubToken = `ghp_${"a".repeat(48)}`;
     const openAiToken = "sk-abc123456789012345678";
     const presentation = buildPluginPresentation({
       title: githubToken,
@@ -117,13 +120,13 @@ describe("buildApprovalPresentation", () => {
       agentId: `operator-${githubToken}`,
     });
 
-    expect(presentation).not.toBeNull();
-    const serialized = JSON.stringify(presentation);
-    expect(serialized).not.toContain(githubToken);
-    expect(serialized).not.toContain(openAiToken);
     expect(presentation).toMatchObject({
       kind: "plugin",
-      description: expect.stringContaining("Token:\n"),
+      title: githubToken,
+      description: `Token:\n${openAiToken}`,
+      pluginId: githubToken,
+      toolName: openAiToken,
+      agentId: `operator-${githubToken}`,
     });
   });
 
@@ -154,7 +157,7 @@ describe("buildApprovalPresentation", () => {
     const presentation = buildPluginPresentation({
       title: "Review tool input",
       description: "Bounded channel summary",
-      detail: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH + 1),
+      detail: "x".repeat(16_385),
     });
 
     expect(presentation).toMatchObject({
@@ -164,7 +167,102 @@ describe("buildApprovalPresentation", () => {
     if (presentation?.kind !== "plugin" || !presentation.detail) {
       throw new Error("expected plugin detail");
     }
-    expect(Array.from(presentation.detail)).toHaveLength(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH);
+    expect(Array.from(presentation.detail)).toHaveLength(16_384);
+  });
+
+  it("projects only bounded reviewer-safe external verification metadata", () => {
+    expect(
+      buildApprovalPresentation({
+        kind: "plugin",
+        request: {
+          title: "World verification",
+          description: "Verify personhood before continuing.",
+          pluginId: "agentkit",
+          externalResolution: {
+            label: "Verify with World\u202E",
+            decisions: ["allow-once", "allow-always"],
+          },
+        },
+        allowedDecisions: ["deny"],
+      }),
+    ).toMatchObject({
+      kind: "plugin",
+      pluginId: "agentkit",
+      allowedDecisions: ["deny"],
+      externalResolution: {
+        label: "Verify with World\\u{202E}",
+        decisions: ["allow-once", "allow-always"],
+      },
+    });
+  });
+
+  it("rejects an external label that exceeds its limit after spoof-resistant escaping", () => {
+    expect(
+      buildApprovalPresentation({
+        kind: "plugin",
+        request: {
+          title: "World verification",
+          description: "Verify personhood before continuing.",
+          pluginId: "agentkit",
+          externalResolution: {
+            label: "\u202E".repeat(11),
+            decisions: ["allow-once"],
+          },
+        },
+        allowedDecisions: ["deny"],
+      }),
+    ).toBeNull();
+  });
+
+  it("applies the external label limit by Unicode code point", () => {
+    const label = String.fromCodePoint(0x1f680).repeat(80);
+    const buildWithLabel = (value: string) =>
+      buildApprovalPresentation({
+        kind: "plugin",
+        request: {
+          title: "World verification",
+          description: "Verify personhood before continuing.",
+          externalResolution: { label: value, decisions: ["allow-once"] },
+        },
+        allowedDecisions: ["deny"],
+      });
+
+    expect(buildWithLabel(label)).toMatchObject({
+      kind: "plugin",
+      externalResolution: { label },
+    });
+    expect(buildWithLabel(`${label}${String.fromCodePoint(0x1f680)}`)).toBeNull();
+  });
+
+  it.each([
+    { label: " ", decisions: undefined },
+    { label: "Verify", decisions: [] },
+    { label: "Verify", decisions: ["allow-once", "allow-once"] as const },
+  ])("rejects malformed external verification metadata", (externalResolution) => {
+    expect(
+      buildPluginPresentation({
+        title: "World verification",
+        description: "Verify personhood before continuing.",
+        pluginId: "agentkit",
+        externalResolution,
+      }),
+    ).toBeNull();
+  });
+
+  it("defaults external verification to allow once", () => {
+    expect(
+      buildPluginPresentation({
+        title: "World verification",
+        description: "Verify personhood before continuing.",
+        pluginId: "agentkit",
+        externalResolution: { label: " Verify\nwith World " },
+      }),
+    ).toMatchObject({
+      externalResolution: {
+        label: "Verify\\u{A}with World",
+        decisions: ["allow-once"],
+      },
+    });
   });
 });
 

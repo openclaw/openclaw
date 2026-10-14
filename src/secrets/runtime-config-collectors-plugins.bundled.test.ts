@@ -14,56 +14,11 @@ function envRef(id: string) {
 }
 
 const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
-  list: [{ id: "main", default: true }],
+  entries: { main: {} },
 };
 const isolatedEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
-  it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
-    expect(
-      findBundledPluginMetadataById("webhooks", {
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
-      })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([{ path: "routes.*.secret", expected: "string", ownerKind: "route" }]);
-    const config = {
-      agents: explicitMainRoster,
-      plugins: {
-        entries: {
-          webhooks: {
-            enabled: true,
-            config: {
-              routes: {
-                zapier: {
-                  sessionKey: "agent:main:main",
-                  secret: envRef("WEBHOOK_SECRET"),
-                },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const context = createResolverContext({ sourceConfig: config, env: isolatedEnv });
-
-    collectPluginConfigAssignments({
-      config,
-      defaults: undefined,
-      context,
-      loadablePluginOrigins: new Map([["webhooks", "bundled"]]),
-    });
-
-    expect(context.assignments).toMatchObject([
-      {
-        path: "plugins.entries.webhooks.config.routes.zapier.secret",
-        ownerKind: "route",
-        ownerId: "plugins.entries.webhooks.config.routes.zapier.secret",
-        requiredForGateway: false,
-        disposition: "isolate",
-      },
-    ]);
-  });
-
   it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("codex", {
@@ -195,6 +150,64 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
           "X-Gateway-Token": "resolved-gateway-token",
         },
       },
+    });
+  });
+
+  it("materializes Tavily tool credentials from the plugin secret contract", async () => {
+    expect(
+      findBundledPluginMetadataById("tavily", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "webSearch.apiKey", expected: "string", ownerKind: "capability" }]);
+    const sourceConfig = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          tavily: {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: envRef("TAVILY_API_KEY"),
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = structuredClone(sourceConfig);
+    const env = { ...isolatedEnv, TAVILY_API_KEY: "resolved-tavily-key" };
+    const context = createResolverContext({ sourceConfig, env });
+
+    collectPluginConfigAssignments({
+      config: runtimeConfig,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["tavily", "bundled"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.tavily.config.webSearch.apiKey",
+    ]);
+    expect(context.assignments).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "plugins.entries.tavily.config.webSearch.apiKey",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+    ]);
+    expect(context.assignments[0]?.ownerContractDigest).toBeUndefined();
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      { config: sourceConfig, env, cache: context.cache },
+    );
+    applyResolvedAssignments({ assignments: context.assignments, resolved });
+    expect(sourceConfig.plugins?.entries?.tavily?.config).toMatchObject({
+      webSearch: { apiKey: envRef("TAVILY_API_KEY") },
+    });
+    expect(runtimeConfig.plugins?.entries?.tavily?.config).toMatchObject({
+      webSearch: { apiKey: "resolved-tavily-key" },
     });
   });
 

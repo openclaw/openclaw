@@ -9,10 +9,6 @@ const RETAINED_TOOL_ARGUMENT_CHUNK_BYTES = 16 * 1024;
 
 type ToolCallEmissionResult = "ok" | "invalid" | "cancelled";
 
-function contentAt(message: AssistantMessage, index: number) {
-  return message.content[index];
-}
-
 export function createWorkerToolCallStream(params: {
   emit: (event: WorkerInferenceEventParams["event"]) => void;
   isCurrent: () => boolean;
@@ -20,11 +16,9 @@ export function createWorkerToolCallStream(params: {
   const pendingDeltas = new Map<number, string[]>();
   let pendingDeltaBytes = 0;
   let pendingDeltaCount = 0;
-  const started = new Set<number>();
   const ended = new Set<number>();
   const identities = new Map<number, { id: string; name: string }>();
-  const emittedArgumentChunks = new Map<number, string[]>();
-  const emittedArgumentChunkBytes = new Map<number, number[]>();
+  const emittedArgumentChunks = new Map<number, Array<{ text: string; bytes: number }>>();
   let retainedArgumentBytes = 0;
   let streamedDeltaCount = 0;
 
@@ -45,39 +39,29 @@ export function createWorkerToolCallStream(params: {
     }
     params.emit({ type: "toolcall_delta", contentIndex, delta });
     const emitted = emittedArgumentChunks.get(contentIndex) ?? [];
-    const emittedBytes = emittedArgumentChunkBytes.get(contentIndex) ?? [];
-    const lastIndex = emitted.length - 1;
-    const last = emitted[lastIndex];
-    const lastBytes = emittedBytes[lastIndex];
-    if (
-      last !== undefined &&
-      lastBytes !== undefined &&
-      lastBytes + deltaBytes <= RETAINED_TOOL_ARGUMENT_CHUNK_BYTES
-    ) {
-      emitted[lastIndex] = last + delta;
-      emittedBytes[lastIndex] = lastBytes + deltaBytes;
+    const last = emitted.at(-1);
+    if (last && last.bytes + deltaBytes <= RETAINED_TOOL_ARGUMENT_CHUNK_BYTES) {
+      last.text += delta;
+      last.bytes += deltaBytes;
     } else {
-      emitted.push(delta);
-      emittedBytes.push(deltaBytes);
+      emitted.push({ text: delta, bytes: deltaBytes });
     }
     emittedArgumentChunks.set(contentIndex, emitted);
-    emittedArgumentChunkBytes.set(contentIndex, emittedBytes);
     retainedArgumentBytes += deltaBytes;
     return params.isCurrent() ? "ok" : "cancelled";
   };
 
   const start = (contentIndex: number, partial: AssistantMessage): ToolCallEmissionResult => {
-    if (started.has(contentIndex)) {
+    if (identities.has(contentIndex)) {
       return params.isCurrent() ? "ok" : "cancelled";
     }
-    const content = contentAt(partial, contentIndex);
+    const content = partial.content[contentIndex];
     if (content?.type !== "toolCall" || !content.id || !content.name) {
       return "invalid";
     }
     if (!params.isCurrent()) {
       return "cancelled";
     }
-    started.add(contentIndex);
     identities.set(contentIndex, { id: content.id, name: content.name });
     params.emit({ type: "toolcall_start", contentIndex, id: content.id, toolName: content.name });
     if (!params.isCurrent()) {
@@ -103,7 +87,7 @@ export function createWorkerToolCallStream(params: {
     if (ended.has(contentIndex)) {
       return "invalid";
     }
-    if (started.has(contentIndex)) {
+    if (identities.has(contentIndex)) {
       return emitDelta(contentIndex, value);
     }
     const pending = pendingDeltas.get(contentIndex) ?? [];
@@ -126,7 +110,9 @@ export function createWorkerToolCallStream(params: {
     if (!identity || identity.id !== complete.id || identity.name !== complete.name) {
       return "invalid";
     }
-    const emittedJson = (emittedArgumentChunks.get(contentIndex) ?? []).join("");
+    const emittedJson = (emittedArgumentChunks.get(contentIndex) ?? [])
+      .map((chunk) => chunk.text)
+      .join("");
     if (!emittedJson) {
       try {
         const completeJson = JSON.stringify(complete.arguments);
@@ -179,8 +165,10 @@ export function createWorkerToolCallStream(params: {
       );
       return (
         pendingDeltas.size === 0 &&
-        terminal.size === started.size &&
-        [...started].every((contentIndex) => terminal.has(contentIndex) && ended.has(contentIndex))
+        terminal.size === identities.size &&
+        [...identities.keys()].every(
+          (contentIndex) => terminal.has(contentIndex) && ended.has(contentIndex),
+        )
       );
     },
     start,
