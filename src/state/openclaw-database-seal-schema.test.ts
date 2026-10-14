@@ -7,7 +7,26 @@ import {
   writeSqliteCleanCloseSeal,
 } from "../infra/sqlite-clean-close-seal.js";
 
-const inputs = vi.hoisted(() => ({ version: "2026.10.1", commit: "first", build: "first" }));
+const inputs = vi.hoisted(() => ({
+  version: "2026.10.1",
+  commit: "first",
+  build: "first",
+  extraColumn: false,
+}));
+vi.mock("./openclaw-agent-db-additive-columns.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./openclaw-agent-db-additive-columns.js")>();
+  return {
+    ...actual,
+    get STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS() {
+      return [
+        ...actual.STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS,
+        ...(inputs.extraColumn
+          ? [{ tableName: "session_windows", columnName: "future_projection", dataType: "TEXT" }]
+          : []),
+      ];
+    },
+  };
+});
 vi.mock("../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version.js")>()),
   get VERSION() {
@@ -47,4 +66,15 @@ it("reuses a clean seal across builds but validates again after a version change
   expect(
     readSqliteCleanCloseSeal(pathname, upgraded.sqliteDatabaseSealSchemaFor(), file),
   ).toBeUndefined();
+});
+
+it("invalidates seal identity when only the same-version additive requirements change", async () => {
+  const { sqliteDatabaseSealSchemaFor } = await import("./openclaw-database-seal-schema.js");
+  const first = sqliteDatabaseSealSchemaFor();
+  inputs.extraColumn = true;
+  try {
+    expect(sqliteDatabaseSealSchemaFor()).not.toBe(first);
+  } finally {
+    inputs.extraColumn = false;
+  }
 });
