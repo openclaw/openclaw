@@ -342,8 +342,9 @@ describe("buildChildCompletionFindings", () => {
     for (const child of children.slice(shown.length, shown.length + 3)) {
       expect(summary).toContain(child.childSessionKey);
     }
-    expect(summary).toContain("Inspect remaining children with subagents and sessions_history");
-    expect(summary).toContain("text fields truncated to 4,000 characters");
+    expect(summary).toContain(
+      "Inspect remaining children with the session tools available to you.",
+    );
     expect(buildChildCompletionFindings(children.toReversed())).toBe(findings);
   });
 

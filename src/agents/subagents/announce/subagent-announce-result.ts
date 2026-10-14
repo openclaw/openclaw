@@ -271,7 +271,7 @@ export function buildChildCompletionFindings(
       maxEscapedChars: MAX_CHILD_COMPLETION_FIELD_CHARS,
       truncationMarker: "…",
     }).replaceAll("\n", " ");
-    summary = `${sections.length - included} additional child results omitted; ${keys}. Inspect remaining children with subagents and sessions_history (text fields truncated to 4,000 characters).`;
+    summary = `${sections.length - included} additional child results omitted; ${keys}. Inspect remaining children with the session tools available to you.`;
   }
   let remaining = available - minimumChars - (summary ? summary.length + 2 : 0);
   const visible = sections.slice(0, included);
