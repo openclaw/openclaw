@@ -25,6 +25,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-cleanup.js";
@@ -562,6 +563,56 @@ describe("session MCP runtime", () => {
       await runtime.dispose();
       await catalogResult;
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports initialize authentication refusal with the server name without response secrets", async () => {
+    const server = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        http.createServer((_req, res) => {
+          res.writeHead(401, {
+            "content-type": "application/json",
+            "www-authenticate": 'Bearer realm="test-header-secret"',
+          });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: null,
+              error: { code: -32001, message: "expired token: test-body-secret" },
+            }),
+          );
+        }),
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-auth-refusal",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            lab: {
+              transport: "streamable-http",
+              url: `http://127.0.0.1:${server.claim.port}/mcp`,
+              headers: { Authorization: "Bearer test-request-secret" },
+            },
+          },
+        },
+      },
+    });
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.diagnostics).toEqual([
+        expect.objectContaining({
+          serverName: "lab",
+          message: expect.stringContaining("authentication refused (401)"),
+        }),
+      ]);
+      expect(catalog.tools).toEqual([]);
+      expect(JSON.stringify(catalog)).not.toMatch(/test-(?:body|header|request)-secret/);
+    } finally {
+      await runtime.dispose();
+      await server.releaseListener();
+      await server.claim.release();
     }
   });
 
