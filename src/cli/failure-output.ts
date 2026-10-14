@@ -11,6 +11,7 @@ import {
 } from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
+import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
 
 type FormatCliFailureOptions = {
   title: string;
@@ -239,12 +240,10 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   // Update subprocesses use both marker values and retain captured reasons for recovery.
   const showUpdateDiagnostics = ["0", "1"].includes(env.OPENCLAW_UPDATE_IN_PROGRESS ?? "");
   // A crash-looping Gateway start must name its cause: the operator reads the
-  // service journal, where no debug flag is available. Matches the foreground
-  // Gateway invocation shapes (bare `gateway` or `gateway run`).
-  const isGatewayStartCommand =
-    commandPath.length === 1
-      ? commandPath[0] === "gateway"
-      : commandPath.length === 2 && commandPath[0] === "gateway" && commandPath[1] === "run";
+  // service journal, where no debug flag is available. Reuse the foreground
+  // Gateway argv parser so option values (`gateway --port 18789`) are consumed
+  // the way the Gateway's own bootstrap consumes them.
+  const isGatewayStartCommand = isGatewayRunInvocationArgv(argv);
   if (
     isGatewayTransportError(options.error) &&
     !showDebugDetails &&
