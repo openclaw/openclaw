@@ -809,14 +809,15 @@ function findExactChildRun(child, repository = DEFAULT_REPO) {
   return selectExactChildRunFromPages(runPages, child.displayTitle, child.headBranch);
 }
 
-// Bounded at 1,000 jobs regardless of the page size readReleaseJobListing selects.
+// The listing keeps the 1,000-job inventory ceiling of ten 100-job pages, whatever page size
+// readReleaseJobListing selects.
 const MAX_RUN_JOBS = 1000;
 
 function findRunJobsAll(path, repository = DEFAULT_REPO, requireComplete = false) {
   return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
     const jobs = [];
     let total;
-    for (let page = 1; page <= Math.ceil(MAX_RUN_JOBS / perPage); page += 1) {
+    for (let page = 1; jobs.length < MAX_RUN_JOBS; page += 1) {
       const query = new URLSearchParams({
         page: String(page),
         per_page: String(perPage),
@@ -840,6 +841,7 @@ function findRunJobsAll(path, repository = DEFAULT_REPO, requireComplete = false
         break;
       }
     }
+    jobs.splice(MAX_RUN_JOBS);
     if (
       requireComplete &&
       (jobs.length !== total || new Set(jobs.map((job) => job.id)).size !== total)
