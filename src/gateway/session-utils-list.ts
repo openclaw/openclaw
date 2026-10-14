@@ -437,7 +437,7 @@ export async function listProjectedSessions(params: {
     let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
     do {
       yieldCount++;
-      await projection.prepareSelection(true);
+      await projection.prepareSelection({ yieldForCatalog: true });
       if (opts.search?.trim()) {
         searchIdentities = await prepareSessionSearchIdentityNames(projection, opts, true);
       }

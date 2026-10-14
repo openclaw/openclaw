@@ -26,6 +26,10 @@ Model-catalog reads in `sessions.create`, `sessions.patch`, `sessions.patchMany`
 Session list orders update incrementally as committed session metadata changes. Each request still applies current visibility, activity, and time filters before pagination. Archived sessions retain their list position when their display rows are released from memory.
 
 Project recents batch repository-workspace reads using the selected sessions’ physical agent owners.
+Project and session-catalog listings consume committed session metadata without
+waiting for unrelated runtime-ownership or display-row preparation. Uncertain
+session metadata and membership still reconcile before selection, and responses
+recheck the current caller and contributing session identities before delivery.
 
 GitHub publication options read independent account status and publication receipts concurrently. The response still checks current session access and personal account authority after those reads settle.
 

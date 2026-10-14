@@ -4091,20 +4091,25 @@ retains its physical store, rereads its voice record inside the worker transacti
 and publishes acknowledged facts before dependent work. Request and session authority
 are prepared before dispatch; session creation publishes its committed identity
 through the existing authorization owner. The committing worker checks same-store predicates;
-custom-store sources retain their native authority, and incognito sources use
+published custom-store sharing sources admit once against the sharing owner's current
+entry and membership facts, and incognito sources use
 committed memory actor facts, without opening readers inside a grant. Opaque synchronous `sessionMutationCommitGuard` and unclassified
 `hasCurrentClientAuthority` callbacks from the released v2026.9.8 Gateway SDK,
 including guards retained by voice replacement,
 keep native voice admission through the same FIFO and mutation kernel. These callbacks
 may read SQLite and remain live throughout native preparation and commit. Ordinary
-prepared same-store Gateway requests use the worker; foreign-store requester
-and session-source authority retain native admission. Incognito sources carry
-committed memory actor facts into the durable voice owner. Other-store predicates use their retained connection before and after the native mutation;
+prepared Gateway requests use the worker, including foreign sharing sources with
+complete owner publication. An admitted cross-store durable voice write may finish
+after session or membership revocation; new admissions fail once revocation starts.
+Disclosure, credential handoff, tool launch, and external sends still check live
+authority immediately before their effect. Incognito sources carry
+committed memory actor facts into the durable voice owner. Uncovered foreign predicates
+and opaque SDK compositions retain native admission and use their retained connection before and after the native mutation;
 same-store predicates use that transaction's connection. This preserves event-loop
 atomicity with synchronous SDK writers without reopening source readers or
 discovering schema capabilities under the write lock. These final native authority
-checks remain until raw synchronous writers are removed at the next Plugin SDK
-major and owner publications cover revocation completely.
+checks remain until the deprecated synchronous SDK APIs are removed and owner
+publications cover revocation completely.
 Native SDK opening hands its admitted file identity to that same executor; refused
 worker preparations finish cleanup before the handoff. Fixed stores retain their
 physical schema owner independently of logical agent routing. Each create/resume
