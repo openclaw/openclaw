@@ -159,6 +159,11 @@ function parseProviderEnvEntries(
     if (!key) {
       throw new Error("--provider-env key must not be empty.");
     }
+    if (key === "__proto__") {
+      throw new Error(
+        '--provider-env key "__proto__" is reserved; use a different key name.',
+      );
+    }
     env[key] = entry.slice(separator + 1);
   }
   return Object.keys(env).length > 0 ? env : undefined;

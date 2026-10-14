@@ -149,6 +149,9 @@ function parseKeyValueEntries(values: readonly string[] | undefined, label: stri
     if (!key) {
       fail(`${label} entries must use a non-empty key.`);
     }
+    if (key === "__proto__") {
+      fail(`${label} key "__proto__" is reserved; use a different key name.`);
+    }
     entries[key] = value;
   }
   return Object.keys(entries).length > 0 ? entries : undefined;
