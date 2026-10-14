@@ -259,8 +259,15 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Escape");
       await expect
-        .poll(() => effort.evaluate((node) => node === document.activeElement))
-        .toBe(true);
+        .poll(() =>
+          effort.evaluate((node) => ({
+            focused: node === document.activeElement,
+            activeTag: document.activeElement?.tagName ?? null,
+            activeClass: document.activeElement?.getAttribute("class") ?? null,
+            activeRole: document.activeElement?.getAttribute("role") ?? null,
+          })),
+        )
+        .toMatchObject({ focused: true });
     });
   });
 

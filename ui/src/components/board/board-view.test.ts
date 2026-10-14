@@ -93,7 +93,7 @@ describe("openclaw-board-view", () => {
   it("paces a stalled proxy retry without spending the authorization refresh budget", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>Ready document</p>"));
-    vi.stubGlobal("fetch", fetchMock);
+    stubBoardDocumentFetch(fetchMock);
     const frameLoadFailed = vi.fn(async () => undefined);
     const view = await mount({
       context: gatewayContext(null),
