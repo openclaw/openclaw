@@ -66,6 +66,7 @@ import type { SessionListModelCatalog, SessionsListResult } from "./session-util
 export type SessionListFilteredEntries = {
   entries: SessionEntryPair[];
   ownerEntries: SessionEntryPair[];
+  totalCount: number;
   ownerFacet: SessionOwnerFacetIdentity[];
   ownerSessionCounts?: SessionOwnerSessionCount[];
   ownerSessionProfiles?: ReadonlyMap<string, string>;
@@ -79,7 +80,6 @@ export type SessionListFilteredEntries = {
 
 export type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & {
   ownerCount: number;
-  totalCount: number;
   limitApplied?: number;
   offset: number;
   nextOffset: number | null;
@@ -171,6 +171,7 @@ function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | u
 
 export function* filterSessionEntries(
   params: SessionListFilterParams,
+  window?: { offset: number; limit?: number; ownerLimit: number },
 ): SynchronousWork<SessionListFilteredEntries> {
   const { cfg, opts, now, shouldYield } = params;
   let rowContext: SessionListRowContext | undefined;
@@ -186,6 +187,7 @@ export function* filterSessionEntries(
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
   let activityExpiresAt = Infinity;
   const entries: SessionEntryPair[] = [];
+  let totalCount = 0;
   const ownerEntries: SessionEntryPair[] = [];
   const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
   const ownerSessionCounts = opts.includeOwnerSessionCounts
@@ -552,11 +554,19 @@ export function* filterSessionEntries(
     }
     if (
       effectiveOwner?.identity?.type === "profile" &&
-      effectiveOwner.identity.id === ownerFirstActorId
+      effectiveOwner.identity.id === ownerFirstActorId &&
+      (!window || ownerEntries.length < window.ownerLimit)
     ) {
       ownerEntries.push(pair);
     }
-    entries.push(pair);
+    // Facets and totals cover the full roster; retain only the requested ordered page.
+    if (
+      !window ||
+      (totalCount >= window.offset && (window.limit === undefined || entries.length < window.limit))
+    ) {
+      entries.push(pair);
+    }
+    totalCount++;
   }
 
   const { people: visiblePeople, overflow } = projectSessionPeopleFacet(people, selectedProfileId);
@@ -566,6 +576,7 @@ export function* filterSessionEntries(
   return {
     entries,
     ownerEntries,
+    totalCount,
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
     ...(ownerSessionCounts
       ? {

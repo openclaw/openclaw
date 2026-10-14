@@ -1,6 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createSignal, For, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup } from "solid-js";
 import type { ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
+import {
+  diffLineChangeRanges,
+  pairSessionDiffLines,
+  type SessionSplitDiffRow,
+} from "../../../lib/chat/session-diff-split.ts";
 import type { DiffFilePaths, DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { DiffHighlightToken } from "./chat-diff-highlight.runtime.ts";
@@ -29,11 +34,47 @@ export function DiffStatChips(props: { stat: DiffStat & { modified?: number } })
 export function HighlightedDiff(props: {
   lines: readonly DiffLine[];
   file: DiffFilePaths;
-  children: (renderLine: (line: DiffLine) => JSX.Element) => JSX.Element;
+  children: (
+    renderLine: (line: DiffLine) => JSX.Element,
+    rows: readonly SessionSplitDiffRow[],
+  ) => JSX.Element;
 }) {
   const [highlighted, setHighlighted] = createSignal<ReadonlyMap<DiffLine, DiffHighlightToken[]>>(
     new Map(),
   );
+  const rows = createMemo(() => pairSessionDiffLines(props.lines));
+  const changes = createMemo(() => diffLineChangeRanges(rows()));
+  const rendered = createMemo(() => {
+    const result = new Map(highlighted());
+    for (const [line, ranges] of changes()) {
+      const parts: DiffHighlightToken[] = [];
+      let offset = 0;
+      let rangeIndex = 0;
+      for (const token of highlighted().get(line) ?? [{ text: line.text, classes: "" }]) {
+        const end = offset + token.text.length;
+        let start = offset;
+        while (start < end) {
+          const range = ranges[rangeIndex];
+          if (range && range.to <= start) {
+            rangeIndex++;
+            continue;
+          }
+          const changed = range && range.from <= start;
+          const next = Math.min(end, range ? (changed ? range.to : range.from) : end);
+          parts.push({
+            text: token.text.slice(start - offset, next - offset),
+            classes: [token.classes, changed ? "chat-diff__change--" + line.kind : ""]
+              .filter(Boolean)
+              .join(" "),
+          });
+          start = next;
+        }
+        offset = end;
+      }
+      result.set(line, parts);
+    }
+    return result;
+  });
   let generation = 0;
   onCleanup(() => {
     generation += 1;
@@ -61,19 +102,22 @@ export function HighlightedDiff(props: {
   );
   return (
     <>
-      {props.children((line) => (
-        <>
-          {highlighted().has(line) ? (
-            <For each={highlighted().get(line)}>
-              {(token) =>
-                token.classes ? <span class={token.classes}>{token.text}</span> : token.text
-              }
-            </For>
-          ) : (
-            line.text
-          )}
-        </>
-      ))}
+      {props.children(
+        (line) => (
+          <>
+            {rendered().has(line) ? (
+              <For each={rendered().get(line)}>
+                {(token) =>
+                  token.classes ? <span class={token.classes}>{token.text}</span> : token.text
+                }
+              </For>
+            ) : (
+              line.text
+            )}
+          </>
+        ),
+        rows(),
+      )}
     </>
   );
 }

@@ -541,6 +541,8 @@ export interface AssistantMessage {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  /** Provider retry floor before diagnostic clipping; null means too large to represent. */
+  retryAfterMs?: number | null;
   timestamp: number; // Unix timestamp in milliseconds
 }
 

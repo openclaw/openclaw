@@ -47,6 +47,7 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
@@ -481,16 +482,25 @@ async function executeAgentTurnInternalLoop(
     (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
   );
   if (!hasNonErrorContent) {
+    const providerFailure = runResult.payloads
+      ?.filter((payload) => payload.isError)
+      .map((payload) => getReplyPayloadMetadata(payload)?.providerFailure)
+      .find((failure) => failure?.rateLimitRetriesExhausted !== undefined);
     const metaErrorMsg = runResult.meta?.error?.message ?? "";
     const rawErrorPayloadText =
       runResult.payloads?.find(
         (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
       )?.text ?? "";
     const errorCandidate = metaErrorMsg || rawErrorPayloadText;
-    const candidateReason = errorCandidate ? classifyFailoverReason(errorCandidate) : null;
+    const candidateReason =
+      providerFailure?.reason ?? (errorCandidate ? classifyFailoverReason(errorCandidate) : null);
     const formattedErrorCandidate =
       candidateReason === "rate_limit" || candidateReason === "overloaded"
-        ? renderRateLimitOrOverloadedCopy({ reason: candidateReason, raw: errorCandidate })
+        ? renderRateLimitOrOverloadedCopy({
+            reason: candidateReason,
+            raw: errorCandidate,
+            rateLimitRetriesExhausted: providerFailure?.rateLimitRetriesExhausted,
+          })
         : undefined;
     if (formattedErrorCandidate) {
       runResult.payloads = [

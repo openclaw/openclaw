@@ -337,7 +337,7 @@ describe("Checkout chip state", () => {
       pendingPlacement: false,
       popoverOpen: true,
       popoverHiding: false,
-      onGuardTransition: vi.fn(),
+      onGuardTransition: vi.fn((event: MouseEvent) => event.preventDefault()),
       onPopoverShow,
       onPopoverHide,
       onPopoverAfterHide,
@@ -354,6 +354,15 @@ describe("Checkout chip state", () => {
       ).toBe("open"),
     );
     onPopoverShow.mockClear();
+
+    const trigger = container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!;
+    expect(trigger.getAttribute("aria-controls")).toBe("new-session-checkout-popover");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    trigger.click();
+    flush();
+    expect(params.onGuardTransition).toHaveBeenCalledOnce();
+    expect(onPopoverHide).not.toHaveBeenCalled();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
 
     expect(container.textContent).toContain(
       "Creates branch openclaw/picker-fixes in a separate checkout.",

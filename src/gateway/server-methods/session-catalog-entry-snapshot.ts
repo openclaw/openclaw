@@ -79,7 +79,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   /** Bound one delivery's lookups; provider planning retains the full snapshot. */
   sessionKeys?: readonly string[];
 }): SessionCatalogRequestEntrySnapshot {
-  if (params.projection.needsSelectionPreparation()) {
+  if (params.projection.needsSelectionPreparation({ metadataOnly: true })) {
     throw new Error("Prepare current session metadata before capturing catalog entries");
   }
   const selectionRevision = params.projection.state.revision;

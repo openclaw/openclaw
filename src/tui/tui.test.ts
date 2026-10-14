@@ -786,7 +786,9 @@ function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
     },
     lockDir: path.join(stateDir, "gateway-locks"),
     readProcessStartTime: () => 123_456,
-    timeoutMs: 100,
+    // Live-owner inspection and uncontended acquisition never wait on this; it only
+    // bounds lock-file inspection, which loaded small hosts can push past 100ms.
+    timeoutMs: 5_000,
   };
 }
 

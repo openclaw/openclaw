@@ -162,6 +162,7 @@ export function retainProjection(
   sessionId: string,
   projection: WorkerSessionPlacementReadResult,
 ) {
+  const retained = owner.projections.get(sessionId);
   owner.projections.delete(sessionId);
   const placement = projection.projection.placements.get(sessionId);
   // Environment lifecycle has its own owner. Keep its changing facts on direct reads.
@@ -174,7 +175,10 @@ export function retainProjection(
   ) {
     return;
   }
-  owner.projections.set(sessionId, structuredClone(projection));
+  owner.projections.set(
+    sessionId,
+    retained === projection ? projection : structuredClone(projection),
+  );
   // Cold sessions can always rehydrate; residency is independent of durable ownership.
   if (owner.projections.size > 256) {
     owner.projections.delete(owner.projections.keys().next().value!);
@@ -197,12 +201,10 @@ export function projectCachedLocalPlacementTurnClaim(
   if (!retained) {
     return undefined;
   }
-  const projection = structuredClone(retained.projection);
-  projection.placements = new Map(projection.placements).set(
-    placement.sessionId,
-    structuredClone(placement),
-  );
-  return projection;
+  return structuredClone({
+    ...retained.projection,
+    placements: new Map(retained.projection.placements).set(placement.sessionId, placement),
+  });
 }
 
 /** The authority owner retains exact reads until one of its writers publishes a change. */

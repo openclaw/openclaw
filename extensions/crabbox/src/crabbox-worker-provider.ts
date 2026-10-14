@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
-import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
+import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
 import { runCrabboxProcess } from "./crabbox-process.js";
 import {
   type CrabboxCommandRunner,
@@ -67,11 +67,11 @@ import {
 } from "./crabbox-worker-snapshot-actions.js";
 import {
   countCrabboxProvisionSetupPhases,
-  CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
+  CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
-  CRABBOX_STOP_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
+  resolveCrabboxDestroyTimeoutMs,
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxNodeEnrollmentTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
@@ -83,8 +83,6 @@ import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.
 import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
-// Local pack creation, two seed commands, and upload precede runtime preparation and capture.
-const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS = 4 * CRABBOX_SETUP_TIMEOUT_MS;
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
 type LeaseHeartbeatContext = LeaseCommandContext &
@@ -135,9 +133,9 @@ export function createCrabboxWorkerProvider(
     warn,
   });
   const providerAbort = new AbortController();
-  const binaries = new Map<string, Promise<string>>();
+  const binaries = new Map<string, Promise<CrabboxBinary>>();
   let defaultCandidate: string | undefined;
-  const resolveBinary = async (explicit?: string, signal?: AbortSignal): Promise<string> => {
+  const resolveBinary = async (explicit?: string, signal?: AbortSignal): Promise<CrabboxBinary> => {
     signal?.throwIfAborted();
     const candidate =
       explicit ??
@@ -157,9 +155,9 @@ export function createCrabboxWorkerProvider(
         runCommand,
         signal: providerAbort.signal,
       })
-        .then(({ binary }) => {
+        .then((resolved) => {
           providerAbort.signal.throwIfAborted();
-          return binary;
+          return resolved;
         })
         .catch((error: unknown) => {
           binaries.delete(candidate);
@@ -174,7 +172,7 @@ export function createCrabboxWorkerProvider(
     return binary;
   };
   const machineOptions = createCrabboxMachineOptionsResolver({
-    resolveBinary,
+    resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
     runCommand,
     warn,
   });
@@ -188,7 +186,13 @@ export function createCrabboxWorkerProvider(
   const resolveMaintenanceBinaries = (
     profiles: readonly Parameters<typeof parseCrabboxProfile>[0][],
     signal: AbortSignal,
-  ) => resolveCrabboxCheckpointBinaries({ profiles, signal, resolveBinary, warn });
+  ) =>
+    resolveCrabboxCheckpointBinaries({
+      profiles,
+      signal,
+      resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
+      warn,
+    });
   const snapshots = createCrabboxSnapshotActions({
     manager: warmImages,
     signal: providerAbort.signal,
@@ -212,7 +216,7 @@ export function createCrabboxWorkerProvider(
     assertCrabboxLeaseId(lease.leaseId);
     return {
       context: {
-        binary: await resolveBinary(profile.binary),
+        binary: (await resolveBinary(profile.binary, lease.signal)).binary,
         heartbeatIntervalMs: profile.heartbeatIntervalMs,
         heartbeatTimeoutMs: profile.heartbeatTimeoutMs,
         id: lease.leaseId,
@@ -263,7 +267,7 @@ export function createCrabboxWorkerProvider(
       signal && project ? AbortSignal.any([signal, project.signal]) : (signal ?? project?.signal);
     const allocation = await resolveAllocation(profile, operationId);
     signal?.throwIfAborted();
-    const binary = await resolveBinary(parsed.binary, preparationSignal);
+    const { binary, version: cliVersion } = await resolveBinary(parsed.binary, preparationSignal);
     preparationSignal?.throwIfAborted();
     if (protectedSetup) {
       await assertCrabboxSetupEgressSupport({
@@ -419,7 +423,7 @@ export function createCrabboxWorkerProvider(
         assertCurrent();
       };
       if (project && (await warmImages.lookupLease(leaseId))?.phase !== "enrolled") {
-        let captured: boolean;
+        let captured: boolean | "source-running";
         try {
           const preparedProject = await prepareCrabboxProjectFiles({
             ...context,
@@ -454,6 +458,7 @@ export function createCrabboxWorkerProvider(
                     ...context,
                     id: leaseId,
                     profile: parsed,
+                    cliVersion,
                     signal: preparationSignal,
                     assertCurrent,
                     projectCaptureRequired:
@@ -475,7 +480,7 @@ export function createCrabboxWorkerProvider(
           return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
         }
         // Only native capture can have restarted the source since preparation returned.
-        if (captured) {
+        if (captured === true) {
           inspectedParams.inspect = await waitForProvisionReady({
             ...inspectedParams,
             refresh: true,
@@ -641,29 +646,21 @@ export function createCrabboxWorkerProvider(
     supportsProjectPreparation: supportsCrabboxProjectPreparation,
     resolvePreparedIdleTimeoutMs: resolveCrabboxPreparedIdleTimeoutMs,
     resolvePreparationTarget: resolveCrabboxPreparationTarget,
-    runSetupCommand: createCrabboxSetupCommandRunner({ resolveBinary, runCommand }),
+    runSetupCommand: createCrabboxSetupCommandRunner({
+      resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
+      runCommand,
+    }),
     notePreparedDemand: async (lease, preparation) =>
       await warmImages.notePreparedDemand(lease.leaseId, preparation),
     resolveAllocation,
     resolveProvisionTimeoutMs(profile, options) {
-      const parsed = parseCrabboxProfile(profile);
-      return (
-        resolveCrabboxProvisionCallTimeoutMs(parsed, options?.nodeBootstrapTimeoutMs) +
-        (parsed.warmImage === false
-          ? 0
-          : CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
-            resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
+      return resolveCrabboxProvisionCallTimeoutMs(
+        parseCrabboxProfile(profile),
+        options?.nodeBootstrapTimeoutMs,
       );
     },
     resolveDestroyTimeoutMs(profile) {
-      const parsed = parseCrabboxCleanupProfile(profile);
-      // Lifecycle profiles omit placement sizing. Reserve capture unless disabled,
-      // plus separate heartbeat and stop child settlement.
-      return (
-        CRABBOX_STOP_TIMEOUT_MS +
-        2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
-        (parsed.warmImage === false ? 0 : resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
-      );
+      return resolveCrabboxDestroyTimeoutMs(parseCrabboxCleanupProfile(profile));
     },
     prepareProvision,
     async provision(...args) {
@@ -677,7 +674,9 @@ export function createCrabboxWorkerProvider(
         ...context,
         runCommand,
         sleep,
+        signal: lease.signal,
       });
+      lease.signal?.throwIfAborted();
       if (!inspected || isNonRunnableState(inspected.state)) {
         await heartbeats.stop(context.id);
         return { status: "unknown" };

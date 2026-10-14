@@ -57,6 +57,7 @@ import {
   shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
 
 export type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 
@@ -1241,6 +1242,22 @@ function emitDiagnosticEventWithTrust(
   }
 
   const enriched = enrichDiagnosticEvent(state, event);
+  if (trusted && enriched.type === "diagnostic.gc") {
+    // SDK producers cross this boundary; native samples already carry bounded attribution.
+    switch (enriched.kind) {
+      case "scavenge":
+      case "mark_sweep_compact":
+      case "incremental":
+      case "weak_processing":
+        break;
+      default:
+        enriched.kind = undefined;
+    }
+    enriched.thread =
+      enriched.thread === undefined || enriched.thread === "main"
+        ? "main"
+        : normalizeDiagnosticWorkerScript(enriched.thread);
+  }
   const { hostPluginId, internal = false, privateData } = options;
   const trustedTraceContext = options.trustedTraceContext === true;
   const metadata: InternalDiagnosticEventMetadata = {

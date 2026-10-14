@@ -108,9 +108,12 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-The submitted browser draft is retired before the confirmed conversation URL is
-committed, so closing the tab does not restore a sent prompt. Saved worktree-name
-preferences can finish clearing alongside navigation.
+As soon as creation is accepted, the submitted prompt and attachments are cleared
+from the New session composer, without waiting for its chat preview to load. The
+submitted browser draft is retired before the confirmed conversation URL is
+committed, so closing the tab does not restore a sent prompt. A failed creation or
+a newer unsent draft stays available. Saved worktree-name preferences can finish
+clearing alongside navigation.
 
 ## Move an existing session
 
@@ -171,6 +174,10 @@ use the first-message text as a branch-name fallback. A title that arrives later
 updates the sidebar without renaming an existing branch.
 
 ## New-session preferences and recents
+
+Changing agents or handing a draft to its new session closes the draft's open
+menus. In the command palette's session settings, Escape closes the nested agent
+menu first and returns focus to its trigger.
 
 In **Project → Browse**, keyboard focus moves to the folder path. Escape returns
 focus to **Browse**. Loading and folder errors are announced without moving focus
