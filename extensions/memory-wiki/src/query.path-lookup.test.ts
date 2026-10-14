@@ -2,10 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import { renderWikiMarkdown } from "./markdown.js";
-import { readQueryableWikiPages } from "./query-pages.js";
+import { readWikiPagesTask } from "./query-pages.js";
+import * as queryReader from "./query-reader.js";
 import { getMemoryWikiPage } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -14,6 +15,7 @@ const PAGE_COUNT = 20;
 
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
+  vi.restoreAllMocks();
 });
 
 async function writePage(
@@ -76,17 +78,23 @@ describe("wiki_get lookups", () => {
 
   it("resolves id lookups and misses with exactly one full read", async () => {
     const { rootDir, config } = await createCompiledVault();
+    const listed = (await readWikiPagesTask({ select: "list", rootDir })).relativePaths;
     const opened = countPageOpens();
-    await readQueryableWikiPages(rootDir);
-    const fullRead = opened.splice(0).length;
+    const scans = vi.spyOn(queryReader, "readMemoryWikiPages");
+    const scanned = () => scans.mock.calls.map(([task]) => [task.select, task.relativePaths]);
 
     await expect(getMemoryWikiPage({ config, lookup: "concept.p7" })).resolves.toMatchObject({
       path: "concepts/p7.md",
     });
-    expect(opened).toHaveLength(fullRead);
+    // The full read is one worker scan over the listing, where this thread's open hook
+    // does not fire; the calling thread opens only the page the scan resolved.
+    expect(scanned()).toEqual([["lookup", listed]]);
+    expect(opened).toEqual(["p7.md"]);
+    scans.mockClear();
     opened.splice(0);
     await expect(getMemoryWikiPage({ config, lookup: "absent" })).resolves.toBeNull();
-    expect(opened).toHaveLength(fullRead);
+    expect(scanned()).toEqual([["lookup", listed]]);
+    expect(opened).toEqual([]);
   });
 
   it("reads one page when several share a basename and settles on the first in path order", async () => {
@@ -166,21 +174,26 @@ describe("wiki_get lookups", () => {
     const outsidePath = path.join(outside.rootDir, "outside.md");
     await fs.writeFile(outsidePath, "outside the vault\n");
     await writePage(rootDir, "concepts/unrelated.md", { pageType: "concept" });
-    const unrelated = await fs.realpath(path.join(rootDir, "concepts/unrelated.md"));
-    __setFsSafeTestHooksForTest({
-      beforeOpen: async (filePath) => {
-        if (path.resolve(filePath) === unrelated) {
-          await fs.unlink(unrelated);
-          await fs.symlink(outsidePath, unrelated);
-        }
-      },
-    });
+    const unrelated = path.join(rootDir, "concepts/unrelated.md");
+    // The full read runs in the worker, where this thread's open hook does not fire, and
+    // the directory walk skips symlinks, so the page is swapped once it has been listed
+    // and before the worker reads it.
+    const scan = queryReader.readMemoryWikiPages;
+    const scans = vi
+      .spyOn(queryReader, "readMemoryWikiPages")
+      .mockImplementation(async (task, ...rest) => {
+        await fs.unlink(unrelated);
+        await fs.symlink(outsidePath, unrelated);
+        return scan(task, ...rest);
+      });
 
     await expect(getMemoryWikiPage({ config, lookup: "p7" })).resolves.toMatchObject({
       path: "concepts/p7.md",
     });
+    expect(scans).not.toHaveBeenCalled();
     await expect(getMemoryWikiPage({ config, lookup: "absent" })).rejects.toMatchObject({
       name: "FsSafeError",
     });
+    expect(scans).toHaveBeenCalledOnce();
   });
 });
