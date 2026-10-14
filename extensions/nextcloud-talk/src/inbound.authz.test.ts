@@ -602,4 +602,25 @@ describe("nextcloud-talk inbound authz", () => {
     expect(buildMentionRegexes).not.toHaveBeenCalled();
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { senderId: "users/trusted-user", admitted: true },
+    { senderId: "guests/trusted-user", admitted: false },
+    { senderId: "federated_users/trusted-user", admitted: false },
+  ])("matches Talk actor $senderId against bare allowlisted user ids", async (params) => {
+    const readAllowFromStore = vi.fn(async () => []);
+    const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
+
+    installInboundAuthzRuntime({ readAllowFromStore, buildMentionRegexes });
+
+    const account = createAccount({ groupAllowFrom: ["trusted-user"] });
+    await handleNextcloudTalkInbound({
+      message: createMessage({ senderId: params.senderId }),
+      account,
+      config: { channels: { "nextcloud-talk": account.config } },
+      runtime: createRuntimeSpies(),
+    });
+
+    expect(buildMentionRegexes).toHaveBeenCalledTimes(params.admitted ? 1 : 0);
+  });
 });
