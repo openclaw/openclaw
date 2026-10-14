@@ -83,6 +83,8 @@ describe("async config plugin validation", () => {
         ],
       });
       raw.plugins.entries["validation-fixture"].config = {};
+      expect(readWorkspace(await validate()).workspace).toBe("prepared-workspace");
+      expect(check).toHaveBeenCalledTimes(2);
       const schema = metadata.manifestRegistry.plugins[0]?.configSchema;
       if (!schema) {
         throw new Error("Expected fixture plugin schema");
@@ -94,6 +96,38 @@ describe("async config plugin validation", () => {
       metadata = preparedMetadata();
       expect(readWorkspace(await validate()).workspace).toBe("prepared-workspace");
       expect(check).toHaveBeenCalledTimes(4);
+    } finally {
+      check.mockRestore();
+    }
+  });
+
+  it("retires removed schema inputs without discovering metadata for an empty revision", async () => {
+    const metadata = preparedMetadata();
+    const raw = {
+      plugins: {
+        allow: ["validation-fixture"],
+        entries: { "validation-fixture": { enabled: true, config: {} } },
+      },
+    };
+    const load = vi.fn(async () => metadata);
+    const validate = (config: unknown) =>
+      validateConfigObjectWithPluginsAsync(config, {
+        env,
+        loadPluginMetadataSnapshotAsync: load,
+      });
+    const check = vi.spyOn(schemaValidator, "validatePluginSchemaValue");
+    try {
+      expect((await validate(raw)).ok).toBe(true);
+      expect(check).toHaveBeenCalledTimes(1);
+      expect((await validate({ plugins: { enabled: false } })).ok).toBe(true);
+      expect((await validate(raw)).ok).toBe(true);
+      expect(check).toHaveBeenCalledTimes(2);
+
+      load.mockClear();
+      expect((await validate({ gateway: { mode: "local" } })).ok).toBe(true);
+      expect(load).not.toHaveBeenCalled();
+      expect((await validate(raw)).ok).toBe(true);
+      expect(check).toHaveBeenCalledTimes(3);
     } finally {
       check.mockRestore();
     }

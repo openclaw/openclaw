@@ -4,12 +4,16 @@ import { normalizePluginId } from "../plugins/config-state.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { collectPluginProviderRequestOwners } from "../plugins/plugin-provider-request-policy.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import { validatePreparedPluginSchemaValue } from "./validation-prepared.js";
+import {
+  validatePreparedPluginSchemaValue,
+  type PreparedPluginSchemaValidations,
+} from "./validation-prepared.js";
 
 /** Validate authored per-model params without filling defaults into override layers. */
 export function validateProviderModelParams(params: {
   config: OpenClawConfig;
   registry: PluginManifestRegistry;
+  schemaValidations: PreparedPluginSchemaValidations;
   deferredPluginIds: ReadonlySet<string>;
 }): ConfigValidationIssue[] {
   const scopes = [
@@ -40,7 +44,7 @@ export function validateProviderModelParams(params: {
             value: entry.params,
             applyDefaults: false,
           },
-          params.registry,
+          params.schemaValidations,
         );
         if (!result.ok) {
           issues.push(

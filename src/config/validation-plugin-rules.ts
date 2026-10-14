@@ -42,7 +42,11 @@ import {
   createPluginRegistryConfigValidator,
   collectSecretRefProviderSourceIssues,
 } from "./validation-plugin-registry.js";
-import { validatePreparedPluginSchemaValue } from "./validation-prepared.js";
+import {
+  preparePluginSchemaValidations,
+  validatePreparedPluginSchemaValue,
+  type PreparedPluginSchemaValidations,
+} from "./validation-prepared.js";
 import type { ValidateConfigWithPluginsResult } from "./validation.types.js";
 
 export type ValidateConfigWithPluginsParams = {
@@ -93,6 +97,10 @@ export function validatePreparedConfigWithPlugins(
     };
     return registryInfo;
   };
+
+  let schemaValidations: PreparedPluginSchemaValidations | undefined;
+  const ensureSchemaValidations = () =>
+    (schemaValidations ??= preparePluginSchemaValidations(ensureLoadedRegistryInfo().registry));
 
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, {
@@ -370,6 +378,7 @@ export function validatePreparedConfigWithPlugins(
           config,
           registry,
           deferredPluginIds,
+          schemaValidations: ensureSchemaValidations(),
         }),
       );
     }
@@ -496,7 +505,7 @@ export function validatePreparedConfigWithPlugins(
           applyDefaults: true, // Always apply defaults for plugin schema validation;
           // writeConfigFile persists persistCandidate, not validated.config (#61841)
         },
-        ensureLoadedRegistryInfo().registry,
+        ensureSchemaValidations(),
       );
       if (!result.ok) {
         for (const error of result.errors) {
@@ -587,6 +596,7 @@ export function validatePreparedConfigWithPlugins(
       env: opts.env,
       applyDefaults: opts.applyDefaults,
       registry,
+      schemaValidations: ensureSchemaValidations(),
       deferredPluginIds,
       ensureCompatPluginIds,
       ensureOverriddenPluginIds,
@@ -608,6 +618,9 @@ export function validatePreparedConfigWithPlugins(
     );
   }
 
+  if (issues.length === 0) {
+    (schemaValidations ?? preparePluginSchemaValidations(registryInfo?.registry)).publish();
+  }
   return issues.length > 0
     ? { ok: false, issues, warnings }
     : { ok: true, config: mutatedConfig, warnings };
