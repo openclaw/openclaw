@@ -3,7 +3,11 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  createControlUiMockSameOriginGatewayScript,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Modal completion actions" });
@@ -90,6 +94,71 @@ function expectCompletionPlacement(geometry: Awaited<ReturnType<typeof inspectAc
 }
 
 suite.define(() => {
+  it("keeps native Workboard card completion controls visible at narrow widths", async () =>
+    suite.withPage({ viewport: viewports[2], reducedMotion: "reduce" }, async ({ page }) => {
+      await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+      const config = { plugins: { entries: { workboard: { enabled: true } } } };
+      const gateway = await installMockGateway(page, {
+        ...workboardUi,
+        methodResponses: {
+          "config.get": {
+            config,
+            hash: "modal-proof",
+            path: "/synthetic/openclaw.json",
+            raw: JSON.stringify(config),
+            resolved: config,
+            sourceConfig: config,
+          },
+          "workboard.cards.list": {
+            cards: [],
+            statuses: ["todo"],
+            boards: [{ id: "default", total: 0, active: 0, archived: 0, byStatus: {} }],
+          },
+        },
+      });
+      for (const width of [320, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+        await page.goto(`${suite.server.baseUrl}workboard`);
+        await gateway.waitForRequest("workboard.cards.list");
+        await page
+          .locator(".workboard-heading__actions")
+          .getByRole("button", { name: /New card/u })
+          .click();
+        const dialog = page.getByRole("dialog", { name: "New card", exact: true });
+        await expect
+          .poll(() => dialog.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("1");
+        // Before scrolling, the card body must absorb overflow, not the shell.
+        const placement = await dialog.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const form = element.querySelector<HTMLFormElement>("form.workboard-card-draft")!;
+          const actions = [
+            ...form.querySelectorAll<HTMLButtonElement>("openclaw-modal-actions button"),
+          ];
+          return {
+            count: actions.length,
+            contained: actions.every((button) => {
+              const rect = button.getBoundingClientRect();
+              return (
+                rect.top >= bounds.top &&
+                rect.bottom <= bounds.bottom + 1 &&
+                rect.left >= bounds.left &&
+                rect.right <= bounds.right + 1
+              );
+            }),
+            submitOwned: actions.some((button) => button.type === "submit" && button.form === form),
+          };
+        });
+        expect(placement).toEqual({ count: 2, contained: true, submitOwned: true });
+        await dialog
+          .locator("openclaw-modal-actions")
+          .getByRole("button", { name: "Cancel", exact: true })
+          .click();
+        await expect.poll(() => dialog.isVisible()).toBe(false);
+      }
+      expect(await gateway.getRequests("workboard.cards.create")).toHaveLength(0);
+    }));
+
   it("keeps update confirmation and progress actions bottom-right without starting early", async () =>
     suite.withPage({ viewport: viewports[0], reducedMotion: "reduce" }, async ({ page }) => {
       const available = { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" };

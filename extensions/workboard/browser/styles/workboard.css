@@ -575,7 +575,7 @@
   gap: 14px;
   width: 100%;
   height: auto;
-  max-height: calc(100dvh - 40px);
+  max-height: var(--openclaw-modal-height-limit);
   min-height: 0;
   overflow: hidden;
   padding: 20px 22px;
