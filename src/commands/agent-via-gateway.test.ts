@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 // Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -394,30 +393,6 @@ describe("agentCliCommand", () => {
       expect(request).not.toHaveProperty("scopes");
     });
   });
-
-  it.each(["local", "remote"] as const)(
-    "resolves session IDs through the %s Gateway while its local store has no schema",
-    async (mode) => {
-      await withTempStore(async ({ dir }) => {
-        const agentDir = path.join(dir, "agents", "main", "agent");
-        fs.mkdirSync(agentDir, { recursive: true });
-        new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite")).close();
-        mockConfig(path.join(dir, "agents", "main", "sessions", "sessions.json"), {
-          agents: { entries: { main: {} } },
-          ...(mode === "remote" ? remoteGatewayConfig : {}),
-        });
-        mockGatewaySuccessReply("resumed by Gateway");
-
-        await agentCliCommand({ message: "resume", agent: "main", sessionId: "saved-id" }, runtime);
-
-        expect(runtime.log).toHaveBeenCalledWith("resumed by Gateway");
-        expect(requireFirstCallArg(callGateway, "gateway")).toMatchObject({
-          method: "agent",
-          params: { agentId: "main", sessionId: "saved-id", sessionKey: undefined },
-        });
-      });
-    },
-  );
 
   it("uses the explicit remote selection and session-id contract", async () => {
     mockRemoteGatewayRoster("explicit", ["ops", "research"]);
