@@ -437,12 +437,7 @@ export function createSessionActorWorker(
       const observed = observeSessionActorCommand(phase);
       const target = command.input.target;
       let database: OpenClawAgentDatabase | undefined;
-      let committed:
-        | Extract<
-            SessionActorOutcome<ReturnType<typeof applySessionActorPhase>["value"]>,
-            { kind: "committed" }
-          >
-        | undefined;
+      let committed = false;
       let stale: Extract<SessionActorOutcome<never>, { kind: "stale-version" }> | undefined;
       try {
         requireTarget(target);
@@ -551,7 +546,7 @@ export function createSessionActorWorker(
                 stage() {},
                 rollback() {},
                 commit() {
-                  committed = accepted;
+                  committed = true;
                   residents.remember(working);
                 },
                 invalidate() {
@@ -607,7 +602,7 @@ export function createSessionActorWorker(
                   },
                   final: true,
                 });
-                return accepted;
+                return { kind: "committed" as const };
               } finally {
                 transfer.cancel();
               }
@@ -619,7 +614,7 @@ export function createSessionActorWorker(
               publication: turn ?? commitPublication,
               final: true,
             });
-            return accepted;
+            return { kind: "committed" as const };
           });
         };
         const outcome = context.writeTransaction(
@@ -637,7 +632,7 @@ export function createSessionActorWorker(
         }
         if (committed) {
           observed.settled("committed");
-          return { ...committed, failure: errorFacts(error) };
+          return { kind: "committed", failure: errorFacts(error) };
         }
         let unsettled = hasSqliteWorkerOutcomeUnknown(error);
         if (database) {

@@ -63,7 +63,7 @@ const executePhase: {
     scope: TransportScope,
     input: SessionActorCommandContext &
       SessionActorPhaseInputs[Phase] & { target: SessionActorTarget },
-  ) => Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>>;
+  ) => Promise<SessionActorOperations[`session.actor.${Phase}`]["output"]>;
 } = {
   acceptInput: (scope, input) => scope.execute({ type: "session.actor.acceptInput", input }),
   adoptRun: (scope, input) => scope.execute({ type: "session.actor.adoptRun", input }),
