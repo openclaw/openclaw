@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ToolSearchConfig as ToolSearchConfigInput } from "../config/types.tools.js";
 import {
   MAX_TOOL_SEARCH_RESULTS,
   type ToolSearchConfig,
@@ -9,7 +10,7 @@ import {
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 
-function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
+function readToolSearchConfig(config?: OpenClawConfig): Exclude<ToolSearchConfigInput, boolean> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
   const toolSearch = tools?.toolSearch;
   if (toolSearch === undefined || typeof toolSearch === "boolean") {
@@ -38,5 +39,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
       readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT),
     ),
     maxSearchLimit,
+    ...(raw.include !== undefined ? { include: raw.include } : {}),
+    ...(raw.exclude !== undefined ? { exclude: raw.exclude } : {}),
   };
 }

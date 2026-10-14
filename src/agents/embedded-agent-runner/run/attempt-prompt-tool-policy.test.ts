@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import {
@@ -26,6 +27,7 @@ function createSession(activeToolNames: string[]) {
   return {
     session: {
       getActiveToolNames: () => [...names],
+      getToolDefinition: (name: string) => createStubTool(name),
       setActiveToolsByName: vi.fn((next: string[]) => {
         names = [...next];
       }),

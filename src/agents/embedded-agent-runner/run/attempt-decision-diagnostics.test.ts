@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   logDecisionToolRequest,
   measureDecisionToolSurface,
@@ -87,6 +88,7 @@ describe("Decision primary tool-definition diagnostics", () => {
     const policy = createPromptBuildToolPolicy({
       session: {
         getActiveToolNames: () => active,
+        getToolDefinition: (name) => createStubTool(name),
         setActiveToolsByName: (names) => {
           active = names;
         },

@@ -23,6 +23,7 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
+import { createToolSearchSelectionMatcher } from "../../tool-search-selection.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -149,14 +150,24 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       { label: "inherited tools.allow", allow: inheritedToolPolicy?.allow },
       { label: "runtime toolsAllow", allow: attempt.toolsAllow, enforceWhenToolsDisabled: true },
     ]);
+    const selectedClientTool = createToolSearchSelectionMatcher(
+      codeModeControlsEnabledForRun ? undefined : toolSearchConfig,
+    );
+    const catalogedClientToolNames = new Set(
+      toolSearch.catalogRegistered &&
+        (codeModeControlsEnabledForRun ||
+          (toolSearchConfig.enabled && toolSearchConfig.mode !== "directory"))
+        ? (clientTools ?? [])
+            .map((tool) => tool.function.name)
+            .filter((name) => selectedClientTool({ source: "client", name }))
+        : [],
+    );
     const toolSearchRunPlan = buildToolSearchRunPlan({
       visibleTools: effectiveTools,
       uncompactedTools: uncompactedEffectiveTools,
-      catalogCapabilityTools: toolSearch.catalogRegistered ? uncompactedEffectiveTools : undefined,
+      catalogEntries: preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current?.entries,
       clientTools,
-      clientToolsCataloged:
-        toolSearch.catalogRegistered &&
-        (codeModeControlsEnabledForRun || toolSearchConfig.mode !== "directory"),
+      catalogedClientToolNames,
       catalogToolCount: toolSearch.catalogToolCount,
       controlsEnabled: toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun,
       deferredToolsCallable: deferredDirectoryToolsCallable,

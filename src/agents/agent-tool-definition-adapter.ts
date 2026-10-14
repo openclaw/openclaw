@@ -45,6 +45,13 @@ import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
 type ToolExecuteArgs = Parameters<ToolDefinition["execute"]>;
+const toolDefinitionSources = new WeakMap<ToolDefinition, AnyAgentTool>();
+
+/** Policy follows the concrete registered definition back to its runtime-owned source. */
+export function getToolDefinitionSource(definition: ToolDefinition): AnyAgentTool | undefined {
+  return toolDefinitionSources.get(definition);
+}
+
 const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
@@ -422,6 +429,7 @@ export function toToolDefinitions(
         });
       },
     } satisfies ToolDefinition;
+    toolDefinitionSources.set(definition, tool);
     copyCodeModeControlToolIdentity(tool, definition);
     if (!sourcePreparer) {
       return beforeHookWrapped ? definition : attachAdapterExecutionPreparer(definition);

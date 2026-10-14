@@ -965,6 +965,7 @@ export function createDefaultEmbeddedSession(params?: {
       },
     },
     getActiveToolNames: () => [...activeToolNames],
+    getToolDefinition: () => undefined,
     setActiveToolsByName: (toolNames) => {
       activeToolNames = [...toolNames];
     },
@@ -1148,6 +1149,8 @@ export async function createContextEngineAttemptRunner(params: {
       });
     // Nested tool observations append through the same manager the runner prepared.
     session.sessionManager = options.sessionManager;
+    const definitions = new Map((options.customTools ?? []).map((tool) => [tool.name, tool]));
+    session.getToolDefinition = (name) => definitions.get(name);
     if (session.agent.streamFn) {
       bindStreamLlmRuntime(session.agent.streamFn, modelRuntime);
     }

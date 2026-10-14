@@ -25,7 +25,7 @@ function plan(overrides: Partial<Parameters<typeof buildToolSearchRunPlan>[0]> =
     visibleTools: [tool("dispatch_action")],
     uncompactedTools: [],
     clientTools,
-    clientToolsCataloged: true,
+    catalogedClientToolNames: new Set(["client_pick_file"]),
     catalogToolCount: 0,
     controlsEnabled: true,
     explicitAllowlistSources: [{ entries: ["missing_tool"] }],
@@ -34,6 +34,53 @@ function plan(overrides: Partial<Parameters<typeof buildToolSearchRunPlan>[0]> =
 }
 
 describe("buildToolSearchRunPlan", () => {
+  it("does not promote direct MCP or client lookalikes into trusted capability guidance", () => {
+    const remote = tool("sessions_spawn");
+    setPluginToolMeta(remote, {
+      pluginId: "remote-plugin",
+      optional: false,
+      mcp: {
+        serverName: "remote",
+        safeServerName: "remote",
+        toolName: "spawn",
+        operation: "tool",
+      },
+    });
+    const result = plan({
+      visibleTools: [remote, tool(" native_direct ")],
+      clientTools: [
+        { type: "function", function: { name: "sessions_yield", parameters: { type: "object" } } },
+      ],
+      catalogedClientToolNames: new Set(),
+    });
+    expect([...result.visibleAllowedToolNames]).toEqual([
+      "sessions_spawn",
+      "native_direct",
+      "sessions_yield",
+    ]);
+    expect([...result.capabilityToolNames]).toEqual(["native_direct"]);
+  });
+
+  it("keeps only deferred client tools out of visible/live allowlists, not replay", () => {
+    const result = plan({
+      clientTools: [
+        ...clientTools,
+        { type: "function", function: { name: "client_direct", parameters: { type: "object" } } },
+      ],
+      explicitAllowlistSources: [],
+    });
+    expect([...result.visibleAllowedToolNames]).toEqual(["dispatch_action", "client_direct"]);
+    expect([...result.liveAllowedToolNames]).toEqual(["dispatch_action", "client_direct"]);
+    expect([...result.replayAllowedToolNames]).toEqual([
+      "client_pick_file",
+      "client_direct",
+      "dispatch_action",
+    ]);
+    // Client names must not advertise trusted native capability guidance.
+    expect([...result.capabilityToolNames]).toEqual(["dispatch_action"]);
+    expect(result.hasCallableTools).toBe(true);
+  });
+
   it("carries native catalog capabilities without widening direct execution authority", () => {
     const foreignTool = tool("sessions_yield");
     setPluginToolMeta(foreignTool, { pluginId: "bundle-mcp", optional: false });
@@ -41,7 +88,11 @@ describe("buildToolSearchRunPlan", () => {
     const result = plan({
       visibleTools: [tool("exec"), tool("wait")],
       uncompactedTools: catalog,
-      catalogCapabilityTools: catalog,
+      catalogEntries: [
+        { name: "sessions_spawn", source: "openclaw" },
+        { name: "sessions_yield", source: "mcp" },
+        { name: "client_pick_file", source: "client" },
+      ],
       catalogToolCount: 2,
       controlNames: ["exec", "wait"],
       deferredToolsCallable: false,
@@ -66,7 +117,7 @@ describe("buildToolSearchRunPlan", () => {
     { name: "explicit control", cataloged: true, entries: ["dispatch_action"] },
   ])("recognizes $name as callable", ({ cataloged, entries }) => {
     const result = plan({
-      clientToolsCataloged: cataloged,
+      catalogedClientToolNames: new Set(cataloged ? ["client_pick_file"] : []),
       deferredToolsCallable: !cataloged,
       explicitAllowlistSources: [{ entries }],
     });
@@ -80,7 +131,7 @@ describe("buildToolSearchRunPlan", () => {
     const result = plan({
       visibleTools: [tool("tool_search"), tool("tool_describe"), tool("dispatch_action")],
       uncompactedTools: [tool("fake_plugin_tool"), tool("sessions_spawn"), tool("sessions_spawn")],
-      clientToolsCataloged: false,
+      catalogedClientToolNames: new Set(),
       catalogToolCount: 3,
       deferredToolsCallable: true,
       explicitAllowlistSources: [],

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -124,9 +125,11 @@ describe("embedded Tool Search prompt parity", () => {
         fixture.input.prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames =
           capabilityToolNames;
         let activeToolNames = surface.tools.map((tool) => tool.name);
+        const definitions = toToolDefinitions(surface.tools);
         fixture.input.prepared.promptToolPolicy = createPromptBuildToolPolicy({
           session: {
             getActiveToolNames: () => activeToolNames,
+            getToolDefinition: (name) => definitions.find((tool) => tool.name === name),
             setActiveToolsByName: (names) => {
               activeToolNames = names;
             },

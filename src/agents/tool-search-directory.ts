@@ -46,6 +46,7 @@ export function applyToolSchemaDirectoryCatalog(params: {
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
+    selection: config,
     isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
     // The unique-name gate defers any cross-source name collision before the
     // shared trust check runs.

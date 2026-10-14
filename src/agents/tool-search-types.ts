@@ -148,4 +148,5 @@ export type ToolSearchCatalogCompactionParams = {
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+  selection?: Pick<ToolSearchConfig, "include" | "exclude">;
 };

@@ -17,6 +17,10 @@ import type { ToolDefinition } from "./sessions/index.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
 import { disposeToolSearchSchedule } from "./tool-search-scheduling.js";
 import {
+  createToolSearchSelectionMatcher,
+  type ToolSearchSelection,
+} from "./tool-search-selection.js";
+import {
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
   type CatalogTool,
@@ -33,7 +37,12 @@ import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 const catalogMetadata = new WeakMap<
   ToolSearchCatalogSession,
-  { fingerprint: string; toolExecutionAllow?: readonly string[] }
+  {
+    fingerprint: string;
+    toolExecutionAllow?: readonly string[];
+    directTools?: readonly CatalogTool[];
+    directClientTools?: readonly CatalogTool[];
+  }
 >();
 const untrustedSchemaIdentities = new WeakMap<object, number>();
 let nextUntrustedSchemaIdentity = 1;
@@ -230,12 +239,18 @@ export function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): S
 function finalizeCatalogAvailability(
   entries: ToolSearchCatalogEntry[],
   toolExecutionAllow?: readonly string[],
+  directTools: readonly CatalogTool[] = [],
+  directClientTools: readonly CatalogTool[] = [],
 ): ToolSearchCatalogEntry[] {
   const orderedEntries = entries.toSorted((a, b) => a.id.localeCompare(b.id));
   // Client definitions win exact-name shadows, matching the guest projection.
-  const tools = orderedEntries
-    .toSorted((a, b) => Number(a.source === "client") - Number(b.source === "client"))
-    .map((entry) => entry.tool);
+  const tools = [
+    ...directTools,
+    ...orderedEntries
+      .toSorted((a, b) => Number(a.source === "client") - Number(b.source === "client"))
+      .map((entry) => entry.tool),
+    ...directClientTools,
+  ];
   finalizeAgentToolAvailability(tools, { toolExecutionAllow });
   // The array is a fresh copy, but its descriptors may belong to retained snapshots.
   orderedEntries.forEach((entry, index) => {
@@ -257,19 +272,32 @@ function registerToolSearchCatalog(params: {
   catalogRef: ToolSearchCatalogRef;
   entries: ToolSearchCatalogEntry[];
   append?: boolean;
+  replaceSource?: CatalogSource;
   toolExecutionAllow?: readonly string[];
+  directTools?: readonly CatalogTool[];
+  directClientTools?: readonly CatalogTool[];
 }): void {
   const prior = params.append ? params.catalogRef.current : undefined;
+  const priorMetadata = prior && catalogMetadata.get(prior);
   // Appending client definitions cannot widen the current run's execution policy.
-  const toolExecutionAllow = prior
-    ? catalogMetadata.get(prior)?.toolExecutionAllow
-    : params.toolExecutionAllow;
-  const byId = new Map((prior?.entries ?? []).map((entry) => [entry.id, entry]));
+  const toolExecutionAllow = prior ? priorMetadata?.toolExecutionAllow : params.toolExecutionAllow;
+  const directTools = params.directTools ?? priorMetadata?.directTools;
+  const directClientTools = params.directClientTools ?? priorMetadata?.directClientTools;
+  const byId = new Map(
+    (prior?.entries ?? [])
+      .filter((entry) => entry.source !== params.replaceSource)
+      .map((entry) => [entry.id, entry]),
+  );
   for (const entry of params.entries) {
     byId.set(entry.id, entry);
   }
   const next = {
-    entries: finalizeCatalogAvailability(Array.from(byId.values()), toolExecutionAllow),
+    entries: finalizeCatalogAvailability(
+      Array.from(byId.values()),
+      toolExecutionAllow,
+      directTools,
+      directClientTools,
+    ),
     // Appended client tools extend the same counter lifetime. A replacement
     // gets a new scope so telemetry consumers never infer resets from values.
     // Hex avoids credential-shaped substrings that transcript redaction would alter.
@@ -282,6 +310,8 @@ function registerToolSearchCatalog(params: {
   catalogMetadata.set(next, {
     fingerprint: catalogEntriesFingerprint(next.entries),
     toolExecutionAllow,
+    directTools,
+    directClientTools,
   });
   params.catalogRef.current = next;
   if (!prior) {
@@ -296,8 +326,13 @@ export function clearToolSearchCatalog(params: { catalogRef?: ToolSearchCatalogR
     // can wake an in-flight wait that still needs its final diagnostics.
     if (params.catalogRef.current) {
       params.catalogRef.closedTelemetry = getTelemetry(params.catalogRef.current);
+      const metadata = catalogMetadata.get(params.catalogRef.current);
       finalizeAgentToolAvailability(
-        params.catalogRef.current.entries.map((entry) => entry.tool),
+        [
+          ...params.catalogRef.current.entries.map((entry) => entry.tool),
+          ...(metadata?.directTools ?? []),
+          ...(metadata?.directClientTools ?? []),
+        ],
         {
           toolExecutionAllow: [],
         },
@@ -317,6 +352,8 @@ export function clearToolSearchCatalog(params: { catalogRef?: ToolSearchCatalogR
 export function restrictToolSearchCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   allowedToolNames: ReadonlySet<string>;
+  /** Availability dependencies only; these names never authorize catalog entries. */
+  allowedDirectToolNames?: ReadonlySet<string>;
   baselineEntries?: readonly ToolSearchCatalogEntry[];
 }): number {
   const owner = params.catalogRef;
@@ -325,11 +362,14 @@ export function restrictToolSearchCatalog(params: {
     return 0;
   }
   const metadata = catalogMetadata.get(current);
+  const allowedDirectToolNames = params.allowedDirectToolNames ?? params.allowedToolNames;
   const entries = finalizeCatalogAvailability(
     (params.baselineEntries ?? current.entries).filter((entry) =>
       params.allowedToolNames.has(entry.name),
     ),
     metadata?.toolExecutionAllow,
+    metadata?.directTools?.filter((tool) => allowedDirectToolNames.has(tool.name)),
+    metadata?.directClientTools?.filter((tool) => allowedDirectToolNames.has(tool.name)),
   );
   if (
     entries.length === current.entries.length &&
@@ -442,7 +482,9 @@ export function applyToolCatalogCompaction(
   }
 
   const visible: AnyAgentTool[] = [];
+  const directTools: CatalogTool[] = [];
   let catalog: ToolSearchCatalogEntry[] = [];
+  const selected = createToolSearchSelectionMatcher(params.selection);
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
@@ -455,17 +497,23 @@ export function applyToolCatalogCompaction(
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
       continue;
     }
-    if (shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true)) {
+    if (
+      shouldCatalogTool(tool) &&
+      (params.shouldCatalogTool?.(tool) ?? true) &&
+      selected({ ...classifyTool(tool), name: tool.name })
+    ) {
       const directVisible = params.isVisibleCatalogTool?.(tool) === true;
       catalog.push({ ...toCatalogEntry(tool, undefined, params.toolHookContext), directVisible });
       if (!directVisible) {
         continue;
       }
+    } else {
+      directTools.push(tool);
     }
     visible.push(tool);
   }
   // Callable bindings can change while descriptors stay equal; normalize before cache reuse.
-  catalog = finalizeCatalogAvailability(catalog, params.toolExecutionAllow);
+  catalog = finalizeCatalogAvailability(catalog, params.toolExecutionAllow, directTools);
   const existingCatalog = catalogRef.current;
   const incomingFingerprint = existingCatalog ? catalogEntriesFingerprint(catalog) : undefined;
   const metadata = existingCatalog && catalogMetadata.get(existingCatalog);
@@ -476,13 +524,19 @@ export function applyToolCatalogCompaction(
     stableStringify(metadata.toolExecutionAllow) === stableStringify(params.toolExecutionAllow)
       ? rebindCatalogExecutors(existingCatalog.entries, catalog)
       : undefined;
-  if (existingCatalog && reboundEntries) {
+  if (existingCatalog && reboundEntries && incomingFingerprint !== undefined) {
     existingCatalog.entries = reboundEntries;
+    catalogMetadata.set(existingCatalog, {
+      fingerprint: incomingFingerprint,
+      toolExecutionAllow: params.toolExecutionAllow,
+      directTools,
+    });
   } else {
     registerToolSearchCatalog({
       catalogRef,
       entries: catalog,
       toolExecutionAllow: params.toolExecutionAllow,
+      directTools,
     });
   }
   catalogRef.directOnlyToolNames = new Set(
@@ -502,15 +556,36 @@ export function addClientToolsToToolCatalog(params: {
   tools: ToolDefinition[];
   enabled: boolean;
   catalogRef?: ToolSearchCatalogRef;
+  selection?: ToolSearchSelection;
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
   const catalogRef = params.catalogRef;
-  if (!params.enabled || !catalogRef?.current || params.tools.length === 0) {
+  if (!catalogRef?.current) {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+  }
+  const selected = createToolSearchSelectionMatcher(params.selection);
+  const entries: ToolSearchCatalogEntry[] = [];
+  const visible: ToolDefinition[] = [];
+  for (const tool of params.tools) {
+    if (params.enabled && selected({ source: "client", name: tool.name })) {
+      entries.push(toCatalogEntry(tool, "client"));
+    } else {
+      visible.push(tool);
+    }
+  }
+  if (
+    entries.length === 0 &&
+    params.tools.length === 0 &&
+    !catalogRef.current.entries.some((entry) => entry.source === "client") &&
+    !catalogMetadata.get(catalogRef.current)?.directClientTools?.length
+  ) {
     return { tools: params.tools, compacted: false, catalogToolCount: 0 };
   }
   registerToolSearchCatalog({
     catalogRef,
-    entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
+    entries,
     append: true,
+    replaceSource: "client",
+    directClientTools: visible,
   });
-  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
+  return { tools: visible, compacted: entries.length > 0, catalogToolCount: entries.length };
 }

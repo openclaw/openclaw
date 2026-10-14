@@ -1,9 +1,12 @@
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createToolPolicyMatcher } from "../../tool-policy-match.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
+import {
+  TOOL_SEARCH_CONTROL_TOOL_NAMES,
+  type ToolSearchCatalogEntry,
+} from "../../tool-search-types.js";
 import { collectUniqueCatalogToolNames } from "../../tool-search.js";
-import { collectAllowedToolNames } from "../tool-name-allowlist.js";
+import { collectAllowedToolNames, collectRegisteredToolNames } from "../tool-name-allowlist.js";
 
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
 
@@ -31,9 +34,9 @@ export function buildToolSearchRunPlan(params: {
   visibleTools: CollectAllowedToolNamesParams["tools"];
   uncompactedTools: CollectAllowedToolNamesParams["tools"];
   /** Registered catalog capabilities; this does not grant direct execution. */
-  catalogCapabilityTools?: CollectAllowedToolNamesParams["tools"];
+  catalogEntries?: readonly Pick<ToolSearchCatalogEntry, "name" | "source">[];
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
-  clientToolsCataloged: boolean;
+  catalogedClientToolNames: ReadonlySet<string>;
   catalogToolCount: number;
   controlsEnabled: boolean;
   deferredToolsCallable?: boolean;
@@ -43,18 +46,23 @@ export function buildToolSearchRunPlan(params: {
   const controlNames = params.controlNames ?? [...TOOL_SEARCH_CONTROL_TOOL_NAMES];
   const visibleAllowedToolNames = collectAllowedToolNames({
     tools: params.visibleTools,
-    clientTools: params.clientToolsCataloged ? undefined : params.clientTools,
+    clientTools: params.clientTools?.filter(
+      (tool) => !params.catalogedClientToolNames.has(tool.function?.name ?? ""),
+    ),
   });
   const replayAllowedToolNames = collectAllowedToolNames({
     tools: params.uncompactedTools,
     clientTools: params.clientTools,
   });
-  const capabilityToolNames = collectAllowedToolNames({
-    tools: [
-      ...(params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools),
-      ...(params.catalogCapabilityTools ?? []),
-    ].filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
-  });
+  const capabilityToolNames = collectRegisteredToolNames([
+    ...(params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools).filter(
+      (tool) => {
+        const meta = getPluginToolMeta(tool);
+        return !meta?.mcp && meta?.pluginId !== "bundle-mcp";
+      },
+    ),
+    ...(params.catalogEntries ?? []).filter((entry) => entry.source === "openclaw"),
+  ]);
   if (params.controlsEnabled) {
     // A control that was visible in the compacted prompt must remain allowed
     // during replay even when the uncompacted tool set would otherwise omit it.
@@ -98,7 +106,7 @@ export function buildToolSearchRunPlan(params: {
   // controls alone must not conceal an explicit allowlist that matched nothing.
   const hasCallableTools =
     params.catalogToolCount > 0 ||
-    ((params.clientToolsCataloged || params.deferredToolsCallable === true) &&
+    ((params.catalogedClientToolNames.size > 0 || params.deferredToolsCallable === true) &&
       explicitlyAllowedClientTool) ||
     [...emptyAllowlistVisibleToolNames].some((toolName) => !autoAddedControlNames.has(toolName));
   return {

@@ -484,9 +484,11 @@ describe("Tool Search", () => {
     );
     expect(computer.execute).not.toHaveBeenCalled();
     let activeToolNames = compacted.tools.map((tool) => tool.name);
+    const definitions = toToolDefinitions(compacted.tools);
     const policy = createPromptBuildToolPolicy({
       session: {
         getActiveToolNames: () => activeToolNames,
+        getToolDefinition: (name) => definitions.find((tool) => tool.name === name),
         setActiveToolsByName: (names) => {
           activeToolNames = names;
         },
