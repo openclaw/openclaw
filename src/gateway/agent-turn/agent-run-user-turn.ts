@@ -235,6 +235,7 @@ export async function prepareAgentRunUserTurn(params: {
         "Private completion requires an exact internal requester turn with delivery disabled",
       );
     }
+    const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
     const suppressPromptPersistence =
       !params.privateCompletion &&
       (params.requestedPromptPersistenceSuppression ||
@@ -299,8 +300,7 @@ export async function prepareAgentRunUserTurn(params: {
         };
       }
       recorder = createUserTurnTranscriptRecorder({
-        trackInputCompletion:
-          params.privateCompletion || settleWakeReplay !== undefined || peerDelivery !== undefined,
+        trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
         ...(peerMessage ? { message: peerMessage } : {}),
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
@@ -368,7 +368,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
 
     let releaseProcessingAbortObserver: (() => void) | undefined;
-    if (params.privateCompletion && recorder && !recorder.getProcessingCompletion?.()) {
+    if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
       const recordAbort = () => {
         const stopReason = params.getAbortStopReason?.() ?? "rpc";
         const settle = () => {
@@ -380,7 +380,7 @@ export async function prepareAgentRunUserTurn(params: {
             }),
           ).catch((error: unknown) => {
             params.context.logGateway.warn(
-              `private input cancellation persistence failed: ${formatForLog(error)}`,
+              `requester input cancellation persistence failed: ${formatForLog(error)}`,
             );
           });
         };
