@@ -67,10 +67,11 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
-Title generation requests thinking off where supported. On custom OpenAI-compatible
-endpoints, an inferred thinking format does not establish that the model can disable
-thinking; without explicit compatibility settings, the provider's default is used.
-Explicit thinking formats and reasoning-effort mappings remain authoritative.
+Title generation requests thinking off where supported. Custom OpenAI-compatible
+endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default
+unless an explicit thinking format or reasoning-effort mapping declares the contract.
+This avoids rejected requests on always-thinking GLM models. Other thinking formats
+retain their existing off controls; explicit compatibility settings remain authoritative.
 Failed title attempts log a warning naming the provider/model and suggesting that
 you check its configuration or choose another `utilityModel`, at most once per
 provider/model per minute. The warning excludes source text and raw provider errors.

@@ -183,7 +183,7 @@ describe("OpenAI completions output budgets", () => {
 
 describe("OpenAI completions reasoning", () => {
   it.each(["direct", "managed"] as const)(
-    "does not infer binary off support from a custom provider's endpoint (%s)",
+    "omits inferred Z.AI off controls but preserves other custom contracts (%s)",
     (mode) => {
       for (const [baseUrl, thinkingFormat] of [
         ["https://api.z.ai/api/paas/v4", "zai"],
@@ -205,7 +205,8 @@ describe("OpenAI completions reasoning", () => {
               ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
               : { mode },
           );
-          if (explicit && (mode === "direct" || thinkingFormat === "together")) {
+          const hasOffContract = explicit || thinkingFormat !== "zai";
+          if (hasOffContract && (mode === "direct" || thinkingFormat === "together")) {
             expect(params).toMatchObject(
               thinkingFormat === "together"
                 ? { reasoning: { enabled: false } }
@@ -215,7 +216,7 @@ describe("OpenAI completions reasoning", () => {
             expect(params).not.toHaveProperty("thinking");
             expect(params).not.toHaveProperty("reasoning");
           }
-          if (explicit && mode === "managed" && thinkingFormat === "deepseek") {
+          if (mode === "managed" && thinkingFormat === "deepseek") {
             expect(params.reasoning_effort).toBe("none");
           } else {
             expect(params).not.toHaveProperty("reasoning_effort");
