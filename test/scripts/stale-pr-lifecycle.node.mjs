@@ -340,7 +340,7 @@ describe("Barnacle PR inactivity", () => {
   it("reserves terminal reads before effects at the shared 4500-request boundary", async () => {
     const h = harness();
     const states = new Map(
-      Array.from({ length: 447 }, (_, index) => [index + 1, snapshot(index + 1).pr]),
+      Array.from({ length: 404 }, (_, index) => [index + 1, snapshot(index + 1).pr]),
     );
     let active;
     h.options.github.rest.pulls.get = async ({ pull_number }) => {
@@ -356,7 +356,7 @@ describe("Barnacle PR inactivity", () => {
     h.options.github.rest.checks.listForRef = async () => ({
       data: {
         check_runs:
-          active < 447
+          active < 404
             ? [
                 {
                   head_sha: HEAD,
@@ -381,11 +381,15 @@ describe("Barnacle PR inactivity", () => {
       dryRun: false,
     });
     assert.equal(result.exhausted, true);
-    assert.equal(result.considered, 446);
+    assert.equal(result.considered, 403);
     assert.equal(result.closed, 0);
-    assert.ok(result.requests < 4500);
+    assert.equal(
+      result.requests,
+      4491,
+      "reserve rejects effects before the final read would exceed 4500",
+    );
     assert.deepEqual(h.writes, []);
-    const retry = await runStalePullRequests({ ...h.options, targets: [447], dryRun: false });
+    const retry = await runStalePullRequests({ ...h.options, targets: [404], dryRun: false });
     assert.equal(retry.closed, 1);
     assert.deepEqual(h.writes, ["close-comment", "close"]);
   });
@@ -601,6 +605,37 @@ describe("Barnacle PR inactivity", () => {
     assert.equal(evaluatePullRequest(seed, NOW).action, "close");
   });
 
+  for (const kind of ["reply", "force-push"])
+    it(`counts a real ${kind} in the warning's timestamp second`, () => {
+      const seed = snapshot();
+      const at = "2026-10-06T12:00:00Z";
+      seed.comments = [
+        comment(1, `${warningBody}\n\n<!-- barnacle-stale-pr:v1 head=${HEAD} -->`, at),
+      ];
+      seed.workflowRuns = [];
+      if (kind === "reply") seed.comments.push(comment(2, "responding", at, human));
+      else seed.timeline.push({ event: "head_ref_force_pushed", created_at: at, actor: bot });
+      assert.partialDeepStrictEqual(evaluatePullRequest(seed, NOW), {
+        action: "unmark",
+        reason: "human-or-head-activity",
+        eligibleAt: "2026-10-20T12:00:00.000Z",
+      });
+    });
+
+  for (const editor of [bot, human])
+    it(`rejects a bound warning edited by ${editor.type} within its creation second`, async () => {
+      const seed = snapshot();
+      seed.workflowRuns = [];
+      seed.comments[0].body += `\n\n<!-- barnacle-stale-pr:v1 head=${HEAD} -->`;
+      seed.edits.push({ nodeId: "comment-1", commentId: 1, editedAt: WARNING, editor });
+      const h = harness(seed);
+      const result = await runStalePullRequests(h.options);
+      assert.partialDeepStrictEqual(result.decisions[0], {
+        action: "preserve",
+        reason: "unknown-head-timing",
+      });
+    });
+
   for (const surface of ["body", "comment", "review", "inline"])
     for (const humanEdit of [false, true])
       it(`attributes ${surface} edits to actual editors, human edit=${humanEdit}`, async () => {
@@ -633,7 +668,10 @@ describe("Barnacle PR inactivity", () => {
         const h = harness(seed);
         const result = await runStalePullRequests(h.options);
         assert.equal(result.decisions[0].action, humanEdit ? "unmark" : "close");
-        assert.equal(h.pages.filter((page) => page.endpoint === "edits").length, 1);
+        assert.equal(
+          h.pages.filter((page) => page.endpoint === "edits" && page.id === nodeId).length,
+          1,
+        );
         assert.deepEqual(h.writes, []);
       });
 
@@ -829,6 +867,28 @@ describe("Barnacle PR inactivity", () => {
     assert.deepEqual(h.writes, ["close"]);
   });
 
+  for (const editor of [bot, human])
+    it(`counts actual ${editor.type} edits to an exact-body reused close receipt`, async () => {
+      const seed = snapshot();
+      seed.comments.push(comment(99, closeMessage, RECENT));
+      seed.edits.push({ nodeId: "comment-99", editedAt: RECENT, editor });
+      const h = harness(seed);
+      await runStalePullRequests({ ...h.options, dryRun: false });
+      assert.deepEqual(h.writes, editor === human ? ["unlabel"] : ["close"]);
+    });
+
+  it("retains a new receipt when a human edits it within its creation second", async () => {
+    const h = harness(snapshot(), (state) => {
+      const receipt = state.comments.at(-1);
+      state.edits.push({ nodeId: receipt.node_id, editedAt: receipt.created_at, editor: human });
+    });
+    await assert.rejects(
+      runStalePullRequests({ ...h.options, dryRun: false }),
+      /Unfinished PR mutation.*"commentId":200.*changed-before-close/,
+    );
+    assert.deepEqual(h.writes, ["close-comment"]);
+  });
+
   it("preserves a security exemption arriving after its close comment", async () => {
     const h = harness(snapshot(), (state) => state.pr.labels.push({ name: "security" }));
     await assert.rejects(
@@ -844,12 +904,12 @@ describe("Barnacle PR inactivity", () => {
       const seed = snapshot(11);
       seed.comments = [];
       const h = harness(seed, (state) =>
-        state.comments.push(
-          comment(999, "author response", new Date(NOW + 1000).toISOString(), human),
-        ),
+        state.comments.push(comment(999, "author response", new Date(NOW).toISOString(), human)),
       );
       const cursorPath = join(dir, "cursor");
       const logs = [];
+      const outputs = [];
+      h.options.core.setOutput = (...output) => outputs.push(output);
       h.options.core.info = (line) => logs.push(line);
       h.options.github.rest.pulls.list = async () => ({
         data: [snapshot(10).pr, seed.pr, snapshot(12).pr],
@@ -889,6 +949,7 @@ describe("Barnacle PR inactivity", () => {
       assert.ok(logs.some((line) => line.includes('"number":10')));
       assert.ok(logs.some((line) => line.includes('"commentId":200')));
       assert.ok(logs.some((line) => line.includes('"unfinished":true')));
+      assert.deepEqual(outputs, [["checkpoint-written", "true"]]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -942,6 +1003,41 @@ describe("Barnacle PR inactivity", () => {
     const h = harness();
     await runStalePullRequests({ ...h.options, dryRun: false, maxClosures: 0 });
     assert.deepEqual(h.writes, []);
+  });
+
+  it("persists only an evaluator-produced checkpoint after failure, never on cancellation", async () => {
+    const yaml = await readFile(
+      new URL("../../.github/workflows/stale.yml", import.meta.url),
+      "utf8",
+    );
+    for (const marker of [
+      "- uses: actions/cache/save@",
+      "- name: Verify PR scan checkpoint persistence",
+    ]) {
+      const condition = yaml
+        .slice(yaml.indexOf(marker))
+        .split("\n")
+        .find((line) => line.includes("if:"));
+      assert.match(condition, /!cancelled\(\)/);
+      assert.match(condition, /steps\.evaluate\.outputs\.checkpoint-written == 'true'/);
+      assert.match(condition, /inputs\.dry_run == false/);
+      assert.match(condition, /inputs\.pr_numbers == ''/);
+    }
+    const h = harness();
+    const outputs = [];
+    h.options.core.setOutput = (...output) => outputs.push(output);
+    await runStalePullRequests(h.options);
+    await runStalePullRequests({ ...h.options, dryRun: false });
+    assert.deepEqual(outputs, [], "dry and exact routes cannot publish a broad checkpoint");
+    h.state.pr.state = "open";
+    h.options.github.rest.pulls.get = async () => {
+      throw new Error("reader unavailable");
+    };
+    await assert.rejects(
+      runStalePullRequests({ ...h.options, targets: [], dryRun: false }),
+      /reader unavailable/,
+    );
+    assert.deepEqual(outputs, [], "setup/read failure cannot claim a newly written checkpoint");
   });
 
   it("paginates human comments and inline edits beyond the first page", async () => {

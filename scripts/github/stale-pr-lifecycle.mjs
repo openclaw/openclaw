@@ -105,6 +105,10 @@ function latestWarning(snapshot) {
     .toSorted((a, b) => time(b.created_at) - time(a.created_at) || b.id - a.id)[0];
 }
 
+const warningWasEdited = (snapshot, comment) =>
+  comment.created_at !== comment.updated_at ||
+  snapshot.edits?.some((edit) => edit.commentId === comment.id);
+
 function headWitnesses(snapshot) {
   const { pr } = snapshot;
   const sourceKnown =
@@ -130,7 +134,7 @@ function headWitnesses(snapshot) {
         (comment) =>
           trustedBarnacle(comment) &&
           isWarning(comment) &&
-          comment.created_at === comment.updated_at &&
+          !warningWasEdited(snapshot, comment) &&
           warningHead(comment) === pr.head.sha,
       )
       .map((comment) => ({ at: time(comment.created_at), source: "warning-head" })),
@@ -162,7 +166,7 @@ function activityAt(snapshot, ignoredComment) {
     );
   }
   for (const edit of snapshot.edits ?? []) {
-    if ((ignoredComment == null || edit.commentId !== ignoredComment) && !automated(edit.editor)) {
+    if (!automated(edit.editor)) {
       latest = Math.max(latest, time(edit.editedAt));
     }
   }
@@ -251,14 +255,14 @@ export function evaluatePullRequest(snapshot, now = Date.now(), ignoredComment =
     return result("warn", "initial-warning");
   }
   const warningAt = time(warning.created_at);
-  if (activity > warningAt && !assigned && now < eligibleAt) {
+  if (activity >= warningAt && !assigned && now < eligibleAt) {
     return result(
       labelsOf(pr).includes("stale") ? "unmark" : "preserve",
       "human-or-head-activity",
       { eligibleAt: new Date(eligibleAt).toISOString() },
     );
   }
-  if (warning.updated_at !== warning.created_at) {
+  if (warningWasEdited(snapshot, warning)) {
     return result(
       witnesses.length || assigned ? "warn" : "preserve",
       witnesses.length || assigned ? "edited-warning" : "unknown-head-timing",
@@ -280,7 +284,7 @@ export function evaluatePullRequest(snapshot, now = Date.now(), ignoredComment =
   if (!witness) {
     return result("preserve", "unknown-legacy-head");
   }
-  if (activity > warningAt) {
+  if (activity >= warningAt) {
     return result("warn", "activity-after-warning");
   }
   const closeAt = Math.max(warningAt + 7 * DAY, assigned ? time(pr.created_at) + 34 * DAY : 0);
@@ -470,8 +474,8 @@ async function contentEdits(io, contents) {
     }
     protection = "incomplete-edit-history";
   };
-  // Fetch only content that reports an edit/update. REST updated_at selects
-  // candidates; actual editor history alone decides whether activity occurred.
+  // Bot comments need history even when REST timestamps match: a human can edit
+  // within the creation second. Human creation already covers that same instant.
   for (let offset = 0; offset < contents.length; offset += 25) {
     const batch = contents.slice(offset, offset + 25);
     if (batch.some((content) => !content.nodeId)) {
@@ -550,7 +554,7 @@ async function snapshotOf(github, checksGithub, io, number) {
   const editHistory = await contentEdits(io, [
     ...(meta.lastEditedAt ? [{ nodeId: meta.id }] : []),
     ...[...comments, ...reviewComments]
-      .filter((comment) => comment.updated_at !== comment.created_at)
+      .filter((comment) => automated(comment.user) || comment.updated_at !== comment.created_at)
       .map((comment) => ({ nodeId: comment.node_id, commentId: comment.id })),
     ...reviews
       .filter((review) => review.lastEditedAt)
@@ -852,6 +856,7 @@ export async function runStalePullRequests({
   if (!exact && !dryRun && cursorPath) {
     await mkdir(dirname(cursorPath), { recursive: true });
     await writeFile(cursorPath, JSON.stringify({ lastNumber: next }) + "\n");
+    core.setOutput?.("checkpoint-written", "true");
   }
   const summary = {
     dryRun,
