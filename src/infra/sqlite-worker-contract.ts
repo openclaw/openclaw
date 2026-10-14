@@ -129,7 +129,6 @@ export type SqliteWorkerReply = {
   transactionCount?: number;
   timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
-  databaseAdmissions?: SqliteDatabaseAdmissions;
 } & (
   | {
       ok: true;
