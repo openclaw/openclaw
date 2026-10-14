@@ -19,6 +19,7 @@ import { acquireCronInferenceAuthorization } from "../../cron/inference-binding.
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
+import { loadCronJobsStore } from "../../cron/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { connectUserModelAccountAsync } from "../../state/user-model-account-operations.js";
@@ -121,8 +122,7 @@ async function createFixture(stateDir: string, agentDir: string) {
     // The advertised jobs.json path is only a SQLite partition key.
     await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await cron.status()).toMatchObject({ storage: "sqlite", jobs: 1 });
-    const [listed] = await cron.list({ includeDisabled: true });
-    const job = listed && (await cron.readJob(listed.id));
+    const [job] = (await loadCronJobsStore(storePath)).jobs;
     if (!job) {
       throw new Error("Expected the committed job after reopening SQLite");
     }
