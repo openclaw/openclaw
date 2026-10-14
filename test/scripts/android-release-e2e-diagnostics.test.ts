@@ -29,10 +29,9 @@ describe("Android release public failure diagnostics", () => {
   ])(
     "identifies SDK facts from either stream for %s without private output",
     (output, expected) => {
-      for (const [stdout, stderr] of [
-        [output, "private-token"],
-        ["private-token", output],
-      ]) {
+      for (const isStdout of [true, false]) {
+        const stdout = isStdout ? output : "private-token";
+        const stderr = isStdout ? "private-token" : output;
         const facts = androidReleaseCommandFacts(
           "/private/sdk/adb",
           ["-s", "private-device", "pull", "/private/setup-secret", "/private/output"],
