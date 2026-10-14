@@ -25,7 +25,10 @@ describe("gateway suspend CLI", () => {
   it("prints a ready lease without exposing remote credentials in the resume hint", async () => {
     const callGateway = vi.fn(async () => readyResult);
     const runtime = createNonExitingRuntimeEnv();
-    const rpcOpts = { url: "wss://gateway.example:19444", token: "opaque-credential" };
+    const rpcOpts = {
+      url: "wss://url-user:url-password@gateway.example:19444/private?token=url-secret",
+      token: "opaque-credential",
+    };
 
     await runGatewaySuspend({ rpcOpts, waitSeconds: 0 }, { callGateway, runtime });
 
@@ -38,7 +41,14 @@ describe("gateway suspend CLI", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       `Expires: 2026-08-11T12:00:00.000Z (${readyResult.expiresAtMs} ms)`,
     );
-    expect(runtime.log).toHaveBeenCalledWith("Resume with: openclaw gateway resume suspension-1");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "To resume this remote Gateway, run openclaw gateway resume suspension-1 with the same --url and authentication options used for suspend.",
+    );
+    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+    expect(output).not.toContain(rpcOpts.url);
+    expect(output).not.toContain(rpcOpts.token);
+    expect(output).not.toContain("url-secret");
+    expect(output).not.toContain("Resume with: openclaw gateway resume suspension-1");
   });
 
   it("rejects whitespace-only wait before acquiring a lease", async () => {
