@@ -369,7 +369,7 @@ function withRunningGateway(
 function expectRestartHandoffCall(expected: {
   restartKind: "full-process" | "update-process";
   reason: string | undefined;
-  supervisorMode: "external" | "launchd";
+  supervisorMode: "external" | "launchd" | "schtasks";
 }) {
   expect(m.writeGatewayRestartHandoff).toHaveBeenCalledTimes(1);
   const [handoff] = m.writeGatewayRestartHandoff.mock.calls[0] ?? [];

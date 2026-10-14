@@ -823,11 +823,6 @@ export async function runGatewayLoop(params: {
             await hostLifecycle?.retire();
           }
           if (shutdownFailure) {
-            writeStabilityBundle(
-              "gateway.restart_close_failed",
-              shutdownFailure.error,
-              shutdownFailure.step,
-            );
             // A failed close leaves this process unable to resume in-process, and a
             // schtasks-supervised run that exits nonzero is never relaunched (manual
             // task starts ignore RestartOnFailure). The handoff observer waits for
@@ -836,8 +831,14 @@ export async function runGatewayLoop(params: {
               (installationReplacement || supervisorMode === "schtasks") &&
               !getManagedUpdateOwner()
             ) {
+              writeStabilityBundle(
+                "gateway.restart_close_failed",
+                shutdownFailure.error,
+                shutdownFailure.step,
+              );
               await handleRestartAfterServerClose(undefined, false, shutdownFailure);
             } else {
+              // forceExitAfterStabilityBundle records the bundle itself; do not double-write.
               await forceExitAfterStabilityBundle(
                 "gateway.restart_close_failed",
                 1,
