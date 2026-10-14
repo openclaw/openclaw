@@ -254,7 +254,7 @@ export function subscribeModelCatalogChanges(
   scope?: ModelCatalogReadScope,
 ): () => void {
   return gateway.subscribeEvents((event) => {
-    const invalidation = modelCatalogEventInvalidation(event);
+    const invalidation = modelCatalogEventInvalidation(event, scope);
     if (invalidation) {
       listener(invalidation);
     } else if (event.event === "models.snapshot" && scope) {

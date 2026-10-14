@@ -194,16 +194,16 @@ The Gateway also emits an always-on `main-thread stall` warning after a synchron
 callback blocks for more than one second. Each line names the longest-running
 known task segment from scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
-does not count as task execution. A task label expires when its callback returns
-or its returned promise settles; detached work does not retain a completed startup
-phase's label. Unknown callbacks use `task=unattributed`;
-process suspension can also produce an unattributed delay. Reporting is bounded
-to eight pending stalls, with an omitted count if that limit is exceeded. This
-requires neither an inspector connection nor a sampling profiler.
-
-Detailed attribution of asynchronous continuations requires Node's `async_hooks`
-callback boundaries. Bun currently reports explicit synchronous task scopes and
-otherwise retains unattributed delay warnings.
+does not count as task execution. Labels cover the synchronous portion of explicit
+task scopes. Asynchronous continuations and unknown callbacks use best-effort unattributed
+delay warnings from the event-loop sampler; the Gateway does not install
+process-wide async hooks to time every promise continuation. During healthy idle
+windows, the native histogram is disabled: an unscoped stall that finishes before
+the next sampling deadline can go unreported. Explicit task scopes and overdue
+idle wakes remain observable. Process suspension
+can also produce an unattributed delay. Reporting is bounded to eight pending
+named stalls, with an omitted count if that limit is exceeded. These warnings
+require neither an inspector connection nor a sampling profiler.
 
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
 whole-process CPU timing, including worker and native threads. Phase CPU can

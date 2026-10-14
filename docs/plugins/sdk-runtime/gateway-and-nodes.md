@@ -200,6 +200,10 @@ retains the pending request instead of treating an unreadable grant as revoked.
 A renewal can retain the UUID only if it commits before the old grant expires;
 reinvitation after expiry or revocation must use a new UUID.
 
+After resuming a grant, recovery retains its authority and calls `assertCurrent`
+before effects instead of resuming it again. Other policies are still checked for
+new applicability on each assertion, including changes to plugin-owned state.
+
 Policies without durable grant support still govern live admission. Their
 unclassified authority cannot be converted into a restartable shared publication
 request. Shared publication currently supports one original governing grant;

@@ -11,6 +11,7 @@ import {
 } from "../lib/chat/chat-metadata-cache.ts";
 import { peekChatMetadata, beginChatMetadataPublication } from "../lib/chat/chat-metadata-store.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
+import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import {
   loadModelCatalog,
   peekModelCatalog,
@@ -221,6 +222,50 @@ it("reuses unrelated agent catalogs across a minute of scoped publications", asy
     );
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(124);
   } finally {
+    stopShell();
+    gateway.stop();
+  }
+});
+
+it("keeps a pending agent catalog read when another agent publishes changes", async () => {
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.(gatewayHelloForMethods([]));
+  const client = gateway.snapshot.client;
+  assert.ok(client);
+  const wire = createDeferred<ModelCatalogResult>();
+  const catalog = { models: [{ id: "model", name: "Catalog model", provider: "fixture" }] };
+  const request = current().request.mockReturnValue(wire.promise);
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = { context: { gateway } as unknown as ApplicationContext };
+  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
+  const scope = { agentId: "alpha" };
+  const reader = new ModelCatalogReader(() => {});
+  reader.bind(gateway, scope);
+  const pending = reader.read();
+  try {
+    current().opts.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { agentId: "bravo", modelCatalogChanged: true, commandsChanged: false },
+    });
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+    wire.resolve(catalog);
+    expect(await pending).toEqual(catalog);
+    for (const payload of [
+      { agentId: "alpha", modelCatalogChanged: true },
+      { modelCatalogChanged: true },
+      { agentId: "bravo", modelSelectionChanged: true },
+    ]) {
+      request.mockClear();
+      current().opts.onEvent?.({ type: "event", event: "chat.metadata.changed", payload });
+      expect(await loadModelCatalog(client, scope)).toEqual(catalog);
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+    }
+  } finally {
+    wire.resolve(catalog);
+    await pending;
+    reader.clear();
     stopShell();
     gateway.stop();
   }
