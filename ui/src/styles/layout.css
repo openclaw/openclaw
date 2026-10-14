@@ -1101,57 +1101,12 @@ openclaw-settings-save-indicator:empty {
   box-shadow: none;
 }
 
-.sidebar-brand {
-  --shell-chrome-control-size: 28px;
-  --sidebar-agent-avatar-size: 28px;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-height: 34px;
-  padding: 0 2px 10px 0;
-  flex-shrink: 0;
-}
-
 /* Desktop web shares the pane centerline. Drawers and native windows keep
    the identity row below their own chrome and retain its separate clearance. */
 :where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
   .sidebar-shell {
     padding-top: 0;
   }
-
-  .sidebar-brand {
-    min-height: var(--rail-header-height);
-    padding-bottom: 0;
-    margin-bottom: 9px;
-  }
-}
-
-.sidebar-brand__actions {
-  display: flex;
-  align-items: center;
-  /* One hit-box size and one gap for every header control: the glyph inset
-     inside each 28px box is the only spacing. A per-button offset here reads
-     as a hole in the rail once that button has no border to sit inside. */
-  gap: 0;
-  /* Keep the action rail independent from the fit-content identity card so
-     short agent names never pull navigation controls away from the edge. */
-  margin-inline-start: auto;
-  flex: 0 0 auto;
-}
-
-.sidebar-brand__header-control svg {
-  opacity: var(--sidebar-header-icon-opacity, 0.72);
-  stroke-width: 1.6px;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-brand__icon.sidebar-brand__header-control {
-  width: var(--shell-chrome-control-size);
-  height: var(--shell-chrome-control-size);
-}
-
-.sidebar-brand__header-control:hover:not(:disabled, [aria-disabled="true"]) {
-  --sidebar-header-icon-opacity: 1;
 }
 
 .sidebar-brand__icon {
@@ -1161,8 +1116,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-brand__icon:hover:not(:disabled, [aria-disabled="true"]),
 .sidebar-brand__icon:focus-visible,
-.sidebar-nav__head-action:hover,
-.sidebar-nav__head-action:focus-visible,
 .settings-sidebar__back:hover,
 .settings-sidebar__search-clear:hover,
 .topbar-icon-btn:hover:not(:disabled),
@@ -1183,12 +1136,6 @@ openclaw-settings-save-indicator:empty {
   width: 16px;
   height: 16px;
   stroke-width: 1.7px;
-}
-
-.sidebar-brand__new-thread svg {
-  /* The plus path occupies less of its viewBox than the panel/search artwork. */
-  width: 20px;
-  height: 20px;
 }
 
 .sidebar-shell__content,
@@ -2333,11 +2280,6 @@ openclaw-settings-save-indicator:empty {
   color: inherit;
 }
 
-.nav-section__items {
-  display: grid;
-  gap: 2px;
-}
-
 .sidebar-online {
   gap: 4px;
   padding-top: 12px;
@@ -2656,15 +2598,6 @@ openclaw-settings-save-indicator:empty {
 .sidebar-customize-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-}
-
-.sidebar-customize-menu__item--active {
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-}
-
-.sidebar-customize-menu__item--active .nav-item__icon {
-  color: var(--accent);
 }
 
 wa-dropdown.session-menu,
@@ -3202,7 +3135,6 @@ a:is(
   padding-right: 0;
 }
 
-.sidebar-brand > openclaw-sidebar-agent-card,
 .sidebar-workspace-header {
   display: flex;
   min-width: 0;
@@ -3363,75 +3295,6 @@ a:is(
   width: 6px;
   height: 6px;
   box-shadow: 0 0 0 2px var(--sidebar-bg);
-}
-
-.sidebar-nav__lead {
-  display: flex;
-  align-items: flex-start;
-  min-width: 0;
-  padding-inline-end: 8px;
-}
-
-.sidebar-nav__lead > :first-child {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.sidebar-nav__head-slot {
-  display: flex;
-  align-items: center;
-  flex: none;
-  block-size: var(--sidebar-nav-row-height);
-}
-
-.sidebar-nav__head-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  flex: none;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-  opacity: 0;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    opacity var(--duration-fast) ease;
-}
-
-.sidebar-nav:hover .sidebar-nav__head-action,
-.sidebar-nav:focus-within .sidebar-nav__head-action {
-  opacity: 1;
-}
-
-/* Touch has no hover: keep the Pages editor discoverable, matching the
-   child-session-toggle touch override above. */
-@media (hover: none), (pointer: coarse) {
-  .sidebar-nav__head-action {
-    opacity: 1;
-  }
-}
-
-.sidebar-nav__head-action svg {
-  width: 13px;
-  height: 13px;
-  stroke-width: 1.5px;
-}
-
-/* Home keeps run state plus outbox/draft counts together at the row edge. */
-.nav-item__state {
-  flex: none;
-  margin-left: auto;
-}
-
-.sidebar-home-session-states {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
 }
 
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
