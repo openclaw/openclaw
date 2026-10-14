@@ -23,6 +23,7 @@ import {
 import { rewriteStandaloneImports } from "./lib/bun-standalone-imports.mjs";
 import { createStandaloneMetadataAdapter } from "./lib/bun-standalone-metadata.mjs";
 import { createStandaloneRequireAdapter } from "./lib/bun-standalone-require.mjs";
+import { copyStandaloneRuntime, STANDALONE_RUNTIME_ROOTS } from "./lib/bun-standalone-snapshot.mjs";
 import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
@@ -50,9 +51,8 @@ if (mode === "aot") {
   assertStandaloneCompiler(mode, help.stdout ?? "");
 }
 const destinationRoot = path.resolve(options.outputDirectory);
-const copiedRoots = ["dist", "node_modules", "packages", "extensions", "skills"];
 if (
-  copiedRoots.some((entry) => {
+  STANDALONE_RUNTIME_ROOTS.some((entry) => {
     const relative = path.relative(path.join(sourceRoot, entry), destinationRoot);
     return (
       relative === "" ||
@@ -60,9 +60,7 @@ if (
     );
   })
 ) {
-  throw new Error(
-    "Choose an output directory outside dist, node_modules, packages, extensions and skills.",
-  );
+  throw new Error(`Choose an output directory outside ${STANDALONE_RUNTIME_ROOTS.join(", ")}.`);
 }
 if (fs.existsSync(destinationRoot)) {
   throw new Error(`Output already exists: ${destinationRoot}. Choose a fresh output directory.`);
@@ -75,36 +73,7 @@ const outputRoot = fs.mkdtempSync(path.join(path.dirname(destinationRoot), ".sta
 const runtimeRoot = path.join(outputRoot, "runtime");
 console.log(`Building ${mode} standalone in ${outputRoot}`);
 
-// A snapshot keeps pnpm workspace links intact without depending on the checkout at runtime.
-// Every build takes a fresh snapshot; a successful output never reuses stale runtime bytes.
-{
-  fs.mkdirSync(runtimeRoot);
-  const entries = [...copiedRoots, "package.json"];
-  entries.push(...fs.readdirSync(sourceRoot).filter((name) => name.endsWith(".mjs")));
-  for (const entry of entries) {
-    const source = path.join(sourceRoot, entry);
-    const destination = path.join(runtimeRoot, entry);
-    if (process.platform === "darwin") {
-      const copy = spawnSync("/bin/cp", ["-cR", source, destination], { stdio: "inherit" });
-      if (copy.status !== 0) {
-        throw new Error(`Could not clone ${source}`);
-      }
-    } else {
-      fs.cpSync(source, destination, { recursive: true, verbatimSymlinks: true });
-    }
-  }
-  fs.mkdirSync(path.join(runtimeRoot, "docs/reference"), { recursive: true });
-  fs.cpSync(
-    path.join(sourceRoot, "docs/reference/templates"),
-    path.join(runtimeRoot, "docs/reference/templates"),
-    { recursive: true },
-  );
-  fs.mkdirSync(path.join(runtimeRoot, "scripts"), { recursive: true });
-  fs.copyFileSync(
-    path.join(sourceRoot, "scripts/windows-cmd-helpers.mjs"),
-    path.join(runtimeRoot, "scripts/windows-cmd-helpers.mjs"),
-  );
-}
+copyStandaloneRuntime(sourceRoot, runtimeRoot);
 
 let runtimeBuildInfo;
 try {

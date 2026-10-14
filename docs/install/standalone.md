@@ -138,7 +138,8 @@ state before upgrading; see [Updating](/install/updating).
 The builder embeds the application modules, bundled plugin entrypoints, worker
 programs, and generated metadata needed by the runtime. It preserves lazy module
 boundaries. The sidecar still contains JavaScript for metadata and dynamic
-external plugins, plus native addons, libraries, templates, and other resources.
+external plugins, plus native addons, libraries, templates, bundled and Custodian
+skills, license notices, and other resources.
 It is not an empty-resource or single-file distribution.
 
 Pruning removes source maps and TypeScript declarations. It does not remove
