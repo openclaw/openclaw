@@ -1,6 +1,7 @@
 import type { toolIcons } from "../../components/icons-tools.ts";
 
 export type PendingInputStatus =
+  | "queued"
   | "waitingForWorkerSetup"
   | "waitingForWorkspaceSync"
   | "resuming"

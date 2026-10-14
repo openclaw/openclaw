@@ -127,8 +127,9 @@ export function buildPendingInputItems(
     ) {
       continue;
     }
-    let pendingStatus: PendingInputStatus | undefined;
+    let pendingStatus: PendingInputStatus;
     if (input.state === "queued") {
+      pendingStatus = "queued";
       if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
         pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
       }
@@ -153,17 +154,11 @@ export function buildPendingInputItems(
       ...buildMessageItems([input.message], () =>
         input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
       ).flatMap((item) =>
-        projectChatSystemNotice(
-          { ...item, startsTurn: true },
-          undefined,
-          pendingStatus
-            ? {
-                status: pendingStatus,
-                key: `pending-input:${input.id}:state`,
-                timestamp: input.acceptedAt,
-              }
-            : undefined,
-        ),
+        projectChatSystemNotice({ ...item, startsTurn: true }, undefined, {
+          status: pendingStatus,
+          key: `pending-input:${input.id}:state`,
+          timestamp: input.acceptedAt,
+        }),
       ),
     );
   }
