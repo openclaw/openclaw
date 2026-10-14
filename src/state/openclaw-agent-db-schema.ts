@@ -52,6 +52,7 @@ import {
   AGENT_MEDIA_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
+  AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -109,6 +110,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
@@ -435,6 +437,19 @@ function ensureAgentSchema(
         ) {
           migrateAgentJsonPredicatesInTransaction(db);
         }
+        if (
+          previousVersion < AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION &&
+          targetVersion >= AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION
+        ) {
+          const elapsedMs = migrateOutboxEnqueueSequenceInTransaction(db);
+          if (elapsedMs !== null) {
+            agentDbLog.info("agent outbox enqueue sequence rebuilt", {
+              agentId,
+              pathname,
+              elapsedMs,
+            });
+          }
+        }
         finishAgentSchemaMigration(
           db,
           agentId,
@@ -446,8 +461,8 @@ function ensureAgentSchema(
         );
       };
       if (
-        previousVersion === CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION &&
-        targetVersion >= AGENT_JSON_PREDICATE_SCHEMA_VERSION
+        previousVersion >= CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION &&
+        previousVersion < targetVersion
       ) {
         assertAgentSchemaVersion(
           db,
