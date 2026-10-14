@@ -5,6 +5,7 @@ import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
+import { clawHubSecurityResponse, clawHubVersionMetadata } from "./clawhub.test-fixtures.js";
 import {
   clawHubArchiveFile,
   clawHubPackageDetail,
@@ -99,18 +100,7 @@ const { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } = await import(".
 const createClawHubArchive = createClawHubArchiveFactory(afterEach);
 
 function mockClawHubVersionMetadata(overrides: Record<string, unknown> = {}) {
-  fetchClawHubPackageVersionMock.mockResolvedValueOnce({
-    version: {
-      version: "2026.3.22",
-      createdAt: 0,
-      changelog: "",
-      compatibility: {
-        pluginApiRange: ">=2026.3.22",
-        minGatewayVersion: "2026.3.0",
-      },
-      ...overrides,
-    },
-  });
+  fetchClawHubPackageVersionMock.mockResolvedValueOnce(clawHubVersionMetadata(overrides));
 }
 
 async function mockClawHubFallbackArchive(params: {
@@ -138,29 +128,6 @@ function mockCommunityClawHubPackageDetail() {
   fetchClawHubPackageDetailMock.mockResolvedValue(
     clawHubPackageDetail({ channel: "community", isOfficial: false }),
   );
-}
-
-function clawHubSecurityResponse(
-  name = "demo",
-  releaseVersion = "2026.3.22",
-  trust: Record<string, unknown> = {},
-  overview = "No security analysis has been recorded yet.",
-) {
-  return {
-    package: { name, displayName: "Demo", family: "code-plugin" },
-    release: { version: releaseVersion },
-    overview,
-    securityAuditUrl: `https://clawhub.ai/plugins/${name}/security-audit?version=${releaseVersion}`,
-    trust: {
-      scanStatus: "clean",
-      moderationState: null,
-      blockedFromDownload: false,
-      reasons: [],
-      pending: false,
-      stale: false,
-      ...trust,
-    },
-  };
 }
 
 function mockClawHubSecurity(
@@ -478,6 +445,41 @@ describe("installPluginFromClawHub", () => {
     expect(failure.error).toBe("Install cancelled.");
     expect(confirmInstall).toHaveBeenCalledOnce();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("Outcome: Review"));
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary plugin updates non-interactive even with an install callback", async () => {
+    mockCommunityClawHubPackageDetail();
+    mockClawHubSecurity({ scanStatus: "suspicious", reasons: ["payload_strings"] });
+    const confirmInstall = vi.fn(async () => false);
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+      mode: "update",
+      confirmInstall,
+    });
+
+    expectInstallSuccess(result);
+    expect(confirmInstall).not.toHaveBeenCalled();
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalled();
+  });
+
+  it("passes the final trust warning to a Claw-managed update before download", async () => {
+    mockCommunityClawHubPackageDetail();
+    mockClawHubSecurity({ scanStatus: "suspicious", reasons: ["payload_strings"] });
+    const confirmInstall = vi.fn(async () => false);
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+      mode: "update",
+      confirmOnUpdate: true,
+      confirmInstall,
+    });
+
+    expect(expectInstallFailure(result).error).toBe("Install cancelled.");
+    expect(confirmInstall).toHaveBeenCalledWith(expect.stringContaining("Outcome: Review"));
     expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
   });
 

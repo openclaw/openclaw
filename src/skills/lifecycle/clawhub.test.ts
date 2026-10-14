@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import { registerRemoteClawHubTests } from "./clawhub.remote.test-support.js";
+import { resetClawHubSkillTestMocks } from "./clawhub.test-setup.js";
 import {
   fetchClawHubSkillDetailMock,
   fetchClawHubSkillInstallResolutionMock,
@@ -16,14 +17,11 @@ import {
   downloadClawHubGitHubSkillArchiveMock,
   reportClawHubSkillInstallTelemetryMock,
   resolveClawHubBaseUrlMock,
-  isDefaultClawHubBaseUrlMock,
-  searchClawHubSkillsMock,
   archiveCleanupMock,
+  applyExtractedSkillRoot,
   withExtractedArchiveRootMock,
   installPackageDirMock,
-  evaluateSkillInstallPolicyMock,
   pathExistsMock,
-  markClawPackageIndependentlyOwnedMock,
   tempDirs,
   expectInstallPackageSourceDir,
   installPolicyInput,
@@ -32,7 +30,6 @@ import {
   installTestSkill,
   updateTestSkill,
   mockArchiveInstallResolution,
-  mockDefaultPackageInstall,
   mockGitHubInstallResolution,
   mockSkillSecurityVerdict,
   mockSkillVerification,
@@ -67,114 +64,61 @@ describe("skills-clawhub", () => {
 
   beforeEach(async () => {
     testWorkspaceDir = await tempDirs.make("openclaw-clawhub-workspace-");
-    fetchClawHubSkillDetailMock.mockReset();
-    fetchClawHubSkillInstallResolutionMock.mockReset();
-    fetchClawHubSkillVerificationMock.mockReset();
-    fetchClawHubSkillSecurityVerdictsMock.mockReset();
-    downloadClawHubSkillArchiveMock.mockReset();
-    downloadClawHubSkillArchiveUrlMock.mockReset();
-    downloadClawHubGitHubSkillArchiveMock.mockReset();
-    reportClawHubSkillInstallTelemetryMock.mockReset();
-    resolveClawHubBaseUrlMock.mockReset();
-    isDefaultClawHubBaseUrlMock.mockReset();
-    searchClawHubSkillsMock.mockReset();
-    archiveCleanupMock.mockReset();
-    withExtractedArchiveRootMock.mockReset();
-    installPackageDirMock.mockReset();
-    evaluateSkillInstallPolicyMock.mockReset();
-    pathExistsMock.mockReset();
-    markClawPackageIndependentlyOwnedMock.mockReset();
-
-    resolveClawHubBaseUrlMock.mockImplementation((baseUrl?: string) =>
-      (baseUrl ?? "https://clawhub.ai").replace(/\/+$/, ""),
-    );
-    isDefaultClawHubBaseUrlMock.mockImplementation(
-      (baseUrl?: string) => !baseUrl || baseUrl.replace(/\/+$/, "") === "https://clawhub.ai",
-    );
-    pathExistsMock.mockImplementation(async (input: string) => input.endsWith("SKILL.md"));
-    fetchClawHubSkillDetailMock.mockResolvedValue({
-      skill: {
-        slug: "agentreceipt",
-        displayName: "AgentReceipt",
-        createdAt: 1,
-        updatedAt: 2,
-      },
-      latestVersion: {
-        version: "1.0.0",
-        createdAt: 3,
-      },
-    });
-    fetchClawHubSkillInstallResolutionMock.mockResolvedValue({
-      ok: true,
-      slug: "agentreceipt",
-      installKind: "archive",
-      archive: {
-        version: "1.0.0",
-        downloadUrl: "https://clawhub.ai/api/v1/download?slug=agentreceipt&version=1.0.0",
-      },
-    });
-    fetchClawHubSkillVerificationMock.mockResolvedValue({
-      schema: "clawhub.skill.verify.v1",
-      ok: true,
-      decision: "pass",
-      reasons: [],
-      card: { available: true, sha256: "card-sha" },
-      artifact: { sourceFingerprint: "source-fp" },
-      provenance: { source: "unavailable" },
-      security: { status: "clean", signals: { staticScan: { engineVersion: "v2.4.24" } } },
-      signature: { status: "unsigned" },
-    });
-    fetchClawHubSkillSecurityVerdictsMock.mockImplementation(
-      async (params: {
-        items: Array<{ slug: string; ownerHandle?: string; version: string }>;
-      }) => ({
-        schema: "clawhub.skill.security-verdicts.v1",
-        items: params.items.map((item) => ({
-          ok: true,
-          decision: "pass",
-          reasons: [],
-          requestedSlug: item.slug,
-          requestedVersion: item.version,
-          slug: item.slug,
-          version: item.version,
-          displayName: "Agent Receipt",
-          ...(item.ownerHandle ? { publisherHandle: item.ownerHandle } : {}),
-          overview: "No security analysis has been recorded yet.",
-          securityAuditUrl: `https://clawhub.ai/${item.ownerHandle ?? "openclaw"}/skills/${item.slug}/security-audit?version=${item.version}`,
-          security: {
-            status: "clean",
-            passed: true,
-          },
-        })),
-      }),
-    );
-    const archive = {
-      archivePath: "/tmp/agentreceipt.zip",
-      integrity: "sha256-test",
-      sha256Hex: "a".repeat(64),
-      artifact: "archive",
-      cleanup: archiveCleanupMock,
-    };
-    downloadClawHubSkillArchiveMock.mockResolvedValue(archive);
-    downloadClawHubSkillArchiveUrlMock.mockResolvedValue(archive);
-    downloadClawHubGitHubSkillArchiveMock.mockResolvedValue({
-      ...archive,
-      archivePath: "/tmp/github-agentreceipt.zip",
-      integrity: "sha256-github-test",
-      sha256Hex: "b".repeat(64),
-    });
-    reportClawHubSkillInstallTelemetryMock.mockResolvedValue(undefined);
-    archiveCleanupMock.mockResolvedValue(undefined);
-    searchClawHubSkillsMock.mockResolvedValue([]);
-    withExtractedArchiveRootMock.mockImplementation(async (params) => {
-      expect(params.rootMarkers).toEqual(["SKILL.md", "skill.md", "skills.md", "SKILL.MD"]);
-      return await params.onExtracted("/tmp/extracted-skill");
-    });
-    mockDefaultPackageInstall(testWorkspaceDir);
-    evaluateSkillInstallPolicyMock.mockResolvedValue(undefined);
+    resetClawHubSkillTestMocks(testWorkspaceDir);
   });
 
   registerRemoteClawHubTests(() => testWorkspaceDir);
+
+  it("marks a missing deferred directory receipt as recovery incomplete", async () => {
+    pathExistsMock.mockImplementation(
+      async (input: string) => input.endsWith("SKILL.md") || input.endsWith("/skills/agentreceipt"),
+    );
+    installPackageDirMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await applyExtractedSkillRoot({
+      workspaceDir: testWorkspaceDir,
+      slug: "agentreceipt",
+      extractedRoot: "/tmp/extracted-skill",
+      mode: "update",
+      deferCommit: true,
+      assertOwned: () => undefined,
+      expectedClawHubState: {
+        slug: "agentreceipt",
+        skillFilePath: "SKILL.md",
+        skillFileSha256: "old-skill",
+        fileTreeSha256: "old-tree",
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, recoveryIncomplete: true });
+  });
+
+  it("marks a missing deferred ClawHub receipt as recovery incomplete", async () => {
+    await writeTrackedSkill(testWorkspaceDir, "agentreceipt", {
+      installedVersion: "1.0.0",
+      skillMd: "old skill",
+    });
+    withExtractedArchiveRootMock.mockResolvedValueOnce({
+      ok: true,
+      targetDir: path.join(testWorkspaceDir, "skills", "agentreceipt"),
+    });
+
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt", {
+      version: "2.0.0",
+      force: true,
+      clawManaged: true,
+      deferCommit: true,
+      assertOwned: () => undefined,
+      expectedClawHubState: {
+        slug: "agentreceipt",
+        skillFilePath: "SKILL.md",
+        skillFileSha256: "old-skill",
+        fileTreeSha256: "old-tree",
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, recoveryIncomplete: true });
+  });
 
   function mockSecurity(overrides: Partial<Parameters<typeof mockSkillSecurityVerdict>[0]>) {
     mockSkillSecurityVerdict({
@@ -332,6 +276,58 @@ describe("skills-clawhub", () => {
     expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
     expect(installPackageDirMock).not.toHaveBeenCalled();
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains exact artifact identity and review warning when v1 occupies the skill target", async () => {
+    const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    pathExistsMock.mockImplementation(
+      async (input: string) =>
+        input.endsWith("SKILL.md") || input.endsWith(path.join("skills", "agentreceipt")),
+    );
+    mockSecurity({
+      ok: false,
+      decision: "fail",
+      reasons: ["security.status_not_clean"],
+      overview: "Review the skill before updating it.",
+      security: { status: "suspicious", passed: false },
+    });
+
+    const result = await preflightSkillFromClawHub({
+      workspaceDir: testWorkspaceDir,
+      slug: "agentreceipt",
+      version: "1.0.0",
+      expectedIntegrity: integrity,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "skill_version_conflict",
+      integrity,
+      warning: expect.stringContaining("Outcome: Review"),
+    });
+    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
+  });
+
+  it("requires live warning confirmation for a forced Claw-managed update", async () => {
+    mockSecurity({
+      ok: false,
+      decision: "fail",
+      reasons: ["security.status_not_clean"],
+      overview: "Review the skill before updating it.",
+      security: { status: "suspicious", passed: false },
+    });
+    const confirmInstall = vi.fn().mockResolvedValue(false);
+
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt", {
+      version: "1.0.0",
+      force: true,
+      clawManaged: true,
+      confirmInstall,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: "Install cancelled." });
+    expect(confirmInstall).toHaveBeenCalledWith(expect.stringContaining("Outcome: Review"));
+    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
   });
 
   it("rejects a downloaded skill whose bytes do not match the consented plan", async () => {
@@ -536,6 +532,7 @@ describe("skills-clawhub", () => {
     if (!result.ok) {
       throw new Error(result.error);
     }
+    expect(result.warning).toBeUndefined();
 
     expectInstallPackageSourceDir("/tmp/extracted-skill");
     expect(installPolicyInput()).toMatchObject({
@@ -574,13 +571,6 @@ describe("skills-clawhub", () => {
     });
     expect(lock.skills.weather?.sourceUrl).toBeUndefined();
     expect(origin.sourceUrl).toBeUndefined();
-    expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
-      kind: "skill",
-      source: "clawhub",
-      ref: "@demo-owner/weather",
-      version: "1.0.0",
-      workspace: workspaceDir,
-    });
     expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
       baseUrl: "https://clawhub.internal.example",
       slug: "weather",
