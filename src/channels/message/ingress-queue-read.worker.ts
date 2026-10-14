@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   countChannelIngressQueuePressureInDatabase,
   countFailedChannelIngressQueueEntriesInDatabase,
@@ -10,7 +10,7 @@ import type {
 import { listChannelIngressAccountsInDatabase } from "./ingress-queue.kernel.js";
 
 export function readChannelIngressInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: ChannelIngressReadCommand,
 ): ChannelIngressReadReply {
   if (command.type === "channelIngress.accounts") {

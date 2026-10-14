@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   assertTransactionUsable,
   runSqliteWorkerTransactionSync,
@@ -45,7 +45,7 @@ export type PluginModelCatalogCredentialOperations = {
 
 /** Apply removal-time endpoint facts to the current rows inside the writer transaction. */
 function pruneRemovedProviderCatalogEntriesInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   removedProviderBaseUrls: Readonly<Record<string, string>>;
   updatedAt: number;
 }): boolean {
@@ -109,14 +109,14 @@ function pruneRemovedProviderCatalogEntriesInDatabase(params: {
 /** Reread authorization inside the admitted publication, including outside discovery snapshots. */
 function findRemovedPluginModelCatalogCredentials(
   snapshot: PluginModelCatalogAuthSnapshot,
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   env: NodeJS.ProcessEnv,
 ): ReadonlySet<string> {
   const captured = new Set<string>();
   const authorized = new Set<string>();
   for (const owner of snapshot) {
-    const read = (db: DatabaseSync) =>
+    const read = (db: EngineConnection) =>
       loadPersistedAuthProfileStoreFromRows(
         readAuthProfileRows(db, owner.databasePath, owner.kind),
         owner.databasePath,

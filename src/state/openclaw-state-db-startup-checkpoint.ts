@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { prepareSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
@@ -313,10 +315,12 @@ export function initializeNativeOpenClawStateConnection(
 ): void {
   assertOpenClawStateSchemaRepairAllowed(resolveDatabasePath(options));
   if (
-    !withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => isUninitializedNativeStartupDatabase(db),
-      options,
-    )
+    !withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (isPostgresSqlConnection(db)) {
+        requireNativeDatabaseFile("postgres", "repair");
+      }
+      return isUninitializedNativeStartupDatabase(db);
+    }, options)
   ) {
     return;
   }

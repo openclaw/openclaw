@@ -136,7 +136,18 @@ describe("Gateway timed work", () => {
           return owner.signal;
         }
       }
-      const signals = Array.from({ length: 12 }, () => new RetiredOwner().close());
+      const prepareStackTrace = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+      const signals: AbortSignal[] = [];
+      try {
+        // Vite's formatter closures can retain callsites through temporary V8 handles.
+        // Exercise native lazy stacks, not the test runner's source-map formatter.
+        Reflect.deleteProperty(Error, "prepareStackTrace");
+        signals.push(...Array.from({ length: 12 }, () => new RetiredOwner().close()));
+      } finally {
+        if (prepareStackTrace) {
+          Object.defineProperty(Error, "prepareStackTrace", prepareStackTrace);
+        }
+      }
       expect(queryObjects(RetiredOwner)).toBe(0);
       for (const signal of signals) {
         expect(signal.aborted).toBe(true);

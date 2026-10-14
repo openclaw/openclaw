@@ -9,15 +9,21 @@ import {
   canonicalizePersistedUserMessageMedia,
   hasMeaningfulRetiredMediaCarrier,
 } from "../media/media-facts.js";
+import { renewAgentDatabaseMaintenanceAuthorityIfPresent } from "../state/openclaw-agent-db-lease.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "./kysely-sync.js";
 import {
   parseTranscriptEvent,
   transformTranscriptEvent,
 } from "./state-migrations.media-persistence-transform.js";
 
 const MEDIA_MIGRATION_ROW_BATCH_SIZE = 64;
+const MEDIA_MIGRATION_BATCH_BYTES = 4 * 1024 * 1024;
 
 type MediaMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -35,36 +41,42 @@ function forEachMediaEventBatch(params: {
     params.table === "transcript_events" && !params.legacyTextStorage
       ? transcriptEventJsonSql(params.database)
       : sql.ref<string>(`${params.table}.event_json`); // kysely-allow-raw: private TEXT-table union.
-  let cursor: { seq: number; sessionId: string } | undefined;
-  while (true) {
-    let query = db
-      .selectFrom(params.table)
-      .select(["session_id", "seq"])
-      .select(eventJson.as("event_json"))
-      .orderBy("session_id", "asc")
-      .orderBy("seq", "asc")
-      .limit(MEDIA_MIGRATION_ROW_BATCH_SIZE);
-    const after = cursor;
-    if (after) {
-      // Keep SQLite on a composite primary-key seek. Expanding this tuple into
-      // OR branches restarts the index scan for every page.
-      query = query.where((expression) =>
-        expression(
-          expression.refTuple("session_id", "seq"),
-          ">",
-          expression.tuple(after.sessionId, after.seq),
-        ),
-      );
+  const query = db
+    .selectFrom(params.table)
+    .select(["session_id", "seq"])
+    .select(eventJson.as("event_json"))
+    .orderBy("session_id", "asc")
+    .orderBy("seq", "asc");
+  let rows: Array<{ event_json: string; seq: number; session_id: string }> = [];
+  let bytes = 0;
+  let renewedAt = performance.now();
+  // Rewrites preserve the scan's primary key. Retain at most a byte-bounded
+  // batch plus one incoming row; a giant historical row is processed alone.
+  for (const row of iterateSqliteQuerySync(params.database, query)) {
+    if (performance.now() - renewedAt >= 1_000) {
+      renewAgentDatabaseMaintenanceAuthorityIfPresent();
+      renewedAt = performance.now();
     }
-    const rows = executeSqliteQuerySync(params.database, query).rows;
-    const last = rows.at(-1);
-    if (!last) {
-      return;
+    const rowBytes = Buffer.byteLength(row.event_json);
+    if (rows.length > 0 && bytes + rowBytes > MEDIA_MIGRATION_BATCH_BYTES) {
+      if (params.visit(rows) === "stop") {
+        return;
+      }
+      rows = [];
+      bytes = 0;
     }
-    if (params.visit(rows) === "stop") {
-      return;
+    rows.push(row);
+    bytes += rowBytes;
+    if (rows.length >= MEDIA_MIGRATION_ROW_BATCH_SIZE || bytes >= MEDIA_MIGRATION_BATCH_BYTES) {
+      if (params.visit(rows) === "stop") {
+        return;
+      }
+      rows = [];
+      bytes = 0;
     }
-    cursor = { seq: last.seq, sessionId: last.session_id };
+  }
+  if (rows.length > 0) {
+    params.visit(rows);
   }
 }
 

@@ -137,6 +137,19 @@ and does not change admission, ordering, or warning thresholds.
 The Gateway records a bounded, payload-free stability stream by default when
 diagnostics are enabled. It captures operational facts, not content.
 
+Child-process spawn samples use bounded command families and operation labels.
+Known owners distinguish agent exec launches (`agent.exec`), shell environment
+snapshots (`shell.snapshot`), and service relay helpers (`service.relay`).
+Relays launched for agent exec retain `agent.exec` as their owner.
+Native PTY exec launches use the same counter after successful admission.
+Windows PTYs publish their PID asynchronously, so attribution waits for the first
+output or exit without delaying the terminal.
+Unscoped launches use fixed classifications such as `unscoped.shell-command`,
+`unscoped.runtime`, or `unscoped.gh`; arguments, script text,
+and paths never become labels. Linux OOM-protection exec wrappers report the
+logical target command, since the spawn broker can omit the wrapper shell.
+Counts represent successful admitted launches, not a census of grandchildren.
+
 Gateway RPC diagnostics retain exact core and registered plugin method names,
 including `node.invoke.result` and `workboard.cards.list`; unregistered request
 names fold into `other` (dedicated worker ingress uses `unknown`). The method
@@ -522,7 +535,7 @@ JavaScript isolate without taking a whole-heap snapshot:
 ```bash
 openclaw gateway call diagnostics.heapProfile --params '{}' --timeout 30000 --json
 openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"samplingIntervalBytes":32768}' --timeout 45000 --json
-openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollectedByMajorGC":true,"includeObjectsCollectedByMinorGC":true}' --timeout 30000 --json
+openclaw gateway call diagnostics.heapProfile --params '{"includeCollected":true}' --timeout 30000 --json
 ```
 
 The RPC supports Node and OpenClaw's Bun runtime. It defaults to five seconds and an average sampling interval of
@@ -534,7 +547,8 @@ collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
 
-The optional booleans `includeObjectsCollectedByMajorGC` and
+`includeCollected: true` enables both collected-object flags. Explicit per-GC
+flags override the shorthand. The optional booleans `includeObjectsCollectedByMajorGC` and
 `includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
 samples of objects collected during the window and attribute transient allocation
 churn. Retaining collected samples can increase profiler memory use.

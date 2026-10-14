@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   prepareAcpSessionMetadataRead,
   readAcpSessionCommand,
@@ -55,6 +54,7 @@ import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   readInterruptedUpdateCandidate,
@@ -117,7 +117,7 @@ export {
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
 export function readOpenClawStateDatabaseCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: OpenClawStateReadRequest,
   command: Exclude<
     OpenClawStateReadRequest["command"],

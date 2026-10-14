@@ -42,6 +42,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { createSqliteWorkerBackend } from "../state/openclaw-state.worker.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -175,13 +176,14 @@ describe("model resolution auth row snapshots", () => {
       });
       const context = captureOpenClawStateWorkerContext();
       const database = openOpenClawStateDatabase({ path: context.admission.databasePath });
+      const db = requireNativeSqliteDatabase(database.db);
       const backend = runWithSqliteWorkerStateContext(context, () =>
         createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
       );
-      clearNodeSqliteKyselyCacheForDatabase(database.db);
-      const prepare = database.db.prepare.bind(database.db);
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      const prepare = db.prepare.bind(db);
       let injected = false;
-      const fault = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const fault = vi.spyOn(db, "prepare").mockImplementation((sql) => {
         if (
           sql ===
           'select "state_key" as "target", "value_json" as "contents" from "config_machine_state" where "state_key" in (?, ?)'

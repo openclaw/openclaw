@@ -9085,8 +9085,6 @@
 ["src/skills/discovery/command-specs.test.ts","../loading/workspace-skill-loader.js","4be7489bcf6ea08e714d31a03f16dc4a7d22dcce008e56073c8bc9922509be2c",1]
 ["src/skills/discovery/status-bundled-warning.test.ts","../loading/bundled-dir.js","6006f24bc8bf8c9adc7d3454df15bcf9050b3af077c4c44c90d13fd25e780c40",1]
 ["src/skills/lifecycle/clawhub.test-support.ts","../../infra/install-flow.js","52d92d3710bda2c105a8dd7eba7b13c3570b45a864a0f915408e345161140da4",1]
-["src/skills/lifecycle/clawhub.test-support.ts","../../infra/install-package-dir.js","8cffcda6c1e2c778962162f90ff0dd70aeaaf0442cd19b277b629c9797f1cafc",1]
-["src/skills/lifecycle/clawhub.test-support.ts","../../state/claw-package-adoption.js","fc56e95867adf77c1665cb25ac21fdca3467cd631c81964f39c8c0b3556415fc",1]
 ["src/skills/lifecycle/install-cache-freshness.test.ts","../../plugins/install-security-scan.js","38b080b15e00737ceec475720c8ccda1c8f0559c72ded374c6696fe7330604cb",1]
 ["src/skills/lifecycle/install-cache-freshness.test.ts","../../process/exec.js","4a4cecdf875448e7c275f876c20257a18fc6faee7af04666873973760c2e2c14",1]
 ["src/skills/lifecycle/install-cache-freshness.test.ts","../loading/workspace-skill-loader.js","e85ebacd3443fba7079f45a21ee7de33a0cc5f08c50ac96a64dc1eb53d2f979b",1]
