@@ -123,6 +123,21 @@ describe("PostgreSQL conformance selection", () => {
   });
 
   it.each([
+    { changedPaths: null, label: "no path inventory" },
+    { changedPaths: ["extensions/workboard/README.md"], label: "a matching documentation path" },
+  ])("skips docs-only pull requests with $label", ({ changedPaths }) => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths,
+      targetFiles: ["scripts/test-database-conformance.mjs"],
+      scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_postgres_conformance).toBe("false");
+  });
+
+  it.each([
     ["schedule", [], true, true],
     ["pull_request", null, true, true],
     ["schedule", [], false, false],

@@ -17,6 +17,101 @@ const added = (slot: number, overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("Responses terminal tool completion", () => {
+  it.each([
+    { ending: "completed", admission: true },
+    { ending: "completed-without-ciphertext", admission: true },
+    { ending: "completed-null-ciphertext", admission: true },
+    { ending: "length", admission: true },
+    { ending: "output-limit-active", admission: true },
+    { ending: "output-limit-rejected", admission: true },
+    { ending: "conflicting-status", admission: false },
+    { ending: "malformed-sibling", admission: false },
+    { ending: "content-filter", admission: false },
+    { ending: "failed", admission: false },
+  ])("settles deferred async admission on $ending", async ({ ending, admission }) => {
+    const reasoning = { type: "reasoning", id: "rs_deferred", summary: [] };
+    const encrypted = !ending.startsWith("completed-");
+    const completedReasoning = {
+      ...reasoning,
+      ...(ending === "completed-without-ciphertext"
+        ? {}
+        : { encrypted_content: encrypted ? "synthetic-ciphertext" : null }),
+    };
+    const call = tool(1, { async: true });
+    const pendingSibling =
+      ending === "output-limit-active" ||
+      ending === "output-limit-rejected" ||
+      ending === "conflicting-status" ||
+      ending === "malformed-sibling";
+    const terminalOutput = [
+      completedReasoning,
+      call,
+      ...(pendingSibling
+        ? [tool(2, ending === "malformed-sibling" ? { arguments: "{" } : { status: "incomplete" })]
+        : []),
+    ];
+    const isIncomplete =
+      ending === "length" ||
+      ending.startsWith("output-limit") ||
+      ending === "conflicting-status" ||
+      ending === "content-filter";
+    const terminalEvent =
+      ending === "failed"
+        ? {
+            type: "response.failed",
+            response: {
+              id: "resp_deferred",
+              status: "failed",
+              error: { code: "server_error", message: "Synthetic failure" },
+            },
+          }
+        : isIncomplete
+          ? {
+              type: "response.incomplete",
+              response: {
+                id: "resp_deferred",
+                status: ending === "conflicting-status" ? "completed" : "incomplete",
+                incomplete_details: {
+                  reason: ending === "content-filter" ? "content_filter" : "max_output_tokens",
+                },
+                output: terminalOutput,
+              },
+            }
+          : completed("resp_deferred", terminalOutput);
+    const result = await runFixture(
+      [
+        { type: "response.output_item.added", output_index: 0, item: reasoning },
+        { type: "response.output_item.done", output_index: 0, item: reasoning },
+        added(1, { async: true }),
+        { type: "response.output_item.done", output_index: 1, item: call },
+        ...(pendingSibling ? [added(2)] : []),
+        ...(ending === "output-limit-rejected"
+          ? [
+              {
+                type: "response.output_item.done",
+                output_index: 2,
+                item: tool(2, { status: "incomplete" }),
+              },
+            ]
+          : []),
+        terminalEvent,
+      ],
+      { asyncToolExecution: true },
+    );
+    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual(
+      admission ? [{ type: "toolcall_end", contentIndex: 1 }] : [],
+    );
+    expect(result.error === null).toBe(
+      ending.startsWith("completed") || ending === "length" || ending === "content-filter",
+    );
+    if (ending === "content-filter") {
+      expect(result.stopReason).toBe("error");
+    }
+    if (admission) {
+      expect(result.content[0]).toMatchObject({ type: "thinking", encrypted });
+    }
+  });
+
   it("does not publish anonymous unindexed completions before ambiguous terminal matching", async () => {
     const anonymous = { id: undefined, call_id: undefined };
     const result = await runFixture([

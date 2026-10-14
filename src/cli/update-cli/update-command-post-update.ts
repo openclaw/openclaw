@@ -1,5 +1,4 @@
 import { isUpdateDoctorInspectionReportMode } from "../../commands/doctor/shared/update-phase.js";
-import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildControlPlaneUpdateRestartHealthPendingResult } from "../../infra/update-control-plane-sentinel.js";
@@ -116,12 +115,7 @@ async function finishSettledUpdate(
     ? false
     : await preparePostUpdateService(params, assertCurrent);
   assertCurrent();
-  let gateway: TriageFailureContext["gateway"] = "preserve";
-  let triageAllowed = true;
-  const createFailure = bindUpdateFinalizationFailure(params, progressFailure, () => ({
-    triageAllowed,
-    gateway,
-  }));
+  const createFailure = bindUpdateFinalizationFailure(progressFailure);
   let rollbackAttempted = false;
   let latestServiceStop = params.preManagedServiceStop;
   // Doctor parking and rollback replace this run's earlier service observation.
@@ -250,7 +244,6 @@ async function finishSettledUpdate(
       !gatewayStartAttempted &&
       (await admitInstalledGatewayRecovery(recoveryParams, result, assertCurrent));
     if (isUpdateGatewayReadinessPending(result)) {
-      triageAllowed = false;
       return { result, recoverService: false };
     }
     return { result, recoverService };
@@ -346,9 +339,6 @@ async function finishSettledUpdate(
       if (service && !params.originalManagedServiceRuntime) {
         root = serviceVerdict && "root" in serviceVerdict ? serviceVerdict.root : root;
         finalResult.recovery = { ...finalResult.recovery, service };
-        if (service === "healthy" && params.shouldRestart) {
-          gateway = "verify-running";
-        }
         if (service === "failed") {
           finalResult.status = "error";
           try {
@@ -387,7 +377,6 @@ async function finishSettledUpdate(
         assertCurrent,
       });
       assertCurrent();
-      triageAllowed &&= !isUpdateGatewayReadinessPending(finalResult);
       rolledBack &&= isVerifiedUpdateRollback(finalResult);
     }
     pendingResult = completeUpdateCommandResult(params, captured.interruptedResult(finalResult));
@@ -477,7 +466,6 @@ async function finishSettledUpdate(
         };
         const convergence = await forward(() => convergeUpdatePlugins(pluginParams));
         if (convergence.resultWithPostUpdate.status === "error") {
-          triageAllowed = !convergence.cancelled;
           const reported = await reportResult(convergence.resultWithPostUpdate);
           throw createFailure(reported, convergence.detail);
         }
@@ -587,17 +575,6 @@ async function finishSettledUpdate(
         );
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
-        }
-        triageAllowed = restartContext.serviceMutationAllowed;
-        if (
-          restarted === "restart-health-failed" &&
-          params.shouldRestart &&
-          restartContext.serviceMutationAllowed &&
-          (params.preManagedServiceStop?.running !== false ||
-            params.preManagedServiceStop.stopped) &&
-          !restartContext.skipLegacyServiceRestart
-        ) {
-          gateway = "verify-running";
         }
         const failure: UpdateRunResult = {
           ...resultWithPostUpdate,

@@ -982,6 +982,7 @@ const runPostgresConformance =
   existsSync("scripts/test-database-conformance.mjs") &&
   (eventName === "schedule" ||
     ((eventName === "pull_request" || releaseGate) &&
+      !docsOnly &&
       (changedPaths === null ||
         changedPaths.some((file) =>
           postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
