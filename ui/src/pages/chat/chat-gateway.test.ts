@@ -794,6 +794,20 @@ describe("handleChatGatewayEvent", () => {
 
   it.each([
     {
+      name: "restart interruption",
+      event: { state: "aborted", stopReason: "restart" },
+      projectionStatus: "aborted",
+      sessionStatus: "interrupted",
+      errorSummary: null,
+    },
+    {
+      name: "ordinary Stop",
+      event: { state: "aborted" },
+      projectionStatus: "aborted",
+      sessionStatus: "killed",
+      errorSummary: null,
+    },
+    {
       name: "provider timeout",
       event: {
         state: "error",

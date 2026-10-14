@@ -41,6 +41,7 @@ import { captureBundledPluginStateOperationModules } from "./plugin-state-operat
 import { bindPluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
+import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
 type SourceBuilds = Map<string, PluginSourceBuild>;
 type RetainedNativeEsm = {
@@ -585,6 +586,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
               }),
             )
           : nextResolve(specifier, nativeContext);
+      if (parentRoot && isPluginSdkAliasSpecifier(specifier)) {
+        recordPluginSdkDeprecatedImport(params.instance.pluginId, specifier);
+      }
       if (resolved.url.startsWith("file:")) {
         const resolvedFilename = fileURLToPath(resolved.url);
         const entry = sourceForOutput(resolvedFilename);
