@@ -45,6 +45,7 @@ import {
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
+import { MediaLimitError } from "./media-limit-error.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 import {
   createImageProcessor,
@@ -854,7 +855,9 @@ async function loadWebMediaInternal(
       const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
       const isGif = params.contentType === "image/gif";
       if (params.buffer.length > imageCap) {
-        throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
+        throw new MediaLimitError(
+          formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length),
+        );
       }
       assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
       return {
@@ -865,7 +868,7 @@ async function loadWebMediaInternal(
       };
     }
     if (params.buffer.length > cap) {
-      throw new Error(formatCapLimit("Media", cap, params.buffer.length));
+      throw new MediaLimitError(formatCapLimit("Media", cap, params.buffer.length));
     }
     return {
       buffer: params.buffer,
@@ -964,7 +967,7 @@ async function loadWebMediaInternal(
     } catch (err) {
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
-          throw new Error(`Media exceeds ${formatMediaSize(sourceReadCap)} limit`, {
+          throw new MediaLimitError(`Media exceeds ${formatMediaSize(sourceReadCap)} limit`, {
             cause: err,
           });
         }

@@ -206,6 +206,40 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(persistedAssistantContent).toEqual(assistantContent);
   });
 
+  it("stages workspace documents above the 5 MB channel default for WebChat download", async () => {
+    const { workspaceDir, cfg } = createMediaTestContext({ allowRead: true });
+    const archivePath = path.join(workspaceDir, "exports", "pack.zip");
+    const archiveBytes = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x05, 0x06]),
+      Buffer.alloc(6 * 1024 * 1024),
+    ]);
+    await fs.mkdir(path.dirname(archivePath), { recursive: true });
+    await fs.writeFile(archivePath, archiveBytes);
+
+    const payload = await normalizeReplyMedia({
+      cfg,
+      payloads: [{ text: "Here it is:", mediaUrls: [archivePath] }],
+    });
+    expect(payload?.text).toBe("Here it is:");
+    const { assistantContent } = await buildAssistantReplyContent({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: payload ? [payload] : [],
+      managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+    });
+    expect(assistantContent).toEqual([
+      { type: "text", text: "Here it is:" },
+      expect.objectContaining({
+        type: "attachment",
+        attachment: expect.objectContaining({
+          kind: "document",
+          label: "pack.zip",
+          sizeBytes: archiveBytes.byteLength,
+        }),
+      }),
+    ]);
+  });
+
   it("publishes a canonical inbound image from a directive reply", async () => {
     const { cfg } = createMediaTestContext({ allowRead: true });
     const saved = await saveMediaBuffer(PNG_BYTES, "image/png", "inbound", undefined, "photo.png");

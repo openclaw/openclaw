@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mediaKindFromMime } from "@openclaw/media-core/constants";
+import { maxBytesForKind, mediaKindFromMime } from "@openclaw/media-core/constants";
 import { detectMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { HostReadMediaTypeError } from "./local-media-access.js";
 import { resolveLocalMediaPath } from "./local-media-path.js";
@@ -7,7 +7,10 @@ import { resolveOutboundAttachmentFromUrl } from "./outbound-attachment.js";
 import type { HostOutboundMediaAccess } from "./read-capability.js";
 import { saveMediaFile } from "./store.js";
 
-/** Stages webchat display media, streaming native audio/video beyond channel caps. */
+/**
+ * Stages webchat display media. Native audio/video streams beyond channel caps, and other
+ * files get at least their media-kind default because webchat serves them from local state.
+ */
 export async function resolveWebchatAttachmentFromUrl(
   mediaUrl: string,
   maxBytes: number,
@@ -48,7 +51,12 @@ export async function resolveWebchatAttachmentFromUrl(
       return { path: saved.path, contentType: saved.contentType };
     }
   }
-  return await resolveOutboundAttachmentFromUrl(mediaUrl, maxBytes, {
-    mediaAccess: options.mediaAccess,
-  });
+  const kind = localKind ?? mediaKindFromMime(mimeTypeFromFilePath(mediaUrl)) ?? "document";
+  return await resolveOutboundAttachmentFromUrl(
+    mediaUrl,
+    Math.max(maxBytes, maxBytesForKind(kind)),
+    {
+      mediaAccess: options.mediaAccess,
+    },
+  );
 }

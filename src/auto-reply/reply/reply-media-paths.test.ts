@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
+import { MediaLimitError } from "../../media/media-limit-error.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import {
   getReplyPayloadMetadata,
@@ -454,6 +455,18 @@ describe("createReplyMediaPathNormalizer", () => {
       verifyMetadata: (result) => {
         expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toEqual([
           { code: "file-not-found", kind: "image", label: "missing.png", mimeType: "image/png" },
+        ]);
+      },
+    },
+    {
+      name: "over the channel byte cap",
+      error: new MediaLimitError("Media exceeds 5MB limit (got 12.76MB)"),
+      mediaUrl: "./out/pack.zip",
+      expectedText:
+        "⚠️ pack.zip: Too large to send. Send a smaller file or raise mediaMaxMb in the config.",
+      verifyMetadata: (result) => {
+        expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toMatchObject([
+          { code: "too-large", kind: "document", label: "pack.zip" },
         ]);
       },
     },

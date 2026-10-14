@@ -10,7 +10,9 @@ export function attachmentFailureReason(code: AttachmentFailureCode): string {
     ? t("chat.attachments.failureFileNotFound")
     : code === "unsupported-format"
       ? t("chat.attachments.failureUnsupportedFormat")
-      : code === "invalid-reference"
-        ? t("chat.attachments.failureInvalidReference")
-        : t("chat.attachments.failureDeliveryFailed");
+      : code === "too-large"
+        ? t("chat.attachments.failureTooLarge")
+        : code === "invalid-reference"
+          ? t("chat.attachments.failureInvalidReference")
+          : t("chat.attachments.failureDeliveryFailed");
 }
