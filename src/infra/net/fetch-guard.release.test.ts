@@ -73,7 +73,9 @@ describe("guarded request release", () => {
           },
         });
         try {
-          expect(await result.response.text()).toBe("complete");
+          expect((await readResponseWithLimit(result.response, 32)).toString("utf8")).toBe(
+            "complete",
+          );
           expect(requests).toEqual(
             ["/start", "/complete"].map((path) => ({
               path,
@@ -83,7 +85,9 @@ describe("guarded request release", () => {
             })),
           );
           expect(admissions).toBe(2);
-          expect(await body.text()).toBe(payload);
+          expect(
+            (await readResponseWithLimit(new Response(body), body.size)).toString("utf8"),
+          ).toBe(payload);
         } finally {
           await result.release();
         }
