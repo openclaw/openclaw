@@ -55,6 +55,10 @@ export type BrowserExtensionStatus = {
   storeDiscovered: DiscoveredChromeStoreExtension[];
   storeInstallRequests: ChromeStoreInstallRequest[];
   registrations: NativeHostRegistrationStatus[];
+  /** Browsers whose profile files could not be read; installation state is unknown. */
+  discoveryBlocked: string[];
+  /** Google Chrome profile files could not be read; Chrome installation cannot be confirmed. */
+  chromeDiscoveryBlocked: boolean;
   manualSetupRequired: boolean;
   issues: string[];
 };
@@ -194,9 +198,16 @@ export async function installChromeExtensionBootstrap(params: {
     storeExtensionId: FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
   });
   let announcedWait = false;
+  const chromeLabels = new Set(
+    chromeProductRoots()
+      .filter((root) => root.product === "chrome")
+      .map((root) => root.label),
+  );
   while (
     discovery.discovered.length === 0 &&
     discovery.storeDiscovered.length === 0 &&
+    // Blocked Chrome profile reads cannot resolve through waiting; report unknown instead.
+    !discovery.blocked.some((label) => chromeLabels.has(label)) &&
     Date.now() < deadline
   ) {
     if (!announcedWait) {
@@ -288,6 +299,27 @@ export async function browserExtensionStatus(params: {
   });
   const storeInstallRequests =
     windows?.storeInstallRequests ?? (await chromeStoreInstallRequests());
+  const blockedBrowserLabels = new Set(discovery.blocked);
+  const chromeDiscoveryBlocked =
+    blockedBrowserLabels.size > 0 &&
+    chromeProductRoots()
+      .filter((root) => root.product === "chrome")
+      .some((root) => blockedBrowserLabels.has(root.label));
+  // Suppression needs an owned native host as counter-evidence; otherwise the
+  // install path must still ask the user to run setup even when reads fail.
+  const chromeBootstrapReady = registrations.some(
+    (registration) =>
+      registration.product === "chrome" && registration.state === "owned" && !registration.issue,
+  );
+  const suppressMissingDiscovery = chromeDiscoveryBlocked && chromeBootstrapReady;
+  const manualSetupRequired =
+    (platform === "win32" && !registrations.length) ||
+    (installedCopy.present && !installedCopy.owned) ||
+    (!suppressMissingDiscovery &&
+      discovery.discovered.length === 0 &&
+      !discovery.storeDiscovered.some((entry) => entry.enabled)) ||
+    discovery.identityMismatches.length > 0 ||
+    unavailableRegistration;
   return {
     platform,
     platformSupport:
@@ -299,13 +331,9 @@ export async function browserExtensionStatus(params: {
     storeDiscovered: discovery.storeDiscovered,
     storeInstallRequests,
     registrations,
-    manualSetupRequired:
-      (platform === "win32" && !registrations.length) ||
-      (installedCopy.present && !installedCopy.owned) ||
-      (discovery.discovered.length === 0 &&
-        !discovery.storeDiscovered.some((entry) => entry.enabled)) ||
-      discovery.identityMismatches.length > 0 ||
-      unavailableRegistration,
+    discoveryBlocked: discovery.blocked,
+    chromeDiscoveryBlocked,
+    manualSetupRequired,
     issues: [
       ...(installedCopy.present && !installedCopy.owned
         ? [`Chrome extension copy is not OpenClaw-owned: ${installedPath}`]

@@ -38,6 +38,8 @@ function installation(): BrowserExtensionStatus {
         state: "owned",
       },
     ],
+    discoveryBlocked: [],
+    chromeDiscoveryBlocked: false,
     manualSetupRequired: true,
     issues: [],
   };
@@ -155,6 +157,34 @@ describe("host-local Chrome setup", () => {
     const result = await runBrowserExtensionSetup({ ...options, action: "verify" });
     expect(result.connection.state).toBe("unavailable");
     expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("verifies the relay instead of reporting a missing extension when profile reads are blocked", async () => {
+    const blocked = installation();
+    blocked.manualSetupRequired = false;
+    blocked.discoveryBlocked = ["Google Chrome"];
+    blocked.chromeDiscoveryBlocked = true;
+    blocked.issues = [
+      "Google Chrome: could not list profiles (Error: EPERM: operation not permitted)",
+    ];
+    mocks.inspect.mockResolvedValue(blocked);
+
+    const inspect = await runBrowserExtensionSetup({ ...options, action: "inspect" });
+    expect(inspect).toMatchObject({
+      phase: "waiting_for_connection",
+      reason: "profile_inspection_blocked",
+      nextAction: "check_connection",
+      installation: { nativeHostRegistered: true, installedProfiles: 0, discoveredProfiles: 0 },
+    });
+
+    const verified = await runBrowserExtensionSetup({ ...options, action: "verify" });
+    expect(verified).toMatchObject({
+      phase: "ready",
+      reason: "connected",
+      nextAction: "none",
+      connection: { state: "connected", extensionVersion: "2.3.0" },
+    });
     expect(mocks.install).not.toHaveBeenCalled();
   });
 

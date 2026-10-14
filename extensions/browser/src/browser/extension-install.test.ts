@@ -147,6 +147,51 @@ describe("native host registration", () => {
     expect(status.issues[0]).toContain("if Chrome has not been launched yet, launch it first");
   });
 
+  it("reports unknown install state instead of manual setup when profile reads are blocked", async () => {
+    const value = await fixture();
+    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
+    if (!chrome) {
+      throw new Error("missing Chrome fixture root");
+    }
+    // Unreadable Preferences yields EACCES for a non-root test user; root runners skip.
+    if (process.getuid?.() === 0) {
+      return;
+    }
+    const preferencesPath = await writeChromePreferences({
+      userDataDir: chrome.userDataDir,
+      profile: "Default",
+      entries: { [FOUNDATION_STORE_ID]: { location: 1, from_webstore: true } },
+    });
+    await fs.chmod(preferencesPath, 0o000);
+    try {
+      let waitTicks = 0;
+      const bootstrapped = await installChromeExtensionBootstrap({
+        bundledDir: value.bundledDir,
+        pluginRoot: value.pluginRoot,
+        waitMs: 1_000,
+        // Blocked Chrome profile reads must end the verification wait immediately.
+        deps: { ...value.deps, sleep: async () => (waitTicks += 1) },
+      });
+      expect(bootstrapped.discoveryBlocked).toContain(chrome.label);
+      expect(waitTicks).toBe(0);
+      expect(bootstrapped.issues.join("\n")).toContain("Preferences");
+
+      const status = await browserExtensionStatus({
+        bundledDir: value.bundledDir,
+        deps: value.deps,
+      });
+      expect(status.discoveryBlocked).toContain(chrome.label);
+      expect(status.manualSetupRequired).toBe(false);
+      expect(
+        status.registrations.some(
+          (entry) => entry.product === "chrome" && entry.state === "owned" && !entry.issue,
+        ),
+      ).toBe(true);
+    } finally {
+      await fs.chmod(preferencesPath, 0o600);
+    }
+  });
+
   it("pre-registers predicted IDs before waiting, then verifies Chrome's recorded ID", async () => {
     const filename = "Secure Preferences";
     const value = await fixture();

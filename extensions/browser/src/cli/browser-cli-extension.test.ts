@@ -68,6 +68,8 @@ function createExtensionStatus() {
     storeDiscovered: [],
     storeInstallRequests: [],
     registrations: [],
+    discoveryBlocked: [],
+    chromeDiscoveryBlocked: false,
     manualSetupRequired: false,
     issues: [],
   };

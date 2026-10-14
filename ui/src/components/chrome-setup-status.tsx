@@ -30,7 +30,12 @@ export function ChromeSetupStatus(props: ChromeSetupStatusProps) {
       }
       const installed = (installation.installedProfiles ?? installation.discoveredProfiles) > 0;
       const known = installation.installedProfiles !== undefined;
-      add(installed ? "Detected" : known ? "NotInstalled" : "Unknown", true);
+      // Blocked profile reads mean unknown, not "Not installed".
+      const inspectionBlocked = result?.reason === "profile_inspection_blocked";
+      add(installed ? "Detected" : inspectionBlocked || !known ? "Unknown" : "NotInstalled", true);
+      if (inspectionBlocked) {
+        add("InspectionBlocked");
+      }
       if (installed && installation.discoveredProfiles === 0) {
         add("EnableHint");
       }
