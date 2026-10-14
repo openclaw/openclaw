@@ -322,7 +322,7 @@ export async function prepareSessionSearchIdentityNames(
   });
   const scope = projection.state.scope(opts);
   const agentIds = new Set(scope.agentId ? [scope.agentId] : listAgentIds(prepared.cfg));
-  for (const [key] of prepared.entries) {
+  for (const [key] of prepared.entries("all")) {
     const agentId = prepared.getTarget(key)?.agentId;
     if (agentId) {
       agentIds.add(agentId);
