@@ -84,7 +84,33 @@ export function resolveMockSubagentHandoff(params: {
   }
   const { current } = splitMockConversationContext(extractLastUserText(input));
   const handoff = /delegate (?:one |a )bounded qa task|subagent handoff/i;
+  // Issue #171647: a guest's completion-intent spawn is visible (not a hidden
+  // private run); the child's own turn then fails at the provider boundary.
+  const visibleHandoff = /delegate (?:one |a )visible qa task/i;
   const allText = extractAllRequestTexts(input, params.body);
+  if (visibleHandoff.test(current)) {
+    const toolResult = parseToolOutputJson(toolOutput);
+    if (toolResult?.status === "error" || toolResult?.status === "forbidden") {
+      return {
+        text: `Failed to delegate: ${typeof toolResult.error === "string" ? toolResult.error : "spawn failed"}`,
+      };
+    }
+    if (!toolOutput && !params.state.subagentHandoffSpawned && params.canSpawn) {
+      params.state.subagentHandoffSpawned = true;
+      return {
+        tool: "sessions_spawn",
+        args: {
+          task: "qa visible child failure",
+          label: "qa-sidecar",
+          visible: true,
+          expectsCompletionMessage: true,
+        },
+      };
+    }
+    return params.canYield
+      ? { tool: "sessions_yield", args: { message: "Waiting for the visible QA child." } }
+      : { text: "Waiting for the visible QA child." };
+  }
   if (
     !handoff.test(current) &&
     !(/^(?:continue|continue again)[.!]?$/i.test(current) && handoff.test(allText))

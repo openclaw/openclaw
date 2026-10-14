@@ -325,6 +325,9 @@ const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
+// A visible child's own turn fails at the provider boundary; the requester then
+// has to be resumed by the settlement wake (issue #171647 proof).
+const QA_VISIBLE_CHILD_FAILURE_PROMPT_RE = /qa visible child failure/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
 // Complete ordinary retries inside their diagnostic request allowance, then
 // leave the fifth request active so recovery can honor both the cumulative
@@ -2156,14 +2159,20 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         : undefined;
     const failure =
       injectedFailure ??
-      (QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
+      (QA_VISIBLE_CHILD_FAILURE_PROMPT_RE.test(allInputText)
         ? {
-            status: 503,
+            status: 500,
             type: "server_error",
-            message: "Service Unavailable",
-            retryAfterSeconds: 120,
+            message: "QA injected visible child failure",
           }
-        : undefined);
+        : QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
+          ? {
+              status: 503,
+              type: "server_error",
+              message: "Service Unavailable",
+              retryAfterSeconds: 120,
+            }
+          : undefined);
     const recorded = requestLog.record({
       ...requestSnapshotBase,
       outcome:
