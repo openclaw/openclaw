@@ -1,6 +1,7 @@
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
@@ -17,6 +18,7 @@ import {
   discardEmptyChildSessionSnapshot,
   hydrateSidebarChildSessions,
   retireStaleChildSessionRows,
+  scheduleSidebarChildSessions,
 } from "./app-sidebar-child-session-data.ts";
 import {
   SessionCatalogLiveState,
@@ -138,6 +140,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
       addController: () => undefined,
       removeController: () => undefined,
       requestUpdate: () => {
+        this.synchronizePresentedSessions();
         if (host.navigationVisible && host.shouldPublishSessionData()) {
           host.requestUpdate();
         }
@@ -282,8 +285,24 @@ export class SessionDataController implements SolidController, SessionCatalogDat
       this.synchronizeOwnerSessionCounts();
       this.lineage.synchronize();
       this.scroll.synchronize(this.host);
-      updateSessionCatalogData(this);
+      this.synchronizePresentedSessions();
     }
+  }
+
+  private synchronizePresentedSessions(): void {
+    updateSessionCatalogData(this);
+    if (
+      !this.host.navigationVisible ||
+      this.host.navigationView !== "sessions" ||
+      this.host.contextualSidebar
+    ) {
+      return;
+    }
+    // Discovery can advance without changing displayed rows; admit it before the frame gate.
+    if (isSessionRouteId(this.host.activeRouteId)) {
+      void this.loadActiveSessionLineage(this.host.getRouteSessionKey());
+    }
+    scheduleSidebarChildSessions(this, () => this.host.childSessionParents());
   }
 
   hostDisconnected(): void {

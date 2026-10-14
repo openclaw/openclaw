@@ -55,6 +55,7 @@ export interface SessionDataControllerHost extends SolidControllerHost {
   readonly sessionCatalogRowsVisible: boolean;
   samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean;
   getRouteSessionKey(): string;
+  childSessionParents(): Set<string>;
   readonly sessionDataContext: ApplicationContext | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;

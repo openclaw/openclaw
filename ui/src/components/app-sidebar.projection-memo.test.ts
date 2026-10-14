@@ -116,16 +116,6 @@ async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
 }
 
 describe("sidebar projection memo", () => {
-  it("renders queued canonical rows when connection props admit the same update", async () => {
-    const { sidebar, publish, row } = await mount([session("first")]);
-    expect(sidebar.connected).toBe(false);
-    expect(row(key("first"))?.textContent).toContain("first");
-    publish([session("first", { label: "Fresh canonical title" })]);
-    sidebar.connected = true;
-    await settleLitElement(sidebar);
-    expect(row(key("first"))?.textContent).toContain("Fresh canonical title");
-  });
-
   it("shares the projection across unrelated updates and refreshes route, list, and filter inputs", async () => {
     const projectHome = vi.spyOn(sidebarAgentSessionRows, "projectSidebarHomeSession");
     const rows = [

@@ -117,6 +117,7 @@ describe("sidebar live roster publication", () => {
         sidebarAgentsMode: "chip",
         shouldPublishSessionData: () => true,
         getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
+        childSessionParents: () => new Set(),
         sessionDataContext: context,
         addController: () => undefined,
         removeController: () => undefined,

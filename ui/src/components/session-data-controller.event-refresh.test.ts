@@ -165,6 +165,7 @@ function createFilteredSessionController(
     sidebarAgentsMode: "chip" as const,
     shouldPublishSessionData: () => true,
     getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
+    childSessionParents: () => new Set(),
     sessionDataContext: context,
     addController: () => undefined,
     removeController: () => undefined,
