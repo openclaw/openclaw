@@ -214,6 +214,8 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  /** Revalidate the caller's live authority before provider I/O or persistent effects. */
+  assertCurrent?: () => void;
   /** Lock the caller's cancellation boundary before the first durable setup effect. */
   beforePersistentEffect?: () => void | Promise<void>;
   /** Preparation effects are complete; the selected route is ready for its live test. */
@@ -232,11 +234,12 @@ export class SetupInferenceCancelledError extends Error {
 }
 
 export function throwIfSetupInferenceCancelled(
-  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled">,
+  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled" | "assertCurrent">,
 ): void {
   if (params.signal?.aborted || params.isCancelled?.()) {
     throw new SetupInferenceCancelledError();
   }
+  params.assertCurrent?.();
 }
 
 export async function waitForProviderAuth<T>(

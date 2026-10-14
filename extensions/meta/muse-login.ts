@@ -107,6 +107,7 @@ export async function runMuseLogin(ctx: ProviderAuthContext): Promise<ProviderAu
   return {
     profiles: [],
     defaultModel: DEFAULT_MODEL,
+    agentRuntimeId: "muse",
     configPatch: {
       plugins: {
         entries: {
@@ -115,7 +116,6 @@ export async function runMuseLogin(ctx: ProviderAuthContext): Promise<ProviderAu
           },
         },
       },
-      agents: { defaults: { models: { [DEFAULT_MODEL]: { agentRuntime: { id: "muse" } } } } },
     },
   };
 }

@@ -1,8 +1,5 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import {
-  findNormalizedProviderKey,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
@@ -182,48 +179,38 @@ export function withCodexHomeScope(
 
 export function prepareSetupModelRuntime(params: {
   config: OpenClawConfig;
-  selected: { provider: string; model: string };
-  defaultModel: { provider: string; model: string };
   modelRef: string;
   agentId: string;
   agentRuntimeId?: string;
 }): { config: OpenClawConfig; agentRuntimeId?: string } {
-  const selectedRuntimeId = resolveModelRuntimePolicy({
-    config: params.config,
-    provider: params.selected.provider,
-    modelId: params.selected.model,
-    agentId: params.agentId,
-  }).policy?.id;
-  const inheritedRuntimeId =
-    !selectedRuntimeId &&
-    normalizeProviderId(params.defaultModel.provider) ===
-      normalizeProviderId(params.selected.provider)
-      ? resolveModelRuntimePolicy({
-          config: params.config,
-          provider: params.defaultModel.provider,
-          modelId: params.defaultModel.model,
-          agentId: params.agentId,
-        }).policy?.id
-      : undefined;
-  const agentRuntimeId = params.agentRuntimeId ?? selectedRuntimeId ?? inheritedRuntimeId;
-  if (!inheritedRuntimeId || params.agentRuntimeId) {
+  const agentRuntimeId =
+    params.agentRuntimeId ??
+    resolveModelRuntimePolicy({
+      config: params.config,
+      modelId: params.modelRef,
+      agentId: params.agentId,
+    }).policy?.id;
+  if (!params.agentRuntimeId) {
     return { config: params.config, agentRuntimeId };
   }
-  // A login's starter-model runtime also owns an unconfigured model selected in that flow.
-  // Materialize the selected row before the runtime installer resolves its requirements.
+  const agents = params.config.agents;
+  const agent = agents?.entries?.[params.agentId];
   return {
     agentRuntimeId,
     config: {
       ...params.config,
       agents: {
-        ...params.config.agents,
-        defaults: {
-          ...params.config.agents?.defaults,
-          models: {
-            ...params.config.agents?.defaults?.models,
-            [params.modelRef]: {
-              ...params.config.agents?.defaults?.models?.[params.modelRef],
-              agentRuntime: { id: inheritedRuntimeId },
+        ...agents,
+        entries: {
+          ...agents?.entries,
+          [params.agentId]: {
+            ...agent,
+            models: {
+              ...agent?.models,
+              [params.modelRef]: {
+                ...agent?.models?.[params.modelRef],
+                agentRuntime: { id: params.agentRuntimeId },
+              },
             },
           },
         },

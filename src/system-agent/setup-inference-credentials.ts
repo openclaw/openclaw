@@ -226,11 +226,9 @@ async function stagePreparedCandidate(
     (appServer.homeScope === "user" || appServer.homeScope === "agent");
   const preparedRuntime = prepareSetupModelRuntime({
     config: params.config,
-    selected: ref,
-    defaultModel: parseInferenceRef(params.result.defaultModel ?? ""),
     modelRef,
     agentId: ctx.routeAgentId,
-    agentRuntimeId: params.agentRuntimeId,
+    agentRuntimeId: params.agentRuntimeId ?? params.result.agentRuntimeId,
   });
   const agentRuntimeId =
     preparedRuntime.agentRuntimeId ?? (preparedCodexSignIn ? "codex" : "openclaw");
@@ -240,6 +238,7 @@ async function stagePreparedCandidate(
       ? withCodexHomeScope(preparedRuntime.config, "agent")
       : preparedRuntime.config;
   if (params.credentialState === "new" && agentRuntimeId !== "openclaw") {
+    throwIfSetupInferenceCancelled(ctx.params);
     const installed = await ensureModelSelectionRuntimePlugins({
       cfg: preparedConfig,
       model: modelRef,
@@ -535,6 +534,7 @@ export async function stageProviderAuthCandidate(
         setDefaultModel: false,
         preserveExistingDefaultModel: true,
         signal: params.signal,
+        assertCurrent: () => throwIfSetupInferenceCancelled(params),
         isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
         beforePersistentEffect: ctx.beforePersistentEffect,
       },

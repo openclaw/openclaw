@@ -342,6 +342,7 @@ export async function fixture(
   return {
     activate,
     detect,
+    runWithMetadata: metadata.run,
     agentDir,
     before,
     config,

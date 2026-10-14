@@ -329,118 +329,125 @@ it("activates and restores setup credentials off-thread while preserving later n
   });
 });
 
-it("routes an alternate Muse model without changing an API-key Spark model", async () => {
-  await withOpenClawTestState({ label: "muse-setup" }, async (state) => {
-    const starter = "meta/muse-spark-1.3";
-    const selectedModel = "meta/muse-spark-1.2";
-    const original = { alias: "Existing Meta API model", agentRuntime: { id: "openclaw" } };
-    const config: OpenClawConfig = {
-      gateway: { mode: "local" },
-      agents: {
-        defaults: { workspace: state.workspaceDir, models: { [starter]: original } },
-        entries: { main: {} },
-      },
-      plugins: { entries: { meta: { enabled: true } } },
-      models: {
-        providers: {
-          meta: {
-            baseUrl: "https://api.meta.ai/v1",
-            models: [],
-            apiKey: "synthetic-existing-meta-api-key",
-          },
+it.each(["meta/muse-spark-1.3", "meta/muse-spark-1.2"])(
+  "routes Muse for main without changing global defaults (%s)",
+  async (selectedModel) => {
+    await withOpenClawTestState({ label: "muse-setup" }, async (state) => {
+      const starter = "meta/muse-spark-1.3";
+      const original = { alias: "Existing Meta API model", agentRuntime: { id: "openclaw" } };
+      const config: OpenClawConfig = {
+        gateway: { mode: "local" },
+        agents: {
+          defaults: { workspace: state.workspaceDir, models: { [starter]: original } },
+          entries: { main: {}, other: {} },
         },
-      },
-    };
-    await state.writeConfig(config);
-    const choice: ProviderAuthChoiceMetadata = {
-      pluginId: "meta",
-      providerId: "meta",
-      methodId: "muse-code",
-      choiceId: "muse-code",
-      choiceLabel: "Muse Code",
-      appGuidedAuth: "device-code",
-    };
-    const provider: ProviderPlugin = {
-      id: "meta",
-      pluginId: "meta",
-      label: "Meta",
-      auth: [
-        {
-          id: "muse-code",
-          label: "Muse Code",
-          kind: "device_code",
-          run: async () => ({
-            profiles: [],
-            defaultModel: starter,
-            configPatch: {
-              agents: { defaults: { models: { [starter]: { agentRuntime: { id: "muse" } } } } },
+        plugins: { entries: { meta: { enabled: true } } },
+        models: {
+          providers: {
+            meta: {
+              baseUrl: "https://api.meta.ai/v1",
+              models: [],
+              apiKey: "synthetic-existing-meta-api-key",
             },
-          }),
-        },
-      ],
-    };
-    const record: PluginInstallRecord = {
-      source: "npm",
-      spec: "@openclaw/muse",
-      installPath: state.statePath("extensions/muse"),
-    };
-    installRuntime.mockImplementation(async ({ cfg, entry, beforePersistentEffect }) => {
-      expect(entry.pluginId).toBe("muse");
-      await beforePersistentEffect?.();
-      return {
-        installed: true,
-        status: "installed",
-        pluginId: "muse",
-        cfg: {
-          ...cfg,
-          plugins: {
-            ...cfg.plugins,
-            entries: { ...cfg.plugins?.entries, muse: { enabled: true } },
-            installs: { muse: record },
           },
         },
       };
-    });
-    const staged = await stageProviderAuthCandidate(
-      {
-        cfg: config,
-        snapshot: await readConfigFileSnapshot(),
-        routeAgentId: "main",
-        workspace: state.workspaceDir,
-        agentDir: state.statePath("agents/main/agent"),
-        effects: { credentialsSaved: false },
-        beforePersistentEffect: async () => {},
-        params: {
-          kind: "provider-auth",
-          surface: "gateway",
-          authChoice: "muse-code",
-          modelRef: selectedModel,
-          runtime: createNonExitingRuntime(),
-          prompter: createWizardPrompter(),
+      await state.writeConfig(config);
+      const choice: ProviderAuthChoiceMetadata = {
+        pluginId: "meta",
+        providerId: "meta",
+        methodId: "muse-code",
+        choiceId: "muse-code",
+        choiceLabel: "Muse Code",
+        appGuidedAuth: "device-code",
+      };
+      const provider: ProviderPlugin = {
+        id: "meta",
+        pluginId: "meta",
+        label: "Meta",
+        auth: [
+          {
+            id: "muse-code",
+            label: "Muse Code",
+            kind: "device_code",
+            run: async () => ({
+              profiles: [],
+              defaultModel: starter,
+              agentRuntimeId: "muse",
+            }),
+          },
+        ],
+      };
+      const record: PluginInstallRecord = {
+        source: "npm",
+        spec: "@openclaw/muse",
+        installPath: state.statePath("extensions/muse"),
+      };
+      installRuntime.mockImplementation(async ({ cfg, entry, beforePersistentEffect }) => {
+        expect(entry.pluginId).toBe("muse");
+        await beforePersistentEffect?.();
+        return {
+          installed: true,
+          status: "installed",
+          pluginId: "muse",
+          cfg: {
+            ...cfg,
+            plugins: {
+              ...cfg.plugins,
+              entries: { ...cfg.plugins?.entries, muse: { enabled: true } },
+              installs: { muse: record },
+            },
+          },
+        };
+      });
+      const staged = await stageProviderAuthCandidate(
+        {
+          cfg: config,
+          snapshot: await readConfigFileSnapshot(),
+          routeAgentId: "main",
+          workspace: state.workspaceDir,
+          agentDir: state.statePath("agents/main/agent"),
+          effects: { credentialsSaved: false },
+          beforePersistentEffect: async () => {},
+          params: {
+            kind: "provider-auth",
+            surface: "gateway",
+            authChoice: "muse-code",
+            modelRef: selectedModel,
+            runtime: createNonExitingRuntime(),
+            prompter: createWizardPrompter(),
+          },
+          deps: {
+            resolveManifestProviderAuthChoice: () => choice,
+            resolvePluginProviders: () => [provider],
+          },
         },
-        deps: {
-          resolveManifestProviderAuthChoice: () => choice,
-          resolvePluginProviders: () => [provider],
-        },
-      },
-      true,
-    );
-    if ("error" in staged) {
-      throw new Error(staged.error);
-    }
-    const selected = await applySystemAgentModelSelection({
-      config: staged.config,
-      model: staged.modelRef,
-      targetAgentId: "main",
-      agentRuntimeId: staged.agentRuntimeId,
+        true,
+      );
+      if ("error" in staged) {
+        throw new Error(staged.error);
+      }
+      const selected = await applySystemAgentModelSelection({
+        config: staged.config,
+        model: staged.modelRef,
+        targetAgentId: "main",
+        agentRuntimeId: staged.agentRuntimeId,
+      });
+      expect(selected.agents?.entries?.main?.model).toBe(selectedModel);
+      expect(
+        resolveModelRuntimePolicy({ config: selected, modelId: selectedModel, agentId: "main" })
+          .policy?.id,
+      ).toBe("muse");
+      expect(selected.agents?.entries?.main?.models?.[selectedModel]?.agentRuntime?.id).toBe(
+        "muse",
+      );
+      expect(
+        resolveModelRuntimePolicy({ config: selected, modelId: starter, agentId: "other" }).policy
+          ?.id,
+      ).toBe("openclaw");
+      expect(selected.plugins?.entries?.muse?.enabled).toBe(true);
+      expect(selected.agents?.defaults?.models?.[starter]).toEqual(original);
+      expect(selected.models?.providers?.meta?.apiKey).toBe("synthetic-existing-meta-api-key");
     });
-    expect(selected.agents?.entries?.main?.model).toBe(selectedModel);
-    expect(
-      resolveModelRuntimePolicy({ config: selected, modelId: selectedModel, agentId: "main" })
-        .policy?.id,
-    ).toBe("muse");
-    expect(selected.plugins?.entries?.muse?.enabled).toBe(true);
-    expect(selected.agents?.defaults?.models?.[starter]).toEqual(original);
-    expect(selected.models?.providers?.meta?.apiKey).toBe("synthetic-existing-meta-api-key");
-  });
-});
+  },
+);

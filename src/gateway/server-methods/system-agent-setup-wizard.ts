@@ -160,6 +160,7 @@ export async function startSetupActivationWizard(params: {
             prompter,
             signal,
             isCancelled: () => signal.aborted,
+            assertCurrent: params.assertCurrent,
             beforePersistentEffect: () => {
               params.assertCurrent?.();
               runnerSession.lockCancellationForPreparation();
