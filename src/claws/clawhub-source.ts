@@ -214,17 +214,24 @@ export async function listClawHubClaws(
 ): Promise<ClawHubClawCatalogEntry[]> {
   const entries = new Map<string, ClawHubClawCatalogEntry>();
   const seenCursors = new Set<string>();
+  const requestedLimit = params.limit && params.limit > 0 ? params.limit : undefined;
   let cursor: string | undefined;
   for (let page = 0; page < MAX_CATALOG_PAGES; page += 1) {
     const result = await listClawHubPackages({
       ...params,
       family: "claw",
       isOfficial: true,
-      limit: CATALOG_PAGE_SIZE,
+      limit: Math.min(
+        CATALOG_PAGE_SIZE,
+        requestedLimit ? requestedLimit - entries.size : CATALOG_PAGE_SIZE,
+      ),
       ...(cursor ? { cursor } : {}),
     });
     for (const entry of projectOfficialEntries(result.items)) {
       entries.set(entry.packageName, entry);
+      if (requestedLimit && entries.size >= requestedLimit) {
+        return [...entries.values()];
+      }
     }
     if (result.nextCursor === null) {
       return [...entries.values()];

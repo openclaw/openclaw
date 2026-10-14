@@ -292,6 +292,21 @@ describe("official ClawHub Claw catalog", () => {
     );
   });
 
+  it("honors the starter catalog limit for a blank query", async () => {
+    mocks.list.mockResolvedValue({
+      items: [officialPackage("@openclaw/first"), officialPackage("@openclaw/second")],
+      nextCursor: "page 2",
+    });
+
+    const entries = await searchClawHubClaws({ query: " ", limit: 1 });
+
+    expect(entries.map((entry) => entry.packageName)).toEqual(["@openclaw/first"]);
+    expect(mocks.list).toHaveBeenCalledOnce();
+    expect(mocks.list).toHaveBeenCalledWith(
+      expect.objectContaining({ family: "claw", isOfficial: true, limit: 1 }),
+    );
+  });
+
   it("finds an official match when community matches fill the search cap", async () => {
     mocks.search.mockImplementation(async ({ isOfficial, limit }) =>
       isOfficial
