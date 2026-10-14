@@ -177,6 +177,7 @@ export function resolveMcpTransport(
     clientCert: resolved.clientCert,
     clientKey: resolved.clientKey,
     resourceUrl: resolved.url,
+    requestTimeoutMs: resolved.requestTimeoutMs,
   });
   const headers =
     resolved.auth === "oauth" || authProfileId
