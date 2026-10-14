@@ -12,14 +12,7 @@ import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
 import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
 
-const fixture = fileURLToPath(new URL("../fixtures/vitest-fork-shutdown.mjs", import.meta.url));
-// Outside the enclosing Vitest TMPDIR: its owner must not erase retained writers.
-const fixtureRoots = fileURLToPath(
-  new URL("../../.artifacts/vitest-fork-shutdown/", import.meta.url),
-);
-fs.mkdirSync(fixtureRoots, { recursive: true });
-
-// Compilation is admission work, not part of the fixture's shutdown deadline.
+// Preparation belongs to collection, before the unchanged per-scenario shutdown deadline.
 const fixtureWorkers = createVitestWorkerRun();
 afterAll(() => fixtureWorkers.dispose());
 try {
@@ -28,6 +21,13 @@ try {
   await fixtureWorkers.dispose();
   throw error;
 }
+
+const fixture = fileURLToPath(new URL("../fixtures/vitest-fork-shutdown.mjs", import.meta.url));
+// Outside the enclosing Vitest TMPDIR: its owner must not erase retained writers.
+const fixtureRoots = fileURLToPath(
+  new URL("../../.artifacts/vitest-fork-shutdown/", import.meta.url),
+);
+fs.mkdirSync(fixtureRoots, { recursive: true });
 
 function observeReadyLine(child: ChildProcess, line: string, ready: () => void) {
   let output = "";
@@ -80,9 +80,9 @@ async function runFixture(
 ) {
   try {
     const result = await runVitestShutdownCommand({
-      args: [fixture, root, JSON.stringify(options)],
       nodeArgs,
-      workerRun: fixtureWorkers,
+      args: [fixture, root, JSON.stringify(options)],
+      workerRun: options.setup === "shared" ? fixtureWorkers : undefined,
       timeoutMs: 20_000,
       ...commandOptions,
     });

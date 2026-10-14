@@ -162,6 +162,7 @@ type NodeTestPlanOptions = {
   compact?: boolean;
   compactMode?: CompactNodeTestPlanMode;
   compactNodeJobCap?: number;
+  mainValidation?: boolean;
   runnerBackend?: string;
 };
 
@@ -332,6 +333,10 @@ const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 360;
 const COMPACT_SERIAL_NODE_TEST_JOB_SECONDS = 300;
 const COMPACT_FINAL_PARALLEL_NODE_TEST_JOB_SECONDS = 500;
 const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
+// Hourly hybrid main validation carries the complete tooling family. Packing it
+// denser (420s + 60s setup) keeps headroom under its 77-row cap without
+// exceeding main's existing 500s parallel rows.
+const COMPACT_MAIN_VALIDATION_TOOLING_JOB_SECONDS = 420;
 // Runtime preparation is charged once beside the same serial test budget.
 // This is admission, never a test deadline.
 const COMPACT_HYBRID_RUNTIME_JOB_SECONDS =
@@ -1023,6 +1028,7 @@ function isParallelToolingGroup(group: NodeTestShardGroup): boolean {
 function compactToolingTestSecondsLimit(
   groups: readonly NodeTestShardGroup[],
   runnerBackend: string | undefined,
+  mainValidation = false,
 ): number {
   // Keep the measured planner-proof tail bounded without fragmenting unrelated tooling.
   const hasPlannerProof = groups.some((group) =>
@@ -1032,7 +1038,9 @@ function compactToolingTestSecondsLimit(
   );
   return runnerBackend !== "github" && hasPlannerProof
     ? COMPACT_EXCLUSIVE_JOB_SECONDS
-    : COMPACT_SERIAL_NODE_TEST_JOB_SECONDS;
+    : mainValidation && runnerBackend === "hybrid"
+      ? COMPACT_MAIN_VALIDATION_TOOLING_JOB_SECONDS
+      : COMPACT_SERIAL_NODE_TEST_JOB_SECONDS;
 }
 
 function estimateParallelToolingSeconds(
@@ -4914,7 +4922,7 @@ function createCompactNodeTestShardBundles(
   const hostedToolingGroups: NodeTestShardGroup[] = [];
   const maximumInitialBinSeconds = Math.max(
     COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS,
-    COMPACT_SERIAL_NODE_TEST_JOB_SECONDS,
+    compactToolingTestSecondsLimit([], options.runnerBackend, options.mainValidation),
     COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS,
     COMPACT_EXCLUSIVE_JOB_SECONDS,
     COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS,
@@ -4988,7 +4996,7 @@ function createCompactNodeTestShardBundles(
       const serialSecondsCap = sharesSerialCliBudget
         ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
         : combined.every(isParallelToolingGroup)
-          ? compactToolingTestSecondsLimit(combined, options.runnerBackend)
+          ? compactToolingTestSecondsLimit(combined, options.runnerBackend, options.mainValidation)
           : exclusive && !sharesHostedBuild
             ? COMPACT_EXCLUSIVE_JOB_SECONDS
             : usesExpandedRunnerProfile(options.runnerBackend)
@@ -5423,7 +5431,11 @@ function createCompactNodeTestShardBundles(
           (jobs, runner) =>
             rebalanceMeasuredSerialJobs(jobs, {
               runner,
-              profile: hostedHourly ? "hosted-hourly" : "native",
+              profile: hostedHourly
+                ? "hosted-hourly"
+                : options.mainValidation
+                  ? "main-validation"
+                  : "native",
               estimateGroup: (group) => ({
                 seconds: estimateParallelToolingSeconds(
                   group,
@@ -5439,7 +5451,11 @@ function createCompactNodeTestShardBundles(
                 ? {}
                 : {
                     testSecondsLimit: (groups: NodeTestShardGroup[]) =>
-                      compactToolingTestSecondsLimit(groups, options.runnerBackend),
+                      compactToolingTestSecondsLimit(
+                        groups,
+                        options.runnerBackend,
+                        options.mainValidation,
+                      ),
                   }),
               canShare: (groups) =>
                 groups.length <= COMPACT_NODE_TEST_JOB_GROUPS && hasDistinctStripeFamilies(groups),

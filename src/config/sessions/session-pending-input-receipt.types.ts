@@ -12,7 +12,7 @@ export type SessionPendingInputReceipt = {
   assertLifetimeCurrent?: () => void;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
   completion?: AgentRunTerminalOutcome;
-  /** @deprecated Await completeAsync. Retained during stable deprecation. */
+  /** @deprecated Await completeAsync. Final compatibility day: 2026-12-31. */
   complete?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome;
   completeAsync?: (outcome: AgentRunTerminalOutcome) => Promise<AgentRunTerminalOutcome>;
   settled?: () => Promise<void>;

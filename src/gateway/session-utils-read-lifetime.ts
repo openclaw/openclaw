@@ -91,6 +91,7 @@ export async function withGatewaySessionEntryReadOnly<T>(
     assertActive?: () => void;
     excludeInternalEffects?: boolean;
     projection?: SessionEntryReadScope["projection"];
+    prepared?: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   },
   consume: (
     loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
@@ -117,7 +118,11 @@ export async function withGatewaySessionEntryReadOnly<T>(
       active = false;
     }
   }
-  const loaded = await loadGatewaySessionEntryReadOnlyInWorker(params);
+  const loaded = params.prepared ?? (await loadGatewaySessionEntryReadOnlyInWorker(params));
+  if (params.prepared && params.excludeInternalEffects) {
+    omitInternalSessionEffectsEntries(loaded.store, loaded.storeKeys);
+    loaded.entry = loaded.store[loaded.legacyKey ?? loaded.canonicalKey];
+  }
   return consume(loaded, () => params.assertActive?.());
 }
 

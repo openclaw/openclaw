@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { hasUnjoinedWork, runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createDeferredCore } from "../../src/shared/deferred.ts";
 import { createBoundedChildOutput } from "./bounded-child-output.ts";
@@ -30,16 +30,18 @@ export async function runVitestShutdownCommand({
     const code = await runManagedCommand({
       ...options,
       bin: options.bin ?? process.execPath,
-      args: workerRun
-        ? [
-            ...nodeArgs,
-            fileURLToPath(
-              new URL("../../scripts/lib/vitest-worker-bootstrap.mts", import.meta.url),
-            ),
-            workerRun.descriptor.directory,
-            ...(options.args ?? []),
-          ]
-        : [...nodeArgs, ...(options.args ?? [])],
+      args: [
+        ...nodeArgs,
+        ...(workerRun
+          ? [
+              fileURLToPath(
+                new URL("../../scripts/lib/vitest-worker-bootstrap.mts", import.meta.url),
+              ),
+              workerRun.descriptor.directory,
+              ...(options.args ?? []),
+            ]
+          : (options.args ?? [])),
+      ],
       shell: false,
       stdio: workerRun ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
       requireProcessTreeExit: process.platform !== "win32",
@@ -80,13 +82,9 @@ export async function runVitestShutdownCommand({
       stderr: stderr.text(),
     });
     if (borrowerCompletion) {
-      const joinedCancellation =
-        cause instanceof Error &&
-        "code" in cause &&
-        (cause.code === "ABORT_ERR" || cause.code === "ETIMEDOUT") &&
-        !hasUnjoinedWork(cause);
-      if (joinedCancellation) {
-        // The command still rejects; only its positively joined artifact loan settles.
+      // Managed timeout/abort reject only after positive termination; cleanup
+      // failures stay primary and must retain their borrowed generation.
+      if (aborted || (cause instanceof Error && "code" in cause && cause.code === "ETIMEDOUT")) {
         workerCompletion?.resolve(1);
       } else {
         workerCompletion?.reject(error);

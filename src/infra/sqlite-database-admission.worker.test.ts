@@ -17,6 +17,7 @@ import {
   readSqliteDatabaseScopedWriteToken,
   retireSqliteDatabaseWriteScopes,
   publishSqliteDatabaseAdmission,
+  getSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
@@ -28,11 +29,56 @@ import {
 } from "./sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
+import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const moduleUrl = new URL("./sqlite-database-admission.worker.test-support.ts", import.meta.url);
+
+it("settles worker facts through admission without echoing snapshots in ordinary replies", async () => {
+  const location = path.join(tempDirs.make("sqlite-admission-reply-"), "shared.sqlite");
+  const database = openNodeSqliteDatabase(location);
+  const broker = new SqliteWorkerBroker();
+  const replies: SqliteWorkerReply[] = [];
+  const workerFact = { ...hostFactKey, name: "admission-test-worker-value" };
+  let factAtReply: number | undefined;
+  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker.
+  const originalEmit = Worker.prototype.emit;
+  const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+    this: Worker,
+    event: string | symbol,
+    reply: SqliteWorkerReply,
+  ) {
+    if (event === "message" && reply.ok) {
+      replies.push(reply);
+      factAtReply = getSqliteDatabaseAdmission(database, workerFact);
+    }
+    return Reflect.apply(originalEmit, this, [event, reply]);
+  });
+  try {
+    const store = await broker.open<AdmissionOperations>({
+      moduleUrl,
+      databasePath: location,
+      input: undefined,
+    });
+    for (const value of [1, 2]) {
+      publishSqliteDatabaseAdmission(database, hostFactKey, value);
+      await store!.execute({ type: "admitted", input: { measureHostAbsence: true } });
+      // The host receives the new worker fact before the broker sees the ordinary reply.
+      expect(factAtReply).toBe(1);
+    }
+    await store!.close();
+    expect(replies).toHaveLength(4);
+    for (const reply of replies) {
+      expect(reply).not.toHaveProperty("databaseAdmissions");
+    }
+  } finally {
+    messages.mockRestore();
+    await broker.close();
+    database.close();
+  }
+});
 
 it.each([undefined, 42])(
   "bootstraps complete host facts before any exchange, value=%s",

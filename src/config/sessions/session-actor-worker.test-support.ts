@@ -5,7 +5,10 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../../infra/sqlite-transaction.js";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  type SqliteWorkerCommand,
+} from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
@@ -38,12 +41,15 @@ import { bindSqliteWorkerBackend as bindSharingBackend } from "./session-sharing
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 export type Mutation = Exclude<Command, { type: "session.actor.read" }>;
 
-export const SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT = 34_000;
+export const SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT = 1_024;
 
 export function seedSessionActorOutcomeTransferTranscript(
   fixture: Pick<ReturnType<typeof createSessionCompoundWorkerFixture>, "database" | "scope">,
 ): void {
-  const keyPayload = "k".repeat(512);
+  // Unique keys alone exceed the limit even when serialization deduplicates strings.
+  const keyPayload = "k".repeat(
+    Math.ceil(SQLITE_WORKER_MAX_MESSAGE_BYTES / SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT),
+  );
   const events = Array.from({ length: SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT }, (_, index) => ({
     type: "message",
     id: `bounded-message-${String(index).padStart(5, "0")}`,

@@ -21,7 +21,7 @@ import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { imessagePlugin } from "./channel.js";
 import type { createIMessageRpcClient } from "./client.js";
-import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
+import { createIMessageConversationBindingManagerV2 } from "./conversation-bindings.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import { setCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 import { getIMessageRuntime } from "./runtime.js";
@@ -168,7 +168,7 @@ describe("iMessage plugin payload attachments", () => {
       ]);
       setActivePluginRegistry(registry);
       const owner = createPluginRegistryOwner(registry);
-      const bindings = createIMessageConversationBindingManager({ cfg: {} });
+      const bindings = createIMessageConversationBindingManagerV2({ cfg: {} });
       addTestHook({
         registry,
         pluginId: "imessage-monitor-proof",

@@ -1,6 +1,7 @@
 // @vitest-environment node
-import type { ReactiveControllerHost } from "lit";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import { I18nController } from "./lit-controller.ts";
 import { i18n } from "./translate.ts";
 
@@ -10,7 +11,7 @@ function createHost() {
     removeController: vi.fn(),
     requestUpdate: vi.fn(),
     updateComplete: Promise.resolve(true),
-  } satisfies ReactiveControllerHost;
+  } satisfies SolidControllerHost;
 }
 
 describe("I18nController", () => {

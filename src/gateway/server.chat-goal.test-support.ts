@@ -5,8 +5,10 @@ import { expect, it, vi, type Mock } from "vitest";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import * as sessionIdentity from "../config/sessions/session-accessor.sqlite-identity.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 type GoalChatScope = { agentId: string; sessionKey: string; sessionId: string; storePath: string };
@@ -123,4 +125,22 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       notification.mockRestore();
     }
   });
+}
+
+export function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"]) {
+  const handler = vi.fn(async () => ({
+    handled: true,
+    queuedFinal: false,
+    counts: { tool: 0, block: 0, final: 0 },
+  }));
+  const registry = getTestPluginRegistry();
+  registry.typedHooks.push({
+    pluginId: "goal-dispatch-fixture",
+    hookName: "reply_dispatch",
+    handler,
+    ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
+    source: "test",
+  });
+  initializeGlobalHookRunner(registry);
+  return handler;
 }

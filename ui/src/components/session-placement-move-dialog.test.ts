@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { showSessionPlacementTargetDialog } from "./session-placement-move-dialog.ts";
+import { showSessionPlacementTargetDialog } from "./session-placement-move-dialog.tsx";
 
 let restoreDialogPolyfill: () => void;
 

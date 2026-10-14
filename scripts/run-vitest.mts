@@ -14,7 +14,6 @@ import {
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
-import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
 import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -65,7 +64,7 @@ import {
   stripVitestAnsi,
   writeVitestUnhandledErrorSummary,
 } from "./lib/vitest-unhandled-errors.mts";
-import { getVitestWorkerDescriptor } from "./lib/vitest-worker-bootstrap.mts";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
@@ -1224,7 +1223,7 @@ export async function runVitest(
   }
 }
 
-if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+if (import.meta.main) {
   // The project owner imports our spawn helpers; top-level await would deadlock
   // its dynamic import when this module is also the native entrypoint.
   void runVitestCli("vitest", runVitest);

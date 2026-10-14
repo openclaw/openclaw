@@ -1,4 +1,6 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   SqliteCoordinatorError,
   throwSqliteLifecycleErrors,
@@ -21,6 +23,7 @@ import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
+import { isStatePostgres } from "./openclaw-state-db-engine.js";
 import {
   assertStateReadSchema,
   openOpenClawStateReadConnection,
@@ -50,6 +53,9 @@ export function createOpenClawStateCurrentWarmReader<T>(
       const scope = getOpenClawDatabaseMaintenanceScope();
       if (!scope?.ownsSchemaMaintenance || (bound && bound.scope !== scope)) {
         return { available: false };
+      }
+      if (isStatePostgres()) {
+        requireNativeDatabaseFile("postgres", "repair");
       }
       if (bound && bound.path !== pathname) {
         throw new Error("Current shared-state reader cannot change its database before cleanup");
@@ -164,6 +170,9 @@ function runOpenClawStateCurrentReadConnection<T>(
   const errors: unknown[] = [];
   let result!: T;
   try {
+    if (isPostgresSqlConnection(db)) {
+      requireNativeDatabaseFile("postgres", "repair");
+    }
     // Explicit Doctor inspection retains its checks; ordinary runtime reads have no callback.
     closeAdmission = openStateSchemaReadAdmission?.(db);
     runSqliteReadOperationSync(db, () => {

@@ -409,7 +409,6 @@ describe("ownerless skip transaction guards", () => {
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
-        resolveAgentId: () => "ops",
       }),
     );
     owner = undefined;

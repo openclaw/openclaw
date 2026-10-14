@@ -350,17 +350,12 @@ describe("failed run recovery actions", () => {
         state.chatSending = true;
       }),
     };
-    const openModelPicker = vi.fn();
     let current = true;
     const actions = createChatPaneRunRecoveryActions(state, {
       canSend: true,
-      canChangeModel: true,
       isCurrent: () => current,
       latestFailedRunId: () => "run-a",
-      openModelPicker,
     });
-    actions.onChangeFailureModel?.("run-a");
-    expect(openModelPicker).toHaveBeenCalledOnce();
     actions.onRetryRun?.("old-run");
     expect(state.handleSendChat).not.toHaveBeenCalled();
     actions.onRetryRun?.("run-a");
@@ -371,9 +366,7 @@ describe("failed run recovery actions", () => {
     state.chatSending = false;
     current = false;
     actions.onRetryRun?.("run-a");
-    actions.onChangeFailureModel?.("run-a");
     expect(state.handleSendChat).toHaveBeenCalledOnce();
-    expect(openModelPicker).toHaveBeenCalledOnce();
   });
   it("does not expose actions without their capabilities", () => {
     const state = {
@@ -386,11 +379,9 @@ describe("failed run recovery actions", () => {
     expect(
       createChatPaneRunRecoveryActions(state, {
         canSend: false,
-        canChangeModel: false,
         isCurrent: () => true,
         latestFailedRunId: () => "run-a",
-        openModelPicker: vi.fn(),
       }),
-    ).toEqual({ onRetryRun: undefined, onChangeFailureModel: undefined });
+    ).toEqual({ onRetryRun: undefined });
   });
 });

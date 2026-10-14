@@ -148,7 +148,6 @@ it("keeps settled append bodies in receipts and storage without evicting navigat
     runSqliteImmediateTransactionSync(f.database.db, () => {
       writeSessionEntry(f.database, other.sessionKey, { sessionId: "other", updatedAt: 1 });
     });
-    f.read();
     const warn = vi.fn();
     f.hooks.transactionOptions = { logger: { warn }, slowTransactionHoldMs: 0 };
     const events = Array.from({ length: 6 }, (_, index) => ({
@@ -159,7 +158,7 @@ it("keeps settled append bodies in receipts and storage without evicting navigat
       customType: "openclaw.cache-ttl",
       data: { snapshot: "synthetic".repeat(180_000) },
     }));
-    for (const event of events) {
+    for (const [index, event] of events.entries()) {
       const outcome = f.mutate({
         type: "session.actor.appendTranscriptEvent",
         input: {
@@ -176,7 +175,17 @@ it("keeps settled append bodies in receipts and storage without evicting navigat
         "slow SQLite transaction hold",
         expect.objectContaining({
           operation: "session.actor.appendTranscriptEvent",
-          context: { payloadBytes: Buffer.byteLength(JSON.stringify(event)) },
+          context: {
+            payloadBytes: Buffer.byteLength(JSON.stringify(event)),
+            actorResident: index > 0,
+            actorTranscriptEvents: 3 + index,
+            actorActiveEvents: 2 + index,
+            actorReadMs: expect.any(Number),
+            actorApplyMs: expect.any(Number),
+            actorProjectionMs: expect.any(Number),
+            actorReceiptMs: expect.any(Number),
+            actorReceiptBytes: expect.any(Number),
+          },
         }),
       );
       if (outcome.kind === "committed") {

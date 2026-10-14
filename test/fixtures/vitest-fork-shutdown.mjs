@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-bootstrap.mts";
+import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-descriptor.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.ts";
 
@@ -286,7 +286,7 @@ it("completes the test before worker shutdown", () => {
 `,
   );
   const args = [
-    path.join(repo, "scripts/run-vitest.mts"),
+    path.join(repo, "scripts/run-vitest.mjs"),
     "run",
     "--config",
     config,
@@ -305,18 +305,13 @@ it("completes the test before worker shutdown", () => {
       `--execArgv=--heap-prof-dir=${profiles}`,
     );
   }
-  const workers = createVitestWorkerRun(env, getVitestWorkerDescriptor());
+  const parent = getVitestWorkerDescriptor();
+  const workers = parent ? createVitestWorkerRun(env, parent) : undefined;
   let result;
   try {
-    result = await runVitestShutdownCommand({
-      args,
-      nodeArgs: ["--import", pathToFileURL(path.join(repo, "scripts/tsx.mjs")).href],
-      cwd: root,
-      env,
-      workerRun: workers,
-    });
+    result = await runVitestShutdownCommand({ args, cwd: root, env, workerRun: workers });
   } finally {
-    await workers.dispose();
+    await workers?.dispose();
   }
   const { code, stdout, stderr } = result;
   const output = stdout + stderr;

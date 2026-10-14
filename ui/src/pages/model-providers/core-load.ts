@@ -2,7 +2,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 import type { ControllerHost } from "./page-controller.ts";
@@ -19,16 +18,12 @@ type CoreLoadOptions = {
   onStart: (reason: ModelProviderRefreshReason) => void;
   onComplete: (result: CoreRequest & { data: ModelProvidersData }) => void;
   onCatalogComplete: (result: ModelCatalogResult) => void;
-  refreshPublication: () => void;
 };
 
 export class ModelProviderCoreLoader {
   private active = false;
-  private publicationPending = false;
   private catalogRequest: AbortController | null = null;
   catalogError: string | null = null;
-  // The latest explicit Retry includes one that has already settled.
-  catalogGeneration = 0;
   private request: AbortController | null = null;
 
   constructor(
@@ -63,7 +58,6 @@ export class ModelProviderCoreLoader {
     const request = new AbortController();
     const ownsResult = () => this.catalogRequest === request && isCurrent();
     this.catalogRequest = request;
-    this.catalogGeneration += 1;
     this.catalogError = null;
     this.host.requestUpdate();
     try {
@@ -87,7 +81,6 @@ export class ModelProviderCoreLoader {
       if (this.catalogRequest === request) {
         this.catalogRequest = null;
         this.host.requestUpdate();
-        this.flushPublication();
       }
     }
   }
@@ -98,15 +91,8 @@ export class ModelProviderCoreLoader {
     reason: ModelProviderRefreshReason,
   ): Promise<void> {
     if (reason === "publication" && (this.active || this.catalogLoading)) {
-      this.publicationPending = true;
+      // Catalog changes during an existing read are best effort until the next refresh.
       return;
-    }
-    if (reason === "publication") {
-      if (this.publicationPending) {
-        // Auth refresh can create a display copy after this publication was queued.
-        invalidateModelCatalogCache(client, { agentId });
-      }
-      this.publicationPending = false;
     }
     this.request?.abort();
     const request = new AbortController();
@@ -134,26 +120,15 @@ export class ModelProviderCoreLoader {
         this.request = null;
         this.active = false;
         this.host.requestUpdate();
-        this.flushPublication();
       }
     }
   }
 
   invalidate(): void {
     this.resetCatalog();
-    this.publicationPending = false;
     this.active = false;
     this.request?.abort();
     this.request = null;
     this.host.requestUpdate();
-  }
-
-  private flushPublication(): void {
-    // Publish after the current completion has applied its data.
-    queueMicrotask(() => {
-      if (this.publicationPending && !this.active && !this.catalogLoading) {
-        this.options.refreshPublication();
-      }
-    });
   }
 }

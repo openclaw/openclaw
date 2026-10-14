@@ -16,7 +16,9 @@ commit notifications; stores keep their existing data and operation contracts.
 ## Configure PostgreSQL
 
 Use a PostgreSQL database dedicated to OpenClaw and a role that can create schemas
-and tables. Put its connection DSN in a secret, then configure a SecretRef:
+and tables. PostgreSQL 16 or newer and UTF8 server and client encoding are required;
+admission checks these once per physical store load. No extensions are installed
+by the engine. Put its connection DSN in a secret, then configure a SecretRef:
 
 ```json5
 {
@@ -149,8 +151,16 @@ version. Admission checks run once per physical store per process load, and
 workers and handles reuse the admitted facts. Confirmed commits and uncertain
 commit outcomes invalidate cached store facts through the anchor's write token.
 
-PostgreSQL catalog admission captures columns, keys, checks, and indexes from the
-server in one consistent read. These facts are separate from the anchor's SQLite
+PostgreSQL catalog admission captures column types, nullability, exact defaults,
+keys, CHECK expressions, index definitions (including partial predicates), and
+trigger definitions and function bodies from the server in one consistent read.
+Bootstrap and migrations record a fingerprint of these PostgreSQL-deparsed facts,
+a hash of the generated DDL for the active schema, and the server major version.
+Startup compares the live fingerprint and the build's DDL hash with that record.
+A mismatch refuses admission and names the recovery step. After a server-major
+upgrade, admission compares the live catalog with generated DDL in a temporary
+namespace, removes that namespace, and records the new fingerprint only on a
+match. Unsealed pilot/ported stores receive the same one-time comparison. These facts are separate from the anchor's SQLite
 catalog. Ordinary data commits retain schema admission; schema owners publish
 replacement facts after committed DDL. Optional SQLite WAL, checkpoint, and
 page-reclamation work does not apply to PostgreSQL. Explicit SQLite integrity,
@@ -220,29 +230,33 @@ not open a database. Keep the manifest and its captured originals intact, then
 use `openclaw database port --resume <manifest>` or `--rollback <manifest>`.
 
 Fresh stores bootstrap from generated PostgreSQL DDL at the current store schema
-version. PostgreSQL forward migrations are not available until schema lockstep
-tooling lands. A version mismatch refuses admission; restore a matching backup
-with its matching OpenClaw version, or keep the existing version until a supported
-migration exists. Never edit the schema version to bypass admission.
+version. Older stores run owner-supplied consecutive forward migrations under the
+PostgreSQL writer transaction and advisory lock. A failure rolls back the pending
+steps and their metadata; admitted facts publish only after commit. Each step
+compares its result with the generated destination DDL in a temporary namespace
+before recording the DDL hash and live catalog fingerprint. A missing migration
+refuses admission. Newer stores require a compatible binary, or a reverse port
+with a compatible binary before downgrade. Never edit schema metadata to bypass
+admission.
 
 The generated shared-state `state.postgres.sql` and `fragment-*.postgres.sql`
 files contain runtime DDL only. Their caller supplies the transaction and
 `search_path`; no second wrapped copy is generated. For manual readiness checks,
 see [applying the generated state DDL](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation).
-The agent readiness artifact remains wrapped until the agent-store cutover.
+The generated agent DDL likewise leaves the transaction and search path to its owner.
 
 PostgreSQL text cannot contain NUL characters. Values containing NUL fail with an
 engine error. Search/vector capabilities remain store-specific; selecting an
 engine does not add PostgreSQL support to an unported store.
 
-| Failure                                  | Next step                                                                                               |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Missing or unresolved connection secret  | Configure `database.postgres.connection` and verify the SecretRef provider is available to the Gateway. |
-| Unreachable PostgreSQL server            | Check the DSN, network access, role permissions, and server availability.                               |
-| Store UUID mismatch                      | Restore the matching anchor and PostgreSQL schema; do not pair an anchor with another store.            |
-| Newer or otherwise mismatched schema     | Use the matching OpenClaw version or restore its matching backup; do not force a downgrade.             |
-| Gateway running during PostgreSQL backup | Stop through the service owner, then rerun the backup command.                                          |
-| Update target lacks PostgreSQL support   | Stay on the current version or reverse-port with the current compatible binary before retrying.         |
+| Failure                                   | Next step                                                                                               |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Missing or unresolved connection secret   | Configure `database.postgres.connection` and verify the SecretRef provider is available to the Gateway. |
+| Unreachable PostgreSQL server             | Check the DSN, network access, role permissions, and server availability.                               |
+| Store UUID mismatch                       | Restore the matching anchor and PostgreSQL schema; do not pair an anchor with another store.            |
+| Newer schema or missing forward migration | Use a compatible OpenClaw binary; reverse-port with that binary before a downgrade.                     |
+| Gateway running during PostgreSQL backup  | Stop through the service owner, then rerun the backup command.                                          |
+| Update target lacks PostgreSQL support    | Stay on the current version or reverse-port with the current compatible binary before retrying.         |
 
 ## Observe database work
 

@@ -129,6 +129,9 @@ On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
 Snapshots stay in bounded process memory until expiry or session cleanup.
+The built-in runtime retains the prepared provider prefix instead of a second copy
+of conversation history. Forks convert only later publications and the side question;
+HTTP continuations retain the full prefix even when the parent sends only a suffix.
 Read-only forks do not acquire workspace placement authority, so a parent's
 pending placement publication does not block them. Normal parent settlement and
 usage updates preserve the fork's read authority. Session reset or deletion
@@ -168,7 +171,7 @@ releasing request resources. Released opaque-requester and synchronous lifecycle
 methods remain deprecated compatibility routes; actual use shares one warning
 budget per plugin and publication family. See
 [GitHub publication migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
-for the method mapping, callback ordering, and next-major removal contract.
+for the method mapping, callback ordering, and ordinary stable removal contract.
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:
 
@@ -241,6 +244,11 @@ nested objects and byte buffers. Produce a new value for a later update.
 Registered callables retain their instance scope, receiver binding, and lifecycle
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
+
+`before_tool_call` inputs and approval parameters retain detached snapshots so
+plugin mutations cannot alter caller arguments or an approved request. These
+snapshots reject shared memory in the cloned graph; properties omitted by
+structured cloning do not cross this boundary.
 
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async
@@ -456,8 +464,10 @@ explicit `close()` do not abort the signal; an aborted signal never authorizes
 replaying an acknowledged or unknown-outcome write.
 The deprecated `withOpenClawAgentDatabaseRuntime` and
 `withOpenClawAgentDatabaseAsync` retain their native callbacks and admission
-ordering, including the latter's post-integrity, pre-repair checkpoint, until
-the next Plugin SDK major. Awaiting those callbacks does not move SQL off-thread.
+ordering, including the latter's post-integrity, pre-repair checkpoint, through
+2026-12-31. Removal ships in the first January 2027 stable release; see the
+[SQLite migration guide](/plugins/sdk-migration/sqlite-async#debug-proxy-capture-and-raw-sqlite).
+Awaiting those callbacks does not move SQL off-thread.
 
 Transcript assertion composition preserves prepared source checks independently
 of opaque SDK callbacks. Cold restoration can recheck those prepared components

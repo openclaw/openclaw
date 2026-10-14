@@ -12,8 +12,9 @@ export function installVitestShutdownCancellation({ root, preload }) {
     fs.renameSync(file(`${name}.tmp`), file(name));
   };
 
-  const fixture = fileURLToPath(new URL("./vitest-fork-shutdown.mjs", import.meta.url));
-  if (process.argv.some((arg, index) => arg === root && process.argv[index - 1] === fixture)) {
+  if (
+    process.argv.includes(fileURLToPath(new URL("./vitest-fork-shutdown.mjs", import.meta.url)))
+  ) {
     const spawn = childProcess.spawn;
     childProcess.spawn = (command, args, options) => {
       const child = spawn(command, args, {
