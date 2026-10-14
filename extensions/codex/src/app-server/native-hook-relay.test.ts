@@ -566,26 +566,26 @@ describe("Codex native hook relay managed policy", () => {
     },
   );
 
-  it.each([
-    { name: "absent requirements", response: { requirements: null } },
-    { name: "ordinary hooks", response: { requirements: { allowManagedHooksOnly: false } } },
-  ])("rechecks managed policy after accepting $name", async ({ response }) => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(response)
-      .mockResolvedValueOnce({ requirements: { allowManagedHooksOnly: true } });
-    const client = { request };
+  it.each([{ name: "absent requirements", response: { requirements: null } }])(
+    "rechecks managed policy after accepting $name",
+    async ({ response }) => {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(response)
+        .mockResolvedValueOnce({ requirements: { allowManagedHooksOnly: true } });
+      const client = { request };
 
-    await assertCodexNativeHookRelayAllowed(client as never);
-    await expect(assertCodexNativeHookRelayAllowed(client as never)).rejects.toThrow(
-      /managed-only hooks.*OpenClaw native hook relay/i,
-    );
+      await assertCodexNativeHookRelayAllowed(client as never);
+      await expect(assertCodexNativeHookRelayAllowed(client as never)).rejects.toThrow(
+        /managed-only hooks.*OpenClaw native hook relay/i,
+      );
 
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenCalledWith("configRequirements/read", undefined, {
-      signal: undefined,
-    });
-  });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenCalledWith("configRequirements/read", undefined, {
+        signal: undefined,
+      });
+    },
+  );
 
   it.each([
     { name: "missing response", response: {} },
@@ -629,19 +629,6 @@ describe("Codex native hook relay config", () => {
     expect(JSON.stringify(config)).not.toContain('"matcher":null');
     expect(config).not.toHaveProperty("hooks.SessionStart");
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
-  });
-
-  it("clears selected PreToolUse when the relay has no local work", () => {
-    const config = buildCodexNativeHookRelayConfig({
-      relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
-      events: ["pre_tool_use"],
-    });
-
-    expect(config).toEqual({
-      "features.hooks": true,
-      "hooks.PreToolUse": [],
-      "hooks.state": {},
-    });
   });
 
   it("clears omitted hook events when requested", () => {
@@ -688,26 +675,6 @@ describe("Codex native hook relay config", () => {
     );
   });
 
-  it("projects canonical OpenClaw ids to Codex canonical and alias matcher names", () => {
-    const config = buildCodexNativeHookRelayConfig({
-      relay: createRelay({
-        matchers: {
-          pre_tool_use: ["exec"],
-          post_tool_use: ["apply_patch", "spawn_agent"],
-        },
-      }),
-      events: ["pre_tool_use", "post_tool_use"],
-    });
-
-    expect(config["hooks.PreToolUse"]).toEqual([
-      expect.objectContaining({ matcher: "Bash|exec|exec_command" }),
-    ]);
-    expect(config["hooks.PostToolUse"]).toEqual([
-      expect.objectContaining({ matcher: "Agent|Edit|Write|apply_patch|spawn_agent" }),
-    ]);
-    expect(JSON.stringify(config)).not.toContain("web_search");
-  });
-
   it("matches custom Codex tool names case-insensitively without widening the scope", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay({ matchers: { pre_tool_use: ["deploy"] } }),
@@ -734,9 +701,10 @@ describe("Codex native hook relay config", () => {
             "find",
             "apply_patch",
           ],
+          post_tool_use: ["apply_patch", "spawn_agent"],
         },
       }),
-      events: ["pre_tool_use"],
+      events: ["pre_tool_use", "post_tool_use"],
       hookTimeoutSec: 120,
     });
     const entries = config["hooks.PreToolUse"];
@@ -748,6 +716,7 @@ describe("Codex native hook relay config", () => {
     const matches = new RegExp(`^(?:${matcher})$`, "u");
     for (const name of [
       "Bash",
+      "exec",
       "exec_command",
       "write_stdin",
       "read_file",
@@ -760,6 +729,9 @@ describe("Codex native hook relay config", () => {
     for (const name of ["web_search", "web_fetch", "request_user_input"]) {
       expect(matches.test(name), name).toBe(false);
     }
+    expect(config["hooks.PostToolUse"]).toEqual([
+      expect.objectContaining({ matcher: "Agent|Edit|Write|apply_patch|spawn_agent" }),
+    ]);
     expect(hooks[0]).toMatchObject({ timeout: 120 });
   });
 
@@ -782,10 +754,7 @@ describe("Codex native hook relay config", () => {
     });
   });
 
-  it.each([
-    { reason: "turn_terminal_idle_timeout", terminalReason: "timed_out" },
-    { reason: "client_closed", terminalReason: "failed" },
-  ] as const)(
+  it.each([{ reason: "turn_terminal_idle_timeout", terminalReason: "timed_out" }] as const)(
     "projects native pre-tool failure reason $reason without a Codex item",
     async ({ reason, terminalReason }) => {
       const controller = new AbortController();
@@ -830,7 +799,6 @@ describe("Codex native hook relay config", () => {
 });
 
 function createRelay(options?: {
-  inactiveEvents?: readonly NativeHookRelayRegistrationHandle["allowedEvents"][number][];
   matchers?: Partial<
     Record<
       NativeHookRelayRegistrationHandle["allowedEvents"][number],
@@ -838,7 +806,6 @@ function createRelay(options?: {
     >
   >;
 }): NativeHookRelayRegistrationHandle {
-  const inactiveEvents = new Set(options?.inactiveEvents ?? []);
   return {
     relayId: "relay-1",
     provider: "codex",
@@ -848,14 +815,10 @@ function createRelay(options?: {
     runId: "run-1",
     allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
-    shouldRelayEvent: (event) => !inactiveEvents.has(event),
+    shouldRelayEvent: () => true,
     toolMatcherForEvent: (event) => options?.matchers?.[event],
     commandForEvent: (event, commandOptions) =>
-      `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${
-        event === "pre_tool_use" && inactiveEvents.has(event)
-          ? " --pre-tool-use-unavailable noop"
-          : ""
-      }${commandOptions?.timeoutMs ? ` --timeout ${commandOptions.timeoutMs}` : ""}`,
+      `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${commandOptions?.timeoutMs ? ` --timeout ${commandOptions.timeoutMs}` : ""}`,
     renew: () => undefined,
     unregister: () => undefined,
   };

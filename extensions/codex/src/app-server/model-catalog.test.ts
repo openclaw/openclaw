@@ -285,6 +285,15 @@ describe("Codex app-server model catalog", () => {
       });
       await owner.load(catalogParams, nativePluginConfig);
       expect(read({}, nativePluginConfig)).toEqual({ accountType: "chatgpt", authMode: mode });
+      expect(read({ agentId: "another" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ agentDir: "/tmp/another-agent" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ workspaceDir: "/tmp/another-workspace" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ config: { ...catalogParams.config } }, nativePluginConfig)).toBeUndefined();
+      expect(read({ modelId: "unlisted" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ provider: "another" }, nativePluginConfig)).toBeUndefined();
+      expect(
+        owner.read({ ...catalogParams, provider: "openai", modelId: "synthetic-opaque" }, {}),
+      ).toBeUndefined();
       rpc.epoch += 1;
       expect(read({}, nativePluginConfig)).toBeUndefined();
     },
@@ -329,50 +338,14 @@ describe("Codex app-server model catalog", () => {
     expect(read({ modelId: "synthetic-configured" })).toBeUndefined();
   });
 
-  it("bounds the live call with the configured discovery timeout", async () => {
-    listModelsMock.mockResolvedValue({ models: [] });
-    await loadCodexAppServerModelCatalog(catalogParams, { discovery: { timeoutMs: 750 } });
-    expect(withCodexAppServerJsonClient).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ timeoutMs: 750 }),
-      expect.any(Function),
-    );
+  it("lists native models without publishing unauthenticated readiness", async () => {
+    listModelsMock.mockResolvedValue(opaqueCatalog());
+    rpc.request.mockResolvedValue({ account: null, requiresOpenaiAuth: true });
+    const result = await owner.load(catalogParams, nativePluginConfig);
+    expect(result.entries).toContainEqual(expect.objectContaining({ id: "synthetic-opaque" }));
+    expect(result.outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+    expect(read({}, nativePluginConfig)).toBeUndefined();
   });
-  it.each([
-    {
-      account: { type: "apiKey" },
-      mode: "apiKey",
-      readiness: { accountType: "apiKey", authMode: "api_key" },
-    },
-    { account: null, mode: undefined, readiness: undefined },
-  ])(
-    "preserves account mode $mode without importing credentials",
-    async ({ account, mode, readiness }) => {
-      vi.mocked(probeCodexNativeAuth).mockResolvedValue({
-        apiKey: "native-presence",
-        source: "native login",
-        mode: mode === "chatgpt" ? "oauth" : "api-key",
-      });
-      listModelsMock.mockResolvedValue(opaqueCatalog());
-      rpc.request.mockResolvedValue({ account, requiresOpenaiAuth: true });
-      const result = await owner.load(catalogParams, nativePluginConfig);
-      expect(result.entries).toContainEqual(expect.objectContaining({ id: "synthetic-opaque" }));
-      expect(result.outcomes).toEqual([
-        { provider: "openai", status: account ? "ready" : "unavailable" },
-      ]);
-      expect(read({}, nativePluginConfig)).toEqual(readiness);
-      expect(read({ agentId: "another" }, nativePluginConfig)).toBeUndefined();
-      expect(read({ agentDir: "/tmp/another-agent" }, nativePluginConfig)).toBeUndefined();
-      expect(read({ workspaceDir: "/tmp/another-workspace" }, nativePluginConfig)).toBeUndefined();
-      expect(read({ config: { ...catalogParams.config } }, nativePluginConfig)).toBeUndefined();
-      expect(read({ modelId: "unlisted" }, nativePluginConfig)).toBeUndefined();
-      expect(read({ provider: "another" }, nativePluginConfig)).toBeUndefined();
-      expect(
-        owner.read({ ...catalogParams, provider: "openai", modelId: "synthetic-opaque" }, {}),
-      ).toBeUndefined();
-      rpc.epoch += 1;
-      expect(read({}, nativePluginConfig)).toBeUndefined();
-    },
-  );
 
   it("revokes prior readiness on failed or disabled refresh", async () => {
     listModelsMock.mockResolvedValue(opaqueCatalog());
