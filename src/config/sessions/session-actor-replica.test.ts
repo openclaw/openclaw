@@ -144,7 +144,7 @@ function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   return snapshot;
 }
 
-it.each(["entry", "transcript"] as const)(
+it.each(["entry", "transcript", "plugin keys"] as const)(
   "evicts old replicas for large %s strings and releases replaced bytes",
   async (payload) => {
     await withReplica(({ replica, load }) => {
@@ -165,8 +165,12 @@ it.each(["entry", "transcript"] as const)(
       const large = "x".repeat(5 * 1024 * 1024);
       const install = (label: string) => {
         const next = load();
-        if (payload === "entry") {
+        if (payload !== "transcript") {
           next.entry = { sessionId: "replica-session", updatedAt: 1, label };
+          if (payload === "plugin keys") {
+            next.entry.label = "before";
+            next.entry.pluginExtensions = { fixture: { [label]: null } };
+          }
         }
         expect(replica.beginRead().install(next)).toBe(true);
         if (payload === "transcript") {
@@ -194,7 +198,7 @@ it.each(["entry", "transcript"] as const)(
         const oversized = install(large);
         expect(replica.read()).toBe(oversized);
         const small = installSibling();
-        expect(replica.read()).toBeUndefined();
+        expect(replica.read() === undefined).toBe(true);
         expect(sibling.read()).toBe(small);
         install(large);
         expect(sibling.read()).toBeUndefined();
