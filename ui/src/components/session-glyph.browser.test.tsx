@@ -23,7 +23,15 @@ describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
         view?.unmount();
         view = mountSolid(
           () => (
-            <a style="display:flex;align-items:center;gap:8px;width:220px;min-height:30px">
+            <a
+              style={{
+                display: "flex",
+                "align-items": "center",
+                gap: "8px",
+                width: "220px",
+                "min-height": "30px",
+              }}
+            >
               <SessionGlyph
                 content={
                   kind === "page" ? (

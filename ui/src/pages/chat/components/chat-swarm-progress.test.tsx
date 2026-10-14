@@ -72,7 +72,7 @@ function mountProgress(props: ChatSwarmProgressProps) {
   mountSolid(() => <ChatSwarmProgress {...current()} />, { container });
   return {
     container,
-    update(next: ChatSwarmProgressProps) {
+    update: (next: ChatSwarmProgressProps) => {
       setCurrent(next);
       flush();
     },
