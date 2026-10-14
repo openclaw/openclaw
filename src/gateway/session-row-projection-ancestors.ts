@@ -1,20 +1,15 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
-import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import {
   SessionRowFactsPending,
   withReadySessionRows,
   type SessionRowReadView,
   type SessionRowPreparationOptions,
-  type withPreparedSessionRows,
 } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 import {
@@ -28,6 +23,7 @@ export function createSessionRowRelationReads(owner: {
   env: NodeJS.ProcessEnv;
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   isReady: () => boolean;
+  assertCurrent: () => void;
   preparedContext: () => SessionRowReadView["state"]["rowContext"] | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
   config: () => records.Inputs["cfg"];
@@ -44,12 +40,6 @@ export function createSessionRowRelationReads(owner: {
         return undefined;
       }
       const memory = getSessionActorStorageBinding({});
-      const binding = memory
-        ? undefined
-        : captureIncognitoSessionBinding({
-            ...query,
-            sessionKey: query.key,
-          });
       return owner.inOwnerContext(() => {
         const { key, value: entry } = selectStoredSessionLineage({
           cfg: owner.config(),
@@ -60,31 +50,14 @@ export function createSessionRowRelationReads(owner: {
               const row = owner.lookup({ ...query, agentId, key: storedKey });
               return row?.key === storedKey ? row.sharingEntry : undefined;
             }
-            if (memory) {
-              const selected = captureSessionActorStorageOwner({
-                agentId,
-                sessionKey: storedKey,
-                sessionActor: memory,
-              })!;
-              return selected.owner?.readSession(storedKey, selected.authority)?.entry;
-            }
-            if (binding && binding.actor.agentId === agentId) {
-              binding.admissionSignal?.throwIfAborted();
-              binding.actor.assertReadable();
-              return binding.actor.sessions.readSharing(storedKey)?.entry;
-            }
-            const database = getOpenIncognitoAgentDatabase(
-              agentId,
-              resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: owner.env }),
+            const selected = captureSessionActorStorageOwner(
+              { agentId, sessionKey: storedKey, sessionActor: memory, env: owner.env },
+              memory?.authority ?? {
+                assertCurrent: owner.assertCurrent,
+                authorize: owner.assertCurrent,
+              },
             );
-            try {
-              return (
-                database && readCommittedIncognitoSessionSharing(database.db, storedKey)?.entry
-              );
-            } catch {
-              // A pending private write cannot supply optional display enrichment yet.
-              return undefined;
-            }
+            return selected?.owner?.readSession(storedKey, selected.authority)?.entry;
           },
         });
         if (!entry) {
@@ -240,7 +213,7 @@ export function createSessionRowAncestorReads(owner: {
       queries: (config: records.Inputs["cfg"]) => readonly records.Lookup[],
       consume: (read: SessionRowReadView) => T,
       options?: SessionRowPreparationOptions,
-    ): ReturnType<typeof withPreparedSessionRows<T>> {
+    ): Promise<T> {
       const selected = options?.includeAncestors
         ? (config: records.Inputs["cfg"]) => {
             const targets = queries(config);
@@ -315,11 +288,8 @@ export function createSessionRowAncestorReads(owner: {
               },
               options?.selection ? owner.prepareSelection : undefined,
             );
-            if (prepared.kind === "pending") {
+            if (prepared !== membershipPending) {
               return prepared;
-            }
-            if (prepared.value !== membershipPending) {
-              return { kind: "complete", value: prepared.value };
             }
           } catch (error) {
             if (!(error instanceof SessionRowFactsPending)) {

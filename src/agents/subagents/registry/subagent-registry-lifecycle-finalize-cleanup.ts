@@ -102,6 +102,7 @@ export const finalizeSubagentCleanup = async (
   const finishCleanup = (
     skipRequesterSettleWake: boolean,
     completionReason?: SubagentLifecycleEndedReason,
+    finalizeDelivery?: (draft: SubagentRunRecord) => void,
   ) =>
     finishSubagentCleanup(context, {
       entry,
@@ -111,6 +112,7 @@ export const finalizeSubagentCleanup = async (
       isCurrent,
       skipRequesterSettleWake,
       completionReason,
+      finalizeDelivery,
     });
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     await commit((draft) => {
@@ -130,7 +132,7 @@ export const finalizeSubagentCleanup = async (
   }
   if (announceOutcome === "delivered" || announceOutcome === "intentional_non_delivery") {
     let terminalNonDelivery = false;
-    await commit((draft) => {
+    const finalizeDelivery = (draft: SubagentRunRecord) => {
       terminalNonDelivery =
         announceOutcome === "intentional_non_delivery" && draft.delivery?.status === "failed";
       const delivery = ensureDeliveryState(draft);
@@ -165,8 +167,18 @@ export const finalizeSubagentCleanup = async (
       const completion = ensureCompletionState(draft);
       completion.fallbackResultText = undefined;
       completion.fallbackCapturedAt = undefined;
-    });
-    await finishCleanup(terminalNonDelivery, entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE);
+    };
+    if (announceOutcome === "delivered") {
+      // The send receipt is already durable; finish its bookkeeping in one write.
+      await finishCleanup(
+        false,
+        entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE,
+        finalizeDelivery,
+      );
+    } else {
+      await commit(finalizeDelivery);
+      await finishCleanup(terminalNonDelivery, entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE);
+    }
     return;
   }
 
@@ -230,7 +242,8 @@ export const finalizeSubagentCleanup = async (
           delivery.createdAt ??= attemptedAt;
           delivery.lastAttemptAt = attemptedAt;
           delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
-          delivery.lastError = "announce deferred or direct delivery failed";
+          // The announce owner records the concrete failure before retry bookkeeping.
+          delivery.lastError ??= "completion announcement did not report a delivery outcome";
         }
         delivery.status = "pending";
         delivery.payload ??= loadPendingFinalDeliveryPayload(draft);
@@ -371,6 +384,7 @@ async function finishSubagentCleanup(
     skipRequesterSettleWake?: boolean;
     completionReason?: SubagentLifecycleEndedReason;
     giveUpReason?: "expiry" | "permanent_failure";
+    finalizeDelivery?: (draft: SubagentRunRecord) => void;
   },
 ): Promise<void> {
   const { cleanup, cleanupGeneration, stateContext, isCurrent } = args;
@@ -404,6 +418,7 @@ async function finishSubagentCleanup(
     skipRequesterSettleWake: args.skipRequesterSettleWake,
     stateContext,
     isCurrent: cleanupOwnerCurrent,
+    finalizeDelivery: args.finalizeDelivery,
   });
   entry = getCurrentSubagentRunOwner(context.options.runs, entry) ?? entry;
   const endedHookOwnerCurrent = () => {

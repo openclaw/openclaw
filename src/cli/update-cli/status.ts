@@ -41,6 +41,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { VERSION } from "../../version.js";
+import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 
@@ -459,7 +460,7 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
       }
       if (abandonedRun) {
         defaultRuntime.log(
-          "Abandoned update detected; the Gateway will reconcile its recorded outcome. Run openclaw update repair to reconcile it now.",
+          `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
         );
       }
       const report = renderUpdateRunReport(

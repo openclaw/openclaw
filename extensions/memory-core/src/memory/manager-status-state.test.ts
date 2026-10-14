@@ -4,12 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it } from "vitest";
-import {
-  collectMemoryStatusAggregate,
-  collectMemoryStorageStatus,
-  resolveStatusProviderInfo,
-} from "./manager-status-state.js";
+import { assert, describe, expect, it } from "vitest";
+import { collectMemoryStatusSnapshot, resolveStatusProviderInfo } from "./manager-status-state.js";
 
 describe("memory manager status state", () => {
   it("distinguishes retained cache payload, WAL, and reusable space without changing the database", () => {
@@ -21,6 +17,8 @@ describe("memory manager status state", () => {
         PRAGMA journal_mode = WAL;
         PRAGMA wal_autocheckpoint = 0;
         CREATE TABLE memory_embedding_cache (embedding BLOB);
+        CREATE TABLE memory_index_sources (source TEXT);
+        CREATE TABLE memory_index_chunks (source TEXT, text TEXT, embedding BLOB);
         CREATE TABLE other_owner (payload BLOB);
         INSERT INTO other_owner VALUES (zeroblob(1048576));
         DELETE FROM other_owner;
@@ -29,7 +27,14 @@ describe("memory manager status state", () => {
       insertEmbedding.run(encodeMemoryEmbedding([1, 2]));
       insertEmbedding.run(encodeMemoryEmbedding([]));
       const before = db.prepare("SELECT total_changes() AS changes").get();
-      const storage = collectMemoryStorageStatus(db, databasePath);
+      const readStatus = () =>
+        collectMemoryStatusSnapshot(db, databasePath, {
+          sources: ["memory"],
+          cacheEnabled: true,
+          includeStorage: true,
+        });
+      const storage = readStatus().storage;
+      assert.isDefined(storage);
       expect(storage.embeddingCacheEntries).toBe(2);
       expect(storage.embeddingCacheBytes).toBe(16);
       expect(storage.databaseBytes).toBe(fs.statSync(databasePath).size);
@@ -38,9 +43,9 @@ describe("memory manager status state", () => {
       expect(storage.reusableBytes).toBeGreaterThanOrEqual(1048576);
       expect(db.prepare("SELECT total_changes() AS changes").get()).toEqual(before);
       db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      expect(collectMemoryStorageStatus(db, databasePath).walBytes).toBe(0);
+      expect(readStatus().storage?.walBytes).toBe(0);
       db.exec("VACUUM");
-      expect(collectMemoryStorageStatus(db, databasePath)).toMatchObject({
+      expect(readStatus().storage).toMatchObject({
         reusableBytes: 0,
         embeddingCacheEntries: 2,
         embeddingCacheBytes: 16,
@@ -124,10 +129,14 @@ describe("memory manager status state", () => {
       `);
       payloadReads = 0;
 
-      const status = collectMemoryStatusAggregate({ db, sources: ["memory", "sessions"] });
+      const status = collectMemoryStatusSnapshot(db, ":memory:", {
+        sources: ["memory", "sessions"],
+        cacheEnabled: false,
+        includeStorage: false,
+      });
 
       expect(payloadReads).toBe(0);
-      expect(status).toEqual({
+      expect(status.aggregate).toEqual({
         files: 2,
         chunks: 2,
         sourceCounts: [
@@ -146,6 +155,7 @@ describe("memory manager status state", () => {
       db.exec(`
         CREATE TABLE memory_index_sources (source TEXT);
         CREATE TABLE memory_index_chunks (source TEXT, text TEXT, embedding BLOB);
+        CREATE TABLE memory_embedding_cache (embedding BLOB);
         INSERT INTO memory_index_sources VALUES ('memory'), ('memory'), ('sessions');
       `);
       const insertChunk = db.prepare("INSERT INTO memory_index_chunks VALUES (?, ?, ?)");
@@ -153,11 +163,11 @@ describe("memory manager status state", () => {
       insertChunk.run("memory", "abc", encodeMemoryEmbedding([]));
       insertChunk.run("sessions", "session", encodeMemoryEmbedding([3]));
       expect(
-        collectMemoryStatusAggregate({
-          db,
-          includeChunkBytes: true,
+        collectMemoryStatusSnapshot(db, ":memory:", {
+          cacheEnabled: false,
+          includeStorage: true,
           sources: ["memory", "sessions"],
-        }),
+        }).aggregate,
       ).toEqual({
         files: 3,
         chunks: 3,
@@ -167,13 +177,11 @@ describe("memory manager status state", () => {
         ],
       });
       expect(
-        collectMemoryStatusAggregate({
-          db,
-          includeChunkBytes: true,
+        collectMemoryStatusSnapshot(db, ":memory:", {
+          cacheEnabled: false,
+          includeStorage: true,
           sources: ["memory"],
-          sourceFilterSql: " AND source IN (?)",
-          sourceFilterParams: ["memory"],
-        }),
+        }).aggregate,
       ).toEqual({
         files: 2,
         chunks: 2,
@@ -181,7 +189,11 @@ describe("memory manager status state", () => {
       });
       db.exec("DELETE FROM memory_index_sources; DELETE FROM memory_index_chunks;");
       expect(
-        collectMemoryStatusAggregate({ db, sources: ["memory"], includeChunkBytes: true }),
+        collectMemoryStatusSnapshot(db, ":memory:", {
+          sources: ["memory"],
+          cacheEnabled: false,
+          includeStorage: true,
+        }).aggregate,
       ).toEqual({
         files: 0,
         chunks: 0,

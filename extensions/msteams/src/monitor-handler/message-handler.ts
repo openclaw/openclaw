@@ -217,7 +217,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       teamId,
       log,
     });
-    const { route, deadline: preprocessingDeadline } = threadRouting;
+    const { route } = threadRouting;
 
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
@@ -300,7 +300,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       mediaAllowHosts: currentMSTeamsCfg?.mediaAllowHosts,
       mediaAuthAllowHosts: currentMSTeamsCfg?.mediaAuthAllowHosts,
       graphMediaFallback: currentMSTeamsCfg?.graphMediaFallback,
-      deadline: preprocessingDeadline,
       log,
     });
     if (!content) {

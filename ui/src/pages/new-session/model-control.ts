@@ -30,13 +30,13 @@ import {
   reconcileDraftModelSelection,
   createEmptyDraftModelMetadata,
   isDraftAccountModelAvailable,
-  resolveDraftAgentRuntime,
   resolveDraftModelControls,
   resolveDraftModelUnavailableReason,
   resolveDraftModelSelectionBlockedReason,
   type NewSessionModelMetadata,
 } from "./model-target.ts";
 import { hasNewSessionModelPreference, type NewSessionPreference } from "./preferences.ts";
+import { createDraftAgentRuntimeResolver } from "./runtime-resolution.ts";
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 
@@ -68,6 +68,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private pendingContext: ApplicationContext | undefined;
   private pendingSelectionGeneration = 0;
   private readonly catalogTargets: CatalogTargetDiscovery;
+  private resolveRuntime = createDraftAgentRuntimeResolver();
 
   constructor(
     private readonly notify: () => void,
@@ -307,6 +308,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   }
 
   reset() {
+    this.resolveRuntime = createDraftAgentRuntimeResolver();
     this.invalidate(true);
   }
 
@@ -545,7 +547,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       context: ApplicationContext | undefined;
     } = { agent: this.pendingAgent, context: this.pendingContext },
   ) {
-    return resolveDraftAgentRuntime({
+    return this.resolveRuntime({
       model: this.effectiveModel,
       agentRuntime: this.agentRuntime,
       agent: options.agent,

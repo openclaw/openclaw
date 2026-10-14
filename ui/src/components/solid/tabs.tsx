@@ -13,6 +13,9 @@ export type TabOption = {
   disabled?: boolean;
   className?: string;
   testId?: string;
+  attributes?: JSX.HTMLAttributes<HTMLButtonElement> & {
+    [name: `data-${string}`]: string | number | boolean | undefined;
+  };
 };
 
 export type TabsProps = TabsOptions & {
@@ -82,6 +85,7 @@ export function Tabs(props: TabsProps) {
       <For each={props.items} keyed={(item) => item.value}>
         {(item) => (
           <button
+            {...item().attributes}
             type="button"
             role="tab"
             class={["oc-tab", item().className]}

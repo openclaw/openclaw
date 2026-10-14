@@ -1,6 +1,5 @@
 // Bounded receipt projection, executed by the audit read worker.
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import {
@@ -12,6 +11,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -343,7 +343,7 @@ function operatorApprovalReceiptSnapshotColumns(hasExecutionIdentityTable: boole
 }
 
 function terminalApprovalReceiptPageRows(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   runId: string;
   nowMs: number;
   after?: OperatorApprovalReceiptCursor;
@@ -478,7 +478,7 @@ function operatorApprovalExecutionLinkState(
 
 /** Probe for an authoritative retained approval without scanning the full run history. */
 export function hasOperatorApprovalReceiptsForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     runId: string;
     nowMs?: number;
@@ -501,7 +501,7 @@ export function hasOperatorApprovalReceiptsForRunInDatabase(
 
 /** Summarize at most 128 owner rows; the 129th makes coverage explicitly unknown. */
 export function summarizeOperatorApprovalReceiptsForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     context: OperatorApprovalReceiptContext;
     nowMs?: number;
@@ -575,7 +575,7 @@ export function summarizeOperatorApprovalReceiptsForRunInDatabase(
 
 /** Project authoritative approval rows directly; no generic decision fact is written. */
 export function pageOperatorApprovalReceiptsForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     context: OperatorApprovalReceiptContext;
     after?: OperatorApprovalReceiptCursor;

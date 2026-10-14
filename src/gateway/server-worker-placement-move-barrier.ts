@@ -123,7 +123,12 @@ export function createGatewayWorkerPlacementMoveBarrier(
       params,
       { ...request, action: "move" },
       await params.loadSessionRuntime(),
-      async () => {
+      async ({ workspace }) => {
+        if (workspace.kind === "device-folder") {
+          throw new Error(
+            "Device folders cannot move or Continue on Gateway; reconnect the original device or start a new session.",
+          );
+        }
         request.authorize?.();
         return await request.begin(async (runId) => {
           if (params.persistAbandonedPartial) {

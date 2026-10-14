@@ -12,6 +12,14 @@ Sub-agents use the same profile and tool-policy pipeline as the parent or
 target agent first. After that, OpenClaw applies the sub-agent restriction
 layer.
 
+For a newly created child, a permitted `github_publish` capability is inherited
+when publication is unavailable only in the parent's workspace. The child's own
+workspace must still qualify for Gateway publication. Explicit denies and
+restrictive profile, sender, sandbox, runtime, and inherited policies still
+apply; this does not grant access to another session's repository or credentials.
+Existing children keep their recorded policy. Create a new child after correcting
+a policy that excluded publication.
+
 When settled children resume a requester after `sessions_yield`, the continuation
 keeps the requester policy captured at spawn. The handoff must still belong to
 the current requester session and settled batch, and every child in that batch
@@ -25,7 +33,10 @@ captured policy. The tools reach the CLI only through OpenClaw's policy-filtered
 MCP surface, so native CLI tools stay disabled for the turn and every inherited
 deny still applies. Other CLI backends, node-hosted Claude CLI sessions, and
 settle batches do not regain requester tools. Message-tool-only replies keep
-their existing source-bound `message` grant.
+their existing source-bound `message` grant. When that restricted surface needs
+its own Claude CLI session, the requester's next resumed turn receives the
+completion prompt and reply as quoted context when its account may replay saved
+history; see [CLI backends](/gateway/cli-backends#sessions).
 
 Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
 `message`, `sessions_send`, and the `conversations_*` tools regardless of

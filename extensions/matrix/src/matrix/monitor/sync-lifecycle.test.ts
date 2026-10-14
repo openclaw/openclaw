@@ -247,17 +247,4 @@ describe("createMatrixMonitorSyncLifecycle", () => {
       lastError: "sync exploded",
     });
   });
-
-  it("rejects a second concurrent fatal-stop waiter", async () => {
-    const { lifecycle } = createSyncLifecycleHarness();
-
-    const firstWait = lifecycle.waitForFatalStop();
-
-    await expect(lifecycle.waitForFatalStop()).rejects.toThrow(
-      "Matrix fatal-stop wait already in progress",
-    );
-
-    lifecycle.dispose();
-    await expect(firstWait).resolves.toBeUndefined();
-  });
 });

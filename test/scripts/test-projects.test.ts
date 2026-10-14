@@ -81,12 +81,10 @@ describe("Windows CI partitions", () => {
     assert(first && second);
     const targets = [...first.targets, ...second.targets];
     expect(new Set(targets).size).toBe(targets.length);
-    // Tooling and infra own shared fixtures; the extension catch-all retains
-    // separate plugin processes. The other projects share setup within one part.
+    // Tooling and infra own shared fixtures. Other projects share setup within one part.
     expect([...first.configs].filter((config) => second.configs.has(config))).toEqual([
       "test/vitest/vitest.tooling.config.ts",
       "test/vitest/vitest.infra.config.ts",
-      "test/vitest/vitest.extensions.config.ts",
     ]);
   });
 });
@@ -143,7 +141,8 @@ describe("test runtime prerequisites", () => {
     ],
     ["tui-pty", ["--exclude", "tui/tui-session-identity-pty.e2e.test.ts"], undefined],
     ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
-    ["gateway-core", ["--exclude", "gateway-*.test.ts"], undefined],
+    ["gateway-core", ["--exclude", "gateway-*.test.ts"], "runtime"],
+    ["gateway-core", ["--exclude", "gateway*.test.ts"], undefined],
     ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
     ["infra", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
     [

@@ -15,6 +15,8 @@ The Gateway store, capabilities, `lib/sessions/*` (reconciler, provenance, refre
 - `useApplication()` (from `lib/reactive/context.ts`) returns the same capability object Lit consumers get. Providing it never transfers ownership.
 - One projection per owner and scope. If you need data an owner doesn't publish, extend the owner, not the view.
 
+Projections are adopt-on-use: add just the thin domain wrapper in the same PR as its first production caller, and remove unadopted adapters. Do not restore event projections or lease machinery. Solid's `createProjection` derives a local readonly store; it does not replace `projectSource` or transfer domain authority. See [projections and local stores](idioms.md#projections-and-local-stores-have-different-jobs).
+
 ## Lifetimes
 
 Application → connection/presentation scope → session/pane → view. _Retained_, _presented_, _retiring_, and _disposed_ are different states:

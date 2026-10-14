@@ -1,6 +1,7 @@
 import { receiveMessageOnPort, type MessagePort, type Transferable } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
+import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { nativePortIsOpen } from "./worker-native-port.js";
 
 type TaskPortMessage = { type: "message"; value: unknown } | { type: "messageerror"; error: Error };
@@ -29,6 +30,7 @@ export class NativeWorkerTaskPort {
   }
 
   private readonly receive = (value: unknown) => {
+    observeWorkerMessage(value, "from_worker");
     this.pending.push({ type: "message", value });
     this.drain();
   };
@@ -86,6 +88,7 @@ export class NativeWorkerTaskPort {
         if (!next) {
           return;
         }
+        observeWorkerMessage(next.message, "from_worker");
         this.callbacks.message(next.message);
       }
       // A callback may synchronously join this worker while servicing its successor.
@@ -128,7 +131,9 @@ export class NativeWorkerTaskPort {
 
   postMessage(value: unknown, transferList: readonly Transferable[]): void {
     this.assertAvailable();
+    const bytes = workerMessagePayloadBytes(value);
     this.port.postMessage(value, [...transferList]);
+    observeWorkerMessage(value, "to_worker", "other", bytes ?? null);
   }
 
   close(): void {

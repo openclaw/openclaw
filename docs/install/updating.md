@@ -26,6 +26,10 @@ Before a significant update, [create a verified backup](#before-updating-create-
 Automatic config copies and migration recovery originals are not a full-state
 backup.
 
+## Update implementation contract
+
+**Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
+
 ## Retired tenant-container management
 
 The experimental `openclaw fleet` command has been removed. Updating the host
@@ -241,8 +245,10 @@ in a fresh process using the updated package and its dependencies. This also
 applies to updates driven by 2026.9.4. If an optional read fails, the updater
 prints `candidate-config-read-failed` with the reader's error or exit reason and
 leaves the service definition unchanged. The reader's stderr is not echoed.
-Reads follow the restored package after a rollback. Inspect the reported problem
-with the updated CLI after the update.
+Reads follow the restored package after a rollback. After the update finishes,
+inspect the reported problem with the updated CLI, then run
+`openclaw gateway install --force` with the same `--profile` or `--dev` option as
+the update to refresh the service definition.
 Node and Bun readers run only one child per read. An attempted nested reader
 stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;
@@ -313,6 +319,9 @@ repeated full-tree scans. Content changes inside that private candidate during
 publication are not detected. Its full fingerprint is retained for recovery;
 resumed publication and repair still verify package contents. This optimization
 applies when the installed updater contains it; older updaters keep their checks.
+
+pnpm updates use the installation's own pnpm home and bin directory, even when
+macOS service PATH excludes pnpm. The installed updater must contain this fix.
 
 Native pnpm updates also relocate pnpm 12 launcher paths before publishing them.
 After activation, unresolved launcher targets produce a warning with repair
@@ -440,11 +449,21 @@ For versions that support checks before installation, health checks, config and 
 test Gateway boot on copied state finish before the service stops. The stopped interval
 contains the swap, required migrations, plugin downloads and convergence, and
 service start. Plugin work uses the installed target without requiring a serving
-Gateway. A changed plugin snapshot runs fresh Doctor migrations before restart;
-unchanged plugins do not run another full Doctor pass. The final report records
-downtime through convergence and final verification, plus verification
-results. See
+Gateway. Changed plugins, pending plugin migrations, or deferred model retirement
+run fresh Doctor repairs before restart; required repair failures still block startup.
+After the candidate takes ownership of finalization, optional diagnostics with
+complete lint coverage can run after verified readiness. Their warnings and retry
+commands remain in the update report while the Gateway serves. Missing diagnostic
+selectors cause the checks to run before startup instead.
+The final report records downtime through convergence and final verification,
+plus verification results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
+
+Post-update configuration and settlement reads wait for temporary SQLite
+maintenance custody within the existing update allowance. If that wait expires,
+contention alone preserves automatic Gateway recovery; an actual data-at-risk
+refusal still blocks recovery. Doctor publishes its completion result only after
+its maintenance resources have been released.
 
 Source updates also admit build-artifact ownership and runtime staging access in
 the installed checkout before stopping the Gateway. A retained
@@ -703,6 +722,12 @@ or rollback for it. Do not rewrite identities or delete recovery artifacts.
 
 ### Unfinished publication and rollback
 
+`openclaw update` automatically settles a `publication-complete` operation when
+the live candidate passes the same verification as repair, even when the update
+lease is unchanged. A dry run previews settlement without changing recovery
+artifacts. With an unchanged lease, other unfinished phases still require explicit
+repair.
+
 For an external-helper operation stuck at `prepared`, `publishing`, or
 `publication-complete` whose live package already serves the candidate, run
 `openclaw update repair` from an independent terminal. Repair verifies the
@@ -838,6 +863,9 @@ restarts the Gateway.
 
 Missing state metadata or unverified backup coverage can still produce
 `update-schema-bump-unfenced` with database versions and recovery instructions.
+If npm postinstall emits this typed refusal, the updater reports it without
+retrying the install with optional dependencies omitted. Other install failures
+retain their existing retry behavior.
 Before package commit, let the failed update finish restoring the previous
 package. OpenClaw 2026.9.2 leaves the Gateway service stopped after failed
 post-install verification. After package commit, the old package backup is gone:

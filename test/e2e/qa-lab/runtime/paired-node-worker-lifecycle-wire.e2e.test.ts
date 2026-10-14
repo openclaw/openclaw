@@ -223,17 +223,20 @@ async function expectPublicBundleStatus(params: {
             .map((frame) => {
               const input = JSON.parse(frame.paramsJSON!) as {
                 sequence?: number;
+                acknowledgedBundleGeneration?: number;
                 bundleStatusHash?: string;
                 bundleHashes?: unknown[];
                 retain?: unknown[];
               };
               return {
                 sequence: input.sequence,
+                acknowledgedBundleGeneration: input.acknowledgedBundleGeneration,
                 bundleStatusHash: input.bundleStatusHash,
                 bundleCount: input.bundleHashes?.length,
                 workspaceCount: input.retain?.length,
               };
             }),
+          bundleInstalls: bundleInstallFrames(params.host).length,
           invokeErrors: params.host.invokeErrors.map(String),
           gatewayLogTail: params.gateway.logs().slice(-4_000),
         }),

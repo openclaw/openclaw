@@ -20,7 +20,7 @@ import {
 type PendingInputScope = SessionAccessScope & { agentId: string; sessionId: string };
 const receiptSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
 
-/** Bounded display reconciliation; these durable correlations never authorize replay. */
+/** History-worker display reconciliation; these durable correlations never authorize replay. */
 export function listSessionPendingInputReceipts(
   scope: PendingInputScope,
   options: { runIds: readonly string[] },

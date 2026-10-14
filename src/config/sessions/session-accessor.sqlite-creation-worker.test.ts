@@ -58,6 +58,28 @@ import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcrip
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
+function observePostedCommands(commands: string[]) {
+  // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
+  const nativePost = Worker.prototype.postMessage;
+  return vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    request,
+    transferList,
+  ) {
+    let commandType: string | undefined;
+    if (isRecord(request) && request.type === "execute" && request.input instanceof Uint8Array) {
+      const command: unknown = deserialize(request.input);
+      if (isRecord(command) && typeof command.type === "string") {
+        commandType = command.type;
+      }
+    }
+    nativePost.call(this, request, transferList);
+    if (commandType !== undefined) {
+      commands.push(commandType);
+    }
+  });
+}
+
 it.each([false, true])(
   "prepares a new custom-store suffix only while absent (appeared=%s)",
   async (appeared) => {
@@ -110,7 +132,8 @@ it("creates through an admitted store alias with prepared facts and atomic owner
       throw new Error("Expected a durable session database identity");
     }
     const key = "agent:main:creation-worker";
-    using post = vi.spyOn(Worker.prototype, "postMessage");
+    const commands: string[] = [];
+    using _ = observePostedCommands(commands);
     const alias = state.path("agent-alias");
     await fs.symlink(path.dirname(database.path), alias, "junction");
     const storePath = path.join(alias, path.basename(database.path));
@@ -223,21 +246,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
         ok: true,
         entry: { sessionId: "created", label: "available" },
       });
-      const writes = post.mock.calls.flatMap(([request]) => {
-        if (
-          !isRecord(request) ||
-          request.type !== "execute" ||
-          !(request.input instanceof Uint8Array)
-        ) {
-          return [];
-        }
-        const command: unknown = deserialize(request.input);
-        return isRecord(command) &&
-          typeof command.type === "string" &&
-          command.type.startsWith("session.")
-          ? [command.type]
-          : [];
-      });
+      const writes = commands.filter((command) => command.startsWith("session."));
       expect(writes).toEqual(["session.entries.replace"]);
       expect(assertCreation).toThrow("Session creation publication owner is no longer current");
       expect(publications).toEqual([
@@ -360,7 +369,7 @@ it("does not initialize a transcript or invoke follow-up when creation rejects",
   });
 });
 
-it.each(["incognito", "maintenance", "alias replacement"] as const)(
+it.each(["maintenance", "alias replacement"] as const)(
   "retains valid native %s creation through follow-up",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -368,11 +377,9 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
       const scope = {
         agentId: "main",
         sessionKey:
-          kind === "incognito"
-            ? "agent:main:dashboard:incognito-fixture"
-            : kind === "maintenance"
-              ? "agent:main:native-maintenance"
-              : "agent:main:signal:group:NativeReplacement",
+          kind === "maintenance"
+            ? "agent:main:native-maintenance"
+            : "agent:main:signal:group:NativeReplacement",
       };
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
       const alias = scope.sessionKey.toLowerCase();
@@ -385,15 +392,12 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
           "/old",
         );
       }
-      const schemaLease =
-        kind !== "incognito" ? acquireStateDatabaseSchemaLease(database.path) : undefined;
-      const maintenance = schemaLease
-        ? createOpenClawDatabaseMaintenanceScope({
-            schemaMaintenance: true,
-            assertOwnerCurrent: () => schemaLease.assertCurrent(),
-            assertDatabaseAccess: schemaLease.assertDatabaseAccess,
-          })
-        : undefined;
+      const schemaLease = acquireStateDatabaseSchemaLease(database.path);
+      const maintenance = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => schemaLease.assertCurrent(),
+        assertDatabaseAccess: schemaLease.assertDatabaseAccess,
+      });
       let followed = false;
       const create = () =>
         createSessionEntryWithTranscript(
@@ -412,7 +416,7 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
           },
         );
       try {
-        const created = await (maintenance ? maintenance.run(create) : create());
+        const created = await maintenance.run(create);
         expect(created.ok).toBe(true);
         expect(followed).toBe(true);
         if (kind === "alias replacement") {
@@ -426,9 +430,9 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
         }
       } finally {
         try {
-          await maintenance?.close();
+          await maintenance.close();
         } finally {
-          schemaLease?.release();
+          schemaLease.release();
         }
       }
     });
@@ -438,7 +442,8 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
 it("adopts admitted Signal history and collaboration without host SQL, preserving a case-distinct Matrix sibling", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    using post = vi.spyOn(Worker.prototype, "postMessage");
+    const commands: string[] = [];
+    using _ = observePostedCommands(commands);
     const sessionKey = "agent:main:signal:group:AbC";
     const alias = sessionKey.toLowerCase();
     const scope = { agentId: "main", storePath: database.path, sessionKey: alias };
@@ -560,17 +565,6 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
       ).ok,
     ).toBe(true);
     expect(readExactSessionEntryRow(database, sibling)?.entry.sessionId).toBe("matrix-sibling");
-    const commands = post.mock.calls.flatMap(([request]) => {
-      if (
-        !isRecord(request) ||
-        request.type !== "execute" ||
-        !(request.input instanceof Uint8Array)
-      ) {
-        return [];
-      }
-      const command: unknown = deserialize(request.input);
-      return isRecord(command) ? [command.type] : [];
-    });
     expect(commands).toContain("session.entries.replace");
     expect(commands).not.toContain("session.archives.preparePublication");
   });

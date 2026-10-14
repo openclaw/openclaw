@@ -28,6 +28,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import {
@@ -364,12 +365,12 @@ describe("worker plugin state", () => {
           .spyOn(worker, "postMessage")
           .mockImplementation((message, transferList) => {
             const request = asOptionalRecord(message);
+            const command =
+              request?.type === "execute" && request.input instanceof Uint8Array
+                ? asOptionalRecord(deserialize(request.input))?.type
+                : undefined;
             nativePost(message, transferList);
-            if (
-              request?.type === "execute" &&
-              request.input instanceof Uint8Array &&
-              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
-            ) {
+            if (command === "pluginState." + operation) {
               posted.resolve();
             }
           });
@@ -682,7 +683,7 @@ describe("worker plugin state", () => {
       const options = { namespace, maxEntries: expected.length };
       const sync = createPluginStateSyncKeyedStore(pluginId, options);
       const store = createPluginStateKeyedStore(pluginId, options);
-      const { db } = openOpenClawStateDatabase();
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
       const reads = trackSqliteStatementExecutions(db, ["listing"], (sql) =>
         sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "listing" : null,
       );

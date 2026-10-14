@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import {
   readProviderReviewAcknowledgment,
   retireProviderReviewAcknowledgment,
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   handoff: vi.fn(),
   resolveTarget: vi.fn(),
   resolveAuthorization: vi.fn(),
+  releaseAuthorization: vi.fn(),
 }));
 vi.mock("../../config/sessions/provider-review-store.js", () => ({
   readSessionProviderReview: mocks.read,
@@ -118,6 +120,7 @@ beforeEach(() => {
       assertCurrent,
       assertAdmittedInputCurrent: assertCurrent,
       assertTargetCurrent: assertCurrent,
+      release: mocks.releaseAuthorization,
     },
     error: null,
   });
@@ -135,6 +138,7 @@ describe("registered provider review continuation", () => {
     const options = request();
     await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
     expect(mocks.handoff).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseAuthorization).toHaveBeenCalledTimes(1);
     const [chatOptions, acknowledgment] = mocks.handoff.mock.calls[0] as [
       GatewayRequestHandlerOptions,
       ProviderReviewAcknowledgment,
@@ -148,6 +152,7 @@ describe("registered provider review continuation", () => {
       deliver: false,
     });
     expect(readProviderReviewAcknowledgment(acknowledgment).review.id).toBe("review-a");
+    await loadOrCreateProcessDeviceIdentityAsync();
     const normalized = await normalizeChatSendRequest({
       params: chatOptions.params,
       client: chatOptions.client,

@@ -383,6 +383,50 @@ describe("worker placement session admission", () => {
     },
   );
 
+  it("joins same-session recovery before acknowledging a targeted pass", async () => {
+    const recoveryEntered = createDeferredCore();
+    const releaseRecovery = createDeferredCore();
+    const targetedAdmission = createDeferredCore();
+    let state = "reconciling";
+    const observed: Array<{ state: string; mode: "results-only" | undefined }> = [];
+    const unrelated = vi.fn(async () => {});
+    const coordinated = coordinateWorkerPlacementDispatch(
+      createCoordinatorTestService({
+        reconcileActive: async (environmentId, admit) => {
+          if (environmentId === undefined) {
+            await admit!([REQUEST.sessionId], async () => {
+              recoveryEntered.resolve();
+              await releaseRecovery.promise;
+              state = "failed";
+            });
+          } else if (environmentId === "unrelated") {
+            await admit!(["unrelated"], unrelated);
+          } else {
+            const recovery = admit!([REQUEST.sessionId], async (mode) => {
+              observed.push({ state, mode });
+            });
+            targetedAdmission.resolve();
+            await recovery;
+          }
+        },
+      }),
+      (_request, run) => run(),
+    );
+    const sweep = coordinated.reconcileActive();
+    await recoveryEntered.promise;
+    const targeted = coordinated.reconcileActive("worker-active");
+    try {
+      await targetedAdmission.promise;
+      await coordinated.reconcileActive("unrelated");
+      expect(unrelated).toHaveBeenCalledOnce();
+      expect(observed).toEqual([]);
+    } finally {
+      releaseRecovery.resolve();
+      await Promise.all([sweep, targeted]);
+    }
+    expect(observed).toEqual([{ state: "failed", mode: undefined }]);
+  });
+
   it.each(["full", "targeted"] as const)(
     "%s recovery admits only result recovery while the session is busy",
     async (kind) => {

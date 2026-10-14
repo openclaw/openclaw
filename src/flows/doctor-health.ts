@@ -15,7 +15,6 @@ import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
-import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import { retainUpdateDoctorProcesses } from "../infra/update-doctor-process-custody.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -23,7 +22,6 @@ import {
   normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
-  writeUpdatePostInstallDoctorResult,
   UpdateDoctorError,
   type UpdateDoctorWriteAuthority,
   type DoctorConfigCapture,
@@ -32,7 +30,6 @@ import {
 import { formatUpdateFailureFact } from "../infra/update-failure-facts-format.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
@@ -41,6 +38,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 import { exitDoctorHealthFlow, showDoctorIntro, showDoctorOutro } from "./doctor-health-startup.js";
+import { publishDoctorUpdateResult } from "./doctor-health-update-result.js";
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function runDoctorHealthFlow(
@@ -268,6 +266,7 @@ async function runDoctorHealthFlowWithResult(
         runtime: doctorRuntime,
         json: options.json,
         postCoreSchemaRepair: writeAuthority?.postCoreSchemaRepair,
+        signal: maintenance?.signal,
         onVerifiedBackup: (snapshots) => {
           verifiedSnapshots = snapshots;
         },
@@ -324,6 +323,7 @@ async function runDoctorHealthFlowWithResult(
           databasePaths: databaseTargets?.map((database) => database.path) ?? [],
           agentDatabaseTargets: databaseTargets,
           pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
+          pendingMigrations: schemas.pendingMigrations,
           verifiedSnapshots,
         });
         for (const message of [...backups.changes, ...backups.warnings]) {
@@ -666,49 +666,9 @@ async function runDoctorHealthFlowWithResult(
     }
     throw error;
   } finally {
-    try {
-      await measureGatewayBootstrapStep("doctor.maintenance.release", () =>
-        resources.disposeAsync(),
-      );
-    } finally {
-      if (updateResult) {
-        for (const change of updateResult.capture.configChanges) {
-          createSubsystemLogger("update").warn(formatUpdateDoctorConfigChange(change));
-        }
-        const contributionWarnings = healthContext?.updateWarnings ?? [];
-        const deferredCount = healthContext?.updateBudget?.deferred.size ?? 0;
-        // Contributions put deferrals first; retain migration advisories before other diagnostics.
-        const warnings = normalizeUpdatePostInstallDoctorWarnings([
-          ...contributionWarnings.slice(0, deferredCount),
-          ...(doctorResult.warnings ?? []),
-          ...(maintenance?.warnings ?? []).filter(
-            (warning) => !doctorResult.warnings?.includes(warning),
-          ),
-          ...contributionWarnings.slice(deferredCount),
-        ]);
-        await writeUpdatePostInstallDoctorResult({
-          resultPath: updateResult.resultPath,
-          result: {
-            ...doctorResult,
-            deferredInspectionCheckIds: updateResult.capture.deferredInspectionCheckIds,
-            ...(maintenance?.databaseWrites ? { databaseWrites: maintenance.databaseWrites } : {}),
-            ...(updateResult.capture.fileWrites
-              ? { configFileWrites: updateResult.capture.fileWrites }
-              : {}),
-            ...(warnings.length ? { warnings } : {}),
-            ...(updateResult.capture.configChanges.length
-              ? { configChanges: updateResult.capture.configChanges }
-              : {}),
-            ...(updateResult.capture.configWriteRefusal
-              ? { configWriteRefusal: updateResult.capture.configWriteRefusal }
-              : {}),
-            configHash: updateResult.capture.hash,
-            ...(updateResult.capture.inputHash === undefined
-              ? {}
-              : { configInputHash: updateResult.capture.inputHash }),
-          },
-        });
-      }
+    await measureGatewayBootstrapStep("doctor.maintenance.release", () => resources.disposeAsync());
+    if (updateResult) {
+      await publishDoctorUpdateResult({ updateResult, doctorResult, healthContext, maintenance });
     }
     // The default runtime exits synchronously; finish native recovery and release
     // maintenance leases before handing it an exit code.

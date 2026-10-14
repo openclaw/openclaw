@@ -1,9 +1,10 @@
 [
-  "claude-fable-5.1",
   "claude-opus-5.5",
-  "claude-sonnet-5.5",
-  "gpt-6-astra",
   "gpt-6.1-sol",
+  "gemini-4-argon",
+  "gpt-6-astra",
+  "claude-fable-5.1",
+  "claude-sonnet-5.5",
   "claude-sonnet-5",
   "kimi-k3",
   "grok-4.7",

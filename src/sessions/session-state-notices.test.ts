@@ -73,8 +73,11 @@ beforeEach(() => {
   mocks.pending.length = 0;
 });
 afterEach(async () => {
-  await vi.runAllTimersAsync();
-  vi.useRealTimers();
+  try {
+    await drainGlobalSingletonLifecycleState("restart");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 function encodeTarget(sessionKey: string): string {
@@ -140,14 +143,12 @@ describe("enqueueSessionStateNotice", () => {
       await secondEnqueued.promise;
       firstSettled.resolve({ status: "completed", executionStarted: true, delivered: false });
       secondSettled.resolve({ status: "completed", executionStarted: true, delivered: false });
-      const closing = drainGlobalSingletonLifecycleState("restart");
-      await vi.runAllTimersAsync();
-      await closing;
+      await drainGlobalSingletonLifecycleState("restart");
       expect(mocks.enqueue).toHaveBeenCalledTimes(2);
     } finally {
       firstSettled.resolve({ status: "cancelled", executionStarted: false, delivered: false });
       secondSettled.resolve({ status: "cancelled", executionStarted: false, delivered: false });
-      await vi.runAllTimersAsync();
+      await drainGlobalSingletonLifecycleState("restart");
     }
   });
 

@@ -81,7 +81,7 @@ describe("FaceTime plugin manifest", () => {
       clawhubSpec: "clawhub:@openclaw/facetime",
       npmSpec: "@openclaw/facetime",
       defaultChoice: "npm",
-      minHostVersion: ">=2026.9.4",
+      minHostVersion: `>=${hostVersion}`,
       allowInvalidConfigRecovery: true,
     });
     expect(packageManifest.openclaw.compat.pluginApi).toBe(`>=${hostVersion}`);

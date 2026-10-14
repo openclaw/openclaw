@@ -105,6 +105,7 @@ function createHarness(
     },
     setPlacement(next: WorkerSessionPlacementRecord) {
       placement = next;
+      monitor.invalidate();
     },
   };
 }
@@ -146,11 +147,13 @@ describe("active worker placement disk-space monitoring", () => {
     const harness = createHarness(runWorkspaceCommand);
 
     await harness.monitor.sweep();
+    expect(harness.monitor.nextSweepAtMs()).toBe(1_000 + 15 * 60_000);
     for (let minute = 0; minute < 14; minute += 1) {
       harness.advanceTime(60_000);
       await harness.monitor.sweep();
     }
     expect(runWorkspaceCommand).toHaveBeenCalledTimes(1);
+    expect(harness.prepareMaintenancePlacements).toHaveBeenCalledTimes(1);
 
     harness.advanceTime(60_000);
     await harness.monitor.sweep();
@@ -163,6 +166,10 @@ describe("active worker placement disk-space monitoring", () => {
     harness.setPlacement(activePlacement({ generation: 4, activeOwnerEpoch: 8 }));
     await harness.monitor.sweep();
     expect(runWorkspaceCommand).toHaveBeenCalledTimes(4);
+
+    harness.advanceTime(24 * 60 * 60_000);
+    await harness.monitor.sweep();
+    expect(runWorkspaceCommand).toHaveBeenCalledTimes(5);
   });
 
   it("samples an idle active placement and emits only projected status transitions", async () => {
@@ -249,6 +256,7 @@ describe("active worker placement disk-space monitoring", () => {
 
     harness.setPlacement({ ...activePlacement(), state: "draining" });
     await harness.monitor.sweep();
+    expect(harness.monitor.nextSweepAtMs()).toBe(Infinity);
 
     expect(harness.monitor.read(harness.placement)).toBeUndefined();
     expect(harness.monitor.version()).toBe(2);
@@ -262,6 +270,7 @@ describe("active worker placement disk-space monitoring", () => {
     harness.startTunnel.mockRejectedValue(new StaleWorkerBuildError());
 
     await harness.monitor.sweep();
+    expect(harness.monitor.nextSweepAtMs()).toBe(Infinity);
     await harness.monitor.sweep();
     await harness.monitor.sweep();
 
@@ -322,6 +331,7 @@ describe("active worker placement disk-space monitoring", () => {
     harness.advanceTime(15 * 60_000);
 
     await harness.monitor.sweep();
+    harness.advanceTime(60_000);
     await harness.monitor.sweep();
 
     expect(harness.monitor.read(harness.placement)?.status).toBe("warning");
@@ -330,5 +340,25 @@ describe("active worker placement disk-space monitoring", () => {
     expect(harness.warn).toHaveBeenCalledWith(
       expect.stringContaining("Worker disk-space check command failed"),
     );
+  });
+
+  it("parks an empty inventory until a placement receipt and retains receipts during reads", async () => {
+    const harness = createHarness(async () => result(6 * GIB, 10 * GIB));
+    harness.setPlacement({ ...activePlacement(), state: "draining" });
+    await harness.monitor.sweep();
+    harness.advanceTime(24 * 60 * 60_000);
+    await harness.monitor.sweep();
+    expect(harness.prepareMaintenancePlacements).toHaveBeenCalledTimes(1);
+
+    harness.setPlacement(activePlacement());
+    harness.prepareMaintenancePlacements.mockImplementationOnce(async () => {
+      harness.setPlacement(activePlacement());
+      return { placements: [], assertCurrent() {}, release: harness.releaseInventory };
+    });
+    await harness.monitor.sweep();
+    expect(harness.monitor.nextSweepAtMs()).toBe(1_000 + 24 * 60 * 60_000 + 60_000);
+    await harness.monitor.sweep();
+    expect(harness.monitor.read(harness.placement)?.status).toBe("ok");
+    expect(harness.startTunnel).toHaveBeenCalledOnce();
   });
 });

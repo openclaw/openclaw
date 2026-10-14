@@ -541,6 +541,8 @@ export interface AssistantMessage {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  /** Provider retry floor before diagnostic clipping; null means too large to represent. */
+  retryAfterMs?: number | null;
   timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -665,7 +667,7 @@ export interface OpenAICompletionsCompat {
   requiresThinkingAsText?: boolean;
   /** Whether all replayed assistant messages must include an empty reasoning_content field when reasoning is enabled. Default: auto-detected from URL. */
   requiresReasoningContentOnAssistantMessages?: boolean;
-  /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
+  /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking, plus chat_template_kwargs.reasoning_effort for selected enabled levels when supportedReasoningEfforts is declared. Default: "openai". */
   thinkingFormat?: ModelDataThinkingFormat;
   /** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
   openRouterRouting?: OpenRouterRouting;

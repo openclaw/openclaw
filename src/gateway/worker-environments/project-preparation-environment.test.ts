@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyTreeCloseOnExec } from "../../../test/helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
@@ -23,7 +22,12 @@ async function fixture(files: Record<string, string>) {
   const bin = path.join(f.home, "fixture-bin");
   await fs.mkdir(bin);
   // Linux selects tools beside process.execPath; a symlink to host Node would select host tools.
-  copyTreeCloseOnExec(process.execPath, path.join(bin, "node"), { dereference: true });
+  // A separate copier keeps writable Node descriptors out of sibling Vitest forks.
+  execFileSync(process.execPath, [
+    "-e",
+    'const fs = require("node:fs"); fs.copyFileSync(process.execPath, process.argv[1], fs.constants.COPYFILE_FICLONE)',
+    path.join(bin, "node"),
+  ]);
   const libraries = path.resolve(path.dirname(process.execPath), "../lib");
   if (existsSync(libraries)) {
     await fs.symlink(libraries, path.join(f.home, "lib"));
@@ -144,7 +148,7 @@ describe("repository environment preparation", () => {
   });
 
   it.each(["pnpm-lock.yaml", "yarn.lock"])(
-    "installs through user-writable Corepack shims without auto-pinning during %s detection",
+    "installs through user-writable Corepack shims without auto-pinning or download prompts during %s detection",
     async (lockfile) => {
       const packageContent = '{"name":"fixture","private":true}\n';
       const f = await fixture({ [lockfile]: "fixture lock\n", "package.json": packageContent });
@@ -159,7 +163,7 @@ describe("repository environment preparation", () => {
       await fs.writeFile(path.join(bin, manager), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
       await fs.writeFile(
         path.join(bin, "package-manager"),
-        '#!/bin/sh\nif [ "${COREPACK_ENABLE_AUTO_PIN:-}" != 0 ]; then printf \'{"packageManager":"fixture"}\\n\' > package.json; fi\n',
+        '#!/bin/sh\nset -eu\ntest "${COREPACK_ENABLE_DOWNLOAD_PROMPT:-}" = 0\nif [ "${COREPACK_ENABLE_AUTO_PIN:-}" != 0 ]; then printf \'{"packageManager":"fixture"}\\n\' > package.json; fi\n',
         { mode: 0o755 },
       );
       const operation = await f.preparedOperation();

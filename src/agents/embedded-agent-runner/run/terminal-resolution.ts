@@ -335,7 +335,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
           terminalAuthFailure: input,
         });
-  const incompleteTurnFallbackSafe = Boolean(
+  const incompleteTurnReplaySafe = Boolean(
     incompleteTurnText &&
     !terminalInterrupted &&
     !promptError &&
@@ -344,7 +344,12 @@ export async function resolveEmbeddedRunTerminal(input: {
     !terminalAssistantError &&
     !input.replayState.hadPotentialSideEffects,
   );
-  const terminalToolPresentation = incompleteTurnFallbackSafe
+  // Replay safety alone is not a model-capability failure; explicit harness failures retain fallback.
+  const incompleteTurnFallbackSafe =
+    incompleteTurnReplaySafe &&
+    (input.attemptAssistant?.stopReason !== "stop" ||
+      attempt.agentHarnessResultClassification !== undefined);
+  const terminalToolPresentation = incompleteTurnReplaySafe
     ? availableTerminalToolPresentation
     : undefined;
   if (
@@ -536,6 +541,7 @@ async function completeEmbeddedRun(
       profileId: input.authProfileId,
       profileStore: input.profileFailureStore,
       provider: input.provider,
+      modelId: input.modelId,
       agentDir: input.runParams.agentDir,
       runId: input.runParams.runId,
       sessionId: input.runParams.sessionId,

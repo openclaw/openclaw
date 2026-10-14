@@ -23,6 +23,7 @@ import {
   openAgentDatabaseSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
 } from "../infra/sqlite-worker-store.js";
+import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
 import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
@@ -68,6 +69,7 @@ export function createAgentDatabaseNativeGeneration(
   assertCleanupOwned: () => void,
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined,
   acceptFileIdentity: (identity: AgentDatabaseExecutionFileIdentity) => void,
+  onTerminal: (reason: Error) => void,
   creatingIdentity?: DatabasePathIdentity,
   creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
 ): AgentDatabaseNativeGeneration {
@@ -101,11 +103,15 @@ export function createAgentDatabaseNativeGeneration(
   let preparationPublished = false;
 
   // The actor retains this observer; keep it outside the opening caller's scope.
-  const onNativeLost = () => {
+  const onNativeLost = (reason: Error) => {
     lifetime.retire();
     // Before the lease handoff this generation has borrowed no validation.
     if (lease) {
       invalidateOpenClawAgentDatabaseValidation(pathname);
+    }
+    // Failed opening admission can be ordinary lock contention; run classifies it after settlement.
+    if (preparationPublished) {
+      onTerminal(reason);
     }
   };
   const assertCurrent = () => {
@@ -236,6 +242,7 @@ export function createAgentDatabaseNativeGeneration(
               }),
             };
             facts.validationPort.postMessage(preparation, []);
+            recordWorkerMessage("admission", "to_worker");
           } finally {
             facts.validationPort.close();
           }

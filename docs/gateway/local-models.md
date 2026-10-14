@@ -310,6 +310,8 @@ Setup no longer writes this flag. For older installations, `openclaw doctor --fi
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 
+Lean Tool Search directories list tool names and owners without descriptions. Full descriptions and schemas remain available through Tool Search. Removing optional tools therefore cannot expand the remaining directory descriptions. Lean mode keeps the ordinary system instructions, skills, and workspace context.
+
 In structured `tools` mode, lean runs keep `exec` directly visible beside the Tool Search controls so coding-tuned local models can still choose their familiar shell path. This changes schema visibility only: normal tool policy, sandboxing, and exec approvals still apply. Explicit `code` and `directory` modes keep their normal compaction behavior.
 
 #### Why these tools

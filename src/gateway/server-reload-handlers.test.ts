@@ -10,6 +10,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { prepareRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
@@ -39,6 +40,7 @@ import {
   type RuntimeConfigWriteApplicationStatus,
 } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import {
   consumeGatewayRestartIntent,
   isGatewayRestartExternallyAllowed,
@@ -131,6 +133,7 @@ import {
   createManagedReloadAuthFixture,
   createManagedRestartSequenceConfigs,
   createConfigWriteNotification,
+  createRecordedChannelHandlers,
   createCronRestartPlan,
   createDirectConfigWriteFixture,
   createDefaultGatewayReloadState,
@@ -452,18 +455,6 @@ vi.mock("./server-cron.js", async () => {
     buildGatewayCronService: hoisted.buildGatewayCronService,
   };
 });
-
-function createRecordedChannelHandlers(events: string[]) {
-  return {
-    stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
-      events.push(`stop:${channel}:${accountId}`);
-    }),
-    start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
-      events.push(`start:${channel}:${accountId}`);
-      return new Map();
-    }),
-  };
-}
 
 async function withReloadChannelManager(
   plugins: ChannelPlugin[],
@@ -1719,9 +1710,9 @@ describe("gateway hot reload model state", () => {
             ) as unknown as ReturnType<typeof hoisted.buildGatewayCronService>,
         );
         const initialCronState = createLazyGatewayCronState({
+          storePath: await resolveCronJobsStorePathFromConfigAsync(config),
           scheduler,
           cfg: config,
-          storePath: path.join(fixtureDir, "jobs.json"),
           deps: {} as never,
           broadcast: vi.fn(),
         });
@@ -2039,6 +2030,28 @@ describe("gateway hot reload model state", () => {
   );
 
   registerGatewayCronReloadTests({ createGatewayReloadHandlers, autoCleanupTempDirs });
+
+  it("requests restart when heartbeat monitor reconciliation cannot schedule recovery", async () => {
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const handlers = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    handlers.reconcileSystemJobs.mockRejectedValueOnce(new Error("cron retry scheduling failed"));
+    try {
+      await expect(
+        handlers.applyHotReload(buildGatewayReloadPlan(["agents.defaults.heartbeat.every"]), {
+          agents: { defaults: { heartbeat: { every: "2h" } } },
+        }),
+      ).resolves.toBe("applied-restart-required");
+      expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+    } finally {
+      handlers.stopRestartRetries();
+    }
+  });
 
   it("rejects an ownerless heartbeat update failure before runtime commit", async () => {
     const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
@@ -3299,6 +3312,7 @@ describe("gateway Gmail hot reload handlers", () => {
   });
 
   it("refreshes owner refs when only the resolved source snapshot changes", async () => {
+    await prepareSharedAuthStoreOwnership();
     const authAgentDir = "/tmp/openclaw-source-only-auth-owner";
     const authProfileId = "openai:source-only";
     const authOwnerId = resolveAuthProfileSecretOwnerId({

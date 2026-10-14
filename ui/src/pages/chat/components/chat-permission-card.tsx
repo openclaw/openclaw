@@ -14,8 +14,8 @@ function ChatPermissionCard(props: {
   const projection = native ? projectNativeDeviceSettings(native) : null;
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
-  const names = () =>
-    props.request.capabilities
+  const names = (capabilities = props.request.capabilities) =>
+    capabilities
       .map((id) => {
         const key = `chat.permissions.capabilities.${id}`;
         const label = t(key);
@@ -43,40 +43,51 @@ function ChatPermissionCard(props: {
       return entry?.status !== "granted" || Boolean(entry.state);
     });
   });
+  // Native cannot commit an enabled Location mode while macOS denies access.
+  const disabled = createMemo(() =>
+    remaining().filter(
+      (id) =>
+        id === "computerControl" ||
+        id === "canvas" ||
+        id === "cameraEnabled" ||
+        (id === "location" &&
+          projection?.read()?.permissions.location?.mode === "off" &&
+          projection?.read()?.permissions.entries.find((entry) => entry.id === id)?.status !==
+            "denied"),
+    ),
+  );
   const complete = () => Boolean(local()) && remaining().length === 0;
-  const state = () => {
+  const action = createMemo(() => {
     const snapshot = projection?.read();
     if (local()) {
-      if (
-        remaining().includes("computerControl") ||
-        remaining().includes("canvas") ||
-        remaining().includes("cameraEnabled") ||
-        (remaining().includes("location") && snapshot?.permissions.location?.mode === "off")
-      ) {
-        return "disabled-in-openclaw";
+      if (disabled().length > 0) {
+        return { state: "disabled-in-openclaw" as const, capabilities: disabled() };
       }
-      const entries =
-        snapshot?.permissions.entries.filter((entry) => remaining().includes(entry.id)) ?? [];
       for (const candidateState of [
         "stale-grant",
         "restart-required",
         "denied",
         "not-determined",
       ] as const) {
-        if (
-          entries.some(
-            (entry) =>
-              entry.state === candidateState ||
-              (candidateState === "denied" && entry.status === "denied") ||
-              (candidateState === "not-determined" && entry.status === "notDetermined"),
-          )
-        ) {
-          return candidateState;
+        const capabilities = remaining().filter((id) => {
+          const entry = snapshot?.permissions.entries.find((candidate) => candidate.id === id);
+          return (
+            entry?.state === candidateState ||
+            (candidateState === "denied" && entry?.status === "denied") ||
+            (candidateState === "not-determined" && entry?.status === "notDetermined")
+          );
+        });
+        if (capabilities.length > 0) {
+          return { state: candidateState, capabilities };
         }
       }
     }
-    return props.request.state;
-  };
+    return { state: props.request.state, capabilities: remaining() };
+  });
+  const following = () =>
+    action().state === "disabled-in-openclaw"
+      ? remaining().filter((id) => !disabled().includes(id))
+      : [];
   const grant = async () => {
     if (!local() || busy()) {
       return;
@@ -86,10 +97,8 @@ function ChatPermissionCard(props: {
     try {
       await native?.resolvePermission?.({
         ...props.request,
-        capabilities: remaining(),
-        state: state(),
+        ...action(),
       });
-      native?.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -109,7 +118,12 @@ function ChatPermissionCard(props: {
         {t("chat.permissions.neededOn", { node: props.request.nodeName ?? props.request.nodeId })}
       </p>
       <Show when={local()} fallback={<p>{t("chat.permissions.openApp")}</p>}>
-        <p>{t(complete() ? "chat.permissions.ready" : `chat.permissions.states.${state()}`)}</p>
+        <p>
+          {t(complete() ? "chat.permissions.ready" : `chat.permissions.states.${action().state}`)}
+        </p>
+        <Show when={following().length > 0}>
+          <p>{t("chat.permissions.following", { permissions: names(following()) })}</p>
+        </Show>
         <Show
           when={complete()}
           fallback={
@@ -119,12 +133,9 @@ function ChatPermissionCard(props: {
               disabled={busy()}
               onClick={() => void grant()}
             >
-              {t(
-                state() === "restart-required"
-                  ? "chat.permissions.relaunch"
-                  : "chat.permissions.grant",
-                { permissions: names() },
-              )}
+              {t(`chat.permissions.actions.${action().state}`, {
+                permissions: names(action().capabilities),
+              })}
             </button>
           }
         >

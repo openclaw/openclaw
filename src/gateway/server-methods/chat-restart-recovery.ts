@@ -336,7 +336,7 @@ export function resolveRestartSafeChatAdmission(params: {
   const placement = params.placement;
   // Only local input may be consumed before turn admission. Worker setup and
   // reconciliation retain approved input in custody until their writer is ready.
-  if (placement && placement.state !== "local") {
+  if (params.cfg.cloudWorkers?.requiredProfile || (placement && placement.state !== "local")) {
     return undefined;
   }
   if (!request || !entry || !isRestartSafeChatSession({ ...params, entry })) {

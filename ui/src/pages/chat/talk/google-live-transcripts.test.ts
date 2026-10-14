@@ -10,13 +10,37 @@ import {
 } from "./google-live.test-support.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./google-live.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
+import type { RealtimeTalkTransportContext } from "./shared.ts";
+
+const GOOGLE_LIVE_URL =
+  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
+
+async function createModelTransport(
+  model: string | undefined,
+  callbacks: RealtimeTalkTransportContext["callbacks"],
+) {
+  return new GoogleLiveRealtimeTalkTransport(
+    { ...createSession(GOOGLE_LIVE_URL), ...(model ? { model } : {}) },
+    {
+      input: await prepareRealtimeTalkTestInput(),
+      callbacks,
+      client: createClient(),
+      sessionKey: "main",
+    },
+  );
+}
 
 describe("Google Live browser transcript finality", () => {
   installGoogleLiveTestFixture();
 
-  it("finalizes both live 3.1 spoken turns before the session closes", async () => {
+  it.each([
+    { name: "default 3.1", model: undefined },
+    { name: "3.8", model: "gemini-3.8-live" },
+    { name: "3.8 Extended Thinking", model: "gemini-3.8-live-extended-thinking" },
+    { name: "prefixed 3.8", model: "models/gemini-3.8-live" },
+  ])("finalizes both live $name spoken turns before the session closes", async ({ model }) => {
     const onTranscript = vi.fn();
-    const transport = await createTransport({ onTranscript });
+    const transport = await createModelTransport(model, { onTranscript });
     const ws = await startTransport(transport);
     for (const [input, output] of [
       ["Please reply with the single word glacier.", "Glacier."],
@@ -38,26 +62,22 @@ describe("Google Live browser transcript finality", () => {
       { role: "user", text: "Now reply with the single word crystal.", final: true },
       { role: "assistant", text: "Crystal.", final: true },
     ]);
+    expect(
+      onTranscript.mock.calls
+        .filter(([entry]) => entry.role === "user")
+        .map(([entry]) => entry.final),
+    ).toEqual([true, true]);
+    ws.emitMessage(encodeJsonFrame({ serverContent: { inputTranscription: { finished: true } } }));
+    await flushMicrotasks();
     transport.stop();
     expect(onTranscript.mock.calls.filter(([entry]) => entry.final)).toHaveLength(4);
   });
 
   it("accumulates 2.5 fragments and honors a finish-only message", async () => {
     const onTranscript = vi.fn();
-    const transport = new GoogleLiveRealtimeTalkTransport(
-      {
-        ...createSession(
-          "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
-        ),
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
-      },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        callbacks: { onTranscript },
-        client: createClient(),
-        sessionKey: "main",
-      },
-    );
+    const transport = await createModelTransport("gemini-2.5-flash-native-audio-preview-12-2025", {
+      onTranscript,
+    });
     const ws = await startTransport(transport);
     for (const transcription of [{ text: "Last " }, { text: "words" }, { finished: true }]) {
       ws.emitMessage(encodeJsonFrame({ serverContent: { inputTranscription: transcription } }));

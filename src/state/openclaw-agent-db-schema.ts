@@ -6,6 +6,7 @@ import {
   migrateMemoryIndexStorage,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { migrateSessionCostUsageRollupStorage } from "../infra/session-cost-usage-cache-migration.js";
+import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import {
   repairCanonicalSqliteIndexes,
@@ -43,8 +44,9 @@ import {
   seedCanonicalSessionValidationPending,
 } from "./openclaw-agent-canonical-validation-migration.js";
 import {
-  canonicalSessionValidationSchemaSql,
+  adoptCanonicalSessionValidationSchema,
   assertCanonicalSessionValidationSchema,
+  canonicalSessionValidationSchemaSql,
 } from "./openclaw-agent-canonical-validation-schema.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
@@ -162,7 +164,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     }
     return false;
   }
-  database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
   const userVersion = readSqliteUserVersion(database);
   const hasApplicationSchema = database
     .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
@@ -271,10 +273,9 @@ export function refreshOpenClawAgentDatabaseSchema(
     if (convergence) {
       ensureAgentSchema(db, agentId, pathname);
     }
-    // Publish facts from the same schema snapshot that passes the final contract checks.
+    // Integrity admission or same-version repair already checked the runtime schema.
     return runSqliteSchemaReadSnapshotSync(db, () => {
       admitSqliteSchema(db);
-      assertOpenClawAgentCurrentRuntimeSchema(db, { agentId, pathname });
       assertCanonicalSessionValidationSchema(db);
       assertCurrent();
       if (!validation) {
@@ -364,6 +365,7 @@ function ensureAgentSchema(
   // no-op inside a transaction, and legacy owner-table rebuilds would otherwise
   // cascade-delete their children. Steady-state enforcement is restored below.
   db.exec("PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = OFF;");
+  let created = false;
   try {
     const mutate = () => {
       // Repeat preflight ownership/version gates inside the write transaction;
@@ -390,6 +392,14 @@ function ensureAgentSchema(
         previousVersion === 0 &&
         readExistingAgentSchemaMeta(db) === null &&
         !db.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get();
+      if (isEmptyDatabase && targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+        // Canonical creation has no legacy rows or definitions to converge or repair.
+        db.exec(schemaSql);
+        db.exec(`PRAGMA user_version = ${targetVersion};`);
+        persistAgentSchemaMetadata(db, agentId, targetVersion);
+        created = true;
+        return;
+      }
       const requiresCanonicalWriterMigration =
         !isEmptyDatabase &&
         previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION &&
@@ -508,8 +518,7 @@ function ensureAgentSchema(
           migrateMemoryChunkMetadataSchema(db);
           db.exec(schemaSql);
         }
-        // Repeat index repair before the transactional schema assertion so a
-        // concurrent opener cannot turn repairable drift into a hard refusal.
+        // Repair canonical indexes after the same-version additive schema changes.
         repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
           verifyPhysicalIntegrity: false,
         });
@@ -572,6 +581,11 @@ function ensureAgentSchema(
       db.exec("PRAGMA foreign_keys = ON;");
     }
   }
+  if (created && (isSqliteSchemaAdmissionCold(db) || getAdmittedSqliteSchemaFacts(db))) {
+    // Tracked handles retain creator facts; DDL and transaction rollback invalidate them.
+    admitSqliteSchema(db);
+    adoptCanonicalSessionValidationSchema(db);
+  }
   for (const warning of warnings) {
     const message = `Agent ${agentId}: ${warning}`;
     agentDbLog.warn(message);
@@ -633,7 +647,7 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
     maintenanceAuthority.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   }
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
   assertSupportedAgentSchemaVersion(db, pathname);
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
   const withIntegrityMutation: AgentSchemaMutationGuard = (run) =>

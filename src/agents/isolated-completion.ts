@@ -171,7 +171,7 @@ async function runCliIsolatedCompletion(
         config: request.config,
         agentId: request.agentId,
       })
-        ? resolveCliExecutionAuthProfileId({
+        ? await resolveCliExecutionAuthProfileId({
             cliExecutionProvider: provider,
             authProfileProvider: modelProvider,
             config: request.config,

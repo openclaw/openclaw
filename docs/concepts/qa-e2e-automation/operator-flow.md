@@ -50,6 +50,14 @@ execution kinds plus explicit exclusions or errors. Unknown, empty explicit,
 profile-incompatible, or lane-incompatible selections are rejected instead of
 being replaced by a default suite.
 
+QA Lab serializes suites and self-checks. While either is running, new suite,
+self-check, and reset requests return HTTP 409. Shutdown drains the accepted run
+before closing its bus and capture store, using its existing execution deadlines.
+It does not cancel that run. While the HTTP server remains reachable during the
+drain, new suite, self-check, and reset requests return HTTP 503. Unaccepted requests may disconnect
+at the existing HTTP shutdown deadline; a suite whose planning crosses shutdown
+cannot start.
+
 For faster QA Lab UI iteration without rebuilding the Docker image each time,
 start the stack with a bind-mounted QA Lab bundle:
 

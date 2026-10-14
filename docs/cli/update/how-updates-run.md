@@ -439,6 +439,13 @@ warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
 
+Offline Doctor cron inspection reuses its admitted maintenance reader after the
+backup boundary instead of creating another disposable SQLite snapshot. If optional
+memory dreaming cron ownership inspection is unavailable, Doctor retains existing
+rows and the pending plugin repair, records a warning, and continues core recovery.
+Run `openclaw doctor --fix` to retry that inspection. Cron rewrite and required
+state migration failures retain their existing safety checks.
+
 Doctor's disposable database migration and repair connections use a 64 MiB SQLite
 page-cache allowance to reduce repeated reads while rebuilding large stores.
 The allowance ends when each connection closes; serving connections keep their
@@ -455,6 +462,10 @@ after the update. Required migration, configuration, plugin, and Gateway readine
 checks still run. Standalone Doctor lint and explicitly selected `--only` checks
 keep their normal scope. The candidate recognizes the private-copy markers already
 set by the published 2026.9.4 updater, so this reduces work on that first hop too.
+When the updater is 2026.10.1 or later, each check has its own time budget, so
+the candidate measures its optional-inspection window from that check's start; a
+slow state snapshot or repair Doctor does not cause lint to defer inspections.
+With older updaters, the window still starts when validation begins.
 
 The rehearsal repair Doctor also defers pure advisory inspections, including
 security, provider catalog, and runtime tool-schema diagnostics, and records their

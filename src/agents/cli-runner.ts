@@ -195,8 +195,16 @@ async function runCliAgentInternal(
       throw error;
     }
     // Preparation resolves the execution owner and effective capture config;
-    // publish both before commentary can arrive from the prepared run.
+    // publish both before commentary can arrive from the prepared run. The
+    // captured prompt is published by execution, which composes what the CLI
+    // actually receives (history reseed, input transforms, context, images).
     diagnosticLifecycle?.setExecutionContext(context.params);
+    diagnosticLifecycle?.publishCapturedContent({
+      userPrompt: context.params.prompt,
+    });
+    // Settlement owns post-commit tolerance: an authority loss after the final
+    // reply commits records a warning and stays successful (#170757); authority
+    // checks live at the protected effect boundaries in the run params instead.
     return await runPreparedCliAgent(context, diagnosticLifecycle);
   } finally {
     generation?.release();
@@ -354,7 +362,13 @@ async function runPreparedCliAgentOwned(
     const output = await executePreparedCliRun(
       attemptContext,
       cliSessionIdToUse,
-      diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
+      diagnosticLifecycle
+        ? {
+            onPhase: diagnosticLifecycle.setPhase,
+            onPromptPrepared: (prompt) =>
+              diagnosticLifecycle.publishCapturedContent({ userPrompt: prompt }),
+          }
+        : undefined,
     );
     params.assertCurrent?.();
     // Test facades and non-instrumented executors may not signal the boundary.
@@ -623,7 +637,10 @@ async function runPreparedCliAgentOwned(
   };
 
   try {
-    return await executeRun();
+    const result = await executeRun();
+    // Publish captured content before backend and session cleanup can throw.
+    diagnosticLifecycle?.publishResultContent(result);
+    return result;
   } catch (error) {
     throw coerceToFailoverError(error, cliFailoverContext) ?? error;
   }

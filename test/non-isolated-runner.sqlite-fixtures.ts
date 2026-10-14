@@ -487,12 +487,18 @@ import { expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
 import { captureOpenClawStateWorkerContext } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-context.ts"))};
 import { getOpenClawStateWorkerOwner } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-owner.ts"))};
+import { measureSessionPhysicalDiskUsage } from ${JSON.stringify(import.meta.resolve("../src/config/sessions/disk-budget-runtime.ts"))};
 
 const generation = ${JSON.stringify(generation)};
 const probeKey = Symbol.for("fixture.sharedStateOwnerGenerations");
 const probe = Reflect.get(globalThis, probeKey) ?? { closes: [] as string[] };
 Reflect.set(globalThis, probeKey, probe);
-const edge = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(async () => {}) }));
+const edge = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(async () => {}), worker: vi.fn() }));
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-cpu.ts"))}, async (importOriginal) => ({
+  ...await importOriginal<typeof import(${JSON.stringify(import.meta.resolve("../src/infra/worker-cpu.ts"))})>(),
+  createCpuTrackedWorker: edge.worker,
+}));
+edge.worker.mockImplementation(() => { throw new Error("Disk worker generation " + generation); });
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
   openSharedStateSqliteWorkerStore: edge.open,
   closeUnclaimedSharedStateSqliteWorkers: async () => {},
@@ -518,6 +524,9 @@ it("binds shared-state retirement to the current file's database lifecycle " + g
   const owner = getOpenClawStateWorkerOwner();
   try {
     expect(await owner.open(context)).toBeDefined();
+    await expect(measureSessionPhysicalDiskUsage(pathname)).rejects.toThrow(
+      "Disk worker generation " + generation,
+    );
     if (generation === "a") {
       expect(probe.closes).toEqual([]);
       // The file drain retires this resource before the next file is evaluated.

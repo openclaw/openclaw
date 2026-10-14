@@ -346,6 +346,22 @@ const gatewayDeps = {
   getRuntimeConfig: () => configOverride,
 };
 
+const deliveryDeps = {
+  ...gatewayDeps,
+  loadSessionEntry: (scope) => readSessionFixture(scope.sessionKey),
+  loadSessionEntryByKey: async (sessionKey) => readSessionFixture(sessionKey),
+  getRequesterSessionActivity: (requesterSessionKey: string) => {
+    const entry = readSessionFixture(requesterSessionKey);
+    const sessionId = entry?.sessionId;
+    return {
+      sessionId,
+      isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedAgentRunActive(sessionId)),
+    };
+  },
+  queueEmbeddedAgentMessageWithOutcome: (sessionId, text, options) =>
+    embeddedRunMock.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
+} satisfies Parameters<typeof subagentAnnounceDeliveryTesting.setDepsForTest>[0];
+
 function expectParentAnnounce() {
   expect(sendSpy).not.toHaveBeenCalled();
   expect(agentSpy).toHaveBeenCalledTimes(1);
@@ -438,21 +454,7 @@ describe("subagent announce formatting", () => {
       }
       return {};
     });
-    subagentAnnounceDeliveryTesting.setDepsForTest({
-      ...gatewayDeps,
-      loadSessionEntry: (scope) => readSessionFixture(scope.sessionKey),
-      loadSessionEntryByKey: async (sessionKey) => readSessionFixture(sessionKey),
-      getRequesterSessionActivity: (requesterSessionKey: string) => {
-        const entry = readSessionFixture(requesterSessionKey);
-        const sessionId = entry?.sessionId;
-        return {
-          sessionId,
-          isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedAgentRunActive(sessionId)),
-        };
-      },
-      queueEmbeddedAgentMessageWithOutcome: (sessionId, text, options) =>
-        embeddedRunMock.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
-    });
+    subagentAnnounceDeliveryTesting.setDepsForTest(deliveryDeps);
     subagentAnnounceTesting.setDepsForTest(gatewayDeps);
     transcriptEvents = [];
     subagentAnnounceOutputTesting.setDepsForTest({
@@ -707,16 +709,11 @@ describe("subagent announce formatting", () => {
           skipMaintenance: true,
         },
       );
+      // Drop both read overrides so the real announce reader reaches the session worker.
       subagentAnnounceDeliveryTesting.setDepsForTest({
-        ...gatewayDeps,
-        loadSessionEntryByKey: async (sessionKey) => readSessionFixture(sessionKey),
-        loadRequesterSessionEntry: (sessionKey) => ({
-          cfg: configOverride,
-          canonicalKey: sessionKey,
-          entry: readSessionFixture(sessionKey),
-        }),
+        ...deliveryDeps,
+        loadSessionEntry: undefined,
       });
-      // readSubagentSessionEntry is intentionally omitted so the real reader runs.
       subagentAnnounceOutputTesting.setDepsForTest({
         ...gatewayDeps,
         resolveSessionStorePathCore: () => storePath,

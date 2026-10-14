@@ -264,7 +264,7 @@ process.kill(process.pid, "SIGKILL");
 );
 
 it.runIf(process.platform !== "win32")(
-  "stops gateway watch when a compile-cache respawn child dies from a signal",
+  "preserves gateway watch signal loss across compile-cache process replacement",
   async ({ signal }) => {
     const nodeArgs = resolveVitestNodeArgs();
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
@@ -409,7 +409,7 @@ else process.exit(outcome);
             signal,
             "Gateway watch exited before the compile-cache child was ready",
           );
-          expect(childPid, "the launcher must respawn before the signal is sent").not.toBe(
+          expect(childPid, "process replacement preserves the supervised Gateway PID").toBe(
             launcherPid,
           );
           expect(

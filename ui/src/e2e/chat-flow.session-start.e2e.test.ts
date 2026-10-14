@@ -227,14 +227,11 @@ suite.define(() => {
       });
       await expect
         .poll(() =>
-          page.locator("openclaw-chat-pane").evaluate((pane) => {
-            const state = (
-              pane as HTMLElement & { state?: { chatModelCatalog?: Array<{ id?: string }> } }
-            ).state;
-            return state?.chatModelCatalog?.map((model) => model.id);
-          }),
+          page
+            .locator("[data-chat-model-select] .chat-controls__inline-select-label")
+            .textContent(),
         )
-        .toEqual(["hydrated-model"]);
+        .toContain("Hydrated Model");
       expect(await gateway.getRequests("agents.list")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);

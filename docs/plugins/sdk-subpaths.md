@@ -255,7 +255,7 @@ new code; see the per-row notes below.
     | `plugin-sdk/channel-targets` | Private-local after July 2026; Target parsing helpers; route comparison callers should use `plugin-sdk/channel-route` |
     | `plugin-sdk/channel-contract` | Channel contract types |
     | `plugin-sdk/channel-feedback` | Feedback/reaction wiring |
-    | `plugin-sdk/reply-payload` | Reply payload types, normalization, content/media inspection, native question option ordering, chunked send helpers, reasoning detection, and reply fan-out |
+    | `plugin-sdk/reply-payload` | Reply payload types, normalization, content/media inspection, host-notice classification (`isHostNoticePayload`), native question option ordering, chunked send helpers, reasoning detection, and reply fan-out |
   </Accordion>
 
 The September channel facades remain public as `removal-pending` records until
@@ -418,7 +418,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
-    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
+    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `createOwnedStdioProcess` / `closeOwnedStdioProcess` and `OwnedStdioProcess` / `OwnedStdioProcessOptions` for bidirectional CLI lifetime and cleanup, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
     | `plugin-sdk/node-host` | Private-local after July 2026; Node-host executable resolution and PTY resume helpers |
     | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |

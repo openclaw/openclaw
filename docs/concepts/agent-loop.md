@@ -302,6 +302,11 @@ drain grace. Neither window resets on progress. These cleanup limits still
 apply when the execution budget is unlimited. See
 [Codex timeouts](/plugins/codex-harness-reference#timeouts).
 
+Harness cleanup flushes trajectory events accepted before foreground work ended,
+including during restart cancellation. It cannot accept new events after that
+lifetime ends, or flush through a closed host, revoked admission, replaced run,
+or replaced recorder.
+
 When a runtime reports a definitive timeout, the Gateway records its terminal
 status and error for the session sidebar immediately, without waiting for
 provider retry grace. Opening the failed session dismisses its sidebar attention
@@ -317,6 +322,12 @@ With diagnostics enabled, a built-in two-minute threshold classifies long `proce
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
 The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
+
+Pending Code Mode `exec` and `wait` calls remain active tool work until they
+settle, including `awaitResults: true` calls waiting for nested work. Nested tool
+completion does not retire the outer call. The normal blocked-tool recovery
+allowance and enforced run/tool deadlines still apply; after the outer call
+settles, an embedded run that stops making progress remains recoverable.
 
 Attention and recovery log lines read optional session context only when their
 log level is enabled. Transcript enrichment runs in the background read worker

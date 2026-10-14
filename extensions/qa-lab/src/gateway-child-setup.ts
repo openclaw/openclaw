@@ -60,6 +60,7 @@ export type QaGatewayChildListeningContext = {
   token: string;
   configPath: string;
   runtimeEnv: NodeJS.ProcessEnv;
+  logs: () => string;
 };
 
 export type QaGatewayChildParams = {

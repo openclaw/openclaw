@@ -21,7 +21,7 @@ export type ReefTrustOperationState = {
   assertCurrent(): void;
 };
 
-export function validateReefPeerIdentity(
+function validateReefPeerIdentity(
   current: ReefPeerTrust | undefined,
   peer: string,
   expected: ReefPeerIdentity,

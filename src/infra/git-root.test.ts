@@ -12,6 +12,7 @@ import {
   readGitMetadataDirectories,
   readGitMetadataPrefix,
   readGitObjectStorageDependencies,
+  readGitRefs,
   readGitWorktreeAdministrations,
 } from "./git-root.js";
 
@@ -41,6 +42,48 @@ async function expectGitRootResolution(params: {
 }
 
 describe("git-root", () => {
+  it("selects exact packed refs while preserving loose overrides and missing aliases", async () => {
+    await withTestDir({ prefix: "openclaw-git-packed-selection-" }, async (root) => {
+      const packed = "a".repeat(40);
+      const loose = "b".repeat(40);
+      const ref = "refs/heads/release.v1+hotfix";
+      await fs.mkdir(path.join(root, "refs", "heads"), { recursive: true });
+      await fs.writeFile(path.join(root, "refs", "heads", "main"), `${loose}\n`);
+      await fs.writeFile(
+        path.join(root, "packed-refs"),
+        [
+          "# pack-refs with: peeled fully-peeled sorted",
+          `${packed} refs/heads/main`,
+          `${loose} ${ref}/child`,
+          `${loose} refs/heads/releaseXv11hotfix`,
+          `${packed} ${ref}`,
+          `${packed} refs/tags/v1`,
+          `^${loose}`,
+          `${loose}\trefs/remotes/origin/main\r`,
+          `${packed} refs/remotes/origin/tail`,
+        ].join("\n"),
+      );
+      const refs = [
+        "refs/heads/main",
+        ref,
+        "refs/tags/v1",
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/tail",
+        "refs/tags/HEAD",
+      ];
+      expect(readGitRefs(root, refs)).toEqual(
+        new Map([
+          ["refs/heads/main", loose],
+          [ref, packed],
+          ["refs/tags/v1", packed],
+          ["refs/remotes/origin/main", loose],
+          ["refs/remotes/origin/tail", packed],
+          ["refs/tags/HEAD", null],
+        ]),
+      );
+    });
+  });
+
   it("keeps short-read retries within the bounded metadata window", async () => {
     await withTestDir({ prefix: "openclaw-git-bounded-ref-" }, async (root) => {
       const ref = path.join(root, "main");

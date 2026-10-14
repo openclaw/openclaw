@@ -12,12 +12,12 @@ import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-se
 import type { SpawnResult } from "../../process/exec.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { sessionByKeyReadHandlers } from "../server-methods/sessions-read-by-key.js";
 import { requestContext } from "../server-methods/sessions-read-cache.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import { placementTurnOwner } from "./placement-record.js";
-import type { WorkerSessionTurnClaim } from "./placement-store.js";
+import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -56,6 +56,61 @@ afterAll(closeStateDatabaseForTest);
 describe("worker turn launcher failure recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+
+  it.each(["supervisor", "runtime"] as const)(
+    "keeps the typed node-loss cause through the %s result and failed workspace recovery",
+    async (source) => {
+      await seedActivePlacement();
+      const loss = new WorkerNodeLostError();
+      const recovered = vi.fn(async () => {
+        const [pending] = await placements.listPendingWorkspaceResultsAsync();
+        if (!pending) {
+          throw new Error("Expected pending workspace recovery");
+        }
+        await placements.failWorkspaceResultAndReleaseTurn(pending, loss);
+      });
+      const provider = createWorkerSessionTurnPlacementProvider({
+        placements,
+        reconcileActivePlacement: recovered,
+        environments: {
+          ...unusedEnvironments(),
+          get: () => attachedEnvironment(),
+          acquireTurnCredential: async () => credential(),
+          acknowledgeCredentialDelivery: async () => true,
+          startTunnel: async () =>
+            createWorkerTurnTunnel({
+              reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+              launchTurn: async (request) => {
+                request.onDispatchReady?.();
+                await placements.markWorkspaceResultPending(request.turnClaim);
+                return {
+                  stdout: JSON.stringify({
+                    status: "failed",
+                    reason: "node-lost",
+                    transcriptLeafId: null,
+                    transcriptNextSeq: 1,
+                  }),
+                  stderr: "unrelated diagnostic",
+                  code: source === "supervisor" ? 1 : 0,
+                  signal: null,
+                  killed: source === "supervisor",
+                  termination: "exit",
+                  ...(source === "supervisor" ? { nodeLoss: loss } : {}),
+                };
+              },
+            }),
+        },
+      });
+      const attempt = provider.executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "node-loss" },
+        turn("node-loss"),
+        vi.fn(),
+      );
+      await expect(attempt).rejects.toBeInstanceOf(WorkerNodeLostError);
+      expect(recovered).toHaveBeenCalledOnce();
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
+    },
+  );
 
   it("terminalizes a journal-settled dead worker without waiting for blocked teardown", async () => {
     await seedActivePlacement();
@@ -622,8 +677,16 @@ describe("worker turn launcher failure recovery", () => {
       const finishPartial = createDeferred();
       const warning = vi.spyOn(rootLogger, "logWarn").mockImplementation(() => {});
       onTestFinished(() => warning.mockRestore());
-      const persistAbandonedPartial = vi.fn(async (claim: WorkerSessionTurnClaim) => {
-        expect(placements.validateTurnClaim(claim)).toBe(true);
+      const persistAbandonedPartial = vi.fn<
+        NonNullable<WorkerTurnLauncherOptions["persistAbandonedPartial"]>
+      >(async (claim) => {
+        const current = placements.get(SESSION_ID);
+        const currentClaim = current && projectWorkerSessionTurnClaim(current);
+        if (!currentClaim) {
+          throw new Error("Expected the live interrupted turn claim");
+        }
+        expect(currentClaim).toMatchObject({ sessionId: claim.sessionId, runId: claim.runId });
+        expect(placements.validateTurnClaim(currentClaim)).toBe(true);
         partialStarted.resolve();
         await finishPartial.promise;
         if (saveRejects) {

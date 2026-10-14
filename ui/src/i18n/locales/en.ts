@@ -853,6 +853,11 @@ export const en: TranslationMap & {
     all: "All",
     snooze: "Snooze",
     wakeSession: "Wake session",
+    snoozeChooseTime: "Choose another time",
+    snoozeCustom: "Custom",
+    snoozeDateTime: "Date and time",
+    snoozeLocalTime: "Your local time ({zone})",
+    snoozeFutureRequired: "Choose a date and time in the future.",
     snoozeHour: "In 1 hour",
     snoozeThreeHours: "In 3 hours",
     snoozeEvening: "This evening",
@@ -3092,6 +3097,7 @@ export const en: TranslationMap & {
       openParent: "Open parent session {title}",
       subagentsRunning: "Subagents · {count} running",
       layout: "Layout",
+      panels: "Panels",
       continueInTerminal: {
         action: "Continue in terminal…",
         title: "Continue in terminal",
@@ -3350,6 +3356,10 @@ export const en: TranslationMap & {
           "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
         cancelled:
           "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue.",
+      },
+      automationRecovery: {
+        label: "System · automation recovery",
+        summary: "An automation failed — asked the agent to investigate and continue if needed.",
       },
       gatewayRestarted: {
         label: "System · gateway restarted",
@@ -3745,6 +3755,11 @@ export const en: TranslationMap & {
         "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
+      agentUpdate: {
+        queued: "Agent update received · waiting for delivery.",
+        cancelled: "This agent update was cancelled before delivery.",
+        interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
+      },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:
@@ -3852,7 +3867,6 @@ export const en: TranslationMap & {
         clear: "Clear session overrides",
       },
       contextUsage: {
-        label: "Context",
         title: "Context usage details",
         open: "Open context usage details",
         summary: "Session context usage: {used} of {limit} ({pct}%)",
@@ -3945,6 +3959,7 @@ export const en: TranslationMap & {
       allowImage: "Allow image",
       attachedFile: "Attached file",
       audio: "Audio",
+      download: "Download",
       expand: "Open {filename} in the side panel",
       open: "Open",
       previewUnavailable: "Preview unavailable",
@@ -3974,6 +3989,7 @@ export const en: TranslationMap & {
     },
     voice: {
       asking: "Asking OpenClaw...",
+      replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",
@@ -3997,18 +4013,24 @@ export const en: TranslationMap & {
       openApp:
         "Grant access in the OpenClaw Mac app on that device: Settings → This Mac → Permissions. Then tell the agent to try again.",
       ready: "Access is available. You can ask the agent to try again.",
-      grant: "Grant {permissions}",
-      relaunch: "Relaunch OpenClaw",
+      following: "Then grant the remaining permissions: {permissions}.",
+      actions: {
+        "not-determined": "Grant {permissions}",
+        denied: "Open System Settings",
+        "restart-required": "Relaunch OpenClaw",
+        "stale-grant": "Open System Settings",
+        "disabled-in-openclaw": "Enable {permissions}",
+      },
       tryAgain: "Try again",
       retryMessage: "I granted {permissions}, try again.",
       states: {
         "not-determined": "Choose Grant to review the permission request.",
-        denied: "Choose Grant to open System Settings and allow access for OpenClaw.",
+        denied: "Open System Settings to allow access for OpenClaw.",
         "restart-required":
           "If you enabled access in System Settings, relaunch OpenClaw to make it available.",
         "stale-grant":
-          "macOS may be using a stale permission grant. Choose Grant to review it in System Settings.",
-        "disabled-in-openclaw": "Choose Grant to review and enable this capability in OpenClaw.",
+          "macOS may be using a stale permission grant. Open System Settings to review it.",
+        "disabled-in-openclaw": "Choose Enable to review and enable this capability in OpenClaw.",
       },
       capabilities: {
         notifications: "Notifications",

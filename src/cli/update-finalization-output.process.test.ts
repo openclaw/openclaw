@@ -437,7 +437,8 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         }
         return;
       }
-      const triageNotice = "Update failed. Preparing triage diagnostics...";
+      const triageNotice = "Preparing triage diagnostics...";
+      const triageCompleted = "Triage diagnostics saved; no repair agent was started.";
       if (!scenario.endsWith("error")) {
         expect(result.stdout + result.stderr, failure).not.toContain(triageNotice);
         expect(result.stdout + result.stderr, failure).not.toContain("triage-fixture-prompt.md");
@@ -457,7 +458,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           expect(triageIndex, failure).toBeGreaterThan(result.stdout.indexOf(terminal));
           expect(promptIndex, failure).toBeGreaterThan(triageIndex);
           expect(guidanceIndex, failure).toBeGreaterThan(promptIndex);
-          expect(result.stdout.trimEnd().endsWith("openclaw triage --run"), failure).toBe(true);
+          expect(result.stdout.trimEnd().endsWith(triageCompleted), failure).toBe(true);
         } else {
           expect(result.stdout.trimEnd().endsWith(terminal), failure).toBe(true);
         }
@@ -468,6 +469,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       if (scenario.endsWith("error")) {
         expect(result.stderr, failure).not.toContain("Process still alive after terminal output");
         expect(result.stderr, failure).toContain(triageNotice);
+        expect(result.stderr, failure).toContain(triageCompleted);
         expect(result.stderr, failure).toContain('"promptPath":');
         expect(result.stderr, failure).toContain("triage-fixture-prompt.md");
         expect(result.stderr, failure).not.toContain("Triage could not complete:");

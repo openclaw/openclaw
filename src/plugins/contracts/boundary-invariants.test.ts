@@ -18,6 +18,7 @@ const tsFilesCache = new Map<string, string[]>();
 const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/acpx/index.ts",
   "extensions/active-memory/index.ts",
+  "extensions/advisor/index.ts",
   "extensions/browser/plugin-registration.ts",
   "extensions/clickclack/src/discussions/register.ts",
   "extensions/codex/index.ts",
@@ -38,6 +39,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
   "extensions/active-memory/index.ts": ["agent_end", "before_prompt_build"],
+  "extensions/advisor/index.ts": ["before_agent_reply"],
   "extensions/browser/plugin-registration.ts": ["session_end"],
   "extensions/clickclack/src/discussions/register.ts": ["before_tool_call"],
   "extensions/codex/index.ts": ["inbound_claim", "session_end"],
@@ -47,7 +49,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
-  "extensions/memory-core/index.ts": ["before_agent_reply", "before_prompt_build"],
+  "extensions/memory-core/index.ts": ["before_prompt_build"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/onepassword/index.ts": ["before_tool_call"],
   "extensions/qa-lab/src/gateway-registration.ts": ["before_agent_run"],
@@ -64,7 +66,7 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   "extensions/diffs/src/plugin.ts": [
     "resolveLivePluginConfigObject(",
     '"diffs"',
-    "api.runtime.config?.current?.() ?? api.config",
+    "api.runtime.config.current()",
   ],
   "extensions/memory-core/src/dreaming.ts": [
     "resolveMemoryDreamingPluginConfig(startupCfg)",

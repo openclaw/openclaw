@@ -6,11 +6,6 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
-import {
-  getActiveOpenClawStateDatabaseReadSnapshot,
-  isArtifactPreservingStateRead,
-} from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
@@ -33,7 +28,6 @@ import type {
 import { readAuthProfileStoreInWorker } from "./runtime-read.worker.js";
 import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
 import { createEmptyAuthProfileStore } from "./runtime-snapshot-owner.js";
-import { runtimeAuthProfileRowsCache } from "./runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
@@ -178,11 +172,6 @@ export function createAuthProfileStoreRuntimeReader({
       getScopedAuthProfileEnv() ?? suppliedEnv ?? process.env,
     );
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    const reusePersistedRows =
-      !scope.isolated &&
-      !isArtifactPreservingStateRead() &&
-      !getOpenClawDatabaseMaintenanceScope() &&
-      !getActiveOpenClawStateDatabaseReadSnapshot({ env });
     const selectedDir = resolveRuntimeAuthProfileAgentDir(agentDir);
     const effectiveAgentDir = selectedDir
       ? path.dirname(resolveAgentAuthPath(selectedDir))
@@ -312,9 +301,7 @@ export function createAuthProfileStoreRuntimeReader({
         requestOptions.deferScopedMigrationRefusals,
       );
       const candidates = resolveLegacyAuthProfileSourceCandidates({ agentDir: ownerAgentDir, env });
-      const preparedReader =
-        rowReaders.get(databasePath) ??
-        (reusePersistedRows ? runtimeAuthProfileRowsCache.prepare(databasePath, reader) : reader);
+      const preparedReader = rowReaders.get(databasePath) ?? reader;
       rowReaders.set(databasePath, preparedReader);
       const capturedAuthority = credentialAuthorities.get(databasePath);
       if (capturedAuthority && !capturedAuthority.ok) {
@@ -578,7 +565,7 @@ export function createAuthProfileStoreRuntimeReader({
     return withPreparedAuthProfileStoreReads(agentDir, options, undefined, env);
   }
 
-  /** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Retained until an announced stable removal window. */
   function loadAuthProfileStoreForRuntime(
     agentDir?: string,
     options?: LoadAuthProfileStoreOptions,

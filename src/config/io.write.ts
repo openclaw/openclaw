@@ -2,7 +2,7 @@ import type fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok } from "@openclaw/normalization-core/result";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import {
   withDeferredPluginConfigRollback,
@@ -10,6 +10,7 @@ import {
 } from "../infra/deferred-plugin-migrations.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import {
   getUpdateDoctorConfigWriteAuthority,
   assertUpdateDoctorConfigInputHash,
@@ -64,16 +65,14 @@ import {
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
-import type {
-  ConfigWriteInputBasis,
-  ConfigWriteOptions,
-  InternalConfigWriteResult,
-  ReadConfigFileSnapshotInternalResult,
-} from "./io.types.js";
 import {
   ConfigRuntimeRefreshError,
   configWriteCommittedSnapshot,
   configWritePostCommitRollback,
+  type ConfigWriteInputBasis,
+  type ConfigWriteOptions,
+  type InternalConfigWriteResult,
+  type ReadConfigFileSnapshotInternalResult,
 } from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
 import {
@@ -182,7 +181,7 @@ export async function writeConfigFileFromContext(
   };
   const cronOwnerRefusal = cronOwner
     ? await prepareCronOwnerWriteRefusal(snapshot.config, {
-        storePath: resolveCronJobsStorePathFromConfig(nextConfig, deps.env),
+        storePath: await resolveCronJobsStorePathFromConfigAsync(nextConfig, deps.env),
         ...cronOwner,
         env: deps.env,
       })
@@ -536,6 +535,7 @@ export async function writeConfigFileFromContext(
       });
     await using preparedFile = await prepareConfigFileWrite({
       configPath,
+      dirMode: readExistingStateRootMode(path.dirname(configPath), stateDirectory.path, deps.fs),
       content: json,
       previousRaw: snapshot.raw,
       fsModule: writeGuard.fileSystem,

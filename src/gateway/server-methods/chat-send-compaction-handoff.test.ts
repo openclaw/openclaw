@@ -17,11 +17,12 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient } from "./types.js";
@@ -41,6 +42,7 @@ it.each([
   "retains the accepted chat target while preparation outlives its predecessor: %s",
   async (scenario) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       const agentId = "main";
       const sessionKey = "agent:main:compaction-handoff";
       const initialSessionId = "before-compaction";
@@ -153,14 +155,16 @@ it.each([
           await releasePreparation.promise;
           return await originalDispatch({ ...options, replyResolver: resolver });
         });
+      let releaseAuthorization: (() => void) | undefined;
       try {
         const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
-        const authorization = resolveSessionMutationAuthorization({
+        const authorization = await resolveSessionMutationAuthorizationAsync({
           client,
           context,
           method: "chat.send",
           requestParams: params,
         });
+        releaseAuthorization = authorization.authorization?.release;
         expect(authorization.error).toBeNull();
         const respond = vi.fn();
         await handleChatSend({
@@ -286,6 +290,7 @@ it.each([
         if (owned) {
           await owned.admission.gatewayWorkAdmission.released;
         }
+        releaseAuthorization?.();
         holdPreparation.mockRestore();
         holdRuntimePlugins?.mockRestore();
         observeChatDispatch.mockRestore();

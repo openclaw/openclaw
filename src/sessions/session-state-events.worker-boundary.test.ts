@@ -37,6 +37,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
   beginAmbientWatchPrune,
@@ -247,7 +248,7 @@ it("preserves older readers and version markers when watcher provenance is first
 
   await seedChild(database, nestedWatcher);
   assertSqliteSchemaContains(
-    reopened.db,
+    requireNativeSqliteDatabase(reopened.db),
     reopened.path,
     getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }).replace(
       /^ {2}(?:watcher_store_path|requester_store_path|controller_store_path) TEXT,\n/gm,

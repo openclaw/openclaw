@@ -167,6 +167,12 @@
           - "extensions/mcp-relay/**"
           - "docs/plugins/mcp-relay.md"
           - "docs/plugins/reference/mcp-relay.md"
+"plugin: muse":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/muse/**"
+          - "docs/plugins/muse.md"
+          - "docs/plugins/reference/muse.md"
 "plugin: mxc":
   - changed-files:
       - any-glob-to-any-file:
@@ -457,6 +463,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llama-cpp/**"
+"extensions: advisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/advisor/**"
 "extensions: active-memory":
   - changed-files:
       - any-glob-to-any-file:

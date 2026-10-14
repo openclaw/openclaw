@@ -7,6 +7,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageSessionEntry, UsageRouteData } from "./types.ts";
 import {
   cacheSnapshot,
@@ -604,12 +605,12 @@ describe("UsagePage detail requests", () => {
     query.dispatchEvent(new Event("input", { bubbles: true }));
     query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await page.updateComplete;
-    const exportJson = () =>
-      page
-        .querySelector(".usage-export-menu")!
-        .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-    exportJson();
+    const exportJson = () => selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
+    await exportJson();
     await page.updateComplete;
+    expect(page.querySelector(".usage-export-menu > button")?.getAttribute("aria-busy")).toBe(
+      "true",
+    );
     const exported = request.mock.calls.find(([, params]) => params?.includeContextWeight)!;
     expect(exported[1]).toMatchObject({
       query: "label:Included",
@@ -634,7 +635,7 @@ describe("UsagePage detail requests", () => {
     });
     expect(payload.sessions.some((session) => session.label === "Excluded")).toBe(false);
     pending = deferred<SessionsUsageResult>();
-    exportJson();
+    await exportJson();
     await page.updateComplete;
     const scope = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Current instance",

@@ -65,6 +65,41 @@ it("coalesces config writes after a delayed Gateway scheduler wake", async () =>
   }
 });
 
+it("applies an automatic write after the same source was accepted without runtime application", async () => {
+  const write = makeZeroDebounceHookWrite("source-only-follow-up");
+  const initialConfig = { gateway: { reload: {} } };
+  const harness = createReloaderHarness(async () => write.snapshot, { initialConfig });
+  await harness.reloader.ready;
+  harness.emitWrite({
+    ...write,
+    afterWrite: { mode: "none", reason: "source owner handles follow-up" },
+  });
+  await flushReload(harness.reloader);
+  expect(harness.onHotReload).not.toHaveBeenCalled();
+  expect(harness.onEffectiveConfigUnchanged).not.toHaveBeenCalled();
+  expect(harness.onConfigAccepted.mock.calls.at(-1)?.[3]).toEqual({ runtimeApplied: false });
+
+  const application = createRuntimeConfigWriteApplication();
+  harness.emitWrite(
+    attachRuntimeConfigWriteApplication(
+      {
+        ...write,
+        revision: 2,
+        preparedCandidate: { runtimeConfig: initialConfig, compareConfig: initialConfig },
+      },
+      application,
+    ),
+  );
+  await flushReload(harness.reloader);
+
+  await expect(application.result).resolves.toBe("applied");
+  expect(harness.onEffectiveConfigUnchanged).toHaveBeenCalledOnce();
+  expect(harness.onConfigAccepted.mock.calls.at(-1)?.[3]).toEqual({
+    runtimeApplied: true,
+    publishSource: expect.any(Function),
+  });
+});
+
 it("joins an admitted reload when its Gateway scheduler stops", async () => {
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);

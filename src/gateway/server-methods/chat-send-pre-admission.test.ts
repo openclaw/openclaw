@@ -17,7 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   prepareUserProfileCatalog,
-  readUserProfileIdentity,
+  readResidentUserProfileId,
 } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -369,6 +369,49 @@ describe("chat send retry identity", () => {
     },
   );
 
+  it.each(["mentions", "work context"] as const)(
+    "keeps a missing %s retry unverifiable without RAM fingerprints",
+    async (annotation) => {
+      const params = retryFixture(`unkeyed-${annotation}`);
+      params.request.requestIdentity = undefined;
+      if (annotation === "work context") {
+        params.request.mentions = undefined;
+        params.request.workContext = {
+          snapshot: { page: "chat" },
+          text: params.request.rawMessage,
+        };
+      }
+      params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
+        ts: 100,
+        ok: true,
+        payload: { runId: params.session.clientRunId, status: "ok" },
+      });
+      vi.mocked(readSessionSubmittedInput).mockResolvedValue(undefined);
+      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
+      expectConflict(params.respond);
+      expect(readSessionSubmittedInput).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rejects a keyed plain-text retry after the device identity changes", async () => {
+    const params = retryFixture("rotated-device-identity");
+    params.request.mentions = undefined;
+    params.request.requestIdentity = "rotated-device-fingerprint";
+    params.session.entry = {
+      sessionId: "mention-session",
+      updatedAt: 100,
+      restartRecoveryTerminalRunIds: [params.session.clientRunId],
+    };
+    vi.mocked(readSessionSubmittedInput).mockResolvedValue({
+      role: "user",
+      timestamp: 100,
+      content: params.request.rawMessage,
+      __openclaw: { chatRequestIdentity: "original-device-fingerprint" },
+    });
+    expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
+    expectConflict(params.respond);
+  });
+
   it.each(["unchanged", "removed", "replaced"] as const)(
     "compares %s selections to the original source after RAM identity expires",
     async (selection) => {
@@ -588,7 +631,8 @@ describe("chat send retry identity", () => {
   it.each(["unchanged", "cached-success", "cached-error", "new-admission"] as const)(
     "rechecks the canonical profile after real recovery without changing %s outcomes",
     async (outcome) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
+      await withOpenClawTestState(stateOptions, async () => {
         setRuntimeConfigSnapshot({});
         const { fixture, params } = preAdmissionFixture(`profile-recovery-${outcome}`);
         const sourceEmail = "recovery-source@example.test";
@@ -625,10 +669,7 @@ describe("chat send retry identity", () => {
         });
         // Keep the selected ID exact: resolving both sides would silently follow a merge.
         params.assertCurrent = () => {
-          if (
-            readUserProfileIdentity(client.authenticatedUserProfile!.profileId)?.profileId !==
-            source.id
-          ) {
+          if (readResidentUserProfileId(client.authenticatedUserProfile!.profileId) !== source.id) {
             throw mismatch;
           }
         };
@@ -652,7 +693,7 @@ describe("chat send retry identity", () => {
           expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
           if (outcome !== "unchanged") {
             linkEmail(sourceEmail, target.id);
-            expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
+            expect(readResidentUserProfileId(source.id)).toBe(target.id);
             expect(client.authenticatedUserProfile?.profileId).toBe(source.id);
           }
           if (outcome === "cached-success" || outcome === "cached-error") {

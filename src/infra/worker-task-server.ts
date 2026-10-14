@@ -5,16 +5,14 @@ import {
   type WorkerTaskChannel,
   type WorkerTaskControl,
 } from "@openclaw/worker-runtime/worker";
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
 import {
   applyAgentDatabaseReaderRequest,
   decodeAgentDatabaseReaderRequest,
   installDeletedAgentDatabaseFences,
 } from "./agent-database-readers.js";
-import {
-  installSqliteDatabaseAdmissions,
-  withSqliteDatabaseAdmissionExchange,
-} from "./sqlite-database-admission.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
@@ -116,13 +114,16 @@ export function serveOwnedWorkerTasks<Output>(
       },
       installTaskContext(context) {
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
-        installSqliteDatabaseAdmissions(context.databaseAdmissions);
         if (context.databaseAdmissionPort) {
           bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);
         }
         databaseAdmissionPort ??= context.databaseAdmissionPort;
       },
-      onIdle: scheduleWorkerIdleGc,
+      onIdle() {
+        // Later tasks can load additional modules; an empty native flush does no I/O.
+        scheduleOpenClawCompileCacheFlush();
+        scheduleWorkerIdleGc();
+      },
       onRetire() {
         cancelWorkerIdleGc();
         try {

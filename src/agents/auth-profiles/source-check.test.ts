@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { refreshAuthProfileFileState } from "./file-state.js";
 import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
 import { hasAuthProfileStoreSourceForProvider } from "./source-check.js";
 import { readPersistedAuthProfileStoreRaw, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
@@ -44,6 +45,7 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
       "requires legacy credential migration",
     );
     await fs.rename(path.join(agentDir, "auth.json"), path.join(agentDir, "auth.json.migrated"));
+    await refreshAuthProfileFileState();
     clearAuthProfileMigrationDiagnostics();
     expect(loadAuthProfileStoreForRuntime(agentDir).profiles).toEqual({});
   });
@@ -102,6 +104,7 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
       path.join(agentDir, "auth.json"),
       JSON.stringify({ openai: { type: "api_key", key: "fake-late-key" } }),
     );
+    await refreshAuthProfileFileState();
 
     expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(true);
     expect(() => loadAuthProfileStoreForRuntime(agentDir)).toThrow(

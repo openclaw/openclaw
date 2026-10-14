@@ -1,6 +1,12 @@
-import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { chatItemGroups, type coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import type { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import type { StreamGroup, WorkGroupSummary } from "./chat-message-stream-view.tsx";
+import type {
+  StreamGroup,
+  UnplacedSubagentWait,
+  WorkGroupSummary,
+} from "./chat-message-stream-view.tsx";
+import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadState } from "./chat-thread-interactions.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 
@@ -10,7 +16,9 @@ export type NativeTranscriptView =
   | ({ kind: "group" } & Parameters<typeof MessageGroup>[0])
   | ({ kind: "activity" } & Parameters<typeof ActivityGroup>[0])
   | ({ kind: "stream" } & Parameters<typeof StreamGroup>[0])
-  | ({ kind: "work" } & Parameters<typeof WorkGroupSummary>[0]);
+  | ({ kind: "work" } & Parameters<typeof WorkGroupSummary>[0])
+  | ({ kind: "frame" } & Parameters<typeof AgentRunFrame>[0])
+  | ({ kind: "wait" } & Parameters<typeof UnplacedSubagentWait>[0]);
 
 /** The keyed virtual row owns the dependency memo and its rendered content. */
 export class GuardedTranscriptItem {
@@ -43,6 +51,22 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
     ];
   }
   return [item];
+}
+
+export function transcriptReplyDependencies(
+  item: ChatRenderItem,
+  loadedSources: ReadonlyMap<string, LoadedReplySource>,
+): unknown[] {
+  const dependencies: unknown[] = [];
+  for (const group of chatItemGroups(item)) {
+    for (const source of group.messages) {
+      if (source.replyTarget?.kind === "id") {
+        const loaded = loadedSources.get(source.replyTarget.id);
+        dependencies.push(source.replyTarget.id, loaded?.message, loaded?.senderLabel);
+      }
+    }
+  }
+  return dependencies;
 }
 
 export function trackTranscriptRenderDependencies(

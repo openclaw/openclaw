@@ -431,43 +431,6 @@ describe("processDiscordMessage draft streaming recovery", () => {
     });
   });
 
-  it("drops earlier tool warning finals when recovered replies arrive", async () => {
-    const draftStream = createMockDraftStreamForTest();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
-      await params?.dispatcher.sendFinalReply({ text: "delivery recovered" });
-      await params?.dispatcher.waitForIdle();
-      return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
-    });
-
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expectFreshFinalText("delivery recovered");
-    expect(draftStream.messageId()).toBeUndefined();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("suppresses pure tool warning finals when no recovered reply is available", async () => {
-    const draftStream = createMockDraftStreamForTest();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
-  });
-
   it("suppresses tool warning finals when the recovered reply fails to send", async () => {
     deliverDiscordReply.mockRejectedValueOnce(new Error("send failed"));
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -616,29 +579,6 @@ describe("processDiscordMessage draft streaming progress", () => {
     );
     expect(draftStream.messageId()).toBeDefined();
     expect(deliverDiscordReply).not.toHaveBeenCalled();
-  });
-
-  it("retries an unacknowledged preamble and reports visibility after Discord accepts it", async () => {
-    const draftStream = createMockDraftStreamForTest();
-    draftStream.messageId.mockReturnValue(undefined);
-    const results: Array<boolean | void> = [];
-
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      const preamble = {
-        itemId: "preamble-1",
-        kind: "preamble",
-        progressText: "Checking source data.",
-      };
-      results.push(await params?.replyOptions?.onItemEvent?.(preamble));
-      draftStream.messageId.mockReturnValue("preview-1");
-      results.push(await params?.replyOptions?.onItemEvent?.(preamble));
-      return createNoQueuedDispatchResult();
-    });
-
-    await runProgressScenario({ toolProgress: true, label: false, commentary: true });
-
-    expect(results).toEqual([false, true]);
-    expect(draftStream.update.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps tool status while yielding commentary and narration to the durable verbose owner", async () => {

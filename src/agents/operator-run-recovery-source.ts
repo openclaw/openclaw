@@ -26,6 +26,12 @@ export function createRestartRecoveryOperatorSource(params: {
   assertAdmittedRunOperatorAuthority(authority);
   authority.assertCurrent();
   const snapshot = authority.recoverySnapshot;
+  const requesterSettle =
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance.sourceTool === "subagent_settle" &&
+    params.inputProvenance.sourceChannel === "internal" &&
+    params.sourceRunId.startsWith("announce:requester-settle:") &&
+    Boolean(params.inputProvenance.sourceSessionKey?.trim());
   // Dashboard roots link to main for grouping; only execution lineage excludes
   // recovery. Treating parentSessionKey as delegation strips real operator turns.
   if (
@@ -38,7 +44,9 @@ export function createRestartRecoveryOperatorSource(params: {
     entry.acp ||
     entry.pluginOwnerId ||
     entry.cronRunContinuation ||
-    (params.inputProvenance && params.inputProvenance.kind !== "external_user") ||
+    (params.inputProvenance &&
+      params.inputProvenance.kind !== "external_user" &&
+      !requesterSettle) ||
     isCronSessionKey(sessionKey) ||
     isSubagentSessionKey(sessionKey) ||
     isAcpSessionKey(sessionKey) ||
