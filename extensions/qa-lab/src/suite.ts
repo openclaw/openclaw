@@ -393,13 +393,19 @@ async function listGatewayHeapSnapshotFiles(tempRoot: string) {
 }
 
 export async function captureGatewayHeapSnapshotCheckpoint(params: {
-  gateway: Pick<QaGatewayChild, "tempRoot" | "signalProcess" | "call">;
+  gateway: Pick<QaGatewayChild, "tempRoot" | "pid" | "signalProcess" | "call">;
   outputDir: string;
   label: string;
 }): Promise<QaSuiteGatewayHeapSnapshot | undefined> {
   const before = new Set(
     (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).map((file) => file.pathName),
   );
+  const pid = params.gateway.pid;
+  const assertSameGateway = () => {
+    if (params.gateway.pid !== pid) {
+      throw new Error("Gateway changed during heap snapshot capture");
+    }
+  };
   const deadlineMs = Date.now() + 20_000;
   await params.gateway.signalProcess("SIGQUIT");
   let snapshotPath: string | undefined;
@@ -417,9 +423,11 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
     return undefined;
   }
 
-  // Node's synchronous signal handler closes the writer before answering an RPC.
-  // A gateway restart during this diagnostic capture is best-effort.
+  // Node opens the file before synchronous serialization. A same-process RPC after
+  // file appearance cannot respond until the signal handler has closed the writer.
+  assertSameGateway();
   await params.gateway.call("health", {}, { deadlineMs });
+  assertSameGateway();
   const { size: bytes } = await fs.stat(snapshotPath);
   const snapshotsDir = path.join(params.outputDir, "artifacts", "gateway-heap-snapshots");
   await fs.mkdir(snapshotsDir, { recursive: true });

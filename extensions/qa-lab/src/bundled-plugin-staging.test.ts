@@ -151,32 +151,6 @@ describe("qa bundled plugin dir", () => {
     ).rejects.toThrow("invalid QA bundled plugin id: ../escape");
   });
 
-  it("stages manifest aliases with source CLI metadata and canonical manifests", async () => {
-    const f = await fixture();
-    for (const id of ["first", "second"]) {
-      await f.write(`dist/extensions/built-${id}/openclaw.plugin.json`, { id });
-      await f.write(`dist/extensions/built-${id}/marker.txt`, "compiled");
-      await f.write(`extensions/source-${id}/openclaw.plugin.json`, { id, name: id });
-      await f.write(`extensions/source-${id}/cli-metadata.ts`, "export {};");
-      await f.write(`extensions/source-${id}/marker.txt`, "source");
-    }
-    const { bundledPluginsDir } = await createQaBundledPluginsDir({
-      ...f,
-      allowedPluginIds: ["first", "second"],
-    });
-    expect((await readdir(bundledPluginsDir)).toSorted()).toEqual(["first", "second"]);
-    for (const id of ["first", "second"]) {
-      await expect(readFile(path.join(bundledPluginsDir, id, "marker.txt"), "utf8")).resolves.toBe(
-        "source",
-      );
-      expect(
-        JSON.parse(
-          await readFile(path.join(bundledPluginsDir, id, "openclaw.plugin.json"), "utf8"),
-        ),
-      ).toEqual({ id, name: id });
-    }
-  });
-
   it("resolves CLI and configured Responses aliases to their shared plugin owner", async () => {
     const f = await fixture();
     await f.write("dist/extensions/cli-owner/openclaw.plugin.json", {

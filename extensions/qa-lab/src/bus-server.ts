@@ -66,78 +66,88 @@ const qaBusMessageOptionalFields = {
   toolCalls: z.array(qaBusToolCallSchema).optional(),
 };
 
-function qaBusRequest<T extends z.ZodRawShape>(
-  shape: T,
-  handle: (state: QaBusState, input: z.infer<z.ZodObject<T>>) => unknown,
-) {
-  const schema = z.object(shape).passthrough();
+function qaBusRequest<T>(schema: z.ZodType<T>, handle: (state: QaBusState, input: T) => unknown) {
   return (state: QaBusState, body: unknown) => handle(state, schema.parse(body));
 }
 
 const qaBusRequests: Partial<Record<string, (state: QaBusState, body: unknown) => unknown>> = {
   "/v1/inbound/message": qaBusRequest(
-    {
-      ...qaBusMessageOptionalFields,
-      conversation: qaBusConversationSchema,
-      senderId: z.string(),
-      text: z.string(),
-      threadTitle: z.string().optional(),
-      nativeCommand: z.object({ name: z.string() }).passthrough().optional(),
-    },
+    z
+      .object({
+        ...qaBusMessageOptionalFields,
+        conversation: qaBusConversationSchema,
+        senderId: z.string(),
+        text: z.string(),
+        threadTitle: z.string().optional(),
+        nativeCommand: z.object({ name: z.string() }).passthrough().optional(),
+      })
+      .passthrough(),
     (state, input) => ({ message: state.addInboundMessage(input) }),
   ),
   "/v1/outbound/message": qaBusRequest(
-    {
-      ...qaBusMessageOptionalFields,
-      to: z.string(),
-      senderId: z.string().optional(),
-      text: z.string(),
-      isError: z.boolean().optional(),
-    },
+    z
+      .object({
+        ...qaBusMessageOptionalFields,
+        to: z.string(),
+        senderId: z.string().optional(),
+        text: z.string(),
+        isError: z.boolean().optional(),
+      })
+      .passthrough(),
     (state, input) => ({ message: state.addOutboundMessage(input) }),
   ),
   "/v1/actions/thread-create": qaBusRequest(
-    {
-      accountId: z.string().optional(),
-      conversationId: z.string(),
-      title: z.string(),
-      createdBy: z.string().optional(),
-      timestamp: z.number().optional(),
-    },
+    z
+      .object({
+        accountId: z.string().optional(),
+        conversationId: z.string(),
+        title: z.string(),
+        createdBy: z.string().optional(),
+        timestamp: z.number().optional(),
+      })
+      .passthrough(),
     (state, input) => ({ thread: state.createThread(input) }),
   ),
   "/v1/actions/react": qaBusRequest(
-    {
-      accountId: z.string().optional(),
-      messageId: z.string(),
-      emoji: z.string(),
-      senderId: z.string().optional(),
-      timestamp: z.number().optional(),
-    },
+    z
+      .object({
+        accountId: z.string().optional(),
+        messageId: z.string(),
+        emoji: z.string(),
+        senderId: z.string().optional(),
+        timestamp: z.number().optional(),
+      })
+      .passthrough(),
     (state, input) => ({ message: state.reactToMessage(input) }),
   ),
   "/v1/actions/edit": qaBusRequest(
-    {
-      accountId: z.string().optional(),
-      messageId: z.string(),
-      text: z.string(),
-      timestamp: z.number().optional(),
-    },
+    z
+      .object({
+        accountId: z.string().optional(),
+        messageId: z.string(),
+        text: z.string(),
+        timestamp: z.number().optional(),
+      })
+      .passthrough(),
     (state, input) => ({ message: state.editMessage(input) }),
   ),
   "/v1/actions/delete": qaBusRequest(
-    {
-      accountId: z.string().optional(),
-      messageId: z.string(),
-      timestamp: z.number().optional(),
-    },
+    z
+      .object({
+        accountId: z.string().optional(),
+        messageId: z.string(),
+        timestamp: z.number().optional(),
+      })
+      .passthrough(),
     (state, input) => ({ message: state.deleteMessage(input) }),
   ),
   "/v1/actions/read": qaBusRequest(
-    {
-      accountId: z.string().optional(),
-      messageId: z.string(),
-    },
+    z
+      .object({
+        accountId: z.string().optional(),
+        messageId: z.string(),
+      })
+      .passthrough(),
     (state, input) => ({ message: state.readMessage(input) }),
   ),
 };

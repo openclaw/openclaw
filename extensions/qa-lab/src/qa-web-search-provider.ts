@@ -2,6 +2,7 @@ import {
   MAX_SEARCH_COUNT,
   readPositiveIntegerParam,
   readStringParam,
+  resolveSiteName,
   wrapWebContent,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -39,7 +40,7 @@ function buildQaLabSearchResult(query: string, index: number) {
       `Deterministic QA Lab web_search result for query: ${query}`,
       "web_search",
     ),
-    siteName: "docs.openclaw.ai",
+    siteName: resolveSiteName(url) || "docs.openclaw.ai",
   };
 }
 

@@ -800,19 +800,29 @@ describe("buildQaSuiteSummaryJson", () => {
 });
 
 describe("Gateway heap snapshot checkpoints", () => {
-  async function createWriterFixture(outcome?: "failed") {
+  async function createWriterFixture(outcome?: "failed" | "replaced-before" | "replaced-during") {
     const tempRoot = await tempDirs.makeTempDir("qa-heap-checkpoint-");
     const outputDir = path.join(tempRoot, "output");
     const snapshotPath = path.join(tempRoot, "Heap.snapshot.heapsnapshot");
+    let pid = 123;
     const gateway = {
       tempRoot,
+      get pid() {
+        return pid;
+      },
       async signalProcess(signal: NodeJS.Signals) {
         expect(signal).toBe("SIGQUIT");
         await fs.writeFile(snapshotPath, '{"snapshot":');
+        if (outcome === "replaced-before") {
+          pid += 1;
+        }
       },
       async call() {
         if (outcome === "failed") {
           throw new Error("Gateway exited during snapshot serialization");
+        }
+        if (outcome === "replaced-during") {
+          pid += 1;
         }
         // Node's signal handler closes the snapshot before its JS thread can answer an RPC.
         await fs.appendFile(snapshotPath, '{"complete":true}}');
@@ -834,11 +844,14 @@ describe("Gateway heap snapshot checkpoints", () => {
     expect(checkpoint!.bytes).toBe(artifact.length);
   });
 
-  it("does not publish a snapshot after the Gateway exits", async () => {
-    const params = await createWriterFixture("failed");
-    await expect(
-      captureGatewayHeapSnapshotCheckpoint({ ...params, label: "after turn" }),
-    ).rejects.toThrow("Gateway exited");
-    await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+  it.each(["failed", "replaced-before", "replaced-during"] as const)(
+    "does not publish a snapshot after the Gateway is %s",
+    async (outcome) => {
+      const params = await createWriterFixture(outcome);
+      await expect(
+        captureGatewayHeapSnapshotCheckpoint({ ...params, label: "after turn" }),
+      ).rejects.toThrow(outcome === "failed" ? "Gateway exited" : "Gateway changed");
+      await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 });

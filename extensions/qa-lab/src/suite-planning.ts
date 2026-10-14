@@ -402,20 +402,34 @@ async function mapQaSuiteWithConcurrency<T, U>(
   let nextStartGate = Promise.resolve();
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl = opts?.sleepImpl ?? sleep;
+  async function waitForStartSlot(shouldReleaseNextSlot: boolean) {
+    const currentGate = nextStartGate;
+    let releaseNextSlot: (() => void) | undefined;
+    if (shouldReleaseNextSlot) {
+      nextStartGate = new Promise<void>((resolve) => {
+        releaseNextSlot = resolve;
+      });
+    }
+    await currentGate;
+    if (!releaseNextSlot) {
+      return;
+    }
+    void (async () => {
+      try {
+        if (!stopped && startStaggerMs > 0) {
+          await sleepImpl(startStaggerMs);
+        }
+      } finally {
+        releaseNextSlot();
+      }
+    })();
+  }
   const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: items.map((item, index) => async () => {
       if (stopped) {
         return undefined;
       }
-      const startGate = nextStartGate;
-      if (index < items.length - 1) {
-        nextStartGate = startGate.then(async () => {
-          if (!stopped && startStaggerMs > 0) {
-            await sleepImpl(startStaggerMs);
-          }
-        });
-      }
-      await startGate;
+      await waitForStartSlot(index < items.length - 1);
       if (stopped) {
         return undefined;
       }

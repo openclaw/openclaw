@@ -12,6 +12,28 @@ export function resolveNativeVitestReportPath(
   return path.join(outputDir, `${scenario.id}.vitest-report.json`);
 }
 
+async function canonicalizeNativeTestFilePath(params: {
+  canonicalRepoRoot: string;
+  repoRoot: string;
+  testPath: string;
+}) {
+  const absoluteTestPath = path.resolve(params.repoRoot, params.testPath);
+  const canonicalTestPath = await fs.realpath(absoluteTestPath).catch(() => undefined);
+  if (canonicalTestPath) {
+    return canonicalTestPath;
+  }
+
+  const repoRelativePath = path.relative(params.repoRoot, absoluteTestPath);
+  if (
+    repoRelativePath !== ".." &&
+    !repoRelativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(repoRelativePath)
+  ) {
+    return path.resolve(params.canonicalRepoRoot, repoRelativePath);
+  }
+  return absoluteTestPath;
+}
+
 export async function readNativeVitestExecutionFailure(params: {
   outputDir: string;
   repoRoot: string;
@@ -46,16 +68,18 @@ export async function readNativeVitestExecutionFailure(params: {
   if (!expectedTestPath) {
     return `Vitest exited successfully without an existing requested test file ${params.scenario.execution.path}.`;
   }
+  const canonicalRepoRoot = await fs.realpath(params.repoRoot);
   const matchingTestResult = (
     await Promise.all(
       (Array.isArray(testResults) ? testResults : []).map(async (result) => {
         if (!result || typeof result.name !== "string") {
           return undefined;
         }
-        // A disappearing test file fails verification instead of guessing its identity.
-        const reportedTestPath = await fs
-          .realpath(path.resolve(params.repoRoot, result.name))
-          .catch(() => undefined);
+        const reportedTestPath = await canonicalizeNativeTestFilePath({
+          canonicalRepoRoot,
+          repoRoot: params.repoRoot,
+          testPath: result.name,
+        });
         return reportedTestPath === expectedTestPath ? result : undefined;
       }),
     )
