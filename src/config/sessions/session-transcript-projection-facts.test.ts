@@ -143,7 +143,7 @@ it("carries a retained actor projection into the history reader and rejects it a
       sessionId: f.scope.sessionId,
     };
     try {
-      expect(replica.beginRead().install(f.hydrate().hot)).toBe(true);
+      expect(replica.beginRead()(f.hydrate().hot)).toBe(true);
       const receipt = readSessionActorProjectionReceipt(locator);
       if (!receipt) {
         throw new Error("Installed actor projection was not available to the history reader");

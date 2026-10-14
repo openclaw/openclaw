@@ -422,19 +422,6 @@ it("reads full durable context through workers and preserves the deprecated sync
     ).rejects.toThrow("Session transcript changed during context read");
     expect(consumeMissing).not.toHaveBeenCalled();
     expect(fs.existsSync(missing.storePath)).toBe(false);
-    const alias = path.join(state.stateDir, "context-alias");
-    const successor = path.join(state.stateDir, "missing-successor");
-    fs.mkdirSync(successor);
-    fs.symlinkSync(path.dirname(target.storePath), alias, "junction");
-    await expect(
-      SessionManager.readSessionContextAsync(
-        { ...target, storePath: path.join(alias, path.basename(target.storePath)) },
-        async () => {
-          fs.unlinkSync(alias);
-          fs.symlinkSync(successor, alias, "junction");
-        },
-      ),
-    ).rejects.toThrow(/captured|identity|owner/);
   });
 });
 

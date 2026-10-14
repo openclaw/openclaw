@@ -676,7 +676,9 @@ it("rejects a physical replacement while target discovery is suspended", async (
       await fs.rename(scope.storePath, originalPath);
       await fs.copyFile(originalPath, scope.storePath);
       release.resolve();
-      await expect(pending).rejects.toThrow("captured database owner");
+      await expect(pending).rejects.toThrow(
+        "SQLite database file identity changed before existing-only open",
+      );
     } finally {
       release.resolve();
       await pending.catch(() => undefined);

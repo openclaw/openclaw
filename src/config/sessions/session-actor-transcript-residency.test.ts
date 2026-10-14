@@ -107,7 +107,7 @@ function contextFixture(f: Fixture) {
       },
     });
     const hot = f.read();
-    expect(replica.beginRead().install(hot)).toBe(true);
+    expect(replica.beginRead()(hot)).toBe(true);
     const retained = seedSessionActorTranscriptContext(
       undefined,
       hot,
@@ -517,7 +517,7 @@ it("invalidates retained context for nonactor content and topology writer classe
         } else {
           expect(after.transcript.version.rawSeq).toBe(before.transcript.version.rawSeq! + 1);
         }
-        expect(context.replica.beginRead().install(after), change).toBe(true);
+        expect(context.replica.beginRead()(after), change).toBe(true);
         expect(context.read(), change).toBeUndefined();
         if (change === "rewrite" || change === "rewind" || change === "compaction") {
           const scope = { ...f.scope, sessionId: after.entry!.sessionId };
@@ -601,7 +601,7 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
       expect(context.anchors()).toBeUndefined();
       expect(context.summary()).toBeUndefined();
       expect(readColdMetadata()).toBeUndefined();
-      expect(context.replica.beginRead().install(f.read())).toBe(true);
+      expect(context.replica.beginRead()(f.read())).toBe(true);
       expect(readColdMetadata()).toBeUndefined();
       const plan = {
         kind: "cold-restore" as const,

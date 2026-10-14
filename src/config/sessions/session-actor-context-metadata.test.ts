@@ -75,7 +75,7 @@ function reader(f: Fixture) {
     replica,
     receipt,
     install() {
-      expect(replica.beginRead().install(f.read())).toBe(true);
+      expect(replica.beginRead()(f.read())).toBe(true);
     },
     accounting: () =>
       withSessionTranscriptProjectionReceipt({ ...receipt(), contextOnly: true }, () =>
