@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
+import { nothing, render } from "lit";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BoardSessionSurface, type BoardSessionSurfaceProps } from "./board-session-surface.tsx";
+import { renderBoardSessionSurface } from "./board-session-surface.tsx";
 
 const containers: HTMLElement[] = [];
 
@@ -30,7 +30,7 @@ describe("board session shell", () => {
       const provider = createMockBoardProvider("agent:main:main");
       const owner = new EventTarget();
       let active = true;
-      const props: BoardSessionSurfaceProps = {
+      const props = {
         active:
           parent === "parked" ? { owner, isPresented: () => active, preview: () => true } : true,
         session: { sessionKey: "agent:main:main" },
@@ -46,9 +46,7 @@ describe("board session shell", () => {
         widgetFrameUrl: (name: string, revision: number) => provider.widgetFrameUrl(name, revision),
       };
 
-      const [current, setCurrent] = createSignal(props);
-      const mount = () => mountSolid(() => <BoardSessionSurface {...current()} />, { container });
-      const mounted = mount();
+      render(renderBoardSessionSurface(props), container);
       flush();
       const board = container.querySelector("openclaw-board-view");
       expect(board?.active).toBe(true);
@@ -57,7 +55,7 @@ describe("board session shell", () => {
       if (parent === "parked") {
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
       } else {
-        setCurrent({ ...props, active: false });
+        render(renderBoardSessionSurface({ ...props, active: false }), container);
       }
       flush();
       const hiddenSurface = container.querySelector<HTMLElement>(".board-session-surface");
@@ -70,18 +68,18 @@ describe("board session shell", () => {
       if (parent === "parked") {
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
       } else {
-        setCurrent(props);
+        render(renderBoardSessionSurface(props), container);
       }
       flush();
       expect(container.querySelector("openclaw-board-view")).toBe(board);
       expect(container.querySelector<HTMLElement>(".board-session-surface")?.hidden).toBe(false);
       expect(board?.active).toBe(true);
       if (parent === "parked") {
-        mounted.unmount();
+        render(nothing, container);
         active = false;
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
         expect(board?.active).toBe(true);
-        mount();
+        render(renderBoardSessionSurface(props), container);
         flush();
         const replacement = container.querySelector("openclaw-board-view");
         expect(replacement).not.toBe(board);
