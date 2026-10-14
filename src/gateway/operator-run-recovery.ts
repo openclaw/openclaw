@@ -243,7 +243,7 @@ export async function restoreGatewayOperatorRecovery(params: {
           access.signal.addEventListener("abort", onAbort, { once: true });
           subscriptions.push(() => access.signal.removeEventListener("abort", onAbort));
         }
-        // Other policy callbacks may synchronously revoke the retained grant.
+        // The grant assertion can synchronously abort its signal.
         accessAuthority?.signal.throwIfAborted();
         // A policy callback can change committed identity/config synchronously.
         return assertFacts().cfg;

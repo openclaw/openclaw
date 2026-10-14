@@ -313,8 +313,6 @@ export function resumeGatewayOperatorAccessGrant(
           grantId: grant.grantId,
           requiredByRole: requiredPlugin === grant.pluginId,
         });
-      authority?.signal.throwIfAborted();
-      authority?.assertCurrent();
     } catch {
       // Startup and unavailable observations are not evidence that a grant ended.
       throw new GatewayOperatorAccessUnavailableError();
@@ -338,6 +336,13 @@ export function resumeGatewayOperatorAccessGrant(
       // A newly applicable policy needs a fresh request bound to that dependency.
       throw new GatewayOperatorAccessDeniedError();
     }
+  }
+  try {
+    // Other policies can synchronously invalidate the original grant without aborting its signal.
+    resumed?.signal.throwIfAborted();
+    resumed?.assertCurrent();
+  } catch {
+    throw new GatewayOperatorAccessUnavailableError();
   }
   return resumed;
 }

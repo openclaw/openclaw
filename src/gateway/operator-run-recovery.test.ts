@@ -313,13 +313,14 @@ describe("restart recovery authenticated operator source", () => {
       });
     },
   );
-  it.each(["signal", "assertion", "new policy", "github binding"] as const)(
+  it.each(["signal", "assertion", "new policy", "github binding", "policy callback"] as const)(
     "resumes the original access grant once and fences retained recovery through %s",
     async (revocation) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const original = { pluginId: "recovery-access", grantId: "original-accepted-grant" };
         let permitted = true;
         let additionalApplicable = false;
+        let invalidateDuringPolicy = false;
         const controller = new AbortController();
         const grant = {
           grantId: original.grantId,
@@ -347,7 +348,14 @@ describe("restart recovery authenticated operator source", () => {
         registry.gatewayAccessPolicies.push({
           pluginId: "additional-access",
           source: "fixture",
-          policy: { authorize: () => (additionalApplicable ? grant : undefined) },
+          policy: {
+            authorize: () => {
+              if (invalidateDuringPolicy) {
+                permitted = false;
+              }
+              return additionalApplicable ? grant : undefined;
+            },
+          },
         });
         const previous = captureActivePluginRegistrySnapshot();
         stageActivePluginRegistry(registry, null, "default");
@@ -390,6 +398,8 @@ describe("restart recovery authenticated operator source", () => {
               expect(restored.authority.signal?.aborted).toBe(true);
             } else if (revocation === "assertion") {
               permitted = false;
+            } else if (revocation === "policy callback") {
+              invalidateDuringPolicy = true;
             } else if (revocation === "github binding") {
               const { db } = openOpenClawStateDatabase();
               // Seed a removed secondary identity, then publish through the profile writer.
