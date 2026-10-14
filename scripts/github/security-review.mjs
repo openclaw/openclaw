@@ -148,7 +148,7 @@ let currentReview;
 
 async function main() {
   const mode = process.env.OPENCLAW_SECURITY_REVIEW_MODE ?? "enforce";
-  if (!["detect", "autoscrub", "enforce"].includes(mode)) {
+  if (!["detect", "autoscrub", "enforce", "prepare"].includes(mode)) {
     throw new Error(`Unknown security review mode: ${mode}`);
   }
   const review = await readGuardReview(recoveryReview);
@@ -162,7 +162,7 @@ async function main() {
   try {
     review.rollout = await securityReviewRollout(review);
     if (review.rollout.mode === "enforced") {
-      if (mode !== "enforce") {
+      if (mode !== "enforce" && mode !== "prepare") {
         await reviewDependencyChanges(review, mode);
         return;
       }
@@ -171,8 +171,11 @@ async function main() {
       let allowed = true;
       for (const guard of [reviewDependencyChanges, reviewSecuritySensitiveChanges]) {
         try {
-          if (!(await guard(review))) {
+          if (!(await guard(review, mode === "prepare" ? "prepare" : "enforce"))) {
             allowed = false;
+          }
+          if (review.autoscrubPending) {
+            return;
           }
         } catch (error) {
           if (
@@ -208,7 +211,7 @@ async function main() {
       } else {
         console.log(summary);
       }
-      if (mode !== "enforce") {
+      if (mode !== "enforce" && mode !== "prepare") {
         return;
       }
     }
@@ -281,13 +284,26 @@ async function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  withSecurityReviewRecovery(main, {
-    checkCurrent: async () => {
-      if (currentReview) {
-        await assertGuardUnchanged(currentReview, { allowFileCountChange: true });
+  withSecurityReviewRecovery(
+    async () => {
+      await main();
+      if (
+        process.env.OPENCLAW_SECURITY_REVIEW_MODE === "prepare" &&
+        currentReview &&
+        !currentReview.autoscrubPending &&
+        process.env.GITHUB_OUTPUT
+      ) {
+        await appendFile(process.env.GITHUB_OUTPUT, "completed=true\n");
       }
     },
-  }).catch(
+    {
+      checkCurrent: async () => {
+        if (currentReview) {
+          await assertGuardUnchanged(currentReview, { allowFileCountChange: true });
+        }
+      },
+    },
+  ).catch(
     /** @param {unknown} error */ (error) => {
       if (error instanceof ObsoleteReviewError) {
         console.log(error.message);

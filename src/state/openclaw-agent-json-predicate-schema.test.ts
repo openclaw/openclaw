@@ -11,8 +11,14 @@ import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-colu
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_V21_SQL,
+  restoreEmptyV21StorageForHistoricalFixture,
+} from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "./openclaw-agent-schema-v25.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   assertOpenClawMigrationWitnessPreserved,
   captureOpenClawMigrationWitness,
@@ -235,6 +241,82 @@ describe("agent JSON predicate migration", () => {
 });
 
 describe("agent outbox sequence migration", () => {
+  it.each(["frozen", "restored"] as const)(
+    "preserves a v17 outbox through schema admission from %s storage",
+    async (source) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const pathname = state.path("outbox-v17.sqlite");
+        using database = new DatabaseSync(pathname);
+        database.exec(
+          source === "frozen" ? OPENCLAW_AGENT_SCHEMA_V21_SQL : OPENCLAW_AGENT_SCHEMA_SQL,
+        );
+        if (source === "restored") {
+          restoreEmptyV21StorageForHistoricalFixture(database);
+        }
+        removeCanonicalValidationFromHistoricalAgentFixture(database);
+        database.exec(`DROP TABLE session_participants;
+          PRAGMA user_version = 17;
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+          VALUES ('primary', 'agent', 17, 'main', 1, 1);`);
+        const rows = [
+          { enqueue_sequence: -7, advancement_key: "z-first", payload_json: '{"state":"ready"}' },
+          { enqueue_sequence: 40, advancement_key: "a-last", payload_json: '{"state":"blocked"}' },
+        ];
+        const insert = database.prepare(`INSERT INTO context_engine_turn_outbox
+          (rowid, advancement_key, engine_id, session_id, payload_json, attempt_count, created_at)
+          VALUES (?, ?, 'test', 'session', ?, 3, 1)`);
+        for (const row of rows) {
+          insert.run(row.enqueue_sequence, row.advancement_key, row.payload_json);
+        }
+        const indexes = database
+          .prepare(
+            "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'context_engine_turn_outbox' AND sql IS NOT NULL ORDER BY name",
+          )
+          .all();
+        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+          ensureOpenClawAgentDatabaseSchema(database, {
+            agentId: "main",
+            env: state.env,
+            path: pathname,
+            register: false,
+          });
+        });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(
+          database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
+        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+        expect(database.prepare("PRAGMA table_info(context_engine_turn_outbox)").all()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: "enqueue_sequence", type: "INTEGER", pk: 1 }),
+            expect.objectContaining({ name: "advancement_key", type: "TEXT", notnull: 1, pk: 0 }),
+          ]),
+        );
+        expect(
+          database
+            .prepare(
+              "SELECT enqueue_sequence, advancement_key, payload_json FROM context_engine_turn_outbox ORDER BY enqueue_sequence",
+            )
+            .all(),
+        ).toEqual(rows);
+        expect(
+          database
+            .prepare(
+              "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'context_engine_turn_outbox' AND sql IS NOT NULL ORDER BY name",
+            )
+            .all(),
+        ).toEqual(indexes);
+        expect(() => restoreEmptyV21StorageForHistoricalFixture(database)).toThrow(
+          "Historical fixture must not discard context_engine_turn_outbox data",
+        );
+        expect(() => insert.run(100, "z-first", "{}")).toThrow(/UNIQUE/);
+        expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+        expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      });
+    },
+  );
+
   it("preserves the previous rowids, payloads and FIFO across migration, vacuum and reopen", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const pathname = state.path("outbox-v26.sqlite");
