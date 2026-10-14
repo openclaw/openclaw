@@ -10,7 +10,10 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
-import type { GitProcessOperation } from "../../process/spawn-diagnostics.js";
+import {
+  withChildProcessOperation,
+  type GitProcessOperation,
+} from "../../process/spawn-diagnostics.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
@@ -203,22 +206,24 @@ async function cleanTemporaryPacks(
     return;
   }
   assertCurrent();
-  const result = await runCommandBuffersWithTimeout(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitPackCleanup),
-      ),
-    ],
-    {
-      input: JSON.stringify({ files, olderThan: Date.now() - TEMP_PACK_MAX_AGE_MS }),
-      beforeInput: assertCurrent,
-      signal,
-      timeoutMs: 30_000,
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
-      maxOutputBytes: 4096,
-    },
+  const result = await withChildProcessOperation("worktree.maintenance", () =>
+    runCommandBuffersWithTimeout(
+      [
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitPackCleanup),
+        ),
+      ],
+      {
+        input: JSON.stringify({ files, olderThan: Date.now() - TEMP_PACK_MAX_AGE_MS }),
+        beforeInput: assertCurrent,
+        signal,
+        timeoutMs: 30_000,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+        maxOutputBytes: 4096,
+      },
+    ),
   );
   assertCurrent();
   if (result.termination !== "exit" || result.code !== 0) {

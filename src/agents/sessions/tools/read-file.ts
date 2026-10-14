@@ -8,6 +8,7 @@ import { resolveRuntimeProcessEntrypointUrl } from "../../../infra/runtime-proce
 import { resolveRuntimeWorkerArgv } from "../../../infra/runtime-worker-url.js";
 import { withCommandProcessScope } from "../../../process/exec-spawn.js";
 import { runCommandBuffered } from "../../../process/exec.js";
+import { withChildProcessOperation } from "../../../process/spawn-diagnostics.js";
 import type { FileReadResult } from "./read-file.worker.js";
 
 function requiresIsolatedRead(filePath: string): boolean {
@@ -32,18 +33,20 @@ export async function readLocalFile(filePath: string, signal?: AbortSignal): Pro
   }
   // Closing a raw descriptor in any Gateway thread drops SQLite's POSIX locks on that inode.
   return await withCommandProcessScope(async () => {
-    const result = await runCommandBuffered(
-      [
-        process.execPath,
-        ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("fileToolRead")),
-        filePath,
-      ],
-      {
-        input: "",
-        signal,
-        // Preserve fs.readFile's byte limit, including the serialized result envelope.
-        maxOutputBytes: { stdout: Number.MAX_SAFE_INTEGER, stderr: 64 * 1024 },
-      },
+    const result = await withChildProcessOperation("agent.file-read", () =>
+      runCommandBuffered(
+        [
+          process.execPath,
+          ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("fileToolRead")),
+          filePath,
+        ],
+        {
+          input: "",
+          signal,
+          // Preserve fs.readFile's byte limit, including the serialized result envelope.
+          maxOutputBytes: { stdout: Number.MAX_SAFE_INTEGER, stderr: 64 * 1024 },
+        },
+      ),
     );
     if (result.code !== 0 || result.termination !== "exit") {
       throw result.error ?? new Error(`File read failed: ${result.termination}`);

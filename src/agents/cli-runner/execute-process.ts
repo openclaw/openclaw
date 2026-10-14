@@ -12,6 +12,7 @@ import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
+import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
@@ -350,30 +351,34 @@ export async function executeCliProcess(params: {
           assertProcessCurrent,
         );
         const managedRun = await runWithAgentToolSourceExecutionScope(params.assertCurrent, () =>
-          supervisor.spawn({
-            assertCurrent: params.assertCurrent,
-            prepareSpawn: params.argsPrompt ? context.cliHistoryWriter?.assertReadable : undefined,
-            prepareInput: params.stdin ? context.cliHistoryWriter?.assertReadable : undefined,
-            runId: runParams.runId,
-            scopeKey,
-            replaceExistingScope: Boolean(params.useResume && scopeKey),
-            mode: "child",
-            argv: [params.executionCommand, ...params.executionLeadingArgv],
-            resolveArgs: params.resolveExecutionArgs,
-            argv0: params.executionArgv0,
-            timeoutMs: runParams.timeoutMs,
-            noOutputTimeoutMs: params.noOutputTimeoutMs,
-            onCancel: () => {
-              processCancelled = true;
-            },
-            cwd: context.cwd ?? context.workspaceDir,
-            env: params.env,
-            input: params.stdin ?? "",
-            secretInput: context.preparedBackend.secretInput,
-            captureOutput: false,
-            onStdout: consumeStdout,
-            onStderr: consumeStderr,
-          }),
+          withChildProcessOperation("agent.cli", () =>
+            supervisor.spawn({
+              assertCurrent: params.assertCurrent,
+              prepareSpawn: params.argsPrompt
+                ? context.cliHistoryWriter?.assertReadable
+                : undefined,
+              prepareInput: params.stdin ? context.cliHistoryWriter?.assertReadable : undefined,
+              runId: runParams.runId,
+              scopeKey,
+              replaceExistingScope: Boolean(params.useResume && scopeKey),
+              mode: "child",
+              argv: [params.executionCommand, ...params.executionLeadingArgv],
+              resolveArgs: params.resolveExecutionArgs,
+              argv0: params.executionArgv0,
+              timeoutMs: runParams.timeoutMs,
+              noOutputTimeoutMs: params.noOutputTimeoutMs,
+              onCancel: () => {
+                processCancelled = true;
+              },
+              cwd: context.cwd ?? context.workspaceDir,
+              env: params.env,
+              input: params.stdin ?? "",
+              secretInput: context.preparedBackend.secretInput,
+              captureOutput: false,
+              onStdout: consumeStdout,
+              onStderr: consumeStderr,
+            }),
+          ),
         );
         managedRunPid = managedRun.pid;
         const detachReplyBackend = attachCliReplyBackend(runParams, () => {
