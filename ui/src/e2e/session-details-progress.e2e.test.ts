@@ -388,6 +388,7 @@ suite.define(() => {
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await page.setViewportSize({ width: 430, height: 900 });
+        await trigger.waitFor({ state: "hidden" });
         expect(await details.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Panels", exact: true }).waitFor();
         await selectChatLayoutAction(page, "Details");
