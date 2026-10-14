@@ -525,7 +525,10 @@ export function prepareProjectedSessionPresentation(
         return previous;
       }
       Object.freeze(rows);
-      registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
+      // Sidebar replies encode the fact-packed rows in shareSidebarSessionRows.
+      if (opts.rowMode !== "sidebar") {
+        registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
+      }
       view.rows = rows;
       return rows;
     },
