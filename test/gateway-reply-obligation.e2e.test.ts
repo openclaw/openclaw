@@ -152,7 +152,7 @@ describe("Gateway trusted reply obligations", () => {
             sessionKey: scenario.parentKey,
             limit: 100,
           });
-          expect(assistantTexts(before.messages)).toEqual([scenario.parentFinal]);
+          expect(modelReplyTexts(before.messages)).toEqual([scenario.parentFinal]);
 
           // Release only after the original final is committed and publicly readable.
           scenario.releasePeer.resolve();
@@ -170,7 +170,20 @@ describe("Gateway trusted reply obligations", () => {
             sessionKey: scenario.parentKey,
             limit: 100,
           });
-          expect(assistantTexts(after.messages)).toEqual([scenario.parentFinal]);
+          expect(modelReplyTexts(after.messages)).toEqual([scenario.parentFinal]);
+          const forwarded = interSessionInputs(after.messages);
+          expect(forwarded).toHaveLength(1);
+          expect(contentText(forwarded[0]?.content).trim()).toBe(scenario.peerResult);
+          expect(forwarded[0]).toMatchObject({
+            role: "assistant",
+            provenance: {
+              kind: "inter_session",
+              sourceTool: "sessions_send",
+              sourceSessionKey: scenario.peerKey,
+            },
+            senderSession: { agentId: "main", sessionKey: scenario.peerKey },
+            senderLabel: "Forwarded from main",
+          });
           expect(scenario.parentRequests).toBe(2);
           expect(scenario.peerRequests).toBe(1);
           expect(scenario.callbackRequests).toBe(1);
@@ -207,7 +220,14 @@ describe("Gateway trusted reply obligations", () => {
           sessionKey: requiredKey,
           limit: 100,
         });
-        expect(assistantTexts(requiredHistory.messages)).toEqual([REQUIRED_RECOVERED]);
+        expect(modelReplyTexts(requiredHistory.messages)).toEqual([REQUIRED_RECOVERED]);
+        const requiredInputs = interSessionInputs(requiredHistory.messages);
+        expect(requiredInputs).toHaveLength(1);
+        expect(contentText(requiredInputs[0]?.content).trim()).toBe(REQUIRED_REQUEST);
+        expect(requiredInputs[0]).toMatchObject({
+          role: "assistant",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        });
         expect(activeFixture.failures).toEqual([]);
         expect(gateway.logs()).not.toContain("sessions_send reply flow failed");
         console.log(
@@ -233,11 +253,23 @@ function contentText(content: unknown): string {
     : "";
 }
 
-function assistantTexts(messages: unknown[]): string[] {
+function interSessionInputs(messages: unknown[]): Record<string, unknown>[] {
+  return messages.flatMap((message) => {
+    const record = asOptionalRecord(message);
+    return record && asOptionalRecord(record.provenance)?.kind === "inter_session" ? [record] : [];
+  });
+}
+
+function modelReplyTexts(messages: unknown[]): string[] {
   return messages.flatMap((message) => {
     const record = asOptionalRecord(message);
     const text = contentText(record?.content).trim();
-    return record?.role === "assistant" && text ? [text] : [];
+    // History presents forwarded peer input as an attributed assistant message.
+    return record?.role === "assistant" &&
+      asOptionalRecord(record.provenance)?.kind !== "inter_session" &&
+      text
+      ? [text]
+      : [];
   });
 }
 
