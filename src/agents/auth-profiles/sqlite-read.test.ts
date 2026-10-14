@@ -125,7 +125,7 @@ describe("prepared auth profile row reads", () => {
                 );
                 binding.admission.service();
                 if (binding.admission.failure) {
-                  throw toErrorObject(binding.admission.failure);
+                  throw toErrorObject(binding.admission.failure, "Auth read admission failed");
                 }
               }),
             });
