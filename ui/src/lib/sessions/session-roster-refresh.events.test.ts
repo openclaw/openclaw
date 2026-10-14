@@ -296,6 +296,62 @@ describe("session roster event traffic", () => {
     },
   );
 
+  it("catches up a retained managed window after an event overlaps its reconnect read", async () => {
+    vi.useFakeTimers();
+    const held = session("main", 1, {
+      key: "agent:main:archived",
+      sessionId: "archived",
+      isMain: false,
+      archived: true,
+      label: "Previous connection",
+      snapshotAt: 1,
+    });
+    const updated = {
+      ...held,
+      updatedAt: 2,
+      snapshotAt: 2,
+      label: "Current connection",
+      unread: true,
+    };
+    const stale = createDeferred<SessionsListResult>();
+    const managedReads = vi
+      .fn()
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValue(sessionsResult([updated], 2));
+    const oldClient = createTestGatewayClient(async () => sessionsResult([held], 1));
+    const nextClient = createTestGatewayClient(async (method, params) => {
+      expect(method).toBe("sessions.list");
+      return Reflect.get(params ?? {}, "archived") === "all"
+        ? managedReads()
+        : sessionsResult([], 1);
+    });
+    const harness = createSessionGatewayHarness(oldClient);
+    const sessions = createTestSessionCapability(harness.gateway);
+    const query = { agentId: "main", archivedFilter: "all" as const };
+    const stop = sessions.subscribeList(query, () => {});
+    try {
+      await sessions.refreshList(query);
+      harness.publish(false);
+      harness.publish(true, nextClient);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(managedReads).toHaveBeenCalledOnce();
+      harness.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { reason: "patch", sessionKey: held.key, session: updated, ancestorSessions: [] },
+      });
+      stale.resolve(sessionsResult([held], 1));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(sessions.listSnapshot(query).result?.sessions).toEqual([updated]);
+      expect(managedReads).toHaveBeenCalledTimes(2);
+    } finally {
+      stale.resolve(sessionsResult([], 1));
+      stop();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps dock snapshots out of ordinary roster membership without repeated list reads", async () => {
     vi.useFakeTimers();
     const held = session("main", 1, { sessionId: "held" });

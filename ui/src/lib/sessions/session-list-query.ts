@@ -466,13 +466,15 @@ export function sessionListsNeedingEventRefresh(
   payload: unknown,
   matches: ReturnType<typeof sessionListEventMatcher>,
   observedRow: SessionListRowLookup,
+  connectionEpoch: number | null,
   viewerProfileId?: string,
 ): Set<ManagedSessionList> {
   const invalidated = new Set<ManagedSessionList>();
   for (const entry of lists) {
     if (
       matches(entry.query, entry.snapshot.result) &&
-      (entry.snapshot.error !== null ||
+      (entry.connectionEpoch !== connectionEpoch ||
+        entry.snapshot.error !== null ||
         !canApplySessionListSnapshot(
           entry.snapshot.result,
           payload,

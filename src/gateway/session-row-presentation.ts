@@ -202,7 +202,7 @@ export function prepareSessionRowPublication(
           retained.lists.clear();
           return;
         }
-        // Keyed changes retire selection, but immutable vectors remain comparison witnesses.
+        // Unaffected immutable vectors remain comparison witnesses after selection retires.
         retained.revision = undefined;
         for (const list of retained.lists.values()) {
           list.selection = undefined;

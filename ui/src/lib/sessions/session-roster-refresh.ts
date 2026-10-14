@@ -544,6 +544,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         payload,
         matches,
         observations.observedRow,
+        scope?.epoch ?? null,
         host.snapshot().selfUser?.id,
       );
       return {
