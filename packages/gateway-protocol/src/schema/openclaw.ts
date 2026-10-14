@@ -454,6 +454,8 @@ export const SystemAgentSetupAuthStartParamsSchema = closedObject({
   /** Agent that owns credentials and model selection created by this setup flow. */
   agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
+  /** Opt in to selecting the verified model when models.authLogin starts AI Setup. */
+  selectModel: Type.Optional(Type.Literal(true)),
   workspace: Type.Optional(Type.String()),
   /** Fresh-install opt-in for native provider conversation discovery. */
   nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),

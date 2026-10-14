@@ -15,9 +15,9 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import type { CliTimeoutContext, FallbackAttemptRecord } from "../failover-error.js";
 import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
+import type { CliTimeoutContext, FallbackAttemptRecord } from "./error.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
@@ -114,11 +114,33 @@ function renderProviderPromptSizeLimitCopy(raw: string): string | undefined {
     : undefined;
 }
 
+/** Render only controller-recorded exhaustion, never infer it from provider text. */
+export function renderRateLimitRetryExhaustion(
+  retries: number | undefined,
+  finalModel = false,
+): string | undefined {
+  if (retries === undefined) {
+    return undefined;
+  }
+  const scope = finalModel ? " on the final model" : "";
+  return retries === 0
+    ? `Automatic rate-limit recovery is disabled${scope} for this session (retry.provider.maxRetries: 0).`
+    : `Rate-limit recovery stopped${scope} after ${retries} automatic ${retries === 1 ? "retry" : "retries"} without a completed model response. Check completed work before trying again.`;
+}
+
 /** Render rate-limit versus overload copy from the canonical classified reason. */
 export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
   raw?: string;
+  rateLimitRetriesExhausted?: number;
 }): string {
+  const exhaustion =
+    params.reason === "rate_limit"
+      ? renderRateLimitRetryExhaustion(params.rateLimitRetriesExhausted)
+      : undefined;
+  if (exhaustion) {
+    return exhaustion;
+  }
   const raw = params.raw ?? "";
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
@@ -403,6 +425,7 @@ export function renderRateLimitReplyCopy(params: {
   reason?: FailoverReason;
   provider?: string;
   attempts?: readonly ReplyFallbackAttempt[];
+  rateLimitRetriesExhausted?: number;
   cooldownExpiry?: number | null;
   nowMs?: number;
   sanitizeText?: (text: string) => string;
@@ -413,6 +436,18 @@ export function renderRateLimitReplyCopy(params: {
     if (promptSizeCopy) {
       return promptSizeCopy;
     }
+  }
+  const exhaustion =
+    params.reason === "rate_limit" && !attempts.some((attempt) => attempt.reason === "billing")
+      ? renderRateLimitRetryExhaustion(
+          attempts.length
+            ? attempts.at(-1)?.rateLimitRetriesExhausted
+            : params.rateLimitRetriesExhausted,
+          attempts.length > 1,
+        )
+      : undefined;
+  if (exhaustion) {
+    return exhaustion;
   }
   const usageLimit = extractCodexUsageLimitErrorMessage(
     attempts,

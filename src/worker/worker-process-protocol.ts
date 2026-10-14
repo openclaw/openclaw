@@ -66,7 +66,7 @@ const RuntimeResultSchema = z.union([
   workerProtocolObject({ status: z.literal("completed"), ...TranscriptResultFields }),
   workerProtocolObject({
     status: z.literal("failed"),
-    reason: z.literal("turn-failed"),
+    reason: z.enum(["turn-failed", "node-lost"]),
     ...TranscriptResultFields,
   }),
 ]);
@@ -84,7 +84,9 @@ const ProcessResultSchema = workerProtocolObject({
 }).refine(
   ({ result, retainWorker, retention }) =>
     (retention === undefined || retainWorker) &&
-    (!retainWorker || result.status === "completed" || result.status === "failed"),
+    (!retainWorker ||
+      result.status === "completed" ||
+      (result.status === "failed" && result.reason === "turn-failed")),
 );
 const ProcessMessageSchema = z.union([
   WorkerProcessObservationResultSchema,

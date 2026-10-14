@@ -301,6 +301,17 @@ describe("createModelProviderRouteOverrideResolver", () => {
     ["empty effort list", { supportedReasoningEfforts: [] }, "present"],
     ["disabled effort", { supportedReasoningEfforts: ["none"] }, "present"],
     ["malformed effort", { supportedReasoningEfforts: ["high", false] }, "present"],
+    ["temperature capability", { supportsTemperature: false }, "none"],
+    ["temperature supported", { supportsTemperature: true }, "none"],
+    ["preferred code mode", { codeMode: "preferred" }, "none"],
+    ["capable code mode", { codeMode: "capable" }, "none"],
+    ["malformed temperature capability", { supportsTemperature: "false" }, "present"],
+    ["unknown code mode", { codeMode: "exact" }, "present"],
+    [
+      "metadata with storage policy",
+      { supportsTemperature: false, codeMode: "preferred", supportsStore: false },
+      "present",
+    ],
     ["store behavior", { supportsStore: false }, "present"],
     [
       "mixed metadata and behavior",
