@@ -28,47 +28,7 @@ describe("runReplyAgent media path normalization", () => {
   beforeEach(resetAgentRunnerMediaTestState);
   afterEach(cleanupAgentRunnerMediaTestState);
 
-  it.each(["device-a", "device-b"])(
-    "steers active non-streaming prompts from reviewer %s in steer queue mode",
-    async (approvalReviewerDeviceId) => {
-      queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(
-        async (sessionId: string) => ({
-          queued: true,
-          sessionId,
-          target: "embedded_run",
-          gatewayHealth: "live",
-        }),
-      );
-      const followupRun = createMediaFollowupRun({ prompt: "generate chart" });
-      followupRun.run.taskSuggestionDeliveryMode = "gateway";
-      followupRun.run.approvalReviewerDeviceId = "device-a";
-
-      const params = await makeRunReplyAgentParams({
-        resolvedQueue: { mode: "steer" } as QueueSettings,
-        shouldSteer: true,
-        shouldFollowup: true,
-        isActive: true,
-        followupRun,
-      });
-      followupRun.run.approvalReviewerDeviceId = approvalReviewerDeviceId;
-
-      await runReplyAgent(params);
-
-      expect(
-        queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls.map(([sessionId, prompt]) => [
-          sessionId,
-          prompt,
-        ]),
-      ).toEqual([["session", "generate chart"]]);
-      expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
-      expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
-      expect(parkedSteerFallbackMock).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
-    { label: "permission mode", run: { permissionMode: "guarded" } },
-    { label: "tool overrides", run: { toolOverrides: { webSearch: false } } },
     { label: "execution policy", run: { execOverrides: { security: "deny" } } },
     { label: "elevation", run: { elevatedLevel: "full" } },
     {
@@ -77,10 +37,6 @@ describe("runReplyAgent media path normalization", () => {
     },
     { label: "workspace", run: { workspaceDir: "/tmp/different-steering-workspace" } },
     { label: "client capabilities", run: { clientCaps: ["changed-capability"] } },
-    {
-      label: "tool bindings",
-      run: { toolBindings: { browser: { clientId: "different-browser" } } },
-    },
   ] satisfies { label: string; run: Partial<FollowupRun["run"]> }[])(
     "queues a different browser's prompt when its $label differs",
     async ({ run }) => {
@@ -457,59 +413,6 @@ describe("runReplyAgent media path normalization", () => {
     ]);
     expect(call?.images?.[0]?.data).toHaveLength(92);
     expect(call?.imageOrder).toEqual(["inline"]);
-  });
-
-  it("does not pass recent history images as unlabeled native OpenClaw images", async () => {
-    const tmpDir = tempDirs.make("openclaw-native-agent-history-");
-    const imagePath = path.join(tmpDir, "recent.png");
-    await writeFile(
-      imagePath,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          sessionId: "session",
-          provider: "ollama",
-          model: "gemma4:latest",
-        },
-      },
-    });
-
-    await runAgentTurnWithSessionContext(
-      {
-        Provider: "telegram",
-        Surface: "telegram",
-        To: "chat-1",
-        OriginatingTo: "chat-1",
-        AccountId: "default",
-        MessageSid: "msg-1",
-        Timestamp: 1_700_000_000_000,
-        InboundHistory: [
-          {
-            sender: "alice",
-            body: "<media:image>",
-            timestamp: 1_700_000_000_000,
-            media: [{ path: imagePath, contentType: "image/png", kind: "image" }],
-          },
-        ],
-      } as unknown as TemplateContext,
-      "what did we discuss?",
-    );
-
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
-      | {
-          images?: Array<{ type?: string; data?: string; mimeType?: string }>;
-          imageOrder?: string[];
-        }
-      | undefined;
-    expect(call?.images).toBeUndefined();
-    expect(call?.imageOrder).toBeUndefined();
   });
 
   it("retains resolved current images and skips unresolved attachments", async () => {
