@@ -3,6 +3,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { preserveSessionInheritedToolPolicy } from "../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   prepareDelegatedToolDenyFloor,
@@ -11,6 +12,7 @@ import {
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
 import {
   captureDelegatedToolPolicyAssertion,
+  readDelegatedToolPolicy,
   selectDelegatedToolPolicy,
 } from "./delegated-tool-policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
@@ -280,6 +282,23 @@ describe("deny-only native tool delegation", () => {
     expect(result.inheritedToolPolicy).toEqual({ deny: fullDeny });
   });
 
+  it("preserves both facts on reset and rejects malformed exception metadata", () => {
+    const original = entry();
+    const preserved = preserveSessionInheritedToolPolicy(original);
+    expect(preserved).toMatchObject({
+      inheritedToolDeny: fullDeny,
+      delegatedToolPolicy: original.delegatedToolPolicy,
+    });
+    expect(preserved.delegatedToolPolicy).not.toBe(original.delegatedToolPolicy);
+    expect(
+      readDelegatedToolPolicy({
+        requesterAgentId: "front",
+        requesterSessionKey: requester,
+        targetAgentId: "worker",
+        deny: [2],
+      }),
+    ).toBeUndefined();
+  });
   it("propagates only within the grantee and revokes the whole native descendant chain", () => {
     const cfg = config();
     const grandchild = "agent:worker:subagent:grandchild";

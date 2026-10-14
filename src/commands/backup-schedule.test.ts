@@ -157,7 +157,7 @@ describe("scheduled backups", () => {
     expect(spec.payload.argv).not.toContain("--all");
   });
 
-  it.each([true])(
+  it.each([false, true])(
     "round-trips offsite CLI options with explicit claim=%s through the persisted schedule and status projection",
     async (claim) => {
       let persisted: CronJobCreate | undefined;
@@ -235,7 +235,52 @@ describe("scheduled backups", () => {
     },
   );
 
+  it.each([{ argv: ["--all"] }, { argv: ["--global"] }, { argv: ["--agent", "main"] }])(
+    "reports installed Git schedule argv $argv in status",
+    ({ argv }) => {
+      expect(
+        summarizeBackupSchedules([
+          {
+            id: "git-job",
+            name: "Renamed by operator",
+            enabled: true,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            state: {},
+            declarationKey: "openclaw-backup-scheduled",
+            schedule: { kind: "every", everyMs: 86_400_000 },
+            payload: {
+              kind: "command",
+              argv: [
+                "openclaw",
+                "backup",
+                "git",
+                "create",
+                "--repository",
+                "/backups/git",
+                ...argv,
+                "--push",
+                "--exclude-secrets",
+              ],
+            },
+          },
+        ]),
+      ).toEqual([
+        {
+          id: "git-job",
+          mode: "git",
+          everyMs: 86_400_000,
+          target: "/backups/git",
+          enabled: true,
+        },
+      ]);
+    },
+  );
+
   it.each([
+    { flags: [], removed: ["git-job", "offsite-job"] },
     { flags: ["--git"], removed: ["git-job"] },
     { flags: ["--offsite"], removed: ["offsite-job"] },
   ])("disables only selected backup modes $flags", async ({ flags, removed }) => {
@@ -288,8 +333,16 @@ describe("scheduled backups", () => {
     { options: { repository: "/backups", keepDaily: "7" }, message: "require --to" },
     { options: { to: "missing" }, message: 'Storage location "missing" is not configured' },
     {
+      options: { repository: "/tmp/openclaw-backups", agent: "nope-agent" },
+      message: 'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    },
+    {
       options: { repository: "/tmp/openclaw-backups", agent: "   " },
       message: "--agent must not be blank",
+    },
+    {
+      options: { repository: "/tmp/openclaw-backups", every: "   " },
+      message: "Invalid duration (empty)",
     },
   ])("rejects invalid schedule options $options", async ({ options, message }) => {
     await expect(backupEnableCommand(createTestRuntime(), options)).rejects.toThrow(message);
@@ -299,6 +352,7 @@ describe("scheduled backups", () => {
   it.each([
     { scenario: "renamed", renamed: true, decoys: 1, disabled: false },
     { scenario: "beyond the first page", renamed: false, decoys: 200, disabled: false },
+    { scenario: "already disabled", renamed: false, decoys: 1, disabled: true },
   ])(
     "removes the $scenario managed declaration through the CLI",
     async ({ renamed, decoys, disabled }) => {

@@ -95,7 +95,6 @@ describe("processEvent (functional)", () => {
         type: "call.assistant-speech",
         transcript: "The plumber will call back.",
       });
-      expect(ctx.maxDurationTimers.has(call.callId)).toBe(true);
     };
     await processEvent(ctx, {
       id: "carrier-ended",
@@ -131,7 +130,7 @@ describe("processEvent (functional)", () => {
     expect(ctx.activeCalls.size).toBe(0);
   });
 
-  it.each(["speech", "answered", "fatal-error"] as const)(
+  it.each(["speech", "answered", "terminal", "fatal-error"] as const)(
     "publishes %s side effects only after SQLite persistence succeeds",
     async (kind) => {
       let failPersistence = true;
@@ -143,7 +142,7 @@ describe("processEvent (functional)", () => {
         providerCallId: "provider-before",
         state: kind === "answered" ? "ringing" : "active",
       });
-      const terminal = kind === "fatal-error";
+      const terminal = kind === "terminal" || kind === "fatal-error";
       const endReason = kind === "fatal-error" ? "error" : "hangup-user";
       const terminalLog = `[voice-call] Call finalized callId=${call.callId} providerCallId=provider-before endReason=${endReason}`;
       ctx.activeCalls.set(call.callId, call);
@@ -169,7 +168,9 @@ describe("processEvent (functional)", () => {
           ? { ...base, type: "call.speech", transcript: "durable", isFinal: true }
           : kind === "answered"
             ? { ...base, type: "call.answered", providerCallId: "provider-after" }
-            : { ...base, type: "call.error", error: "carrier failure", retryable: false };
+            : kind === "fatal-error"
+              ? { ...base, type: "call.error", error: "carrier failure", retryable: false }
+              : { ...base, type: "call.ended", reason: "hangup-user" };
 
       await expect(processEvent(ctx, event)).rejects.toThrow(
         "synthetic SQLite persistence failure",
@@ -194,12 +195,13 @@ describe("processEvent (functional)", () => {
         expect(onCallAnswered).toHaveBeenCalledWith(call);
       }
       expect(ctx.activeCalls.has(call.callId)).toBe(!terminal);
-      if (kind === "speech") {
-        expect(ctx.maxDurationTimers.has(call.callId)).toBe(true);
-      }
       if (terminal) {
         expect(call).toMatchObject({ state: endReason, endReason, endedAt: event.timestamp });
-        expect(reject).toHaveBeenCalledWith(new Error("Call error: carrier failure"));
+        expect(reject).toHaveBeenCalledWith(
+          new Error(
+            kind === "fatal-error" ? "Call error: carrier failure" : "Call ended: hangup-user",
+          ),
+        );
         expect(logSpy.logEntries.filter((entry) => entry === terminalLog)).toHaveLength(1);
       } else {
         expect(logSpy.logEntries).not.toContain(terminalLog);
@@ -207,61 +209,64 @@ describe("processEvent (functional)", () => {
     },
   );
 
-  it("upgrades provider identity without downgrading a retained request alias", async () => {
-    const now = Date.now();
-    const ctx = createContext();
-    ctx.activeCalls.set(
-      "call-1",
-      createCall({
+  it.each(["request-uuid", "call-1"])(
+    "upgrades provider identity without downgrading a known alias via %s",
+    async (aliasCallId) => {
+      const now = Date.now();
+      const ctx = createContext();
+      ctx.activeCalls.set(
+        "call-1",
+        createCall({
+          callId: "call-1",
+          providerCallId: "request-uuid",
+          state: "initiated",
+          startedAt: now,
+          metadata: {},
+        }),
+      );
+      ctx.providerCallIdMap.set("request-uuid", "call-1");
+      const initialCall = ctx.activeCalls.get("call-1");
+      if (!initialCall) {
+        throw new Error("expected the initial call");
+      }
+      await persistCallRecord(ctx.storePath, initialCall);
+
+      await processEvent(ctx, {
+        id: "evt-provider-id-change",
+        type: "call.answered",
         callId: "call-1",
+        providerCallId: "call-uuid",
+        timestamp: now + 1,
+      });
+
+      const activeCall = ctx.activeCalls.get("call-1");
+      if (!activeCall) {
+        throw new Error("expected active call after provider id change");
+      }
+      expect(activeCall.providerCallId).toBe("call-uuid");
+      expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
+      expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
+
+      const result = await processEvent(ctx, {
+        id: "evt-old-provider-alias",
+        type: "call.speech",
+        callId: aliasCallId,
         providerCallId: "request-uuid",
-        state: "initiated",
-        startedAt: now,
-        metadata: {},
-      }),
-    );
-    ctx.providerCallIdMap.set("request-uuid", "call-1");
-    const initialCall = ctx.activeCalls.get("call-1");
-    if (!initialCall) {
-      throw new Error("expected the initial call");
-    }
-    await persistCallRecord(ctx.storePath, initialCall);
-
-    await processEvent(ctx, {
-      id: "evt-provider-id-change",
-      type: "call.answered",
-      callId: "call-1",
-      providerCallId: "call-uuid",
-      timestamp: now + 1,
-    });
-
-    const activeCall = ctx.activeCalls.get("call-1");
-    if (!activeCall) {
-      throw new Error("expected active call after provider id change");
-    }
-    expect(activeCall.providerCallId).toBe("call-uuid");
-    expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
-    expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
-
-    const result = await processEvent(ctx, {
-      id: "evt-old-provider-alias",
-      type: "call.speech",
-      callId: "request-uuid",
-      providerCallId: "request-uuid",
-      timestamp: now + 2,
-      direction: "outbound",
-      transcript: "Continue the existing call.",
-      isFinal: true,
-    });
-    if (result.kind !== "final-speech") {
-      throw new Error("expected speech for the live call");
-    }
-    expect(result.call).toBe(activeCall);
-    expect(ctx.activeCalls.size).toBe(1);
-    expect(activeCall.providerCallId).toBe("call-uuid");
-    expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
-    expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
-  });
+        timestamp: now + 2,
+        direction: "outbound",
+        transcript: "Continue the existing call.",
+        isFinal: true,
+      });
+      if (result.kind !== "final-speech") {
+        throw new Error("expected speech for the live call");
+      }
+      expect(result.call).toBe(activeCall);
+      expect(ctx.activeCalls.size).toBe(1);
+      expect(activeCall.providerCallId).toBe("call-uuid");
+      expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
+      expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
+    },
+  );
 
   it.each(["admission", "status"] as const)(
     "surfaces call history read failure during %s without claiming absence or writing a call",
@@ -351,71 +356,110 @@ describe("processEvent (functional)", () => {
     expect(Array.from(ctx.processedEventIds)).toEqual(["stable-late-call"]);
   });
 
-  it("starts max-duration enforcement when speaking arrives before answered", async () => {
-    const now = new Date("2026-03-22T12:00:00.000Z").getTime();
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    const hangupCalls: HangupCallInput[] = [];
-    const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
-        enabled: true,
-        provider: "plivo",
-        fromNumber: "+15550000000",
-        maxDurationSeconds: 1,
+  it.each([
+    {
+      name: "speaking",
+      expectedState: "speaking",
+      expectedTranscript: [],
+      createEvent: (timestamp: number): NormalizedEvent => ({
+        id: "evt-live-speaking",
+        type: "call.speaking",
+        callId: "call-live",
+        providerCallId: "provider-live",
+        timestamp,
+        text: "hello",
       }),
-      provider: createProvider({
-        hangupCall: async (input: HangupCallInput): Promise<void> => {
-          hangupCalls.push(input);
+    },
+    {
+      name: "assistant speech",
+      expectedState: "speaking",
+      expectedTranscript: [{ speaker: "bot", text: "hello" }],
+      createEvent: (timestamp: number): NormalizedEvent => ({
+        id: "evt-live-assistant-speech",
+        type: "call.assistant-speech",
+        callId: "call-live",
+        providerCallId: "provider-live",
+        timestamp,
+        transcript: "hello",
+      }),
+    },
+    {
+      name: "listening",
+      expectedState: "listening",
+      expectedTranscript: [{ speaker: "user", text: "hello" }],
+      createEvent: (timestamp: number): NormalizedEvent => ({
+        id: "evt-live-listening",
+        type: "call.speech",
+        callId: "call-live",
+        providerCallId: "provider-live",
+        timestamp,
+        transcript: "hello",
+        isFinal: true,
+      }),
+    },
+  ])(
+    "starts max-duration enforcement when $name arrives before answered",
+    async ({ expectedState, expectedTranscript, createEvent }) => {
+      const now = new Date("2026-03-22T12:00:00.000Z").getTime();
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      const hangupCalls: HangupCallInput[] = [];
+      const ctx = createContext({
+        config: VoiceCallConfigSchema.parse({
+          enabled: true,
+          provider: "plivo",
+          fromNumber: "+15550000000",
+          maxDurationSeconds: 1,
+        }),
+        provider: createProvider({
+          hangupCall: async (input: HangupCallInput): Promise<void> => {
+            hangupCalls.push(input);
+          },
+        }),
+      });
+      ctx.activeCalls.set(
+        "call-live",
+        createCall({
+          callId: "call-live",
+          providerCallId: "provider-live",
+          direction: "inbound",
+          state: "ringing",
+          from: "+15550000002",
+          to: "+15550000000",
+          startedAt: now - 120_000,
+          metadata: {},
+        }),
+      );
+      ctx.providerCallIdMap.set("provider-live", "call-live");
+      const liveTimestamp = now + 250;
+
+      await processEvent(ctx, createEvent(liveTimestamp));
+
+      const call = ctx.activeCalls.get("call-live");
+      if (!call) {
+        throw new Error("expected live call to remain active");
+      }
+      expect(call.state).toBe(expectedState);
+      expect(call.answeredAt).toBe(liveTimestamp);
+      expect(call.transcript.map(({ speaker, text }) => ({ speaker, text }))).toEqual(
+        expectedTranscript,
+      );
+      expect(ctx.maxDurationTimers.has("call-live")).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.all(ctx.endCallOperations.values());
+
+      expect(hangupCalls).toEqual([
+        {
+          callId: "call-live",
+          providerCallId: "provider-live",
+          reason: "timeout",
         },
-      }),
-    });
-    ctx.activeCalls.set(
-      "call-live",
-      createCall({
-        callId: "call-live",
-        providerCallId: "provider-live",
-        direction: "inbound",
-        state: "ringing",
-        from: "+15550000002",
-        to: "+15550000000",
-        startedAt: now - 120_000,
-        metadata: {},
-      }),
-    );
-    ctx.providerCallIdMap.set("provider-live", "call-live");
-    const liveTimestamp = now + 250;
-
-    await processEvent(ctx, {
-      id: "evt-live-speaking",
-      type: "call.speaking",
-      callId: "call-live",
-      providerCallId: "provider-live",
-      timestamp: liveTimestamp,
-      text: "hello",
-    });
-
-    const call = ctx.activeCalls.get("call-live");
-    if (!call) {
-      throw new Error("expected live call to remain active");
-    }
-    expect(call.state).toBe("speaking");
-    expect(call.answeredAt).toBe(liveTimestamp);
-    expect(call.transcript).toEqual([]);
-    expect(ctx.maxDurationTimers.has("call-live")).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    await Promise.all(ctx.endCallOperations.values());
-
-    expect(hangupCalls).toEqual([
-      {
-        callId: "call-live",
-        providerCallId: "provider-live",
-        reason: "timeout",
-      },
-    ]);
-    expect(ctx.activeCalls.has("call-live")).toBe(false);
-    vi.useRealTimers();
-  });
+      ]);
+      expect(ctx.activeCalls.has("call-live")).toBe(false);
+      vi.useRealTimers();
+    },
+  );
 
   it("enforces max duration for Twilio initial-message streams without answeredAt", async () => {
     const now = new Date("2026-03-22T12:00:00.000Z").getTime();
@@ -558,10 +602,13 @@ describe("processEvent (functional)", () => {
     expect(replayResult).toEqual({ kind: "ignored" });
   });
 
-  it("records whitespace final speech without consuming its waiter", async () => {
+  it.each([
+    { label: "empty", transcript: "", withWaiter: false },
+    { label: "whitespace with a waiter", transcript: " \t\n", withWaiter: true },
+  ])("records $label final speech as a processed non-turn", async ({ transcript, withWaiter }) => {
     const now = Date.now();
     const ctx = createContext();
-    const callId = "call-blank-waiter";
+    const callId = `call-blank-${withWaiter ? "waiter" : "direct"}-${transcript.length}`;
     ctx.activeCalls.set(
       callId,
       createCall({
@@ -576,7 +623,9 @@ describe("processEvent (functional)", () => {
     const resolve = vi.fn();
     const reject = vi.fn();
     const timeout = setTimeout(() => {}, 60_000);
-    ctx.transcriptWaiters.set(callId, { resolve, reject, timeout });
+    if (withWaiter) {
+      ctx.transcriptWaiters.set(callId, { resolve, reject, timeout });
+    }
 
     const result = await processEvent(ctx, {
       id: `evt-${callId}`,
@@ -584,7 +633,7 @@ describe("processEvent (functional)", () => {
       type: "call.speech",
       callId,
       timestamp: now + 1,
-      transcript: " \t\n",
+      transcript,
       isFinal: true,
     });
 
@@ -595,7 +644,7 @@ describe("processEvent (functional)", () => {
     expect(ctx.processedEventIds.has(`dedupe-${callId}`)).toBe(true);
     expect(resolve).not.toHaveBeenCalled();
     expect(reject).not.toHaveBeenCalled();
-    expect(ctx.transcriptWaiters.has(callId)).toBe(true);
+    expect(ctx.transcriptWaiters.has(callId)).toBe(withWaiter);
   });
 
   it("bounds committed replay keys in both manager and persisted call owners", async () => {
@@ -736,11 +785,31 @@ describe("processEvent privacy assertions", () => {
       );
 
       expectCallerRedacted(phone, `allowlisted=${allowed}`);
-      if (allowed) {
-        expectCallerRedacted(phone, requireFirstActiveCall(ctx).callId);
-      }
     },
   );
+
+  it("redacts caller phone numbers in call record creation logs", async () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+      }),
+    });
+    const phone = "+15554444444";
+    await processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: "evt-privacy-create",
+        providerCallId: "prov-privacy-create",
+        from: phone,
+      }),
+    );
+
+    const call = requireFirstActiveCall(ctx);
+    expectCallerRedacted(phone, call.callId);
+  });
 
   it("redacts caller phone numbers when rejection cannot reach a provider", async () => {
     const ctx = createContext({
@@ -768,65 +837,70 @@ describe("processEvent privacy assertions", () => {
   });
 });
 
-it("does not consume a replacement waiter when speech persistence outlasts the original", async () => {
-  vi.useFakeTimers();
-  const ctx = createContext();
-  ctx.config.transcriptTimeoutMs = 30;
-  const call: CallRecord = {
-    callId: "call-expiring-waiter",
-    providerCallId: "provider-expiring-waiter",
-    provider: "plivo",
-    direction: "inbound",
-    state: "listening",
-    from: "+15550000001",
-    to: "+15550000000",
-    startedAt: Date.now(),
-    answeredAt: Date.now(),
-    transcript: [],
-    processedEventIds: [],
-  };
-  ctx.activeCalls.set(call.callId, call);
-  ctx.providerCallIdMap.set(call.providerCallId!, call.callId);
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  const persist = callStore.persistCallRecord;
-  vi.spyOn(callStore, "persistCallRecord").mockImplementationOnce(async (...args) => {
-    entered.resolve();
-    await release.promise;
-    await persist(...args);
-  });
-  const waiting = waitForFinalTranscript(ctx, call.callId);
-  const timedOut = expect(waiting).rejects.toThrow("Timed out waiting for transcript");
-  const pending = processEvent(ctx, {
-    id: "speech-before-timeout",
-    type: "call.speech",
-    callId: call.callId,
-    timestamp: Date.now(),
-    transcript: "Persist this utterance",
-    isFinal: true,
-  });
-  let replacementSettled = false;
-  try {
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(30);
-    await timedOut;
-    const next = waitForFinalTranscript(ctx, call.callId);
-    ctx.trackCallWork(
-      next.then(
-        () => {
-          replacementSettled = true;
-        },
-        () => {},
-      ),
-    );
-    release.resolve();
-    await expect(pending).resolves.toMatchObject({ kind: "final-speech", waiterResolved: false });
-    expect(replacementSettled).toBe(false);
-    expect(ctx.transcriptWaiters.has(call.callId)).toBe(true);
-    expect(call.transcript.at(-1)?.text).toBe("Persist this utterance");
-    expect(ctx.processedEventIds.has("speech-before-timeout")).toBe(true);
-  } finally {
-    release.resolve();
-    await pending;
-  }
-});
+it.each([false, true])(
+  "reports unconsumed speech after its waiter expires (replacement=%s)",
+  async (replacement) => {
+    vi.useFakeTimers();
+    const ctx = createContext();
+    ctx.config.transcriptTimeoutMs = 30;
+    const call: CallRecord = {
+      callId: "call-expiring-waiter",
+      providerCallId: "provider-expiring-waiter",
+      provider: "plivo",
+      direction: "inbound",
+      state: "listening",
+      from: "+15550000001",
+      to: "+15550000000",
+      startedAt: Date.now(),
+      answeredAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+    };
+    ctx.activeCalls.set(call.callId, call);
+    ctx.providerCallIdMap.set(call.providerCallId!, call.callId);
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const persist = callStore.persistCallRecord;
+    vi.spyOn(callStore, "persistCallRecord").mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      await persist(...args);
+    });
+    const waiting = waitForFinalTranscript(ctx, call.callId);
+    const timedOut = expect(waiting).rejects.toThrow("Timed out waiting for transcript");
+    const pending = processEvent(ctx, {
+      id: "speech-before-timeout",
+      type: "call.speech",
+      callId: call.callId,
+      timestamp: Date.now(),
+      transcript: "Persist this utterance",
+      isFinal: true,
+    });
+    let replacementSettled = false;
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(30);
+      await timedOut;
+      if (replacement) {
+        const next = waitForFinalTranscript(ctx, call.callId);
+        ctx.trackCallWork(
+          next.then(
+            () => {
+              replacementSettled = true;
+            },
+            () => {},
+          ),
+        );
+      }
+      release.resolve();
+      await expect(pending).resolves.toMatchObject({ kind: "final-speech", waiterResolved: false });
+      expect(replacementSettled).toBe(false);
+      expect(ctx.transcriptWaiters.has(call.callId)).toBe(replacement);
+      expect(call.transcript.at(-1)?.text).toBe("Persist this utterance");
+      expect(ctx.processedEventIds.has("speech-before-timeout")).toBe(true);
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  },
+);
