@@ -55,13 +55,13 @@ it("keeps a catalog's active animation across unread changes and shows later sta
     expect(header.querySelector(".session-unread-dot")).toBeNull();
   }
 
-  result.sessions = [{ ...row, hasActiveRun: false, status: "idle", unread: true }];
+  result.sessions = [{ ...row, hasActiveRun: false, status: "done", unread: true }];
   sessions.publishList({ result });
   await settleRoster(sidebar);
   expect(header.querySelector(".session-run-spinner")).toBeNull();
   expect(header.querySelector(".session-unread-dot")).not.toBeNull();
 
-  result.sessions = [{ ...row, hasActiveRun: false, status: "idle", unread: false }];
+  result.sessions = [{ ...row, hasActiveRun: false, status: "done", unread: false }];
   sessions.publishList({ result });
   await settleRoster(sidebar);
   expect(header.querySelector(".session-run-spinner, .session-unread-dot")).toBeNull();
