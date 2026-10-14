@@ -46,7 +46,7 @@ describe("executeAgentTurn: runtime selection", () => {
       thinkLevel: "max" as const,
     },
   ])(
-    "prepares $provider thinking capability for the concrete $agentRuntime runtime",
+    "carries $provider thinking for the concrete $agentRuntime runtime",
     async ({ provider, model, api, baseUrl, agentRuntime, runtimeOverride, thinkLevel }) => {
       await useProductionEmbeddedRunExecutionParamsForTest();
       const compat = { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] };
@@ -93,21 +93,19 @@ describe("executeAgentTurn: runtime selection", () => {
       expect(result.kind).toBe("success");
       expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded thinking params", {
         thinkLevel,
-        modelThinkingCapability: {
-          provider,
-          modelId: model,
-          agentRuntime,
-          ...(agentRuntime === "openclaw" ? { route: { api, baseUrl } } : {}),
-          compat,
-        },
+        ...(agentRuntime === "openclaw"
+          ? {
+              modelThinkingCapability: {
+                provider,
+                modelId: model,
+                agentRuntime,
+                route: { api, baseUrl },
+                compat,
+              },
+            }
+          : {}),
       });
-      if (agentRuntime === "codex") {
-        expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ provider, model, agentRuntime: "codex" }),
-        );
-      } else {
-        expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
-      }
+      expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
     },
   );
 

@@ -3,22 +3,9 @@ import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
 import type { FollowupRun } from "./queue.js";
 
 const loadProviderScopedThinkingCatalog = vi.hoisted(() =>
-  vi.fn(async ({ agentRuntime }: { agentRuntime?: string }) =>
-    agentRuntime === "codex"
-      ? [
-          {
-            provider: "openai",
-            id: "gpt-5.6-luna",
-            name: "GPT-5.6 Luna",
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            compat: {
-              supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-            },
-          },
-        ]
-      : [],
-  ),
+  vi.fn(async () => {
+    throw new Error("native discovery must wait for the reply hook");
+  }),
 );
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
@@ -30,7 +17,7 @@ describe("reply-path model thinking capability", () => {
     { supportedReasoningEfforts: undefined },
     { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
   ])(
-    "retains native Codex max with queued efforts $supportedReasoningEfforts",
+    "defers native capability discovery with queued efforts $supportedReasoningEfforts",
     async ({ supportedReasoningEfforts }) => {
       const run: FollowupRun["run"] = {
         config: {},
@@ -51,6 +38,7 @@ describe("reply-path model thinking capability", () => {
             id: "gpt-5.6-luna",
             api: "openai-chatgpt-responses",
             baseUrl: "https://chatgpt.com/backend-api/codex",
+            input: ["text"],
             compat: { supportedReasoningEfforts },
           },
         ],
@@ -64,14 +52,9 @@ describe("reply-path model thinking capability", () => {
         authProfile: {},
       });
 
-      expect(result.modelThinkingCapability).toEqual({
-        provider: "openai",
-        modelId: "gpt-5.6-luna",
-        agentRuntime: "codex",
-        compat: {
-          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-        },
-      });
+      expect(result.thinkLevel).toBe("max");
+      expect(result.modelThinkingCapability).toBeUndefined();
+      expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
     },
   );
 });

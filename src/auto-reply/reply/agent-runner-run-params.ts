@@ -106,7 +106,9 @@ export async function buildEmbeddedRunBaseParams(params: {
   const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
     resolveModelFallbackOptions(params.run);
   let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
-  if (params.agentRuntime) {
+  // Native capability discovery can open a remote transport. Its owner is runtime
+  // preparation, after before_agent_reply has had a chance to handle the turn.
+  if (params.agentRuntime === "openclaw") {
     let thinkingCatalog = params.run.thinkingCatalog;
     if (needsThinkHydration(thinkingCatalog, params.provider, params.model, params.agentRuntime)) {
       const { loadProviderScopedThinkingCatalog } =

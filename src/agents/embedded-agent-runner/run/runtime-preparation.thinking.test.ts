@@ -30,6 +30,9 @@ import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
 import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
+const loadProviderScopedThinkingCatalog = vi.hoisted(() => vi.fn());
+vi.mock("../../model-catalog.runtime.js", () => ({ loadProviderScopedThinkingCatalog }));
+
 // Credential acquisition and native process installation are outside this network-free
 // composition. Route planning, model resolution, auth commit, and the overlay remain real.
 vi.mock("../../model-auth.js", async (importOriginal) => ({
@@ -87,6 +90,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
   let provider: ProviderPlugin;
 
   beforeEach(async () => {
+    loadProviderScopedThinkingCatalog.mockReset().mockResolvedValue([]);
     state = await createOpenClawTestState({ label: "effort-route", scenario: "minimal" });
     root = state.workspaceDir;
     const { buildOpenAIProvider } = await loadBundledPluginFacade<{
@@ -162,7 +166,9 @@ describe("selected route thinking metadata at runtime preparation", () => {
     ["subscription", "absent"],
     ["subscription", "platform"],
     ["subscription", "subscription"],
-  ] as const)("preserves %s disablement with %s prepared capability", async (route, capability) => {
+    ["subscription", "native"],
+    ["subscription", "native-error"],
+  ] as const)("prepares %s thinking with %s capability", async (route, capability) => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() => {
@@ -194,12 +200,19 @@ describe("selected route thinking metadata at runtime preparation", () => {
       api: capabilityApi,
     } satisfies ModelCatalogEntry;
     const modelThinkingCapability =
-      capability === "absent"
+      capability === "absent" || capability === "native" || capability === "native-error"
         ? undefined
         : prepareModelRunCapabilities([[capabilityEntry], []], ["openai", MODEL_ID, "codex"])
             .modelThinkingCapability;
+    if (capability === "native") {
+      loadProviderScopedThinkingCatalog.mockResolvedValue([capabilityEntry]);
+    } else if (capability === "native-error") {
+      loadProviderScopedThinkingCatalog.mockRejectedValue(
+        new Error("native discovery unavailable"),
+      );
+    }
     const runId = `effort-${route}-${capability}`;
-    const runtime = await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
+    const preparation = withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
       prepareEmbeddedRunRuntime({
         assertCurrent: () => {},
         runParams: {
@@ -214,7 +227,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
           config: preparedModelRuntime.config,
           authProfileId: `openai:${route}`,
           authProfileIdSource: "user",
-          thinkLevel: "off",
+          thinkLevel: capability === "native" ? "max" : "off",
           modelThinkingCapability,
         },
         provider: "openai",
@@ -230,6 +243,11 @@ describe("selected route thinking metadata at runtime preparation", () => {
         preparedModelRuntime,
       }),
     );
+    if (capability === "native-error") {
+      await expect(preparation).rejects.toThrow("native discovery unavailable");
+      return;
+    }
+    const runtime = await preparation;
     try {
       const { effectiveModel, activePreparedAuthPlan } = runtime.snapshot();
       expect(activePreparedAuthPlan.modelRoute?.authRequirement).toBe(
@@ -238,6 +256,13 @@ describe("selected route thinking metadata at runtime preparation", () => {
       expect(effectiveModel.baseUrl).toBe(route === "platform" ? PLATFORM : SUBSCRIPTION);
       expect(effectiveModel.thinkingLevelMap?.off).toBe(route === "platform" ? "none" : null);
       const efforts = effectiveModel.compat?.supportedReasoningEfforts ?? [];
+      if (capability === "native") {
+        expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ provider: "openai", model: MODEL_ID, agentRuntime: "codex" }),
+        );
+        expect(efforts).toContain("max");
+        expect(runtime.snapshot().thinkLevel).toBe("max");
+      }
       if (modelThinkingCapability) {
         expect(modelThinkingCapability.route).toBeUndefined();
         expect(efforts).toEqual(

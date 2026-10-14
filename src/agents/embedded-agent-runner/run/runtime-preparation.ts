@@ -5,7 +5,10 @@ import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
-import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
+import {
+  prepareModelRunCapabilities,
+  resolvePreparedModelThinkingCompat,
+} from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
@@ -17,7 +20,10 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
-import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
+import {
+  normalizeThinkingCatalogProviders,
+  resolveCandidateThinkingLevel,
+} from "../../thinking-runtime.js";
 import { log } from "../logger.js";
 import { formatEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
 import {
@@ -89,6 +95,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   } = modelSetup;
   let agentHarness = modelSetup.agentHarness;
   let pluginHarnessOwnsTransport = modelSetup.pluginHarnessOwnsTransport;
+  let modelThinkingCapability = params.modelThinkingCapability;
   let preparedThinkingCapabilityReady = false;
   const resolveEffectiveModel = (candidate: typeof model) =>
     resolveEmbeddedRunEffectiveModel({
@@ -118,7 +125,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   ) => {
     const preparedThinkingCompat = preparedThinkingCapabilityReady
       ? resolvePreparedModelThinkingCompat({
-          capability: params.modelThinkingCapability,
+          capability: modelThinkingCapability,
           model: candidate,
           agentRuntime: agentHarness.id,
         })
@@ -204,6 +211,27 @@ export async function prepareEmbeddedRunRuntime(input: {
     preparedAuthAttempts,
   } = preparedAuthPlan;
   let { activePreparedAuthPlan } = preparedAuthPlan;
+  if (pluginHarnessOwnsTransport && !modelThinkingCapability) {
+    // The reply hook has declined this turn. Native discovery may now connect to
+    // the selected runtime, before its capabilities constrain the thinking level.
+    const { loadProviderScopedThinkingCatalog } = await import("../../model-catalog.runtime.js");
+    const catalog = normalizeThinkingCatalogProviders(
+      await loadProviderScopedThinkingCatalog({
+        config: params.config ?? {},
+        provider,
+        model: modelId,
+        agentRuntime: agentHarness.id,
+        agentId: params.agentId,
+        agentDir: input.agentDir,
+        workspaceDir: input.workspaceDir,
+      }),
+    );
+    input.assertCurrent();
+    modelThinkingCapability = prepareModelRunCapabilities(
+      [catalog, []],
+      [provider, modelId, agentHarness.id],
+    ).modelThinkingCapability;
+  }
   preparedThinkingCapabilityReady = true;
   applyResolvedRuntimeModel(models.runtime);
   const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;

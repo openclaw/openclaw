@@ -39,10 +39,6 @@ import {
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig, TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import {
-  buildHandledBeforeAgentReplyPayloads,
-  runBeforeAgentReplyForTurn,
-} from "../../plugins/before-agent-reply.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
@@ -56,6 +52,10 @@ import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallbac
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
 import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
+import {
+  registerNativeReadinessHookCases,
+  runHookBackedEmbeddedAgent,
+} from "./agent-runner.runreplyagent.readiness.cases.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
@@ -560,39 +560,6 @@ function requireScheduledFollowupRunner(): (run: FollowupRun) => Promise<void> {
   return scheduled[1];
 }
 
-async function runHookBackedEmbeddedAgent(params: {
-  agentId?: string;
-  prompt: string;
-  runId: string;
-  sessionId: string;
-  sessionKey?: string;
-  trigger?: string;
-  workspaceDir: string;
-}) {
-  const hookResult = await runBeforeAgentReplyForTurn({
-    runId: params.runId,
-    trigger: params.trigger,
-    event: { cleanedBody: params.prompt },
-    context: {
-      runId: params.runId,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      trigger: params.trigger,
-      workspaceDir: params.workspaceDir,
-    },
-  });
-  return hookResult?.handled
-    ? {
-        payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
-        meta: { agentMeta: {} },
-      }
-    : {
-        payloads: [{ text: "model reply" }],
-        meta: { agentMeta: {} },
-      };
-}
-
 function attachSourceTurnRecorder(params: {
   followupRun: FollowupRun;
   sessionEntry: SessionEntry;
@@ -628,6 +595,13 @@ function requireBuiltChannelSourceTurnId(
   }
   return sourceTurnId;
 }
+
+registerNativeReadinessHookCases({
+  createMinimalRun,
+  makeSessionFixture,
+  readStoredMainSession,
+  state,
+});
 
 describe("runReplyAgent active steering", () => {
   it("queues instead of steering when privilege facts differ on the active route", async () => {
