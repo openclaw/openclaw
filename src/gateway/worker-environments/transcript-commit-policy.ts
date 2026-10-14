@@ -77,6 +77,20 @@ export function isCommittedAgentMessage(message: unknown): message is CommittedA
   );
 }
 
+function isSameRunDeliveryMirror(
+  entry: TranscriptEntry,
+  runId: string | null | undefined,
+  baseRunId: string | undefined,
+): boolean {
+  return Boolean(
+    runId &&
+    baseRunId === runId &&
+    entry.type === "message" &&
+    isOpenClawDeliveryMirrorAssistantMessage(entry.message) &&
+    readSessionTranscriptRunId(entry.message) === runId,
+  );
+}
+
 function resolveActiveCommitPrefix(params: {
   baseLeafId: string | null;
   activeBranch: TranscriptEntry[];
@@ -112,14 +126,7 @@ function resolveActiveCommitPrefix(params: {
   // A message tool persists its delivered reply before returning to the worker.
   // Its same-run mirror is bookkeeping, not a change to the worker's model context.
   const activeSuffix = suffix.filter(
-    (entry) =>
-      !(
-        params.runId &&
-        baseRunId === params.runId &&
-        entry.type === "message" &&
-        isOpenClawDeliveryMirrorAssistantMessage(entry.message) &&
-        readSessionTranscriptRunId(entry.message) === params.runId
-      ),
+    (entry) => !isSameRunDeliveryMirror(entry, params.runId, baseRunId),
   );
   if (activeSuffix.length === 0) {
     return { ok: true, recoveredMessages: [] };
@@ -148,8 +155,12 @@ function resolveActiveCommitPrefix(params: {
 function resolvePersistedCommitAcrossDag(params: {
   baseLeafId: string | null;
   entries: TranscriptEntry[];
+  runId: string | null | undefined;
   messages: readonly AgentMessage[];
 }): PersistedCommitResolution {
+  const baseEntry = params.entries.find((entry) => entry.id === params.baseLeafId);
+  const baseRunId =
+    baseEntry?.type === "message" ? readSessionTranscriptRunId(baseEntry.message) : undefined;
   const childrenByParent = new Map<string | null, TranscriptEntry[]>();
   for (const entry of params.entries) {
     const children = childrenByParent.get(entry.parentId) ?? [];
@@ -175,6 +186,11 @@ function resolvePersistedCommitAcrossDag(params: {
       return;
     }
     for (const entry of childrenByParent.get(parentId) ?? []) {
+      // Recover the original worker rows through the same bookkeeping allowed on the active branch.
+      if (isSameRunDeliveryMirror(entry, params.runId, baseRunId)) {
+        visit(entry.id, messageIndex, path);
+        continue;
+      }
       if (
         entry.type !== "message" ||
         !isCommittedAgentMessage(entry.message) ||
@@ -254,6 +270,7 @@ export function prepareTranscriptCommitFromSnapshot(
     const recovered = resolvePersistedCommitAcrossDag({
       baseLeafId: input.requestedBaseLeafId,
       entries: navigation.entries,
+      runId: input.runId,
       messages: input.messages,
     });
     if (recovered.kind === "found") {

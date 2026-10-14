@@ -10,6 +10,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -94,6 +98,94 @@ describe("worker transcript delivery mirrors", () => {
     }
   });
 
+  it.each(["base", "later user"] as const)(
+    "recovers a lost mirror-backed batch receipt without changing the winning branch (%s)",
+    async (winner) => {
+      const [user, assistant, toolResult] = createTurnMessages();
+      if (!user || assistant?.role !== "assistant" || toolResult?.role !== "toolResult") {
+        throw new Error("Expected a complete worker tool turn");
+      }
+      const first = await committer.commit({
+        ...ADMITTED_OWNER,
+        request: createRequest({ messages: [user, assistant] }),
+      });
+      if (!first.ok) {
+        throw new Error("Expected the worker tool call to commit");
+      }
+      await persistInternalSourceReply({
+        cfg,
+        sessionKey: SESSION_KEY,
+        expectedSessionId: SESSION_ID,
+        agentId: "main",
+        runId: expectDefined(IDENTITY.runId, "worker run ID"),
+        idempotencyKey: "source-reply-before-interrupted-result",
+        payload: { text: "Delivered source reply" },
+      });
+      const request = createRequest({
+        seq: 2,
+        baseLeafId: first.result.newLeafId,
+        messages: [
+          toolResult,
+          {
+            ...assistant,
+            itemId: "abandoned-final",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Done" }],
+          },
+        ],
+      });
+      const interrupted = createInterruptedCommitter(() => cfg, ledgerStore, "lost batch receipt");
+      await expect(interrupted.commit({ ...ADMITTED_OWNER, request })).rejects.toThrow(
+        "lost batch receipt",
+      );
+      const manager = await SessionManager.openAsync(sessionTarget);
+      const committedEntryIds = manager
+        .getBranch()
+        .slice(-2)
+        .map((entry) => entry.id);
+      expect(committedEntryIds).toHaveLength(2);
+      // branchAsync only selects this manager's next append; recovery reads durable navigation.
+      await manager.appendLeafControlAsync({
+        targetId: first.result.newLeafId,
+        appendParentId: first.result.newLeafId,
+      });
+      if (winner === "later user") {
+        await manager.appendMessageAsync({
+          role: "user",
+          content: "A different input",
+          timestamp: 400,
+        });
+      }
+      const entriesBeforeReplay = structuredClone(manager.getEntries());
+      const branchBeforeReplay = manager.getBranch().map((entry) => entry.id);
+      expect(
+        (await SessionManager.openAsync(sessionTarget)).getBranch().map((entry) => entry.id),
+      ).toEqual(branchBeforeReplay);
+      const publicUpdates: unknown[] = [];
+      const internalUpdates: unknown[] = [];
+      const offPublic = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
+      const offInternal = onInternalSessionTranscriptUpdate((update) =>
+        internalUpdates.push(update),
+      );
+      try {
+        const replay = await committer.commit({ ...ADMITTED_OWNER, request });
+        expect(replay).toEqual({
+          ok: true,
+          result: { entryIds: committedEntryIds, newLeafId: committedEntryIds.at(-1) },
+        });
+        const reopened = await SessionManager.openAsync(sessionTarget);
+        expect(reopened.getEntries()).toEqual(entriesBeforeReplay);
+        expect(reopened.getBranch().map((entry) => entry.id)).toEqual(branchBeforeReplay);
+        expect(publicUpdates).toEqual([]);
+        expect(internalUpdates).toEqual([]);
+        await expect(committer.commit({ ...ADMITTED_OWNER, request })).resolves.toEqual(replay);
+      } finally {
+        offPublic();
+        offInternal();
+      }
+    },
+  );
+
   it.each(["same-run mirror", "different-run mirror", "later user", "later assistant"] as const)(
     "continues a message-tool turn only across its own delivery bookkeeping (%s)",
     async (scenario) => {
@@ -101,7 +193,7 @@ describe("worker transcript delivery mirrors", () => {
       if (!user || assistant?.role !== "assistant" || toolResult?.role !== "toolResult") {
         throw new Error("Expected a complete worker tool turn");
       }
-      const runId = expectDefined(IDENTITY.runId);
+      const runId = expectDefined(IDENTITY.runId, "worker run ID");
       assistant.content = [
         {
           type: "toolCall",
