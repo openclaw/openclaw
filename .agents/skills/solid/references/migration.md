@@ -14,7 +14,7 @@ The Lit ratchet blocks only new production files under `ui/src` that import Lit.
 - Port a component together with its tests. Delete the Lit class in the same PR, and route remaining Lit callers through the bridge.
 - Keep host tags, classes, routes, and E2E selectors. Keep the quantitative gates green.
 - If something you need is still in flight in another lane, port what doesn't need it, poll `origin/main`, and merge `main` when it lands. Never merge an unlanded branch.
-- Proof: touched tests, `tsgo`, lint, `pnpm ui:parity` or inspected screenshots, WebKit for overlay/focus code, and the inventory shrinking. Run `$autoreview`, then land through `scripts/pr` (the `gh` shim blocks direct `gh pr merge`).
+- Proof: follow the assigned campaign's budget and [testing guidance](testing.md); use focused local tests and typechecking, inspected before/after screenshots for visual changes, and PR CI for broad suites (including WebKit for overlay/focus). Run `$autoreview`, then land through `scripts/pr` (the `gh` shim blocks direct `gh pr merge`).
 
 ## Order of the endgame
 
@@ -30,4 +30,4 @@ The Lit ratchet blocks only new production files under `ui/src` that import Lit.
 
 ## Codemod
 
-`scripts/codemods/lit-to-solid.mts` (once landed) converts mechanical bindings and leaves `TODO(solid2): <reason>` markers for ownership decisions. Resolve every marker before you land. It never converts `keyed`, `live`, `guard`, `cache`, custom directives, unsafe HTML, controller lifetimes, or cancellation.
+Dry-run `scripts/codemods/lit-to-solid.mts` on each source before porting. It converts mechanical bindings and leaves `TODO(solid2): <reason>` markers for ownership decisions. Resolve every marker before you land. It never converts `keyed`, `live`, `guard`, `cache`, custom directives, unsafe HTML, controller lifetimes, or cancellation.

@@ -52,7 +52,7 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     ),
     createTool: (ctx) => ({
       description:
-        "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search.",
+        "Search the web using Kimi by Moonshot. Returns structured results with titles, URLs, and descriptions.",
       parameters: KimiSearchSchema,
       execute: async (args, context) => {
         const { executeKimiWebSearchProviderTool } = await loadKimiWebSearchProviderRuntime();

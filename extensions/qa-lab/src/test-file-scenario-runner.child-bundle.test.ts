@@ -85,7 +85,7 @@ describe("native attempt child bundles", () => {
     async (status) => {
       const root = await harness.makeTempRepo("qa-native-child-");
       const script = path.join(root, "producer.mjs");
-      const api = pathToFileURL(path.resolve("extensions/qa-lab/test-api.ts")).href;
+      const api = pathToFileURL(path.resolve("extensions/qa-lab/src/evidence-invocation.ts")).href;
       await fs.writeFile(
         script,
         `

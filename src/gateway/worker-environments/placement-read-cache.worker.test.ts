@@ -211,6 +211,13 @@ describe("worker placement read cache", () => {
       });
       const claimed = await reader.readProjection([identity.sessionId]);
       expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
+      // A warm read must still return independent placement and nested claim snapshots.
+      const warm = await reader.readProjection([identity.sessionId]);
+      warm.placements.get(identity.sessionId)!.state = "requested";
+      warm.placements.get(identity.sessionId)!.turnClaim!.claimId = "caller-change";
+      expect(
+        (await writer.readProjection([identity.sessionId])).placements.get(identity.sessionId),
+      ).toMatchObject({ state: "local", turnClaim: { claimId: "claim" } });
       await writer.releaseTurnIfOwned(claim);
       expect(
         (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId),

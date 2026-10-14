@@ -8,6 +8,7 @@ import { runCrabboxProcess } from "./crabbox-process.js";
 import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
 export const CRABBOX_MIN_VERSION = "0.73.0";
+export const CRABBOX_NONBLOCKING_CAPTURE_VERSION = "0.78.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 // Gateway startup contention can delay an otherwise healthy executable probe.
@@ -21,6 +22,22 @@ type CrabboxVersionProbe =
   | { status: "supported"; version: string }
   | { status: "outdated"; version: string }
   | { status: "indeterminate"; reason: string };
+
+export function isCrabboxVersionAtLeast(version: string, minimum: string): boolean {
+  const [currentMatch, minimumMatch] = [version, minimum].map((value) =>
+    /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.exec(value),
+  );
+  if (!currentMatch || !minimumMatch) {
+    return false;
+  }
+  const current = currentMatch.slice(1, 4).map(Number);
+  const floor = minimumMatch.slice(1, 4).map(Number);
+  if ([...current, ...floor].some((part) => !Number.isSafeInteger(part))) {
+    return false;
+  }
+  const difference = current.findIndex((part, index) => part !== floor[index]);
+  return difference === -1 ? !currentMatch[4] : current[difference]! > floor[difference]!;
+}
 
 export async function probeCrabboxVersion(
   binary: string,
@@ -65,9 +82,7 @@ export async function probeCrabboxVersion(
   if (current.some((part) => !Number.isSafeInteger(part))) {
     return { status: "indeterminate", reason: "version output was not recognized" };
   }
-  const minimum = CRABBOX_MIN_VERSION.split(".").map(Number);
-  const difference = current.findIndex((part, index) => part !== minimum[index]);
-  const supported = difference === -1 ? !match[5] : current[difference]! > minimum[difference]!;
+  const supported = isCrabboxVersionAtLeast(match[1]!, CRABBOX_MIN_VERSION);
   return { status: supported ? "supported" : "outdated", version: match[1]! };
 }
 

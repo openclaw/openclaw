@@ -55,6 +55,11 @@ error across retries. A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
 
+Transcript writer-claim changes remain retryable when no send is confirmed. If
+local retries are exhausted, the completion stays eligible for bounded requester
+recovery. Permanent delivery rejections still stop recovery, including when they
+are wrapped by a writer-claim error.
+
 If a chunk in a direct-message text fallback fails or is aborted after earlier
 chunks were sent, OpenClaw records an incomplete delivery. It stops automatic
 retries to avoid duplicating chunks the recipient already received. A successful

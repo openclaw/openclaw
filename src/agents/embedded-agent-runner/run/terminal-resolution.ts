@@ -541,6 +541,7 @@ async function completeEmbeddedRun(
       profileId: input.authProfileId,
       profileStore: input.profileFailureStore,
       provider: input.provider,
+      modelId: input.modelId,
       agentDir: input.runParams.agentDir,
       runId: input.runParams.runId,
       sessionId: input.runParams.sessionId,

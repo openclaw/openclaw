@@ -5,7 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { assertGatewayAgentsAdmitted } from "../../test/helpers/gateway-agent-admission.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isLiveTestEnabled, useLiveTestRuntimeConfig } from "../agents/live-test-helpers.js";
 import { mergeWorkspaceSetupState } from "../agents/workspace-state-store.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -176,6 +176,7 @@ describeLive("session event wake through a live Gateway", () => {
           },
         };
         await instance.state.writeConfig(config);
+        using _ = useLiveTestRuntimeConfig(config);
         const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
           displayName: "live-session-event-wake",
         });

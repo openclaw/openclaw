@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -18,13 +17,14 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { activeSessionAgentStatus, sessionRowAttention } from "../lib/session-attention.ts";
 import { uiConversationMatches } from "../lib/sessions/session-key.ts";
 import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   summarizeSidebarSessionAttention,
   type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
 
-interface SessionAttentionControllerHost extends ReactiveControllerHost {
+interface SessionAttentionControllerHost extends SolidControllerHost {
   readonly isConnected: boolean;
   readonly sessionAttentionContext: ApplicationContext | undefined;
 }
@@ -34,7 +34,7 @@ type SessionAttentionResolver = (
 ) => SidebarSessionAttention;
 
 /** Session-scoped question, approval, and failed-run attention ownership. */
-export class SessionAttentionController implements ReactiveController {
+export class SessionAttentionController implements SolidController {
   revision = 0;
   private resolverInputs: readonly unknown[] = [];
   private resolver: SessionAttentionResolver | undefined;

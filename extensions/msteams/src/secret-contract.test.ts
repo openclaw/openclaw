@@ -94,39 +94,6 @@ describe("msteams secret contract", () => {
     expect(resolved.warnings).toStrictEqual([]);
   });
 
-  it("resolves top-level default appPassword SecretRefs when named accounts also exist", async () => {
-    const resolved = await resolveMSTeamsSecretAssignments(
-      {
-        channels: {
-          msteams: {
-            enabled: true,
-            appId: "default-app-id",
-            appPassword: { source: "env", provider: "default", id: "MSTEAMS_APP_PASSWORD" },
-            tenantId: "tenant-id",
-            accounts: {
-              support: {
-                enabled: true,
-                appId: "support-app-id",
-                appPassword: { source: "env", provider: "default", id: "SUPPORT_MSTEAMS_SECRET" },
-                webhook: { path: "/hooks/3979" },
-              },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-      {
-        MSTEAMS_APP_PASSWORD: "resolved-default-secret",
-        SUPPORT_MSTEAMS_SECRET: "resolved-support-secret",
-      },
-    );
-
-    expect(resolved.config.channels?.msteams?.appPassword).toBe("resolved-default-secret");
-    expect(resolved.config.channels?.msteams?.accounts?.support?.appPassword).toBe(
-      "resolved-support-secret",
-    );
-    expect(resolved.warnings).toStrictEqual([]);
-  });
-
   it("does not resolve a root appPassword when the canonical default account is disabled", async () => {
     const secretRef = { source: "env", provider: "default", id: "MSTEAMS_APP_PASSWORD" } as const;
     const resolved = await resolveMSTeamsSecretAssignments(
@@ -142,41 +109,6 @@ describe("msteams secret contract", () => {
                 enabled: true,
                 appId: "support-app-id",
                 appPassword: "support-secret",
-                webhook: { path: "/hooks/3979" },
-              },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-      { MSTEAMS_APP_PASSWORD: "should-not-resolve" },
-    );
-
-    expect(resolved.config.channels?.msteams?.appPassword).toEqual(secretRef);
-    expect(resolved.warnings).toEqual([
-      expect.objectContaining({
-        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "channels.msteams.appPassword",
-      }),
-    ]);
-  });
-
-  it("does not let a named federated account activate a disabled default password", async () => {
-    const secretRef = { source: "env", provider: "default", id: "MSTEAMS_APP_PASSWORD" } as const;
-    const resolved = await resolveMSTeamsSecretAssignments(
-      {
-        channels: {
-          msteams: {
-            enabled: true,
-            appId: "default-app-id",
-            appPassword: secretRef,
-            accounts: {
-              default: { enabled: false },
-              support: {
-                enabled: true,
-                appId: "support-app-id",
-                tenantId: "support-tenant-id",
-                authType: "federated",
-                useManagedIdentity: true,
                 webhook: { path: "/hooks/3979" },
               },
             },

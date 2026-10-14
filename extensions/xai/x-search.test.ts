@@ -1,20 +1,16 @@
 // Xai tests cover x search plugin behavior.
-import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createXaiFetchInspectors } from "./responses-http.test-support.js";
 import { createXSearchTool } from "./x-search.js";
+
+const { firstFetchUrl, firstAuthorizationHeader, parseFirstRequestBody } =
+  createXaiFetchInspectors("x_search");
 
 const XAI_DOCUMENTED_HANDLE_LIMIT = 20;
 
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-}
-
 function installXSearchFetch(payload?: Record<string, unknown>) {
-  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+  const mockFetch = vi.fn((_input?: unknown, _init?: RequestInit) =>
     Promise.resolve(
       jsonResponse(
         payload ?? {
@@ -37,39 +33,6 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
   );
   vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
-}
-
-function firstFetchCall(mockFetch: ReturnType<typeof installXSearchFetch>) {
-  const [call] = mockFetch.mock.calls;
-  if (!call) {
-    throw new Error("expected x_search fetch call");
-  }
-  return call;
-}
-
-function firstFetchUrl(mockFetch: ReturnType<typeof installXSearchFetch>) {
-  const [url] = firstFetchCall(mockFetch);
-  return String(url);
-}
-
-function firstFetchInit(mockFetch: ReturnType<typeof installXSearchFetch>): RequestInit {
-  const [, init] = firstFetchCall(mockFetch);
-  if (!init || typeof init !== "object" || Array.isArray(init)) {
-    throw new Error("expected x_search fetch init");
-  }
-  return init as RequestInit;
-}
-
-function firstAuthorizationHeader(mockFetch: ReturnType<typeof installXSearchFetch>) {
-  return new Headers(firstFetchInit(mockFetch).headers).get("Authorization");
-}
-
-function parseFirstRequestBody(mockFetch: ReturnType<typeof installXSearchFetch>) {
-  const requestBody = firstFetchInit(mockFetch).body;
-  return JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as Record<
-    string,
-    unknown
-  >;
 }
 
 function xaiPluginConfig({

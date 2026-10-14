@@ -5,11 +5,15 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../../infra/sqlite-transaction.js";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  type SqliteWorkerCommand,
+} from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -23,6 +27,9 @@ import type {
   SessionActorHotState,
   SessionActorTarget,
   SessionActorOperations,
+  SessionActorOutcome,
+  SessionActorPhase,
+  SessionActorPhaseResults,
 } from "./session-actor-contract.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -34,12 +41,15 @@ import { bindSqliteWorkerBackend as bindSharingBackend } from "./session-sharing
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 export type Mutation = Exclude<Command, { type: "session.actor.read" }>;
 
-export const SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT = 34_000;
+export const SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT = 1_024;
 
 export function seedSessionActorOutcomeTransferTranscript(
   fixture: Pick<ReturnType<typeof createSessionCompoundWorkerFixture>, "database" | "scope">,
 ): void {
-  const keyPayload = "k".repeat(512);
+  // Unique keys alone exceed the limit even when serialization deduplicates strings.
+  const keyPayload = "k".repeat(
+    Math.ceil(SQLITE_WORKER_MAX_MESSAGE_BYTES / SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT),
+  );
   const events = Array.from({ length: SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT }, (_, index) => ({
     type: "message",
     id: `bounded-message-${String(index).padStart(5, "0")}`,
@@ -79,10 +89,23 @@ function createFixture() {
     transactionOptions?: SqliteTransactionOptions;
     transactions: number;
   } = { transactions: 0 };
+  let commitFacts: unknown;
+  let transferredOutcome: unknown;
+  let outcomeTransfer: ReturnType<typeof createSqliteWorkerTransferCollector> | undefined;
+  let lastReply: SessionActorOperations["session.actor.patch"]["output"] | undefined;
   const context: AgentWorkerOperationContext = {
     open: () => database,
     options: { agentId: "main", path: database.path },
-    admit: (stage, facts) => hooks.admit?.(stage, facts),
+    admit(stage, facts) {
+      hooks.admit?.(stage, facts);
+      if (
+        isRecord(facts) &&
+        isRecord(facts.publication) &&
+        facts.publication.kind === "session-actor-outcome"
+      ) {
+        outcomeTransfer?.accept(facts.publication.transfer);
+      }
+    },
     writeTransaction(operationLabel, _owner, write, diagnosticContext) {
       hooks.transactions += 1;
       const result = runSqliteImmediateTransactionSync(database.db, () => write(database), {
@@ -110,6 +133,9 @@ function createFixture() {
     }
     if (received.kind === "native-commit" || received.kind === "native-settlement") {
       receipts.push(received);
+      if (received.kind === "native-commit" && isRecord(received.committed)) {
+        commitFacts = received.committed.facts;
+      }
       return;
     }
     // Preserve real admission exchanges while their native caller blocks on this isolate.
@@ -135,13 +161,37 @@ function createFixture() {
       }
       return value;
     },
-    mutate(command: Mutation) {
+    mutate(command: Mutation): SessionActorOutcome<SessionActorPhaseResults[SessionActorPhase]> {
+      commitFacts = undefined;
+      transferredOutcome = undefined;
+      outcomeTransfer = createSqliteWorkerTransferCollector("outcome", (value) => {
+        transferredOutcome = value;
+      });
       const value = execute(command);
       if (!("kind" in value)) {
         throw new Error("Actor mutation returned a read snapshot");
       }
-      return value;
+      lastReply = value;
+      if (value.kind !== "committed") {
+        return value;
+      }
+      const evidence =
+        isRecord(commitFacts) && commitFacts.kind === "session-actor-committed-transfer"
+          ? outcomeTransfer.completed && outcomeTransfer.id === commitFacts.transferId
+            ? transferredOutcome
+            : undefined
+          : commitFacts;
+      if (!isRecord(evidence) || evidence.kind !== "committed") {
+        throw new Error("Actor acknowledgement has no native committed outcome");
+      }
+      // The worker's native receipt is the typed outcome; the command reply carries only failure.
+      const committed = evidence as Extract<
+        SessionActorOutcome<SessionActorPhaseResults[SessionActorPhase]>,
+        { kind: "committed" }
+      >;
+      return value.failure ? { ...committed, failure: value.failure } : committed;
     },
+    reply: () => lastReply,
     participant(params: SessionParticipantRecordInput) {
       const backend = bindSharingBackend(undefined, {
         database: database.db,

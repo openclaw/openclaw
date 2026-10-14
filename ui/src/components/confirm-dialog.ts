@@ -1,4 +1,3 @@
-import { render as renderSolid, type JSX } from "@solidjs/web";
 import { createComponent } from "solid-js";
 import type { ConfirmDialogOptions } from "./confirm-dialog-types.ts";
 import { ConfirmDialogView } from "./confirm-dialog-view.tsx";
@@ -9,10 +8,9 @@ export type { ConfirmDialogOptions, ConfirmDialogSkipPreference } from "./confir
 let confirmationActive = false;
 
 function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
-  return withPromiseModalHost<boolean, JSX.Element>(
+  return withPromiseModalHost<boolean>(
     { signal: options.signal, value: false },
     ({ render, finish }) => render(() => createComponent(ConfirmDialogView, { options, finish })),
-    (content, host) => renderSolid(content, host),
   );
 }
 

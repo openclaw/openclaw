@@ -32,23 +32,27 @@ describe("main-thread stall attribution", () => {
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 
-  it("ignores time awaiting I/O and attributes a blocking continuation to its named owner", async () => {
-    const { monitor, elapse } = fixture();
-    const ready = createDeferredCore();
-    const operation = runWithMainThreadTask("maintenance:resume", async () => {
-      await ready.promise;
-      elapse(1_200);
-    });
-    elapse(5_000);
-    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
-    ready.resolve();
-    await operation;
-    expect(monitor.drain()).toEqual({
-      stalls: [{ elapsedMs: 1_200, task: "maintenance:resume", taskMs: 1_200 }],
-      dropped: 0,
-      delayMaxMs: 1_200,
-    });
-  });
+  // Bun does not implement async_hooks before/after hooks for Promise continuations.
+  it.skipIf(process.versions.bun)(
+    "ignores time awaiting I/O and attributes a blocking continuation to its named owner",
+    async () => {
+      const { monitor, elapse } = fixture();
+      const ready = createDeferredCore();
+      const operation = runWithMainThreadTask("maintenance:resume", async () => {
+        await ready.promise;
+        elapse(1_200);
+      });
+      elapse(5_000);
+      expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
+      ready.resolve();
+      await operation;
+      expect(monitor.drain()).toEqual({
+        stalls: [{ elapsedMs: 1_200, task: "maintenance:resume", taskMs: 1_200 }],
+        dropped: 0,
+        delayMaxMs: 1_200,
+      });
+    },
+  );
 
   it("starts a fresh observation when reset interrupts an active callback", () => {
     const { monitor, elapse } = fixture();
@@ -74,7 +78,8 @@ describe("main-thread stall attribution", () => {
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 
-  it.each(["sync", "resolved", "rejected"] as const)(
+  // Bun does not implement async_hooks before/after hooks for Promise continuations.
+  it.skipIf(process.versions.bun).each(["sync", "resolved", "rejected"] as const)(
     "expires a %s task before its detached work runs",
     async (completion) => {
       const { monitor, elapse } = fixture();
