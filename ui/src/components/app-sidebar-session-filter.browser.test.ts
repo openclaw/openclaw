@@ -36,6 +36,8 @@ const ownerOptions = (root: Element) =>
 async function mountFilters(width: number, teammates = 0) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 560);
+  // Park the previous case's pointer before mounting new hoverable controls.
+  await page.elementLocator(document.body).hover({ position: { x: width - 1, y: 0 } });
   // The app shell marks phone layouts; the filter panel becomes a bottom sheet there.
   document.body.classList.toggle("shell--mobile-nav", width < 560);
   onTestFinished(() => document.body.classList.remove("shell--mobile-nav"));
@@ -104,8 +106,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         }
       };
       const lifecycle = (event: Event) => {
-        if (event.target instanceof Element && event.target.matches(surfaceSelector)) {
-          record(event.type, undefined, event.target);
+        const surface = event.composedPath()[0];
+        if (surface instanceof Element && surface.matches(surfaceSelector)) {
+          record(event.type, undefined, surface);
         }
       };
       const events = ["overlay-show", "overlay-hide", "overlay-after-show", "overlay-after-hide"];
@@ -169,8 +172,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         }
       };
       const owners = page.getByRole("button", { name: "Owners: All owners", exact: true });
-      // Keep a previous case's pointer from opening hover surfaces during keyboard navigation.
-      await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
       (owners.element() as HTMLElement).focus();
       await userEvent.keyboard("{Enter}");
       await expect
