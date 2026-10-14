@@ -240,6 +240,23 @@ export async function resolveApiKeyForProviderCore(input: {
     ));
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   assertProviderAuthReady({ cfg, provider, agentDir });
+  // `auth: "none"` is an authoritative operator declaration: never hand stored,
+  // pinned, env, or inline credentials to a host explicitly marked keyless, so
+  // real secrets cannot egress to it. Unusable declarations (no OpenAI-compatible
+  // route) fall through to the normal resolution paths.
+  if (authConfig.resolveProviderAuthOverride(cfg, provider) === "none") {
+    const noAuthRuntimeAuth = await prepareSyntheticLocalProviderAuth({
+      cfg,
+      provider,
+      modelApi: params.modelApi,
+      workspaceDir: params.workspaceDir,
+      secretSentinels: params.secretSentinels,
+      signal: params.signal,
+    });
+    if (noAuthRuntimeAuth) {
+      return noAuthRuntimeAuth;
+    }
+  }
   let scopedStore: AuthProfileStore | undefined = params.store;
   const getScopedStore = async (requestedProfileId?: string) =>
     (scopedStore ??= await resolveScopedAuthProfileStoreAsync({

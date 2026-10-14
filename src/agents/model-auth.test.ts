@@ -922,6 +922,51 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
     });
   });
 
+  it("keeps auth none authoritative over stored profiles", async () => {
+    const auth = await resolveAuth({
+      provider: "custom-studio",
+      cfg: configForProviders({
+        "custom-studio": {
+          baseUrl: "https://studio.example.ts.net/v1",
+          api: "openai-completions",
+          auth: "none",
+          models: [createModelConfig()],
+        },
+      }),
+      store: authStore({
+        "custom-studio:manual": {
+          type: "api_key" as const,
+          provider: "custom-studio",
+          key: "stale-profile-key-must-not-egress",
+        },
+      }),
+    });
+
+    expectAuthFields(auth, {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: "models.providers.custom-studio (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
+  it("does not synthesize no-auth for auth none providers on non-openai-completions adapters", async () => {
+    await expect(
+      resolveAuth({
+        provider: "custom-studio",
+        cfg: configForProviders({
+          "custom-studio": {
+            baseUrl: "https://studio.example.ts.net/v1",
+            api: "openai-responses",
+            auth: "none",
+            models: [createModelConfig()],
+          },
+        }),
+        store: authStore({}),
+        allowAuthProfileFallback: false,
+      }),
+    ).rejects.toThrow('No API key found for provider "custom-studio"');
+  });
+
   it("keeps requiring a key for remote providers without explicit auth none", async () => {
     await expect(
       resolveAuth({

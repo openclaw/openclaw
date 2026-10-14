@@ -55,6 +55,8 @@ export const en = {
       modelIdRequired: "Model ID is required",
       noAuthConfirm:
         "No API key entered. Use no-auth mode for this endpoint (requests send no Authorization header)?",
+      noAuthCompatKeyRequired:
+        "No-auth mode supports OpenAI-compatible endpoints only. Enter an API key (a placeholder works if the server ignores keys).",
       retryChoice: "What would you like to change?",
       verifying: "Verifying...",
       verificationFailedError: "Verification failed: {error}",

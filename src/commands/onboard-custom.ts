@@ -360,6 +360,28 @@ export async function promptCustomApiConfig(params: {
           initialValue: imageInputInference.supportsImageInput,
         });
   const resolvedCompatibility = compatibility ?? "openai";
+  if (noAuth && resolvedCompatibility !== "openai") {
+    // The no-auth confirmation happens before compatibility is chosen, and only
+    // openai-completions transports can suppress the auth header, so require a
+    // real key instead of persisting an unsupported no-auth combination.
+    noAuth = false;
+    let compatKeyInput: SecretInput | undefined;
+    resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
+      config,
+      provider: buildEndpointIdFromUrl(baseUrl) || "custom",
+      envLabel: "CUSTOM_API_KEY",
+      promptMessage: t("wizard.customProvider.apiKeyPrompt"),
+      normalize: normalizeSecretInput,
+      validate: (value) =>
+        value.trim() ? undefined : t("wizard.customProvider.noAuthCompatKeyRequired"),
+      prompter,
+      secretInputMode: params.secretInputMode,
+      setCredential: async (key) => {
+        compatKeyInput = key;
+      },
+    });
+    apiKey = normalizeOptionalProviderApiKey(compatKeyInput);
+  }
   const result = applyCustomApiConfig({
     config,
     baseUrl,

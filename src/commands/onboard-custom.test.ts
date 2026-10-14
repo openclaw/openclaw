@@ -160,6 +160,29 @@ describe("promptCustomApiConfig", () => {
     expect(result.config.models?.providers?.custom?.auth).toBeUndefined();
   });
 
+  it("requires a key when no-auth is chosen but a non-openai compatibility is selected", async () => {
+    const prompter = createTestPrompter({
+      text: [
+        "https://claude-compatible.example.ts.net",
+        "",
+        "qwen3.8",
+        "custom",
+        "",
+        "placeholder-key", // pragma: allowlist secret
+      ],
+      select: ["plaintext", "anthropic", "plaintext"],
+      confirm: [true, true],
+    });
+    stubFetchSequence([]);
+
+    const result = await runPromptCustomApi(prompter, {}, undefined, {
+      verification: "deferred",
+    });
+
+    expect(result.config.models?.providers?.custom?.apiKey).toBe("placeholder-key"); // pragma: allowlist secret
+    expect(result.config.models?.providers?.custom?.auth).toBeUndefined();
+  });
+
   it("prepares deferred setup without a provider request or a selected default", async () => {
     const prompter = createTestPrompter({
       text: ["https://provider.example/v1", "fixture-key", "fixture-model", "custom", ""],

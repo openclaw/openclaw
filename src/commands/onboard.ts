@@ -283,7 +283,7 @@ async function validateResetAuthChoice(params: {
         baseUrl: params.opts.customBaseUrl,
         modelId: params.opts.customModelId,
         compatibility: params.opts.customCompatibility,
-        apiKey: undefined,
+        apiKey: params.opts.customApiKey,
         noAuth: params.opts.customNoAuth,
         providerId: params.opts.customProviderId,
         supportsImageInput: params.opts.customImageInput,
@@ -293,20 +293,22 @@ async function validateResetAuthChoice(params: {
         baseUrl: custom.baseUrl,
         providerId: custom.providerId,
       }).providerId;
-      const customCredential = await resolveNonInteractiveCredential({
-        provider: customProviderId,
-        cfg: params.baseConfig,
-        flagValue: params.opts.customApiKey,
-        flagName: "--custom-api-key",
-        envVar: "CUSTOM_API_KEY",
-        runtime: params.runtime,
-        agentDir: target.agentDir,
-        workspaceDir: params.workspaceDir,
-        allowProfile: params.resetScope === "config",
-        required: false,
-        secretInputMode: params.opts.secretInputMode,
-        json: params.opts.json,
-      });
+      const customCredential = custom.noAuth
+        ? undefined
+        : await resolveNonInteractiveCredential({
+            provider: customProviderId,
+            cfg: params.baseConfig,
+            flagValue: params.opts.customApiKey,
+            flagName: "--custom-api-key",
+            envVar: "CUSTOM_API_KEY",
+            runtime: params.runtime,
+            agentDir: target.agentDir,
+            workspaceDir: params.workspaceDir,
+            allowProfile: params.resetScope === "config",
+            required: false,
+            secretInputMode: params.opts.secretInputMode,
+            json: params.opts.json,
+          });
       if (params.opts.customApiKey?.trim() && !customCredential) {
         return false;
       }
@@ -320,7 +322,8 @@ async function validateResetAuthChoice(params: {
         error instanceof CustomApiError &&
         (error.code === "missing_required" ||
           error.code === "invalid_compatibility" ||
-          error.code === "no_auth_conflict")
+          error.code === "no_auth_conflict" ||
+          error.code === "no_auth_unsupported")
           ? error.message
           : `Invalid custom provider config: ${formatErrorMessage(error)}`;
       return reject(message);

@@ -412,6 +412,18 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.apiKey).toBeUndefined();
   });
 
+  it("rejects no-auth on unsupported compatibilities before saving", () => {
+    expect(() =>
+      applyCustomApiConfig({
+        config: {},
+        baseUrl: "https://claude-compatible.example.ts.net",
+        modelId: "some-model",
+        compatibility: "anthropic",
+        noAuth: true,
+      }),
+    ).toThrow('auth: "none" currently supports OpenAI-compatible endpoints only');
+  });
+
   it("clears stale keys and auth modes when switching a provider to no-auth", () => {
     const providerId = "custom-studio-example-ts-net";
     const result = applyCustomApiConfig({
@@ -642,6 +654,17 @@ describe("parseNonInteractiveCustomApiFlags", () => {
         noAuth: true,
       }),
     ).toThrow("--custom-no-auth cannot be combined with --custom-api-key");
+  });
+
+  it("rejects no-auth on adapters that cannot suppress auth headers", () => {
+    expect(() =>
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "anthropic",
+        noAuth: true,
+      }),
+    ).toThrow("--custom-no-auth currently supports --custom-compatibility openai only");
   });
 
   it.each([

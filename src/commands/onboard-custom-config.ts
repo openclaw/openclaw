@@ -146,7 +146,8 @@ type CustomApiErrorCode =
   | "invalid_model_id"
   | "invalid_provider_id"
   | "invalid_alias"
-  | "no_auth_conflict";
+  | "no_auth_conflict"
+  | "no_auth_unsupported";
 
 /** Error class used by callers to turn custom API validation failures into CLI UX. */
 export class CustomApiError extends Error {
@@ -405,16 +406,23 @@ export function parseNonInteractiveCustomApiFlags(params: ParseNonInteractiveCus
   const apiKey = normalizeOptionalString(params.apiKey);
   const providerId = normalizeOptionalString(params.providerId);
   assertValidCustomProviderId(providerId);
+  const compatibility = parseCustomApiCompatibility(params.compatibility);
   if (params.noAuth && apiKey) {
     throw new CustomApiError(
       "no_auth_conflict",
       "Custom provider flags conflict: --custom-no-auth cannot be combined with --custom-api-key. Omit one.",
     );
   }
+  if (params.noAuth && compatibility !== "openai") {
+    throw new CustomApiError(
+      "no_auth_unsupported",
+      "--custom-no-auth currently supports --custom-compatibility openai only (no-auth cannot suppress auth headers on other adapters).",
+    );
+  }
   return {
     baseUrl,
     modelId,
-    compatibility: parseCustomApiCompatibility(params.compatibility),
+    compatibility,
     ...(apiKey ? { apiKey } : {}),
     ...(params.noAuth ? { noAuth: true } : {}),
     ...(providerId ? { providerId } : {}),
@@ -438,6 +446,13 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams) {
     throw new CustomApiError(
       "invalid_compatibility",
       'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
+    );
+  }
+
+  if (params.noAuth && params.compatibility !== "openai") {
+    throw new CustomApiError(
+      "no_auth_unsupported",
+      'auth: "none" currently supports OpenAI-compatible endpoints only (no-auth cannot suppress auth headers on other adapters).',
     );
   }
 

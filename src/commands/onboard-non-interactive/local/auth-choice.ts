@@ -185,14 +185,19 @@ export async function applyNonInteractiveAuthChoice(params: {
         baseUrl: customAuth.baseUrl,
         providerId: customAuth.providerId,
       });
-      const resolvedCustomApiKey = await resolveApiKey({
-        provider: resolvedProviderId.providerId,
-        flagValue: customAuth.apiKey,
-        flagName: "--custom-api-key",
-        envVar: "CUSTOM_API_KEY",
-        envVarName: "CUSTOM_API_KEY",
-        required: false,
-      });
+      // No-auth selection must not resolve ambient credentials: keeping the
+      // env/flag key alive would serialize it next to auth: "none" and crash
+      // the replacement branch (which expects a staged profile).
+      const resolvedCustomApiKey = customAuth.noAuth
+        ? undefined
+        : await resolveApiKey({
+            provider: resolvedProviderId.providerId,
+            flagValue: customAuth.apiKey,
+            flagName: "--custom-api-key",
+            envVar: "CUSTOM_API_KEY",
+            envVarName: "CUSTOM_API_KEY",
+            required: false,
+          });
       let customApiKeyInput: SecretInput | undefined;
       if (
         resolvedCustomApiKey &&

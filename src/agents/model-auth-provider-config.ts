@@ -275,8 +275,12 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   }
   // `auth: "none"` is an explicit operator declaration, so it also covers
   // reachable-but-private hosts (tailnet/VPN inference servers) that hostname
-  // classification cannot prove local.
-  return noAuthOverride || isLocalAuthProviderBaseUrl(route.baseUrl);
+  // classification cannot prove local. Only `openai-completions` transports
+  // suppress the Authorization header for the synthetic marker, so no-auth is
+  // restricted to that adapter.
+  return noAuthOverride
+    ? route.api === "openai-completions"
+    : isLocalAuthProviderBaseUrl(route.baseUrl);
 }
 
 export function resolveProviderAuthOverride(

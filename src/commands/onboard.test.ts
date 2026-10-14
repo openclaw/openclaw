@@ -792,6 +792,19 @@ describe("setupWizardCommand", () => {
     );
   });
 
+  it("rejects no-auth combined with a custom API key before reset", async () => {
+    await expectAuthPreflightError(
+      {
+        customBaseUrl: "https://example.com/v1",
+        customModelId: "test-model",
+        customApiKey: "conflicting-key",
+        customNoAuth: true,
+      },
+      () =>
+        "Custom provider flags conflict: --custom-no-auth cannot be combined with --custom-api-key. Omit one.",
+    );
+  });
+
   it("rejects ambiguous interactive provider flags before reset", async () => {
     const runtime = makeRuntime();
     await setupWizardCommand({ reset: true, nvidiaApiKey: "n", openaiApiKey: "o" }, runtime);
