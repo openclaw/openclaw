@@ -98,6 +98,52 @@ export function registerAgentDeleteDrainRecoveryTests(harness: AgentDeleteRecove
     }
   });
 
+  it("reports slow placement preparation without canceling the run after timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sessionId = "slow-placement-session";
+    const sessionKey = "agent:test-agent:slow-placement";
+    const handle = createEmbeddedRunHandle({ abort: vi.fn() });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "test-agent");
+    const preparation =
+      createDeferred<
+        Awaited<ReturnType<typeof sessionPlacement.prepareSessionWorkerPlacementStop>>
+      >();
+    const stop = vi.fn(async () => {});
+    const prepareStop = vi
+      .spyOn(sessionPlacement, "prepareSessionWorkerPlacementStop")
+      .mockReturnValueOnce(preparation.promise);
+    const deletion = makeCall("agents.delete", { agentId: "test-agent" });
+    const failed = vi.fn();
+    const completed = Promise.resolve(deletion.promise).catch(failed);
+    try {
+      await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+      expect(prepareStop).toHaveBeenCalledOnce();
+      expect(failed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "deletion preparation timed out for sessions: agent:test-agent:slow-placement. Check session placement availability",
+          ),
+        }),
+      );
+      preparation.resolve({ stop, startBeforeDrain: false });
+      await vi.runAllTimersAsync();
+      expect(handle.abort).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeDefined();
+      expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+      expect(mocks.beginAgentDeletionRetire).not.toHaveBeenCalled();
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+    } finally {
+      preparation.resolve({ stop, startBeforeDrain: false });
+      await vi.runAllTimersAsync();
+      await completed;
+      prepareStop.mockRestore();
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { sessionKey: undefined, isAbortable: false },
     { sessionKey: undefined, isAbortable: true },

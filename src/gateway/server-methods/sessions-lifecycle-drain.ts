@@ -65,6 +65,7 @@ type SessionLifecycleParams = {
   action: "archive" | "delete";
   authorize?: () => void;
   beforeCancel?: () => void | Promise<void>;
+  onPrepared?: () => void;
   context: GatewayRequestContext;
   storePath: string;
   sessionKeys: string[];
@@ -173,6 +174,7 @@ export async function prepareSessionLifecycleDrain(
         }
         const workerStop = await prepareSessionWorkerPlacementStop(params);
         params.authorize?.();
+        params.onPrepared?.();
         releaseAdmissions = closeSessionWorkAdmissions({
           scope: params.storePath,
           identities: params.lifecycleIdentities,

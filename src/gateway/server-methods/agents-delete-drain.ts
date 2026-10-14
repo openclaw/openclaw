@@ -184,8 +184,12 @@ export async function drainAgentDeletionRuns(
         );
       }
     });
-    const sessions = [...targets.values()].map(async (target) => {
-      const drain = await prepareSessionLifecycleDrain(target);
+    const preparing = new Set(targets.values());
+    const sessions = [...preparing].map(async (target) => {
+      const drain = await prepareSessionLifecycleDrain({
+        ...target,
+        onPrepared: () => preparing.delete(target),
+      });
       if (finished) {
         drain.release();
         return;
@@ -232,6 +236,11 @@ export async function drainAgentDeletionRuns(
       );
     }
     if (!settled) {
+      if (preparing.size) {
+        throw new Error(
+          `Agent ${agentId} deletion preparation timed out for sessions: ${[...preparing].map((target) => target.sessionKey).join(", ")}. Check session placement availability, then retry agents.delete; agent storage has been preserved.`,
+        );
+      }
       const stuck = [...embeddedRuns.values()].filter((run) => run.isActive());
       throw new Error(
         `Agent ${agentId} deletion is still draining${stuck.length ? ` embedded runs in sessions: ${stuck.map((run) => run.sessionId).join(", ")}` : " active work"}. Wait for active work to end, then retry agents.delete; agent storage has been preserved.`,
