@@ -195,8 +195,8 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
                 <span class="sidebar-session-indicator"
                   >${solidContent(
                     () =>
-                      renderSessionLeadingState(
-                        {
+                      renderSessionLeadingState({
+                        session: {
                           key: "agent:main:shared",
                           label: "Shared session",
                           renameValue: "Shared session",
@@ -222,15 +222,15 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
                           ],
                           participantCount: ownerCount - 1,
                         },
-                        {
+                        ownerActor: {
                           type: "human",
                           id: "profile-ada",
                           identity: { type: "profile", id: "profile-ada" },
                           label: "Ada",
                         },
-                        "owned",
-                        presence === "away" ? false : undefined,
-                      ).leadingIndicator,
+                        attribution: "owned",
+                        ownerViewing: presence === "away" ? false : undefined,
+                      }).leadingIndicator,
                     {},
                   )}</span
                 >

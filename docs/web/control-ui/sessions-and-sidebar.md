@@ -85,6 +85,8 @@ or when the connection has no durable profile, the list shows **All owners**.
 Identifying the profile restores its saved choice or the **My sessions** default.
 During reconnection, a known profile's title and filter stay in place until identity
 resolves or the connection changes.
+The filtered session list loads before custom group metadata, so a slow group
+catalog does not hold up session rows. Group names and ordering update when that catalog arrives.
 On a single-user installation without ownership filters, the header is a plain
 **Sessions** title and the list includes sessions without owner metadata.
 

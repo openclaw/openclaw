@@ -2197,6 +2197,7 @@ packages/tool-call-repair/src/index.ts
 packages/tool-call-repair/src/payload.ts
 packages/tool-call-repair/src/promote.ts
 packages/tool-call-repair/src/protection-fast-path.ts
+packages/tool-call-repair/src/stream-normalizer-suppression.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/agents/auth-profiles/oauth-refresh-error-format.ts
 src/agents/auth-profiles/oauth-refresh-failure.ts

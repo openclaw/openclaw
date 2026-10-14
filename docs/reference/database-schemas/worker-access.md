@@ -2723,19 +2723,12 @@ live receipt boundary. These assertions execute no main-thread SQLite. Recovery
 carries its original source receipt into combined operations; a mismatch refuses
 composition before dispatch.
 
-Reef retains synchronous `listCurrent` reads only for the released
-`ChannelPlugin` config, account-description, and security-policy adapters;
-asynchronous directory listings use the worker. Replacing those released
-synchronous policy surfaces belongs to the next approved SDK migration. Hosts
-without `createOperation` retain their existing native adapters, selected before
-awaiting. Worker failures never select a fallback.
-
-Older hosts without the additive direct-DM authority callback retain their
-historical host behavior and do not gain the current host's checks after their
-own awaits. See the
-[channel authority contract](/plugins/sdk-channel-plugins) for current-host
-checks. These changes preserve schemas, stored formats, retention, permissions,
-and update behavior.
+Reef's config, account-description, security-policy, and directory adapters use
+the asynchronous worker APIs. Bundled plugins release with the host and require
+its current capabilities; Reef has no older-host native-store or transport
+fallback. See the [channel authority contract](/plugins/sdk-channel-plugins)
+for the host's checks before dispatch. Schemas, stored formats, retention,
+permissions, and update behavior are unchanged.
 
 Manual `sessions.compact` trimming with `maxLines` runs on the existing agent
 writer. The worker plans retained transcript rows before its synchronous write

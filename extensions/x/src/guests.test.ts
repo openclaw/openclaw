@@ -124,48 +124,6 @@ describe("X guest turns", () => {
     }
   });
 
-  it.each([
-    { name: "absent capability", capabilities: null, helperOnly: false },
-    { name: "unrelated capability", capabilities: ["unrelated-feature-v1"], helperOnly: false },
-    { name: "explicit helpers on an older host", capabilities: null, helperOnly: true },
-  ])("keeps guest ingress restricted with $name", async ({ capabilities, helperOnly }) => {
-    const cfg = guestConfig();
-    if (helperOnly) {
-      cfg.channels!.x!.guests!.tools = { allow: ["sessions_spawn", "sessions_yield", "subagents"] };
-    }
-    const done = Promise.withResolvers<void>();
-    const test = fixture({
-      cfg,
-      capabilities,
-      posts: [post("501", "99")],
-      queue: createQueue<Payload>({ onCompleted: () => done.resolve() }),
-    });
-    const running = test.start();
-    try {
-      await done.promise;
-      expect(test.dispatch).toHaveBeenCalledOnce();
-      const turn = test.dispatch.mock.calls[0]![0];
-      expect(turn.ctxPayload.ConversationToolPolicy).toEqual(
-        helperOnly ? { deny: ["*"] } : { allow: ["read", "ls"], deny: ["skills_read"] },
-      );
-      expect(turn.ctxPayload.BodyForAgent).toContain("this host supports read-only guest answers");
-      expect(turn.ctxPayload.BodyForAgent).not.toContain("hidden helpers must use");
-      expect(running.status()).toMatchObject({
-        guests: { enabled: true, helpersAvailable: false },
-      });
-      expect(
-        xPlugin.groups!.resolveToolPolicy!({
-          cfg,
-          senderId: "10",
-          groupId: "500",
-          accountId: "default",
-        }),
-      ).toBeUndefined();
-    } finally {
-      await test.stop();
-    }
-  });
-
   it("uses hot config publication to admit and then disable guests without restarting the monitor", async () => {
     let completed = Promise.withResolvers<void>();
     const initial = guestConfig(false);

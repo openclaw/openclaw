@@ -35,8 +35,9 @@ import {
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
+import { ChatPageState } from "./chat-page-state.ts";
 import { settleChatPage, setNavigationContext } from "./chat-page.test-support.ts";
-import { ChatPage, chatPageState } from "./chat-page.ts";
+import { ChatPage } from "./chat-page.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
@@ -63,7 +64,7 @@ type RenderedPane = HTMLElement & {
 };
 
 function getRouteDraftForActivePane(page: ChatPage): string | undefined {
-  const state = chatPageState(page) as unknown as {
+  const state = ChatPageState.forHost(page) as unknown as {
     data: SessionChatRouteData;
     consumedDraftData: SessionChatRouteData | null;
   };
@@ -152,7 +153,7 @@ describe("chat page retained sessions", () => {
       page.data = { sessionKey: "agent:main:main" };
       document.body.append(page);
       await settleChatPage(page);
-      const owner = chatPageState(page) as unknown as {
+      const owner = ChatPageState.forHost(page) as unknown as {
         retainedSessions: { suspend(): void };
       };
       const suspend = vi.spyOn(owner.retainedSessions, "suspend");
@@ -866,7 +867,7 @@ describe("chat page retained sessions", () => {
         );
       } else {
         (
-          chatPageState(page) as unknown as {
+          ChatPageState.forHost(page) as unknown as {
             applySessionDrop: (
               key: string,
               pane: string,

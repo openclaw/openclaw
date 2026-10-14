@@ -13,7 +13,7 @@ import {
   createComposerProps,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const controllers: NewSessionComposerTextareaController[] = [];
