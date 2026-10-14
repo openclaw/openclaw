@@ -32,7 +32,7 @@ export type UsageSessionSummaryTarget = {
 
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 const USAGE_REPORT_PUBLICATION_WAIT_MS = 100;
-const USAGE_REPORT_BATCH_SIZE = 1024;
+const USAGE_REPORT_INITIAL_BATCH_SIZE = 256;
 
 export async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
   const result = await runTasksWithConcurrency({
@@ -155,8 +155,11 @@ export async function loadUsageSessionSummaries(params: {
     Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => {
       let usage: ReturnType<typeof createSessionCostSummaryAccumulator> | undefined;
       let reportBudgetBytes: number | undefined;
-      for (let offset = 0; offset < agentSessions.length; offset += USAGE_REPORT_BATCH_SIZE) {
-        const batch = agentSessions.slice(offset, offset + USAGE_REPORT_BATCH_SIZE);
+      for (let offset = 0; offset < agentSessions.length;) {
+        const batch = agentSessions.slice(
+          offset,
+          offset === 0 ? USAGE_REPORT_INITIAL_BATCH_SIZE : undefined,
+        );
         const loaded = await params.read(
           () =>
             loadSessionCostSummariesFromCache({
@@ -207,6 +210,7 @@ export async function loadUsageSessionSummaries(params: {
             usage = undefined;
           }
         }
+        offset += batch.length;
       }
     }),
   );

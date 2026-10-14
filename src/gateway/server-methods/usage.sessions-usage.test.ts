@@ -266,14 +266,14 @@ describe("sessions.usage", () => {
     const load = vi.mocked(loadSessionCostSummariesFromCache);
     const originalLoad = load.getMockImplementation()!;
     discovered.mockResolvedValue(
-      Array.from({ length: 1025 }, (_, index) => ({
+      Array.from({ length: 257 }, (_, index) => ({
         sessionId: `budget-${index}`,
         sessionFile: `/tmp/budget-${index}.jsonl`,
-        mtime: 1025 - index,
+        mtime: 257 - index,
       })),
     );
     load.mockImplementation(async ({ sessions }) => {
-      if (sessions.some(({ sessionId }) => sessionId === "budget-1024")) {
+      if (sessions.some(({ sessionId }) => sessionId === "budget-256")) {
         const signal = getAsyncWorkSignal()!;
         const abort = () => release.resolve();
         signal.addEventListener("abort", abort, { once: true });
@@ -300,11 +300,11 @@ describe("sessions.usage", () => {
       await started.promise;
       await vi.advanceTimersByTimeAsync(15_000);
       const result = readResult(await pending);
-      expect(result.totals.totalTokens).toBe(1024 * 7);
+      expect(result.totals.totalTokens).toBe(256 * 7);
       expect(result.sessions).toHaveLength(50);
       expect(result.cacheStatus).toMatchObject({
         status: "partial",
-        cachedFiles: 1024,
+        cachedFiles: 256,
         pendingFiles: 1,
       });
       expect(result.partial?.reason).toBe("time-budget");
@@ -331,10 +331,10 @@ describe("sessions.usage", () => {
     const load = vi.mocked(loadSessionCostSummariesFromCache);
     const originalLoad = load.getMockImplementation()!;
     discovered.mockResolvedValue(
-      Array.from({ length: 1025 }, (_, index) => ({
+      Array.from({ length: 257 }, (_, index) => ({
         sessionId: `memory-${index}`,
         sessionFile: `/tmp/memory-${index}.jsonl`,
-        mtime: 1025 - index,
+        mtime: 257 - index,
       })),
     );
     load.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
@@ -352,10 +352,10 @@ describe("sessions.usage", () => {
     try {
       const result = readResult(await runSessionsUsage(BASE_USAGE_RANGE));
       expect(load.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
-      expect(result.totals.totalTokens).toBe(1024 * 7);
+      expect(result.totals.totalTokens).toBe(256 * 7);
       expect(result.cacheStatus).toMatchObject({
         status: "partial",
-        cachedFiles: 1024,
+        cachedFiles: 256,
         pendingFiles: 1,
       });
     } finally {
