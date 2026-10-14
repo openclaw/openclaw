@@ -3130,54 +3130,58 @@ describe("server-channels auto restart", () => {
     expect(readAccount(manager)?.running).not.toBe(true);
   });
 
-  it("does not attribute later Discord gateway callbacks to account startup", async () => {
-    let now = 0;
-    const monitor = createMainThreadStallMonitor(() => now);
-    const gatewayEvent = createDeferred();
-    const eventHandled = createDeferred();
-    const started = createDeferred();
-    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      started.resolve();
-      await gatewayEvent.promise;
-      now += 1_928;
-      eventHandled.resolve();
-      await waitForAbort(abortSignal);
-    });
-    const log = createSubsystemLogger("gateway/stall-test");
-    const info = vi.spyOn(log, "info");
-    const trace = createGatewayStartupTrace(log);
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createChannelManager({
-      scheduler: createTestGatewayScheduler(),
-      getRuntimeConfig: () => ({}),
-      getPluginRegistry: requireActivePluginChannelRegistry,
-      channelLogs: { discord: log },
-      channelRuntimeEnvs: {},
-      startupTrace: trace,
-    });
-    createdManagers.push({ channelIds: ["discord"], manager });
-    try {
-      await manager.startChannels();
-      await started.promise;
-      await flushMicrotasks();
-      gatewayEvent.resolve();
-      await eventHandled.promise;
-      expect(startAccount).toHaveBeenCalledTimes(1);
-      expect(info.mock.calls.filter(([message]) => message.includes("starting account"))).toEqual([
-        ["[default] starting account (reason: startup)"],
-      ]);
-      expect(monitor.drain()).toEqual({
-        stalls: [{ elapsedMs: 1_928, task: "unattributed", taskMs: 1_928 }],
-        dropped: 0,
-        delayMaxMs: 1_928,
+  // Bun does not implement async_hooks before/after callbacks used by the stall monitor.
+  it.skipIf(process.versions.bun)(
+    "does not attribute later Discord gateway callbacks to account startup",
+    async () => {
+      let now = 0;
+      const monitor = createMainThreadStallMonitor(() => now);
+      const gatewayEvent = createDeferred();
+      const eventHandled = createDeferred();
+      const started = createDeferred();
+      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+        started.resolve();
+        await gatewayEvent.promise;
+        now += 1_928;
+        eventHandled.resolve();
+        await waitForAbort(abortSignal);
       });
-    } finally {
-      monitor.stop();
-      trace.close();
-      info.mockRestore();
-      await manager.stopChannel("discord");
-    }
-  });
+      const log = createSubsystemLogger("gateway/stall-test");
+      const info = vi.spyOn(log, "info");
+      const trace = createGatewayStartupTrace(log);
+      installTestRegistry(createTestPlugin({ startAccount }));
+      const manager = createChannelManager({
+        scheduler: createTestGatewayScheduler(),
+        getRuntimeConfig: () => ({}),
+        getPluginRegistry: requireActivePluginChannelRegistry,
+        channelLogs: { discord: log },
+        channelRuntimeEnvs: {},
+        startupTrace: trace,
+      });
+      createdManagers.push({ channelIds: ["discord"], manager });
+      try {
+        await manager.startChannels();
+        await started.promise;
+        await flushMicrotasks();
+        gatewayEvent.resolve();
+        await eventHandled.promise;
+        expect(startAccount).toHaveBeenCalledTimes(1);
+        expect(info.mock.calls.filter(([message]) => message.includes("starting account"))).toEqual(
+          [["[default] starting account (reason: startup)"]],
+        );
+        expect(monitor.drain()).toEqual({
+          stalls: [{ elapsedMs: 1_928, task: "unattributed", taskMs: 1_928 }],
+          dropped: 0,
+          delayMaxMs: 1_928,
+        });
+      } finally {
+        monitor.stop();
+        trace.close();
+        info.mockRestore();
+        await manager.stopChannel("discord");
+      }
+    },
+  );
 
   it("prunes only credential owners and account state for inactive channel plugins", async () => {
     installTestRegistry(

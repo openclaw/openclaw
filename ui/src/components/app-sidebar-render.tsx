@@ -473,22 +473,17 @@ export function renderAppSidebarPluginTab(
     return isRouteId(route) ? route : null;
   });
   const location = createMemo(() => pluginTabLocation(tab(), host.basePath));
+  const iconName = createMemo(() => {
+    const icon = tab().icon;
+    return icon && Object.hasOwn(iconData, icon)
+      ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
+      : "plug";
+  });
   const link = renderSidebarNavLink({
     get href() {
       return `${location().pathname}${location().search}`;
     },
-    get icon() {
-      const icon = tab().icon;
-      return (
-        <Icon
-          name={
-            icon && Object.hasOwn(iconData, icon)
-              ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
-              : "plug"
-          }
-        />
-      );
-    },
+    icon: <Icon name={iconName()} />,
     get label() {
       return tab().label;
     },

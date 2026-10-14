@@ -4793,7 +4793,7 @@ jobs:
       matrix:
         phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
     runs-on: &hosted_xcode_runner ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27'))) || ('xcode-27') }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && 75 || 30 }}
     env:
       HISTORICAL_TARGET: *historical_target
       MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
@@ -5165,6 +5165,37 @@ jobs:
             ${{ steps.swift-test.outputs.menu-named-artifact-path }}/*-menu-*.png
             ${{ steps.swift-test.outputs.menu-named-artifact-path }}/*-capture-status.json
             ${{ steps.swift-test.outputs.menu-named-artifact-path }}/capture-export.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Setup bundled recovery runtime build
+        id: recovery-runtime-setup
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && hashFiles('scripts/test-macos-app-host.sh') != '' && steps.swift-test.outputs.debug-tests-built == 'true' && steps.swift-test.outcome == 'success' }}
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: *cache_mode
+          install-bun: "false"
+          build-all-cache-scope: full
+
+      - name: Build bundled recovery runtime
+        id: recovery-runtime-build
+        if: ${{ !cancelled() && steps.recovery-runtime-setup.outcome == 'success' }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build:ci-artifacts
+
+      - name: Prove bundled app recovery and relaunch
+        id: bundled-recovery
+        if: ${{ !cancelled() && steps.recovery-runtime-build.outcome == 'success' }}
+        run: bash scripts/test-macos-app-host.sh
+
+      - name: Upload bundled app recovery proof
+        if: ${{ always() && steps.bundled-recovery.outputs.recovery-artifact-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-bundled-recovery-proof
+          path: ${{ steps.bundled-recovery.outputs.recovery-artifact-path }}
           if-no-files-found: error
           retention-days: 7
 

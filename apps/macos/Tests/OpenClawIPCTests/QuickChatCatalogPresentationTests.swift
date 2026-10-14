@@ -26,7 +26,7 @@ struct QuickChatCatalogPresentationTests {
 
     private func checkRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed() async throws {
         let application = AppKitTestSupport.application
-        #expect(AppKitTestSupport.didSetActivationPolicy)
+        #expect(AppKitTestSupport.hasAccessoryActivationPolicy)
         if ProcessInfo.processInfo.environment["OPENCLAW_TEST_QUICKCHAT_APPEARANCE"] == "dark" {
             application.appearance = NSAppearance(named: .darkAqua)
         }

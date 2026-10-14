@@ -236,7 +236,8 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         var database: OpaquePointer?
         let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE) | SQLITE_OPEN_FULLMUTEX
             | (createIfMissing && !readOnly ? SQLITE_OPEN_CREATE : 0)
-        let result = sqlite3_open_v2(databaseURL.path, &database, flags, nil)
+        let vfsName = readOnly ? try OpenClawNativeStateReadOnlyVFS.name() : nil
+        let result = sqlite3_open_v2(databaseURL.path, &database, flags, vfsName)
         guard result == SQLITE_OK, let database else {
             let detail = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
             if let database { sqlite3_close(database) }

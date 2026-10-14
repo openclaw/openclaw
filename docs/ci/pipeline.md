@@ -471,6 +471,14 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
+Full nonpublishing manual validation also stages the exact candidate runtime and runs
+ordinary bundled recovery and relaunch through two fresh `.app` test-host processes.
+The existing launcher owns their private home, Keychain, selected service, and process
+settlement. Both phase event streams are retained in `macos-bundled-recovery-proof`.
+Only this full-tier test phase has a 75-minute budget for the runtime build, staging,
+and native composition; ordinary tests and independent packages retain 30 minutes.
+The proof does not sign or publish an app.
+
 App tests run in three sequential launcher invocations: the default-profile suite,
 rendered Quick Chat in a fresh default-profile process, then named-profile fixtures.
 The rendered suite keeps its catalog, disclosure, and shortcut flows together and
