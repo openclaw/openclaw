@@ -70,6 +70,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
   databasePath: string;
   agentId: string;
   env: NodeJS.ProcessEnv;
+  source?: "runtime" | "canonical";
 }): {
   identity: string | undefined;
   captureCredentialAuthority: (
@@ -211,7 +212,10 @@ export function prepareAgentAuthProfileRowsRead(options: {
     return { store: rows.store, state: rows.state, cacheable: rows.cacheable };
   };
   const cachedReader =
-    isMainThread && !uncached && !getActiveOpenClawStateDatabaseReadSnapshot({ env })
+    isMainThread &&
+    options.source !== "canonical" &&
+    !uncached &&
+    !getActiveOpenClawStateDatabaseReadSnapshot({ env })
       ? runtimeAuthProfileRowsCache.prepare(databasePath, {
           identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
           read: readRows,
@@ -251,10 +255,12 @@ export function prepareAgentAuthProfileRowsRead(options: {
 export async function readSharedAuthProfileRows(
   context: OpenClawStateWorkerContext,
   artifactPreserving = isArtifactPreservingStateRead(),
+  source: "runtime" | "canonical" = "runtime",
 ): Promise<AuthProfileRowRead> {
   const read = () => readSharedAuthProfileRowsUncached(context, artifactPreserving);
   if (
     !isMainThread ||
+    source === "canonical" ||
     artifactPreserving ||
     context.maintenanceScope ||
     getActiveOpenClawStateDatabaseReadSnapshot({ env: context.environment })

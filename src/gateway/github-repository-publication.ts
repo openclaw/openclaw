@@ -31,7 +31,6 @@ import {
 } from "./github-publication-availability.js";
 import {
   exactClaimForPlacement,
-  createSharedGitHubPublicationReadMethods,
   type GitHubPublicationClaimRequestV2,
   type GitHubPublicationSessionRequestV2,
 } from "./github-publication-coordinator-methods.js";
@@ -456,7 +455,6 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       isExecuting: (requestId) => active.has(requestId),
       execute: (row, assertCustody) => execute(row, { assertCustody }),
     }),
-    ...createSharedGitHubPublicationReadMethods("repository"),
     preparePersonalStatus,
     async personalStatusAsync(
       action: PersonalGitHubAction,

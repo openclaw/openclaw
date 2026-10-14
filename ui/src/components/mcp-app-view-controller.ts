@@ -365,18 +365,17 @@ export class McpAppViewController {
     signal: AbortSignal,
   ) {
     bridge.onopenlink = async ({ url }) => {
-      if (!parseMcpAppLink(url)) {
-        return openExternalUrlSafe(url) ? {} : { isError: true };
-      }
       const context = this.context;
-      // Recognized plugin links navigate this host, so a retired/background frame
-      // must not redirect a collaborator or a replacement connection.
+      // Both external and plugin navigation require the current, focused App.
       if (
         !context ||
         !this.isCurrentBinding(binding, resources, signal) ||
         !isWidgetFrameInteractable(resources.iframe)
       ) {
         return { isError: true };
+      }
+      if (!parseMcpAppLink(url)) {
+        return openExternalUrlSafe(url) ? {} : { isError: true };
       }
       return navigateMcpAppLink(context, url) ? {} : { isError: true };
     };

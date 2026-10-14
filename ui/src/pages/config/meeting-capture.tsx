@@ -154,7 +154,7 @@ function MeetingCaptureSettingsContent(props: SettingsProps) {
         : retain(providerId, known),
     );
   }
-  function saveSource(event: SubmitEvent) {
+  function saveSource(event: SubmitEvent & { currentTarget: HTMLFormElement }) {
     event.preventDefault();
     const index = editing();
     if (disabled() || index === null) {
@@ -165,8 +165,7 @@ function MeetingCaptureSettingsContent(props: SettingsProps) {
       setEditError(t("meetingCapture.sourceChanged"));
       return;
     }
-    // SAFETY: SourceEditor calls this synchronously from its native form's submit binding.
-    const form = event.currentTarget as HTMLFormElement;
+    const form = event.currentTarget;
     if (!form.reportValidity()) {
       return;
     }
@@ -256,7 +255,7 @@ function MeetingCaptureSettingsContent(props: SettingsProps) {
         "sessionId",
       ] as const;
     return (
-      <form onSubmit={(event: SubmitEvent) => saveSource(event)}>
+      <form onSubmit={saveSource}>
         <SettingsSection
           title={t(
             editorProps.index === "new" ? "meetingCapture.addSource" : "meetingCapture.editSource",
@@ -273,10 +272,7 @@ function MeetingCaptureSettingsContent(props: SettingsProps) {
                   required
                   disabled={disabled()}
                   value={editedProviderId()}
-                  onChange={(event: Event) => {
-                    // SAFETY: This native select emits the change event handled by its own binding.
-                    selectProvider((event.target as HTMLSelectElement).value);
-                  }}
+                  onChange={(event) => selectProvider(event.currentTarget.value)}
                 >
                   <option value="">{t("meetingCapture.chooseProvider")}</option>
                   <For each={options()} keyed={(option) => option.id}>
@@ -320,10 +316,9 @@ function MeetingCaptureSettingsContent(props: SettingsProps) {
                         locatorRequirements()?.[key] === "required"
                       }
                       value={typeof source?.[key] === "string" ? source[key] : ""}
-                      onInput={(event: Event) => {
+                      onInput={(event) => {
                         // Health refreshes can remove metadata; unsaved locators must survive.
-                        // SAFETY: This native input emits the input event handled by its own binding.
-                        sourceDraft[key] = (event.target as HTMLInputElement).value;
+                        sourceDraft[key] = event.currentTarget.value;
                       }}
                     />
                   }
