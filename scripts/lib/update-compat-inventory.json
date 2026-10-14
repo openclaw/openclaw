@@ -2,6 +2,390 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "2026.8.33",
+      "buildId": "2026.8.33-f773aa06a1a9-2026-09-28T21-18-41.248Z",
+      "commit": "f773aa06a1a93b36b050f1a3f4b57d3d91311541",
+      "integrity": "sha512-y1ti0TLEXk/vDB03XDPVICUE5DJWpp0EwoJHvQaWFKB4NZjyrIu9WDGSpcU+bIYwIpeqK9nlzQVjU8S3XkrHKA==",
+      "chunks": [
+        {
+          "path": "inspect-NJkH8Crf.js",
+          "imports": [
+            {
+              "importer": "systemd-scope-Bi0-Bka_.js",
+              "owner": "src/daemon/systemd-scope.ts",
+              "exports": [
+                "findSystemGatewayServices"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "findSystemGatewayServices",
+              "origin": {
+                "module": "src/daemon/inspect.ts",
+                "symbol": "findSystemGatewayServices"
+              }
+            }
+          ]
+        },
+        {
+          "path": "io.runtime.js",
+          "imports": [
+            {
+              "importer": "gateway-service-probe-hosts-IK6swFQ0.js",
+              "owner": "src/daemon/gateway-service-probe-hosts.ts",
+              "exports": [
+                "createConfigIO"
+              ]
+            },
+            {
+              "importer": "service-DiPE6UCW.js",
+              "owner": "src/daemon/future-config-guard.ts",
+              "exports": [
+                "readConfigFileSnapshot"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "createConfigIO",
+              "origin": {
+                "module": "src/config/io.factory.ts",
+                "symbol": "createConfigIO"
+              }
+            },
+            {
+              "exported": "readConfigFileSnapshot",
+              "origin": {
+                "module": "src/config/io.runtime.ts",
+                "symbol": "readConfigFileSnapshot"
+              }
+            }
+          ]
+        },
+        {
+          "path": "legacy-config-repair-CEY-cd4T.js",
+          "imports": [
+            {
+              "importer": "update-command-config-v_dqcQOH.js",
+              "owner": "src/cli/update-cli/update-command-config.ts",
+              "exports": [
+                "repairLegacyConfigForUpdateChannel"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "repairLegacyConfigForUpdateChannel",
+              "origin": {
+                "module": "src/commands/doctor/legacy-config-repair.ts",
+                "symbol": "repairLegacyConfigForUpdateChannel"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-execution.runtime.js",
+          "imports": [
+            {
+              "importer": "update-command-DwutlQEE.js",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "resumePostCoreUpdate"
+              ]
+            },
+            {
+              "importer": "update-command-DwutlQEE.js",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "executeMutableUpdate",
+                "finishUpdate"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "executeMutableUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-execution.ts",
+                "symbol": "executeMutableUpdate"
+              }
+            },
+            {
+              "exported": "finishUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-post-update.ts",
+                "symbol": "finishUpdate"
+              }
+            },
+            {
+              "exported": "resumePostCoreUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-resume.ts",
+                "symbol": "resumePostCoreUpdate"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2026.8.34",
+      "buildId": "2026.8.34-d21cb744af45-2026-10-01T05-25-23.380Z",
+      "commit": "d21cb744af45bc4d29352750c5e1e7f1cf7f066a",
+      "integrity": "sha512-wr/4SIbHkX2sSCi5etvIevjYK4IWfKsQmPf3Yhhrix4Eg94CALkdBr8VPAQsbMXyiILGQpW6syjXsmFs+aCvzg==",
+      "chunks": [
+        {
+          "path": "inspect-B2nUgl9v.js",
+          "imports": [
+            {
+              "importer": "systemd-scope-BYZZMrQt.js",
+              "owner": "src/daemon/systemd-scope.ts",
+              "exports": [
+                "findSystemGatewayServices"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "findSystemGatewayServices",
+              "origin": {
+                "module": "src/daemon/inspect.ts",
+                "symbol": "findSystemGatewayServices"
+              }
+            }
+          ]
+        },
+        {
+          "path": "io.runtime.js",
+          "imports": [
+            {
+              "importer": "gateway-service-probe-hosts-njjinIab.js",
+              "owner": "src/daemon/gateway-service-probe-hosts.ts",
+              "exports": [
+                "createConfigIO"
+              ]
+            },
+            {
+              "importer": "service-DuwbM4vN.js",
+              "owner": "src/daemon/future-config-guard.ts",
+              "exports": [
+                "readConfigFileSnapshot"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "createConfigIO",
+              "origin": {
+                "module": "src/config/io.factory.ts",
+                "symbol": "createConfigIO"
+              }
+            },
+            {
+              "exported": "readConfigFileSnapshot",
+              "origin": {
+                "module": "src/config/io.runtime.ts",
+                "symbol": "readConfigFileSnapshot"
+              }
+            }
+          ]
+        },
+        {
+          "path": "legacy-config-repair-CNJGdjHs.js",
+          "imports": [
+            {
+              "importer": "update-command-config-CV2B6-ek.js",
+              "owner": "src/cli/update-cli/update-command-config.ts",
+              "exports": [
+                "repairLegacyConfigForUpdateChannel"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "repairLegacyConfigForUpdateChannel",
+              "origin": {
+                "module": "src/commands/doctor/legacy-config-repair.ts",
+                "symbol": "repairLegacyConfigForUpdateChannel"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-execution.runtime.js",
+          "imports": [
+            {
+              "importer": "update-command-DmWtQOAI.js",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "resumePostCoreUpdate"
+              ]
+            },
+            {
+              "importer": "update-command-DmWtQOAI.js",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "executeMutableUpdate",
+                "finishUpdate"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "executeMutableUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-execution.ts",
+                "symbol": "executeMutableUpdate"
+              }
+            },
+            {
+              "exported": "finishUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-post-update.ts",
+                "symbol": "finishUpdate"
+              }
+            },
+            {
+              "exported": "resumePostCoreUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-resume.ts",
+                "symbol": "resumePostCoreUpdate"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2026.8.35",
+      "buildId": "2026.8.35-713ba5785d72-2026-10-02T10-24-33.908Z",
+      "commit": "713ba5785d72d6ed1cec971e21307f16cc4234a6",
+      "integrity": "sha512-7Bk/IeHTk04gfR4rW2SEVwwmGiXg2CcRxL3K1U2JzTgwbSSSlbX/yoLEbkiiSMOLtOuAi1ZfVbgmSsSlOA/E6g==",
+      "chunks": [
+        {
+          "path": "inspect-BfZGXVuJ.js",
+          "imports": [
+            {
+              "importer": "systemd-scope-Ct8R_ZId.js",
+              "owner": "src/daemon/systemd-scope.ts",
+              "exports": [
+                "findSystemGatewayServices"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "findSystemGatewayServices",
+              "origin": {
+                "module": "src/daemon/inspect.ts",
+                "symbol": "findSystemGatewayServices"
+              }
+            }
+          ]
+        },
+        {
+          "path": "io.runtime.js",
+          "imports": [
+            {
+              "importer": "gateway-service-probe-hosts-C8c_wHyH.js",
+              "owner": "src/daemon/gateway-service-probe-hosts.ts",
+              "exports": [
+                "createConfigIO"
+              ]
+            },
+            {
+              "importer": "service-DmiQ15ys.js",
+              "owner": "src/daemon/future-config-guard.ts",
+              "exports": [
+                "readConfigFileSnapshot"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "createConfigIO",
+              "origin": {
+                "module": "src/config/io.factory.ts",
+                "symbol": "createConfigIO"
+              }
+            },
+            {
+              "exported": "readConfigFileSnapshot",
+              "origin": {
+                "module": "src/config/io.runtime.ts",
+                "symbol": "readConfigFileSnapshot"
+              }
+            }
+          ]
+        },
+        {
+          "path": "legacy-config-repair-yKxLMJhb.js",
+          "imports": [
+            {
+              "importer": "update-command-config-DfOC9x3c.js",
+              "owner": "src/cli/update-cli/update-command-config.ts",
+              "exports": [
+                "repairLegacyConfigForUpdateChannel"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "repairLegacyConfigForUpdateChannel",
+              "origin": {
+                "module": "src/commands/doctor/legacy-config-repair.ts",
+                "symbol": "repairLegacyConfigForUpdateChannel"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-execution.runtime.js",
+          "imports": [
+            {
+              "importer": "update-command-CeQULJ9_.js",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "resumePostCoreUpdate"
+              ]
+            },
+            {
+              "importer": "update-command-CeQULJ9_.js",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "executeMutableUpdate",
+                "finishUpdate"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "executeMutableUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-execution.ts",
+                "symbol": "executeMutableUpdate"
+              }
+            },
+            {
+              "exported": "finishUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-post-update.ts",
+                "symbol": "finishUpdate"
+              }
+            },
+            {
+              "exported": "resumePostCoreUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-resume.ts",
+                "symbol": "resumePostCoreUpdate"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2026.9.1",
       "buildId": "2026.9.1-release-ad6fe23aecb9-2026-09-03T15-04-19.382Z",
       "commit": "ad6fe23aecb9b833d68139b0ddc9f239b894d2f1",
