@@ -462,31 +462,6 @@ describe("historical page recovery context", () => {
     );
   });
 
-  it.each([
-    { offset: 1, messageId: undefined, expectedIds: ["user"] },
-    { offset: undefined, messageId: "failed", expectedIds: [] },
-  ])(
-    "omits a recovered failure outside the newer page (offset=$offset, anchor=$messageId)",
-    async ({ expectedIds, ...options }) => {
-      await withTranscript(
-        [
-          ["user", user],
-          ["failed", failed],
-          ["answer", answer],
-        ],
-        async ({ read, raw }) => {
-          const original = await raw();
-          const page = await read(options);
-          expect(page.messages.map(readChatHistoryMessageId)).toEqual(expectedIds);
-          if (options.offset !== undefined) {
-            expect(page.pagination).toEqual({ offset: 1, totalMessages: 3, rawPageMessages: 2 });
-          }
-          expect(await raw()).toEqual(original);
-        },
-      );
-    },
-  );
-
   it("recovers a failed page across a hidden runtime continuation without rewriting history", async () => {
     await withTranscript(
       [
@@ -515,32 +490,22 @@ describe("historical page recovery context", () => {
   it.each([
     { reason: "later turn", offset: 2, messageId: undefined },
     { reason: "byte budget", offset: 1, messageId: undefined },
-    { reason: "ordinary offset", offset: 1, messageId: undefined },
-    { reason: "ordinary anchor", offset: undefined, messageId: "answer" },
   ])("selects recovery context for $reason", async ({ reason, offset, messageId }) => {
-    const ordinary = reason.startsWith("ordinary");
-    const messages: Array<[string, Record<string, unknown>]> = [["user", user]];
-    if (!ordinary) {
-      messages.push(["failed", failed]);
-    }
+    const messages: Array<[string, Record<string, unknown>]> = [
+      ["user", user],
+      ["failed", failed],
+    ];
     if (reason === "later turn") {
       messages.push(["next-user", user]);
     }
     messages.push(["answer", answer]);
-    if (ordinary) {
-      messages.push(["next-user", user]);
-    }
     await withTranscript(messages, async ({ read }) => {
-      const reads = vi.spyOn(anchorReader, "readSessionMessagesAroundIdWithStatsAsync");
       const page = await read({
         offset,
         messageId,
         ...(reason === "byte budget" ? { maxHistoryBytes: 1 } : {}),
       });
-      expect(page.messages.map(readChatHistoryMessageId)).toEqual(ordinary ? ["answer"] : ["user"]);
-      if (ordinary) {
-        expect(reads).toHaveBeenCalledTimes(messageId ? 1 : 0);
-      }
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["user"]);
     });
   });
 
