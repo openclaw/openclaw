@@ -69,6 +69,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Parent Inheritance",
     help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
   },
+  "thread.autoName": {
+    label: "Discord Thread Auto Naming",
+    help: "Rename new Discord threads after this many user/agent messages. true uses 5; 0 or false disables. Account settings override the channel-wide setting.",
+  },
   "threadBindings.enabled": {
     label: "Discord Thread Binding Enabled",
     help: "Enable Discord thread-bound session spawning, routing, and delivery. Overrides session.threadBindings.enabled when set.",

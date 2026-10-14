@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { diffGatewayReloadPaths } from "../src/gateway/config-diff.js";
 import {
   buildGatewayReloadPlan,
+  isNoopGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
 } from "../src/gateway/config-reload-plan.js";
 import { createLazyGatewayCronState } from "../src/gateway/server-cron-lazy.js";
@@ -57,6 +58,47 @@ function waitForFast(callback: () => unknown) {
 }
 
 describe("Discord admission through Gateway policy publication", () => {
+  it("restarts Discord for startup settings while access policy still publishes in place", async () => {
+    const { discordPlugin } = await loadBundledPluginFacade<{ discordPlugin: ChannelPlugin }>({
+      pluginId: "discord",
+      artifactBasename: "api.js",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "synthetic" }]),
+    );
+    const lifecycleChanges = [
+      "enabled",
+      "actions.channels",
+      "thread.autoName",
+      "thread.inheritParent",
+    ];
+    for (const scope of ["channels.discord", "channels.discord.accounts.work"]) {
+      for (const setting of lifecycleChanges) {
+        const configPath = `${scope}.${setting}`;
+        const plan = buildGatewayReloadPlan([configPath]);
+        expect(plan.restartChannels, configPath).toEqual(new Set(["discord"]));
+        expect(plan.restartGateway, configPath).toBe(false);
+        expect(isNoopGatewayReloadPlan(plan), configPath).toBe(false);
+        expect(plan.noopPaths, configPath).toEqual([]);
+      }
+      for (const setting of [
+        "groupPolicy",
+        "dmPolicy",
+        "allowFrom",
+        "dm.enabled",
+        "guilds.123.users",
+        "allowBots",
+        "dangerouslyAllowNameMatching",
+      ]) {
+        const configPath = `${scope}.${setting}`;
+        const plan = buildGatewayReloadPlan([configPath]);
+        expect(isNoopGatewayReloadPlan(plan), configPath).toBe(true);
+        expect(plan.restartChannels, configPath).toEqual(new Set());
+        expect(plan.noopPaths, configPath).toEqual([configPath]);
+      }
+    }
+  });
+
   it("admits newly allowed Discord messages during active work without restarting", async () => {
     // Describe the public calls this fixture consumes without importing plugin implementation types.
     const discord = await loadBundledPluginFacade<{

@@ -24,7 +24,7 @@ import {
 import { DiscordChannelConfigSchema } from "./config-schema.js";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
-import { selectDiscordLivePolicyConfig } from "./live-policy-config.js";
+import { selectDiscordLiveAccessPolicyConfig } from "./live-policy-config.js";
 import {
   collectRuntimeConfigAssignments,
   secretTargetRegistryEntries,
@@ -38,10 +38,9 @@ import { deriveLegacySessionChatType } from "./session-contract.js";
 import { parseDiscordTarget } from "./target-parsing.js";
 
 const DISCORD_CHANNEL = "discord" as const;
-const livePolicyConfigPrefixes = Object.keys(selectDiscordLivePolicyConfig({})).flatMap((key) => [
-  `channels.discord.${key}`,
-  `channels.discord.accounts.*.${key}`,
-]);
+const livePolicyConfigPrefixes = Object.keys(selectDiscordLiveAccessPolicyConfig({})).flatMap(
+  (key) => [`channels.discord.${key}`, `channels.discord.accounts.*.${key}`],
+);
 type DiscordConfigAccessorAccount = {
   allowFrom: string[] | undefined;
   defaultTo: string | undefined;

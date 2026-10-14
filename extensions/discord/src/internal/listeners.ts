@@ -2,6 +2,7 @@ import {
   GatewayDispatchEvents,
   type APIInteraction,
   type APIMessage,
+  type GatewayMessageCreateDispatchData,
   type APIReaction,
   type APIUnavailableGuild,
   type APIVoiceState,
@@ -9,6 +10,7 @@ import {
   type GatewayGuildDeleteDispatchData,
   type GatewayPresenceUpdateDispatchData,
   type GatewayThreadDeleteDispatchData,
+  type GatewayThreadCreateDispatchData,
   type GatewayThreadUpdateDispatchData,
 } from "discord-api-types/v10";
 import type { Client } from "./client.js";
@@ -46,12 +48,13 @@ type ListenerDataByEvent = {
   [GatewayDispatchEvents.Ready]: unknown;
   [GatewayDispatchEvents.GuildCreate]: GatewayGuildCreateDispatchData | APIUnavailableGuild;
   [GatewayDispatchEvents.GuildDelete]: GatewayGuildDeleteDispatchData;
-  [GatewayDispatchEvents.MessageCreate]: APIMessage;
+  [GatewayDispatchEvents.MessageCreate]: GatewayMessageCreateDispatchData;
   [GatewayDispatchEvents.InteractionCreate]: APIInteraction;
   [GatewayDispatchEvents.MessageReactionAdd]: DiscordReactionDispatchData;
   [GatewayDispatchEvents.MessageReactionRemove]: DiscordReactionDispatchData;
   [GatewayDispatchEvents.PresenceUpdate]: GatewayPresenceUpdateDispatchData;
   [GatewayDispatchEvents.VoiceStateUpdate]: APIVoiceState;
+  [GatewayDispatchEvents.ThreadCreate]: GatewayThreadCreateDispatchData;
   [GatewayDispatchEvents.ThreadUpdate]: GatewayThreadUpdateDispatchData;
   [GatewayDispatchEvents.ThreadDelete]: GatewayThreadDeleteDispatchData;
 };
@@ -99,6 +102,10 @@ export abstract class VoiceStateUpdateListener extends BaseListener<GatewayDispa
 
 export abstract class ThreadUpdateListener extends BaseListener<GatewayDispatchEvents.ThreadUpdate> {
   readonly type = GatewayDispatchEvents.ThreadUpdate;
+}
+
+export abstract class ThreadCreateListener extends BaseListener<GatewayDispatchEvents.ThreadCreate> {
+  readonly type = GatewayDispatchEvents.ThreadCreate;
 }
 
 export abstract class ThreadDeleteListener extends BaseListener<GatewayDispatchEvents.ThreadDelete> {

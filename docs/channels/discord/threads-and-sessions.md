@@ -41,6 +41,29 @@ Empty standalone threads have no initial-delivery receipt. Partial failures
 report accepted chunks separately; `failedChunkDelivery: "unknown"` means the
 failed chunk may have been delivered, so inspect the thread before retrying.
 
+## AI auto-naming
+
+Set `channels.discord.thread.autoName` to rename newly created threads after a set number of user and agent messages. The default is `false`. `true` uses five messages; a positive integer sets the threshold, and `0` or `false` disables it. An account setting overrides the channel-wide value.
+
+```json5
+{
+  channels: {
+    discord: {
+      thread: { autoName: 5 },
+      accounts: {
+        work: { thread: { autoName: 8 } },
+      },
+    },
+  },
+}
+```
+
+At the threshold, OpenClaw sends a bounded recent thread transcript to an isolated title-generation run. It uses the agent selected by Discord routing or the thread's active binding, with that agent's utility model when available and primary model as fallback. This run does not inherit the thread session. Only messages admitted by the current Discord guild, channel, and member policy count. Agent messages count after an admitted user contributes; other bots and webhooks do not count. The user's authorization remains available after their text leaves the recent transcript window. OpenClaw rechecks contributor access before title generation and renaming, and abandons the attempt if configuration or conversation ownership changes during generation.
+
+Naming applies only during the first 24 hours after thread creation. Each eligible thread gets one attempt, persisted across Gateway restarts. Claims expire after 24 hours and are deleted on thread deletion; expired claims cannot make an older thread eligible again. Existing non-expiring claims retain their one-time protection for the rest of that window, then retire. The claim and rate-limit stores each hold at most 10,000 rows and reject new entries when full.
+
+OpenClaw allows two rename attempts per account and parent channel in ten minutes, including across Gateway restarts. It skips naming when that budget is exhausted, channel-management actions are disabled, the bot lacks **Manage Threads**, or Discord rejects the request. A manually renamed thread is left alone. Threads created before the bot sees their new-thread creation event are not auto-named.
+
 ## Session and thread behavior
 
 <AccordionGroup>

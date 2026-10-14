@@ -32,6 +32,57 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("Discord live account policy", () => {
+  it.each(["default", "work"])(
+    "invalidates enablement, action, and auto-name policy for %s while restart is deferred",
+    async (accountId) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            token: "synthetic-token",
+            enabled: true,
+            actions: { channels: true },
+            thread: { autoName: 5 },
+            ...(accountId === "work"
+              ? {
+                  accounts: {
+                    work: {
+                      enabled: true,
+                      actions: { channels: true },
+                      thread: { autoName: 5 },
+                    },
+                  },
+                }
+              : {}),
+          },
+        },
+      };
+      publish(cfg);
+      const read = createDiscordLivePolicyReader({ cfg, accountId });
+      let previous = await read();
+      for (const change of [
+        { enabled: false },
+        { actions: { channels: false } },
+        { thread: { autoName: false } },
+        { thread: { autoName: 10 } },
+      ] as const) {
+        const discord = cfg.channels!.discord!;
+        publish({
+          channels: {
+            discord:
+              accountId === "default"
+                ? { ...discord, ...change }
+                : { ...discord, accounts: { work: { ...discord.accounts!.work, ...change } } },
+          },
+        });
+        expect(previous.isCurrent()).toBe(false);
+        const current = await read();
+        expect(current.isCurrent()).toBe(true);
+        expect(current.discordConfig).toMatchObject(change);
+        previous = current;
+      }
+    },
+  );
+
   it("keeps the admitted runtime owner across startup and allowlist resolution", async () => {
     const cfg = config(["startup-name"]);
     publish(cfg);
