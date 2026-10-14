@@ -191,7 +191,8 @@ function updateGatewayHealthFacts(
       ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
       ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
     ],
-    channelsReady: health.healthy && !health.channelProbeErrors?.length,
+    // Channel connectivity is advisory to activation; warning steps retain its diagnostics.
+    channelsReady: health.healthy,
     settled: health.healthy,
     readyz,
   };
@@ -217,13 +218,15 @@ export async function verifyUpdatedGateway(
     ...params,
     assertCurrent,
     deadline: params.opts.run?.deadline ?? params.deadline,
+    requirePluginHealth: true,
   });
   const channelWarnings = [
+    ...(health.channelProbeErrors ?? []),
     ...(health.channelProbeTimeouts ?? []),
     ...(health.channelRuntimeWarnings ?? []),
   ].map(({ id, error }) =>
     redactSupportDiagnosticLine(
-      `Channel health warning (${id}: ${error}). Run openclaw health --json to inspect it.`,
+      `Channel health warning (${id}: ${error}). Run openclaw channels status --probe or openclaw health --json to inspect it.`,
       { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
     ),
   );
@@ -302,11 +305,8 @@ export async function verifyUpdatedGateway(
       }
     }
   };
-  if (health.healthy && serviceRunning && readyz) {
+  if (health.healthy && serviceRunning && readyz && !health.activatedPluginErrors?.length) {
     const pluginFailures = new Map<string, string>();
-    for (const failure of health.activatedPluginErrors ?? []) {
-      pluginFailures.set(failure.id, failure.error);
-    }
     for (const failure of health.unavailablePlugins ?? []) {
       pluginFailures.set(failure.id, `${failure.reason}: ${failure.detail}`);
     }
@@ -333,7 +333,7 @@ export async function verifyUpdatedGateway(
     }
     return {
       ok: true,
-      score: 7,
+      score: 6,
       summary:
         channelWarnings.length > 0
           ? "Gateway service, version, and readiness verified; channel warnings need attention."
@@ -387,13 +387,11 @@ export async function verifyUpdatedGateway(
       ? "build-id-mismatch"
       : health.activatedPluginErrors?.length
         ? "plugin-errors"
-        : health.channelProbeErrors?.length
-          ? "channel-errors"
-          : httpFailed
-            ? "readyz-unhealthy"
-            : !serviceRunning
-              ? "service-not-running"
-              : (health.waitOutcome ?? "restart-unhealthy");
+        : httpFailed
+          ? "readyz-unhealthy"
+          : !serviceRunning
+            ? "service-not-running"
+            : (health.waitOutcome ?? "restart-unhealthy");
   const facts: UpdateFailureFact[] = [];
   for (const [mismatch, label, code] of [
     [health.versionMismatch, "version", "version-mismatch"],
@@ -421,13 +419,8 @@ export async function verifyUpdatedGateway(
       message: `Managed Gateway service status: ${health.runtime.status ?? "unknown"}.`,
     });
   }
-  for (const [errors, check, code] of [
-    [health.activatedPluginErrors, "pluginErrors", "plugin-errors"],
-    [health.channelProbeErrors, "channelsReady", "channel-errors"],
-  ] as const) {
-    for (const error of errors ?? []) {
-      facts.push({ check, code, pluginId: error.id, message: error.error });
-    }
+  for (const { id: pluginId, error: message } of health.activatedPluginErrors ?? []) {
+    facts.push({ check: "pluginErrors", code: "plugin-errors", pluginId, message });
   }
   if (!facts.length || health.waitOutcome === "timeout") {
     facts.push({
@@ -455,7 +448,6 @@ export async function verifyUpdatedGateway(
     !health.versionMismatch,
     !health.buildIdMismatch,
     !health.activatedPluginErrors?.length,
-    !health.channelProbeErrors?.length,
     health.healthy,
     readyz,
   ].filter(Boolean).length;

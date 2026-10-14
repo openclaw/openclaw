@@ -139,7 +139,6 @@ describe("maybeRestartService", () => {
     "initial-stopped-reachable",
     "initial-plugin-error",
     "initial-plugin-unavailable",
-    "initial-channel-error",
     "initial-readyz-error",
     "initial-readyz-rollback",
     "initial-version-error",
@@ -160,8 +159,7 @@ describe("maybeRestartService", () => {
         },
       };
       const rollback = change === "initial-readyz-rollback";
-      const pluginOnly =
-        change === "initial-plugin-error" || change === "initial-plugin-unavailable";
+      const pluginOnly = change === "initial-plugin-unavailable";
       const initialFailure = change.startsWith("initial-") && !pluginOnly;
       const healthy = await mocks.inspectGatewayRestart();
       if (change.startsWith("initial-")) {
@@ -206,9 +204,6 @@ describe("maybeRestartService", () => {
                 ],
               }
             : {}),
-          ...(change === "initial-channel-error"
-            ? { channelProbeErrors: [{ id: "fixture-channel", error: "connection failed" }] }
-            : {}),
         };
         mocks.waitForGatewayHealthyRestart.mockResolvedValue(observedHealth);
         mocks.inspectGatewayRestart.mockResolvedValue(observedHealth);
@@ -252,12 +247,12 @@ describe("maybeRestartService", () => {
             ? { check: "versionMatch", code: "version-mismatch" }
             : change === "initial-build-error"
               ? { check: "versionMatch", code: "build-id-mismatch" }
-              : change === "initial-channel-error"
+              : change === "initial-plugin-error"
                 ? {
-                    check: "channelsReady",
-                    code: "channel-errors",
-                    pluginId: "fixture-channel",
-                    message: "connection failed",
+                    check: "pluginErrors",
+                    code: "plugin-errors",
+                    pluginId: "fixture",
+                    message: "failed",
                   }
                 : change === "initial-readyz-error" || rollback
                   ? { check: "readyz", code: "readyz-unhealthy" }
@@ -340,10 +335,7 @@ describe("maybeRestartService", () => {
         const result = await verification;
         expect(result.ok).toBe(true);
         if (pluginOnly) {
-          const retry =
-            change === "initial-plugin-unavailable"
-              ? "openclaw --container service-box doctor --fix"
-              : "openclaw --profile service-profile doctor --fix";
+          const retry = "openclaw --container service-box doctor --fix";
           expect(result.pluginWarnings).toEqual([
             expect.objectContaining({
               pluginId: "fixture",
@@ -352,9 +344,6 @@ describe("maybeRestartService", () => {
             }),
           ]);
           expect(result.summary).toContain("plugin failures need a retry");
-          expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-            expect.objectContaining({ requirePluginHealth: false }),
-          );
         }
         expect(onVerified).toHaveBeenCalledOnce();
       }
@@ -775,7 +764,7 @@ describe("maybeRestartService", () => {
     },
   );
 
-  it("rejects channel failures even when a Git target has no build identity", async () => {
+  it("rejects unverified Git readiness despite channel warnings", async () => {
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "running", pid: 8000 },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
@@ -797,7 +786,7 @@ describe("maybeRestartService", () => {
         onVerificationFailure,
       }),
     ).resolves.toBe("restart-health-failed");
-    expect(onVerificationFailure).toHaveBeenCalledWith("channel-errors");
+    expect(onVerificationFailure).toHaveBeenCalledWith("timeout");
   });
 
   it.for([
