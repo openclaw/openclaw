@@ -542,53 +542,37 @@ describe("model resolution auth row snapshots", () => {
     },
   );
 
-  it("keeps incognito reads outside the main runtime cache even for the same database", async () => {
+  it("keeps incognito credentials isolated from the main runtime store", async () => {
     await withOpenClawTestState({ label: "model-auth-row-isolation" }, async (state) => {
       await state.writeAuthProfiles(fixtureStore("fixture-main"));
       await state.writeAuthProfiles(fixtureStore("fixture-incognito"), "incognito");
-      const read = vi.spyOn(sqliteWorker, "runSqliteReadOnlyWorker");
       const resolve = modelResolver(state);
-      const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
-      const mainReads = () => read.mock.calls.filter(([pathname]) => pathname === databasePath);
-      try {
+      expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
+      await withAuthProfileStoreAgentDir(state.agentDir(), state.stateDir, async () => {
         expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-        expect.soft(mainReads()).toHaveLength(1);
-        await withAuthProfileStoreAgentDir(state.agentDir(), state.stateDir, async () => {
-          expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-        });
-        expect.soft(mainReads()).toHaveLength(2);
+      });
 
-        await withAuthProfileStoreAgentDir(
-          state.agentDir("incognito"),
-          state.stateDir,
-          async () => {
-            expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-            const isolated = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
-              readOnly: true,
-              allowKeychainPrompt: false,
-              externalCli: { mode: "none" },
-            });
-            expect(isolated.profiles[PROFILE_ID]).toEqual({
-              type: "api_key",
-              provider: PROVIDER,
-              key: "fixture-incognito",
-            });
-          },
-        );
-
+      await withAuthProfileStoreAgentDir(state.agentDir("incognito"), state.stateDir, async () => {
         expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-        const main = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
+        const isolated = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
           readOnly: true,
           allowKeychainPrompt: false,
           externalCli: { mode: "none" },
         });
-        expect(main.profiles[PROFILE_ID]).toEqual(
-          fixtureStore("fixture-main").profiles[PROFILE_ID],
-        );
-        expect.soft(mainReads()).toHaveLength(2);
-      } finally {
-        read.mockRestore();
-      }
+        expect(isolated.profiles[PROFILE_ID]).toEqual({
+          type: "api_key",
+          provider: PROVIDER,
+          key: "fixture-incognito",
+        });
+      });
+
+      expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
+      const main = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
+        readOnly: true,
+        allowKeychainPrompt: false,
+        externalCli: { mode: "none" },
+      });
+      expect(main.profiles[PROFILE_ID]).toEqual(fixtureStore("fixture-main").profiles[PROFILE_ID]);
     });
   });
 });

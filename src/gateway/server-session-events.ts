@@ -514,6 +514,7 @@ async function handleTranscriptUpdateBroadcast(
           ? {
               prepareSessionProjection: prepareSessionEventProjection(projection, read, {
                 ancestors,
+                encodeMessage: true,
               }),
             }
           : undefined;

@@ -19,6 +19,7 @@ import { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-
 import {
   acquireOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
+  updateOpenClawStateLeasePayloadInTransaction,
 } from "../state/openclaw-state-lease-store.js";
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { captureOpenClawStateReadSource } from "../state/openclaw-state-read-worker.js";
@@ -52,6 +53,7 @@ const log = createSubsystemLogger("gateway");
 export type GatewayOwnerLease = {
   owner: string;
   ready: Promise<void>;
+  markListening: () => void;
   release: () => Promise<void>;
 };
 
@@ -241,13 +243,17 @@ export function acquireGatewayOwnerLease(params: {
       getFileLockProcessStartTime(process.pid, env) ??
       getFileLockProcessStartTime(process.pid, env),
   };
-  const payloadJson = JSON.stringify({
+  const payload = {
     owner: processOwner,
     port: params.port,
     mode: params.mode,
     supervisor: params.supervisor,
-  });
-  const mutateLease = <T>(operation: "acquire" | "release", mutate: (db: EngineConnection) => T) =>
+  };
+  const payloadJson = JSON.stringify(payload);
+  const mutateLease = <T>(
+    operation: "acquire" | "release" | "listening",
+    mutate: (db: EngineConnection) => T,
+  ) =>
     withOpenClawStateStartupMigrationCheckpointDatabase(
       (db) =>
         runSqliteImmediateTransactionSync(
@@ -315,6 +321,25 @@ export function acquireGatewayOwnerLease(params: {
   return {
     owner: identity.owner,
     ready,
+    markListening() {
+      custody?.assertCurrent();
+      mutateLease("listening", (db) => {
+        custody?.assertCurrent();
+        const current = readGatewayOwnerLeaseFromDatabase(db);
+        if (!current || current.owner !== identity.owner) {
+          throw new Error("Gateway owner changed before listening publication");
+        }
+        updateOpenClawStateLeasePayloadInTransaction(
+          db,
+          identity,
+          JSON.stringify({
+            ...payload,
+            owner: { ...processOwner, startedAt: current.startedAt },
+            listeningAt: Date.now(),
+          }),
+        );
+      });
+    },
     async release() {
       if (released) {
         return;

@@ -18,6 +18,24 @@ import type {
 
 type LeaseDatabase = Pick<DB, "state_leases">;
 
+/** Publish owner facts in the caller's transaction without renewing or replacing its lease. */
+export function updateOpenClawStateLeasePayloadInTransaction(
+  db: EngineConnection,
+  identity: OpenClawStateLeaseIdentity,
+  payloadJson: string,
+): boolean {
+  const result = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<LeaseDatabase>(db)
+      .updateTable("state_leases")
+      .set({ payload_json: payloadJson })
+      .where("scope", "=", identity.scope)
+      .where("lease_key", "=", identity.key)
+      .where("owner", "=", identity.owner),
+  );
+  return result.numAffectedRows === 1n;
+}
+
 /** The caller owns the write transaction; only absent or expired leases can be acquired. */
 export function acquireOpenClawStateLeaseInTransaction(
   db: EngineConnection,

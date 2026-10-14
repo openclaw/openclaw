@@ -594,6 +594,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       runtimeAuthRetry: input.runtimeAuthRetry,
       buildErrorAgentMeta: buildAttemptErrorMeta,
       failover: failoverRetryController,
+      rateLimitRetriesExhausted: failoverRetryController.rateLimitRetriesExhausted,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,
       traceAttempts: input.traceAttempts,
       previousRetryFailoverReason: input.lastRetryFailoverReason,
