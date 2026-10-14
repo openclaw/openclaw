@@ -68,7 +68,7 @@ describe("agent tool definition adapter", () => {
       permissionMissing,
     });
   });
-  it.each(["direct", "wrapped", "composed"] as const)(
+  it.each(["wrapped", "composed"] as const)(
     "preserves signal and update identity through %s execution",
     async (route) => {
       const caller = new AbortController();

@@ -20,12 +20,17 @@ import { getExistingFollowupQueue } from "./queue/state.js";
 import { FollowupRunDeferredError } from "./queue/types.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
+const admissionState = vi.hoisted(() => ({ beforeAdmission: vi.fn<() => Promise<void>>() }));
+
 // mock-isolation: Keep database admission outside this queue-to-execution ownership proof.
 vi.mock("./followup-turn-admission.js", () => ({
-  admitFollowupTurn: async ({ queued }: Parameters<typeof admitFollowupTurn>[0]) => ({
-    kind: "admitted",
-    turn: createFollowupTurnTestTurn({ runId: "queued-user-run", queued }),
-  }),
+  admitFollowupTurn: async ({ queued }: Parameters<typeof admitFollowupTurn>[0]) => {
+    await admissionState.beforeAdmission();
+    return {
+      kind: "admitted",
+      turn: createFollowupTurnTestTurn({ runId: "queued-user-run", queued }),
+    };
+  },
 }));
 
 // mock-isolation: An aborted stub turn needs no result accounting or worker initialization.
@@ -46,6 +51,7 @@ const key = "followup-heartbeat-drain";
 beforeEach(() => {
   vi.useFakeTimers();
   resetFollowupTurnTestState();
+  admissionState.beforeAdmission.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -57,14 +63,13 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
   const firstStarted = createDeferred();
   const releaseFirst = createDeferred();
   const settled = createDeferred();
-  let attempts = 0;
   let retriedExecution: AgentTurnParams | undefined;
+  admissionState.beforeAdmission.mockImplementationOnce(async () => {
+    firstStarted.resolve();
+    await releaseFirst.promise;
+    throw new FollowupRunDeferredError("reply lane busy");
+  });
   state.execute.mockImplementation(async (params: AgentTurnParams) => {
-    if (++attempts === 1) {
-      firstStarted.resolve();
-      await releaseFirst.promise;
-      throw new FollowupRunDeferredError("reply lane busy");
-    }
     retriedExecution = params;
     return { runId: "queued-user-run", outcome: { kind: "aborted", reason: "user" } };
   });
@@ -127,7 +132,8 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     await vi.advanceTimersByTimeAsync(0);
 
     expect(getExistingFollowupQueue(key)).toBeUndefined();
-    expect(state.execute).toHaveBeenCalledTimes(2);
+    expect(admissionState.beforeAdmission).toHaveBeenCalledTimes(2);
+    expect(state.execute).toHaveBeenCalledOnce();
     expect(retriedExecution).toMatchObject({
       isHeartbeat: false,
       opts: { isHeartbeat: false },

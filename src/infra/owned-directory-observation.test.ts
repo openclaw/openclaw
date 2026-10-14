@@ -23,6 +23,33 @@ afterEach(() => {
 });
 
 describe("process-owned directory observation", () => {
+  it("bounds scheduling work while 810 directories subscribe and close", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const root = tempDirs.make("owned-directory-fleet-");
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    const clock = vi.spyOn(Date, "now");
+    const listener = vi.fn();
+    for (let index = 0; index < 810; index++) {
+      const directory = path.join(root, `agent-${index}`);
+      fs.mkdirSync(directory);
+      clock.mockClear();
+      subscriptions.push(observeOwnedDirectory(directory, listener));
+      expect(clock.mock.calls.length).toBeLessThanOrEqual(4);
+    }
+    expect(timeout).toHaveBeenCalledOnce();
+    clock.mockClear();
+    for (let index = 0; index < 809; index++) {
+      subscriptions.pop()!.close();
+    }
+    expect(clock).not.toHaveBeenCalled();
+    expect(timeout).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(300_000);
+    expect(listener).toHaveBeenCalledOnce();
+    subscriptions.pop()!.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("recovers healthy watches every five minutes while authority subscribers keep 30 seconds", () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);

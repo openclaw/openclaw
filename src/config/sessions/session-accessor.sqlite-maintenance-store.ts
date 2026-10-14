@@ -108,7 +108,7 @@ export function applySessionEntryMaintenanceInDatabase(
   return apply(database, onArchived, postimages);
 }
 
-export type SessionEntryMaintenanceApply = (
+type SessionEntryMaintenanceApply = (
   database: OpenClawAgentDatabase,
   onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3],
   postimages?: SessionEntryWritePostimages,
