@@ -291,6 +291,48 @@ describe("config io audit helpers", () => {
       ],
       ["openclaw", "config", "set", "--batch-json", "***"],
     ],
+    [
+      "sensitive config set value with a value option before the positionals",
+      [
+        "openclaw",
+        "config",
+        "set",
+        "--expect-current-json",
+        '{"theme":"dark"}',
+        "channels.slack.token",
+        "secret-value",
+      ],
+      [
+        "openclaw",
+        "config",
+        "set",
+        "--expect-current-json",
+        '{"theme":"dark"}',
+        "channels.slack.token",
+        "***",
+      ],
+    ],
+    [
+      "sensitive config set value with a value option after the positionals",
+      [
+        "openclaw",
+        "config",
+        "set",
+        "channels.slack.token",
+        "secret-value",
+        "--expect-current-json",
+        '{"theme":"dark"}',
+      ],
+      [
+        "openclaw",
+        "config",
+        "set",
+        "channels.slack.token",
+        "***",
+        "--expect-current-json",
+        '{"theme":"dark"}',
+      ],
+    ],
   ])("redacts $0 in persisted audit process info", (_name, argv, expected) => {
     expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);
   });
