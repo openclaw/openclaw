@@ -1,6 +1,6 @@
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   ComputerActParams,
   ComputerActResult,

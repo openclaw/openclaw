@@ -379,13 +379,16 @@ export async function materializeSessionStateDeletePlans(
   plans: readonly SessionStateDeletePlan[],
 ): Promise<MaterializedSessionStateDeletePlan[]> {
   const deduped = dedupeSqliteSessionStateDeletePlans(plans);
-  const workerPlans = deduped.filter((plan) => plan.archiveTranscript);
+  // Empty snapshots have no archive bytes; the deletion transaction still rejects later appends.
+  const workerPlans = deduped.filter(
+    (plan) => plan.archiveTranscript && plan.snapshot.lastSeq !== null,
+  );
   const workerResults =
     workerPlans.length > 0 ? await runSqliteTranscriptArchiveWorker(workerPlans) : [];
   const resultBySessionId = new Map(workerResults.map((result) => [result.sessionId, result]));
 
   return deduped.map((plan) => {
-    if (!plan.archiveTranscript) {
+    if (!plan.archiveTranscript || plan.snapshot.lastSeq === null) {
       return Object.assign({}, plan, { archive: null, archivedTranscript: null });
     }
     const result = resultBySessionId.get(plan.sessionId);

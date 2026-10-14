@@ -35,10 +35,11 @@ function userMessage(sendId: string) {
   };
 }
 function setup() {
+  const requestUpdate = vi.fn();
   const host: ReactiveControllerHost = {
     addController: () => undefined,
     removeController: () => undefined,
-    requestUpdate: vi.fn(),
+    requestUpdate,
     updateComplete: Promise.resolve(true),
   };
   const controller = new ChatStateController<ChatPageHost>(host);
@@ -74,6 +75,8 @@ function setup() {
   controller.attach(state);
   return {
     state,
+    controller,
+    requestUpdate,
     scrollport,
     commitGrowth: () => {
       state.requestUpdate?.();
@@ -85,6 +88,47 @@ function setup() {
 }
 
 describe("transcript arrival scroll ownership", () => {
+  it("coalesces background replies without delaying input or transcript invalidation", () => {
+    const { state, controller, requestUpdate } = setup();
+    for (let index = 0; index < 36; index++) {
+      state.assistantName = `Assistant ${index}`;
+      controller.requestBackgroundUpdate();
+    }
+    expect(requestUpdate).not.toHaveBeenCalled();
+    vi.advanceTimersToNextFrame();
+    expect(requestUpdate).toHaveBeenCalledTimes(1);
+
+    controller.requestBackgroundUpdate();
+    state.chatMessage = "Keep this draft";
+    state.requestUpdate?.();
+    expect(requestUpdate).toHaveBeenCalledTimes(2);
+    vi.advanceTimersToNextFrame();
+    expect(requestUpdate).toHaveBeenCalledTimes(2);
+
+    state.chatMessages = [...state.chatMessages, userMessage("remote")];
+    controller.requestBackgroundUpdate();
+    expect(requestUpdate).toHaveBeenCalledTimes(3);
+  });
+
+  it("absorbs a pending background repaint into an immediate commit and cancels on teardown", async () => {
+    const { controller, requestUpdate, state } = setup();
+    controller.requestBackgroundUpdate();
+    controller.hostUpdate();
+    vi.advanceTimersToNextFrame();
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    controller.requestBackgroundUpdate();
+    const effect = vi.fn();
+    state.renderLifecycle.afterCommit(effect);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(effect).toHaveBeenCalledOnce();
+    controller.requestBackgroundUpdate();
+    controller.hostDisconnected();
+    vi.advanceTimersToNextFrame();
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
   it.each(["message", "pending input", "resumed stream", "speech"] as const)(
     "follows remote %s growth only while the viewer is following",
     (source) => {

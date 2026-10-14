@@ -16,7 +16,7 @@ import {
   parseQaCredentialResponsePayload,
   QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
 } from "../../qa-credentials-common.runtime.js";
-import { captureQaLeaseClock, createQaLeaseHealth } from "./credential-lease-health.js";
+import { createQaLeaseHealth } from "./credential-lease-health.js";
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 90_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -414,7 +414,7 @@ export async function acquireQaCredentialLease<TPayload>(
     opts.signal?.throwIfAborted();
     attempt += 1;
     try {
-      const acquiredAt = captureQaLeaseClock();
+      const acquiredAt = Date.now();
       const payload = await postConvexBroker(config, fetchImpl, "acquire", {
         kind: opts.kind,
         ownerId: config.ownerId,
@@ -475,7 +475,7 @@ export async function acquireQaCredentialLease<TPayload>(
         payload: parsedPayload,
         async heartbeat() {
           health.assertHealthy();
-          const requestStartedAt = captureQaLeaseClock();
+          const requestStartedAt = Date.now();
           const heartbeatPayload = await postConvexBroker(config, fetchImpl, "heartbeat", {
             kind: opts.kind,
             ownerId: config.ownerId,

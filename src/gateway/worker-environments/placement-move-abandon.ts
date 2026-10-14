@@ -138,20 +138,6 @@ export function createWorkerPlacementMoveAbandonment(
       }
       const assertCurrent = () => {
         authorize?.();
-        const { placement: latest, move: currentMove } = placements.readCurrentMoveAuthority(
-          request.sessionId,
-        );
-        if (
-          !isForceAbandonedWorkerPlacement(latest) ||
-          latest.generation !== failed.generation ||
-          latest.environmentId !== intent.source.environmentId ||
-          latest.activeOwnerEpoch !== intent.source.ownerEpoch ||
-          currentMove?.operationId !== intent.operationId
-        ) {
-          throw new Error(
-            `Session ${request.sessionKey} abandonment source changed during Gateway preparation`,
-          );
-        }
       };
       assertCurrent();
       if (intent.target.kind === "gateway") {

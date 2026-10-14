@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import zlib from "node:zlib";
 import { z } from "zod";
 import { resolveSessionArtifactDirectory } from "./paths.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
+
+export const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
 export function resolveSessionColdArchivePath(storePath: string, archiveName: string): string {
   if (!/^[a-f0-9]{64}\.jsonl\.zst$/.test(archiveName)) {
@@ -113,4 +116,33 @@ export function verifyPublishedSessionColdArchive(
   ) {
     throw new Error("Cold archive changed before publication; its SQLite copy was retained");
   }
+}
+
+export function decodeSessionColdRecords(
+  bytes: Uint8Array,
+  archive: SessionColdArchive,
+): SessionColdRecord[] {
+  const records = zlib
+    .zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES })
+    .toString("utf8")
+    .trimEnd()
+    .split("\n")
+    .map((line) => sessionColdRecordSchema.parse(JSON.parse(line)));
+  const header = records[0];
+  const events = records.filter((record) => record.kind === "event");
+  if (
+    header?.kind !== "header" ||
+    header.sessionId !== archive.session_id ||
+    header.generation !== archive.generation ||
+    records.slice(1).some((record) => record.kind === "header") ||
+    events.length !== archive.event_count ||
+    events.at(-1)?.row.seq !== archive.last_seq ||
+    events.reduce((sum, event) => sum + Buffer.byteLength(event.row.event_json), 0) +
+      events.length -
+      1 !==
+      archive.raw_bytes
+  ) {
+    throw new Error("Cold transcript archive metadata does not match its contents");
+  }
+  return records;
 }

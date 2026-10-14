@@ -183,6 +183,7 @@ export async function buildEmbeddedHandledBeforeAgentReplyResult(params: {
       },
       finalAssistantVisibleText: handled.finalText,
       finalAssistantRawText: handled.finalText,
+      providerStarted: false,
     },
   };
 }

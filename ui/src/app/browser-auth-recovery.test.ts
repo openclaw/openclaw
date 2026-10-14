@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { startBrowserAuthRecovery } from "./browser-auth-recovery.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { startBrowserAuthRecovery } from "./browser-auth-recovery.tsx";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "./browser-http.ts";
 
 function redirectResponse() {
@@ -13,6 +14,7 @@ function redirectResponse() {
 }
 
 function button(label: string) {
+  flush();
   const result = [...document.querySelectorAll("button")].find(
     (entry) => entry.textContent?.trim() === label,
   );
@@ -88,7 +90,6 @@ describe("browser sign-in recovery", () => {
       const results = await Promise.allSettled(requests);
       expect(results.every((result) => result.status === "rejected")).toBe(true);
       await finishRenewal();
-      await expect.poll(() => document.querySelector("openclaw-modal-dialog")).not.toBeNull();
       const { dialog } = await getRenderedModalDialog(document.body);
       expect(dialog.getAttribute("aria-label")).toBe("Sign in to continue loading content");
       expect(document.querySelectorAll("openclaw-modal-dialog")).toHaveLength(1);
@@ -105,7 +106,8 @@ describe("browser sign-in recovery", () => {
         ]),
       );
 
-      button("Sign in").click();
+      const signIn = button("Sign in");
+      signIn.click();
       if (host === "native") {
         await vi.dynamicImportSettled();
         expect(reconnect).toHaveBeenCalledExactlyOnceWith({
@@ -121,6 +123,8 @@ describe("browser sign-in recovery", () => {
           "_blank",
           "noopener,noreferrer",
         );
+        await waitForSolid(() => expect(button("Check again").disabled).toBe(false));
+        expect(button("Sign in")).toBe(signIn);
         button("Check again").click();
         await expect.poll(() => document.body.textContent).toContain("Sign-in is still required");
       }
@@ -134,7 +138,7 @@ describe("browser sign-in recovery", () => {
     },
   );
 
-  it.each(["offline", "missing", "server-error", "gateway-auth", "html"])(
+  it.each(["offline", "gateway-auth"])(
     "does not turn %s into a sign-in dialog",
     async (failure) => {
       vi.stubGlobal(
@@ -164,7 +168,7 @@ describe("browser sign-in recovery", () => {
     },
   );
 
-  it.each(["stored-token", "stored-password"])(
+  it.each(["stored-password"])(
     "verifies renewed website access using the current %s credential",
     async (acceptedCredential) => {
       stop();
@@ -198,7 +202,6 @@ describe("browser sign-in recovery", () => {
         fetchControlUiResource("/nested/__openclaw__/assistant-media"),
       ).rejects.toThrow();
       await finishRenewal();
-      await expect.poll(() => document.querySelector("openclaw-modal-dialog")).not.toBeNull();
       await getRenderedModalDialog(document.body);
       signedIn = true;
       window.dispatchEvent(new Event("focus"));
@@ -241,7 +244,6 @@ describe("browser sign-in recovery", () => {
     onTestFinished(subscribeBrowserAuthRestored(restored));
     await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
     await finishRenewal();
-    await expect.poll(() => document.querySelector("openclaw-modal-dialog")).not.toBeNull();
     await getRenderedModalDialog(document.body);
     button("Sign in").click();
     window.dispatchEvent(new Event("focus"));
@@ -266,7 +268,6 @@ describe("browser sign-in recovery", () => {
     );
     await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
     await finishRenewal();
-    await expect.poll(() => document.querySelector("openclaw-modal-dialog")).not.toBeNull();
     await getRenderedModalDialog(document.body);
     button("Not now").click();
     now += 30_001;

@@ -267,8 +267,7 @@ describe("whatsapp directory", () => {
     expect(mocks.releaseOwner).toHaveBeenCalledOnce();
   });
 
-  it("retries retained ownership after credential cleanup times out", async () => {
-    vi.useFakeTimers();
+  it("retries retained cleanup on the next lookup after credentials time out", async () => {
     let closed = false;
     const sock = {
       groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
@@ -284,7 +283,7 @@ describe("whatsapp directory", () => {
         },
       },
     };
-    createSocketMock.mockResolvedValueOnce(sock as never);
+    createSocketMock.mockResolvedValueOnce(sock as never).mockResolvedValueOnce(sock as never);
     waitForCredsMock.mockResolvedValueOnce("timed_out");
 
     await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
@@ -293,7 +292,7 @@ describe("whatsapp directory", () => {
     });
     expect(mocks.releaseOwner).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(mocks.releaseOwner).toHaveBeenCalledOnce();
+    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).resolves.toEqual([]);
+    expect(mocks.releaseOwner).toHaveBeenCalledTimes(2);
   });
 });

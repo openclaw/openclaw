@@ -81,6 +81,7 @@ const mocks = vi.hoisted(() => ({
       },
 }));
 
+// mock-isolation: The driver fixture owns synthetic Talk sessions, consult callbacks, and observations; no host runtime is started.
 vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
   REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES: ["safe-read-only", "owner", "none"],
   isRealtimeVoiceAgentConsultToolPolicy: (value: unknown) =>
@@ -121,7 +122,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
     transcript.splice(0, Math.max(0, transcript.length - maxEntries));
     return entry;
   }),
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveProvider,
   resolveRealtimeVoiceAgentConsultTools: vi.fn(
     (policy: string, customTools: Array<{ name: string }> = []) => [
       ...(policy === "none" ? [] : [{ name: "openclaw_agent_consult" }]),

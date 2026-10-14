@@ -2,15 +2,16 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
+import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
+import type { PluginCache } from "../plugins/plugin-cache.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
-  assertPreflightConfigUnchanged,
   readAdmittedConfigSnapshot,
-  readConfigPreflightSnapshot,
+  createConfigPreflightSnapshotReader,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
@@ -21,6 +22,8 @@ import {
 } from "./doctor-startup-migration-refusal.js";
 import { cleanupStartupPluginSourceCaptures } from "./startup-plugin-source-captures.js";
 
+// Persistent lease loss must reach the operator instead of retrying startup forever.
+const STARTUP_LEASE_ATTEMPTS = 3;
 export type StartupConfigPreflightOptions = {
   gateway: boolean;
   observe?: boolean;
@@ -29,20 +32,38 @@ export type StartupConfigPreflightOptions = {
   beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
 };
 
-export type StartupConfigPreflightResult = ReturnType<typeof result>;
+export type StartupConfigPreflightResult = ReturnType<typeof result> & {
+  pluginCache?: PluginCache;
+};
 
 /** Prepare current runtime state; legacy imports and repair receipts belong to Doctor. */
 export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
-  const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
-  try {
-    return await withSqliteReadOnlyWorkerScope(() => prepareStartupConfig(options));
-  } catch (error) {
-    if (options.gateway) {
-      rethrowStartupConfigFailure(error);
+  assertDatabasePortStartupAllowed(resolveStateDir(process.env));
+  for (let attempt = 1; ; attempt++) {
+    await using snapshots = createConfigPreflightSnapshotReader();
+    const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
+    try {
+      const prepared = await withSqliteReadOnlyWorkerScope(() =>
+        prepareStartupConfig(options, snapshots),
+      );
+      return {
+        ...prepared,
+        pluginCache: await snapshots.takePluginCache(prepared.pluginMetadataSnapshot),
+      };
+    } catch (error) {
+      const { StartupMigrationLeaseLostError } =
+        await import("../infra/startup-migration-checkpoint.js");
+      if (error instanceof StartupMigrationLeaseLostError && attempt < STARTUP_LEASE_ATTEMPTS) {
+        recordStartupMigrationWarnings(["Startup migration lease lost; reacquiring and retrying."]);
+        continue;
+      }
+      if (options.gateway) {
+        rethrowStartupConfigFailure(error);
+      }
+      throw error;
     }
-    throw error;
   }
 }
 
@@ -62,11 +83,12 @@ function readStartupStateWarnings(env: NodeJS.ProcessEnv): string[] {
 
 async function prepareStartupConfig(
   options: StartupConfigPreflightOptions,
+  snapshots: ReturnType<typeof createConfigPreflightSnapshotReader>,
 ): Promise<StartupConfigPreflightResult> {
   let env = process.env;
   const measure: ConfigSnapshotReadMeasure = options.measure ?? (async (_name, run) => await run());
   const readSnapshot = (readOptions?: Pick<ConfigSnapshotReadOptions, "isolateEnv">) =>
-    readConfigPreflightSnapshot({
+    snapshots.read({
       purpose: "startup",
       allowCurrentPluginMetadata: false,
       includePluginMetadata: true,
@@ -144,10 +166,8 @@ async function prepareStartupConfig(
           }
           assertLeaseCurrent();
           if (read.recovery) {
-            const recovered = read.snapshot;
             await read.recovery.apply(() => pluginLease.assertOwned());
             read = await readSnapshot();
-            assertPreflightConfigUnchanged(recovered, read.snapshot);
           }
         },
       );
@@ -178,7 +198,6 @@ async function prepareStartupConfig(
       }
       if (migration.changes.length) {
         await beforeStatePreparation(read.snapshot);
-        assertPreflightConfigUnchanged(read.snapshot, (await readSnapshot()).snapshot);
         assertLeaseCurrent();
         if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
           const { StartupMaintenanceRequiredError } =

@@ -35,6 +35,7 @@ import {
   listSessionStateEventsSince,
 } from "../sessions/session-state-events.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import * as settlementOwner from "./server-methods/session-run-settlement.js";
 import { embeddedRunMock, onceMessage, agentDiscoveryMock, rpcReq } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { testConfigRoot } from "./test-helpers.runtime-state.js";
@@ -47,6 +48,8 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { registerWorkerInferenceSessionControl } from "./worker-environments/inference-control-internal.js";
+// Load after the fixture mocks, during collection rather than the first RPC deadline.
+import "./server-methods/sessions-compact.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
@@ -111,6 +114,48 @@ async function createCompactionSession(
   }
   return { ...scope, dir };
 }
+
+test("sessions.compact reads entry and transcript facts after the prior writer settles", async () => {
+  const scope = await createCompactionSession("sess-compact-settled", {
+    totalLines: 0,
+    entry: {
+      agentHarnessId: "codex",
+      cliSessionBindings: { "codex-cli": { sessionId: "thread-1" } },
+      modelSelectionLocked: true,
+    },
+  });
+  const settle = settlementOwner.waitForTerminalSessionRunSettlement;
+  const settlement = vi
+    .spyOn(settlementOwner, "waitForTerminalSessionRunSettlement")
+    .mockImplementationOnce(async (params) => {
+      const settled = await settle(params);
+      await upsertSessionEntryCore(scope, {
+        ...loadSessionEntry(scope),
+        sessionId: scope.sessionId,
+        updatedAt: 2,
+        spawnedCwd: "/tmp/after-settlement",
+      });
+      await appendTranscriptMessage(scope, {
+        message: { role: "user", content: "final settled message", timestamp: 2 },
+      });
+      return settled;
+    });
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({ ok: true, compacted: true });
+  const { ws } = await openClient();
+  try {
+    expectMainCompactionResult(await rpcReq(ws, "sessions.compact", { key: "main" }), true);
+    expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/after-settlement",
+        sessionEntry: expect.objectContaining({ spawnedCwd: "/tmp/after-settlement" }),
+      }),
+      expect.anything(),
+    );
+  } finally {
+    settlement.mockRestore();
+    ws.close();
+  }
+});
 
 test("sessions.compact without maxLines runs embedded manual compaction without checkpoint metadata", async () => {
   const sessionScope = await createCompactionSession("sess-main", {
@@ -183,8 +228,6 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
   });
 
   const { ws } = await openClient();
-  // Prepare the lazy handler before arming the RPC and event observers.
-  await import("./server-methods/sessions-compact.js");
   await rpcReq(ws, "sessions.subscribe", {});
   const signalVersion = await getSessionStateVersion(sessionScope.sessionKey, "main");
   const signal = loseSessionSignalAcknowledgement();
@@ -546,6 +589,31 @@ test("sessions.compact rejects stale terminal persistence after the session chan
     const replacedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
     expect(replacedEntry?.sessionId).toBe("sess-replacement");
     expect(replacedEntry?.compactionCount).toBeUndefined();
+  } finally {
+    compaction.release();
+    await Promise.allSettled([compactResult]);
+    await closeGatewayTestWebSocket(ws);
+  }
+});
+
+test("sessions.compact accounts from the latest entry without overwriting concurrent metadata", async () => {
+  const scope = await createCompactionSession("sess-compact-metadata");
+  const compaction = holdCompaction();
+  const { ws } = await openClient();
+  const compactResult = rpcReq(ws, "sessions.compact", { key: "main" });
+  try {
+    await compaction.waitForEntry(compactResult);
+    await upsertSessionEntryCore(scope, {
+      ...loadSessionEntry(scope),
+      sessionId: scope.sessionId,
+      compactionCount: 3,
+      label: "changed during compaction",
+    });
+    compaction.release();
+    expectMainCompactionResult(await compactResult, true);
+    const entry = loadSessionEntry(scope);
+    expect(entry?.label).toBe("changed during compaction");
+    expect(entry?.compactionCount).toBe(4);
   } finally {
     compaction.release();
     await Promise.allSettled([compactResult]);

@@ -36,6 +36,7 @@ import {
   finishUpdateRunRecord,
   isAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
+  type CreateUpdateRunInput,
   type UpdateRunRecord,
   type UpdateRunPhase,
   type UpdateRunStep,
@@ -74,16 +75,9 @@ export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 export function createUpdateRun(
-  input: RunPatch & {
-    runId?: string;
-    trigger: UpdateRunRecord["trigger"];
-    supersedeStaleIdentityless?: boolean;
-    /** Preview history must not repair canonical task data. */
-    preview?: boolean;
-    /** Record an already completed repair without publishing a transient running row. */
-    settlement?: { reason: string; detail: string };
-  },
+  input: CreateUpdateRunInput,
   options: LedgerOptions = {},
+  assertCurrent?: (stage: "transaction" | "commit") => void,
 ): UpdateRunRecord {
   const now = Date.now();
   const initial: UpdateRunRecord = {
@@ -171,6 +165,7 @@ export function createUpdateRun(
     },
     options,
     !input.preview,
+    assertCurrent,
   );
 }
 

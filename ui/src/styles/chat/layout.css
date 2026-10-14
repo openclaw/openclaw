@@ -828,8 +828,7 @@ openclaw-pending-session-create {
     transform var(--duration-slow) var(--ease-in-out),
     opacity var(--duration-slow) var(--ease-in-out),
     background-color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out),
-    visibility 0s linear var(--duration-slow);
+    border-color var(--duration-fast) var(--ease-out);
 }
 
 .chat-scroll-to-bottom[data-visible="true"] {
@@ -908,7 +907,9 @@ openclaw-pending-session-create {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  gap: 5px;
+  width: auto;
+  white-space: nowrap;
   height: 24px;
   padding: 0;
   border-radius: var(--radius-full);
@@ -2156,20 +2157,21 @@ openclaw-chat-video-player {
   color: var(--ok);
 }
 
-.chat-pr[data-state="draft"] .chat-pr__icon {
+.chat-pr[data-state="draft"] .chat-pr__icon,
+.chat-pr[data-state="branch"] .chat-pr__icon {
   color: var(--muted);
 }
 
-.chat-pr[data-state="closed"] .chat-pr__icon {
+.chat-pr[data-state="closed"] .chat-pr__icon,
+.chat-pr__deletions,
+.chat-pr__checks[data-checks="failing"],
+.chat-ci__status[data-state="failed"] {
   color: var(--danger);
 }
 
-.chat-pr[data-state="merged"] .chat-pr__icon {
+.chat-pr[data-state="merged"] .chat-pr__icon,
+.chat-pr[data-state="merged"] .chat-pr__state {
   color: var(--pr-merged);
-}
-
-.chat-pr[data-state="branch"] .chat-pr__icon {
-  color: var(--muted);
 }
 
 .chat-pr__number {
@@ -2227,28 +2229,20 @@ button.chat-pr__diff {
   cursor: var(--cursor-action);
 }
 
-.chat-pr__additions {
+.chat-pr__additions,
+.chat-pr__checks[data-checks="passing"],
+.chat-ci__status[data-state="passed"] {
   color: var(--ok);
-}
-
-.chat-pr__deletions {
-  color: var(--danger);
 }
 
 .chat-pr__checks {
   color: var(--muted);
 }
 
-.chat-pr__checks[data-checks="passing"] {
-  color: var(--ok);
-}
-
-.chat-pr__checks[data-checks="pending"] {
+.chat-pr__checks[data-checks="pending"],
+.chat-ci__status[data-state="running"],
+.chat-ci__status[data-state="queued"] {
   color: var(--warn);
-}
-
-.chat-pr__checks[data-checks="failing"] {
-  color: var(--danger);
 }
 
 .chat-pr__checks-pill {
@@ -2554,19 +2548,6 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-ci__status[data-state="passed"] {
-  color: var(--ok);
-}
-
-.chat-ci__status[data-state="failed"] {
-  color: var(--danger);
-}
-
-.chat-ci__status[data-state="running"],
-.chat-ci__status[data-state="queued"] {
-  color: var(--warn);
-}
-
 .chat-ci__job[open] > summary .chat-ci__chevron,
 .chat-ci__skipped[open] > summary .chat-ci__chevron {
   transform: rotate(180deg);
@@ -2651,10 +2632,6 @@ openclaw-chat-ci-details {
 .chat-pr__state {
   color: var(--muted);
   font-weight: 600;
-}
-
-.chat-pr[data-state="merged"] .chat-pr__state {
-  color: var(--pr-merged);
 }
 
 .chat-pr__warning {
@@ -3103,9 +3080,9 @@ openclaw-chat-ci-details {
 
   .agent-chat__input--chat .context-ring {
     justify-content: center;
-    width: var(--chat-composer-control-size);
+    width: auto;
     height: var(--chat-composer-chip-height);
-    gap: 0;
+    gap: 5px;
     padding-inline: 0;
   }
 
@@ -3329,4 +3306,85 @@ openclaw-chat-ci-details {
 
 .chat-provider-review .chat-composer-neighbor-card__copy :is(strong, span) {
   white-space: normal;
+}
+
+.chat-pane__layout-trigger,
+.chat-pane__sharing-trigger,
+.chat-pane__subagents-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chat-pane__layout-trigger {
+  padding: 5px 8px;
+  line-height: 1;
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-pane__layout-trigger {
+    min-height: 44px;
+  }
+
+  /* Keep the complete action list scrollable without covering the conversation. */
+  .chat-panel-layout-menu::part(menu) {
+    /* Web Awesome consumes this variable in its important max-height rule. */
+    --auto-size-available-height: min(360px, 50dvh);
+
+    width: min(264px, calc(100dvw - 24px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .chat-panel-layout-menu .session-menu__item {
+    min-height: 44px;
+  }
+
+  .chat-panel-layout-menu .session-menu__text {
+    display: block;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* The desktop shortcut rail consumes label space but offers no touch action. */
+  .chat-panel-layout-menu .side-panel-type-option__shortcut,
+  .chat-panel-layout-menu .session-menu__item::part(details) {
+    display: none;
+  }
+}
+
+.chat-pane__layout-trigger svg,
+.chat-pane__sharing-trigger svg,
+.chat-pane__subagents-running svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.6px;
+}
+
+.chat-pane__header--stacked-status {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+.chat-pane__header--stacked-status > .chat-pane__header-leading {
+  flex: 1;
+}
+
+.chat-pane__header--stacked-status > .chat-pane__subagents-running {
+  flex-basis: 100%;
+  padding-bottom: 6px;
+}
+
+.chat-pr__accounts-panel .oc-menu-item__check {
+  display: none;
+}
+
+.chat-pr__checks-overlay {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
 }

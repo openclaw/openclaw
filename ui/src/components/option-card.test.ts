@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import "./option-card.ts";
+import "./option-card.tsx";
 
 describe("option card", () => {
   let container: HTMLDivElement;
@@ -36,7 +36,6 @@ describe("option card", () => {
       onSelect,
     };
     mountSolid(() => card, { container });
-    // Solid owns the host node; its still-Lit children have a separate commit.
     await card.updateComplete;
     const recommended = container.querySelector<HTMLButtonElement>(
       ".option-card__choice--recommended",

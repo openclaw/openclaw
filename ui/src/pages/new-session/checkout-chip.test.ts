@@ -1,6 +1,27 @@
-import { render } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import { renderCheckoutChip, resolveCheckoutChip } from "./checkout-chip.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { resolveCheckoutChip, type CheckoutChipOptions } from "./checkout-chip.ts";
+import { CheckoutChip } from "./checkout-chip.tsx";
+
+function mountCheckout(initial: CheckoutChipOptions) {
+  const [params, setParams] = createSignal(initial);
+  const mounted = mountSolid(() =>
+    createComponent(CheckoutChip, {
+      get params() {
+        return params();
+      },
+    }),
+  );
+  return {
+    container: mounted.container,
+    update: (next: CheckoutChipOptions) => {
+      setParams(next);
+      flush();
+    },
+  };
+}
 
 describe("Checkout chip state", () => {
   it.each([
@@ -120,47 +141,51 @@ describe("Checkout chip state", () => {
     { worktree: false, remotePlacement: true, repository: true, emptyBranches: true },
   ])(
     "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement, emptyBranches=$emptyBranches)",
-    ({ worktree, remotePlacement, repository, emptyBranches }) => {
-      const container = document.createElement("div");
+    async ({ worktree, remotePlacement, repository, emptyBranches }) => {
       const onSelectWorktree = vi.fn();
       const onBaseRefInput = vi.fn();
       const onWorktreeNameInput = vi.fn();
       const onConfirm = vi.fn();
-      render(
-        renderCheckoutChip({
-          state: { label: worktree ? "New worktree from main" : "feature" },
-          remotePlacement,
-          repository,
-          folderLabel: "OpenClaw",
-          worktree,
-          worktreeAvailable: true,
-          branches: {
-            repoRoot: "/repo",
-            branches: emptyBranches
-              ? []
-              : [
-                  { name: "main", kind: "local" },
-                  { name: "release/next", kind: "local" },
-                ],
-            headBranch: "feature",
-          },
-          branchesLoading: false,
-          baseRef: "main",
-          worktreeName: "",
-          submitting: false,
-          pendingPlacement: false,
-          popoverOpen: true,
-          popoverHiding: false,
-          onGuardTransition: () => undefined,
-          onPopoverShow: () => undefined,
-          onPopoverHide: () => undefined,
-          onPopoverAfterHide: () => undefined,
-          onSelectWorktree,
-          onBaseRefInput,
-          onWorktreeNameInput,
-          onConfirm,
-        }),
-        container,
+      const { container } = mountCheckout({
+        state: { label: worktree ? "New worktree from main" : "feature" },
+        remotePlacement,
+        repository,
+        folderLabel: "OpenClaw",
+        worktree,
+        worktreeAvailable: true,
+        branches: {
+          repoRoot: "/repo",
+          branches: emptyBranches
+            ? []
+            : [
+                { name: "main", kind: "local" },
+                { name: "release/next", kind: "local" },
+              ],
+          headBranch: "feature",
+        },
+        branchesLoading: false,
+        baseRef: "main",
+        worktreeName: "",
+        submitting: false,
+        pendingPlacement: false,
+        popoverOpen: true,
+        popoverHiding: false,
+        onGuardTransition: () => undefined,
+        onPopoverShow: () => undefined,
+        onPopoverHide: () => undefined,
+        onPopoverAfterHide: () => undefined,
+        onSelectWorktree,
+        onBaseRefInput,
+        onWorktreeNameInput,
+        onConfirm,
+      });
+
+      await waitForSolid(() =>
+        expect(
+          container
+            .querySelector(".new-session-page__checkout-popover")
+            ?.getAttribute("data-phase"),
+        ).toBe("open"),
       );
 
       if (worktree || repository) {
@@ -183,10 +208,12 @@ describe("Checkout chip state", () => {
         const inputs = container.querySelectorAll<HTMLInputElement>("input");
         expect(inputs).toHaveLength(1);
         inputs[0]!.value = "release/next";
-        inputs[0]!.dispatchEvent(new Event("input"));
+        inputs[0]!.dispatchEvent(new Event("input", { bubbles: true }));
         expect(onBaseRefInput).toHaveBeenCalledWith("release/next");
-        inputs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
-        container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+        inputs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        container
+          .querySelector(".new-session-page__checkout-popover")!
+          .dispatchEvent(new CustomEvent("overlay-after-hide"));
         expect(onConfirm).toHaveBeenCalledOnce();
         expect(container.textContent).toContain(
           "Clones OpenClaw on the selected runner. No Gateway checkout is created.",
@@ -224,9 +251,9 @@ describe("Checkout chip state", () => {
         expect(baseRef.value).toBe("main");
         expect(name.placeholder).toBe("Named from the session title");
         baseRef.value = " release ";
-        baseRef.dispatchEvent(new Event("input"));
+        baseRef.dispatchEvent(new Event("input", { bubbles: true }));
         name.value = " checkout-proof ";
-        name.dispatchEvent(new Event("input"));
+        name.dispatchEvent(new Event("input", { bubbles: true }));
         expect(onBaseRefInput).toHaveBeenCalledWith(" release ");
         expect(onWorktreeNameInput).toHaveBeenCalledWith(" checkout-proof ");
         const suggestions = container.querySelectorAll("[data-worktree-suggestion]");
@@ -234,8 +261,8 @@ describe("Checkout chip state", () => {
           "main",
           "release/next",
         ]);
-        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
-        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
         expect(baseRef.getAttribute("aria-activedescendant")).toBe(
           "new-session-worktree-branch-suggestion-1",
         );
@@ -247,18 +274,32 @@ describe("Checkout chip state", () => {
           expect(name.hasAttribute("aria-activedescendant")).toBe(false);
           expect(suggestions[1]!.getAttribute("aria-selected")).toBe("true");
         }
-        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
         expect(onBaseRefInput).toHaveBeenLastCalledWith("release/next");
         expect(onConfirm).not.toHaveBeenCalled();
         (suggestions[1] as HTMLButtonElement).click();
         expect(onBaseRefInput).toHaveBeenLastCalledWith("release/next");
-        name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
-        container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+        name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        container
+          .querySelector(".new-session-page__checkout-popover")!
+          .dispatchEvent(new CustomEvent("overlay-after-hide"));
         expect(onConfirm).toHaveBeenCalledOnce();
-        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+        container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!.click();
+        await waitForSolid(() =>
+          expect(
+            container
+              .querySelector(".new-session-page__checkout-popover")
+              ?.getAttribute("data-phase"),
+          ).toBe("open"),
+        );
+        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
         const branchWrites = onBaseRefInput.mock.calls.length;
-        name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
-        container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+        name.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", cancelable: true, bubbles: true }),
+        );
+        container
+          .querySelector(".new-session-page__checkout-popover")!
+          .dispatchEvent(new CustomEvent("overlay-after-hide"));
         expect(onBaseRefInput).toHaveBeenCalledTimes(branchWrites);
         expect(onConfirm).toHaveBeenCalledTimes(2);
         expect(container.textContent).toContain(
@@ -273,50 +314,52 @@ describe("Checkout chip state", () => {
     },
   );
 
-  it("shows the actual branch name and only confirms valid input", () => {
-    const container = document.createElement("div");
+  it("shows the actual branch name and only confirms valid input", async () => {
     const onConfirm = vi.fn();
     const onPopoverShow = vi.fn();
     const onPopoverHide = vi.fn();
     const onPopoverAfterHide = vi.fn();
-    const renderNamed = (worktreeName: string) =>
-      render(
-        renderCheckoutChip({
-          state: { label: "New worktree from main" },
-          remotePlacement: false,
-          folderLabel: "OpenClaw",
-          worktree: true,
-          worktreeAvailable: true,
-          branches: {
-            repoRoot: "/repo",
-            branches: [{ name: "main", kind: "local" }],
-            headBranch: "main",
-          },
-          branchesLoading: false,
-          baseRef: "main",
-          worktreeName,
-          submitting: false,
-          pendingPlacement: false,
-          popoverOpen: true,
-          popoverHiding: false,
-          onGuardTransition: vi.fn(),
-          onPopoverShow,
-          onPopoverHide,
-          onPopoverAfterHide,
-          onSelectWorktree: vi.fn(),
-          onBaseRefInput: vi.fn(),
-          onWorktreeNameInput: vi.fn(),
-          onConfirm,
-        }),
-        container,
-      );
+    const params: CheckoutChipOptions = {
+      state: { label: "New worktree from main" },
+      remotePlacement: false,
+      folderLabel: "OpenClaw",
+      worktree: true,
+      worktreeAvailable: true,
+      branches: {
+        repoRoot: "/repo",
+        branches: [{ name: "main", kind: "local" }],
+        headBranch: "main",
+      },
+      branchesLoading: false,
+      baseRef: "main",
+      worktreeName: "picker-fixes",
+      submitting: false,
+      pendingPlacement: false,
+      popoverOpen: true,
+      popoverHiding: false,
+      onGuardTransition: vi.fn(),
+      onPopoverShow,
+      onPopoverHide,
+      onPopoverAfterHide,
+      onSelectWorktree: vi.fn(),
+      onBaseRefInput: vi.fn(),
+      onWorktreeNameInput: vi.fn(),
+      onConfirm,
+    };
+    const { container, update } = mountCheckout(params);
+    const renderNamed = (worktreeName: string) => update({ ...params, worktreeName });
+    await waitForSolid(() =>
+      expect(
+        container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
+      ).toBe("open"),
+    );
+    onPopoverShow.mockClear();
 
-    renderNamed("picker-fixes");
     expect(container.textContent).toContain(
       "Creates branch openclaw/picker-fixes in a separate checkout.",
     );
-    const suggestionPopup = container.querySelector("wa-popup")!;
-    for (const type of ["wa-show", "wa-hide", "wa-after-hide"]) {
+    const suggestionPopup = container.querySelector(".new-session-page__branch-popup")!;
+    for (const type of ["overlay-show", "overlay-hide", "overlay-after-hide"]) {
       suggestionPopup.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));
     }
     expect(onPopoverShow).not.toHaveBeenCalled();
@@ -324,30 +367,20 @@ describe("Checkout chip state", () => {
     expect(onPopoverAfterHide).not.toHaveBeenCalled();
     container
       .querySelectorAll("input")[1]!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     suggestionPopup.dispatchEvent(
-      new CustomEvent("wa-after-hide", { bubbles: true, composed: true }),
+      new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }),
     );
     expect(onConfirm).not.toHaveBeenCalled();
-    container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+    container
+      .querySelector(".new-session-page__checkout-popover")!
+      .dispatchEvent(new CustomEvent("overlay-after-hide"));
     expect(onConfirm).toHaveBeenCalledOnce();
 
     renderNamed("Not Valid");
     container
       .querySelectorAll("input")[1]!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(onConfirm).toHaveBeenCalledOnce();
-
-    renderNamed("picker-fixes");
-    document.body.append(container);
-    const name = container.querySelectorAll("input")[1]!;
-    name.focus();
-    name.setSelectionRange(0, 6);
-    name.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
-    const hide = new CustomEvent("wa-hide", { bubbles: true, cancelable: true });
-    container.querySelector("wa-popover")!.dispatchEvent(hide);
-    expect(hide.defaultPrevented).toBe(true);
-    expect(onPopoverHide).not.toHaveBeenCalled();
-    container.remove();
   });
 });

@@ -52,6 +52,14 @@ export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadat
   return loginKind(choice) !== undefined;
 }
 
+/** CLI API-key logins use the same credential-only runner without changing UI discovery. */
+export function isProviderCliLoginChoiceStartable(choice: ProviderAuthChoiceMetadata): boolean {
+  return (
+    isProviderLoginChoiceStartable(choice) ||
+    (isEligible(choice) && choice.methodId === "api-key" && choice.appGuidedSecret === true)
+  );
+}
+
 export function listProviderLoginOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): ProviderLoginOption[] {

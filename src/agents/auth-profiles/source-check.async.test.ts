@@ -14,7 +14,8 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
-import { SHARED_AUTH_STORE_STATE_KEY, writeAuthProfileJsonCell } from "./sqlite-json.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import * as readers from "./sqlite-read.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
@@ -39,6 +40,9 @@ it("retains the read failure classification when reader cleanup also fails", asy
   await withOpenClawTestState({ label: "auth-source-cleanup" }, async (state) => {
     const failure = new SqliteWorkerError("source read closed", "closed");
     const prepare = vi.spyOn(readers, "prepareAgentAuthProfileRowsRead").mockReturnValue({
+      identity: undefined,
+      captureCredentialAuthority: () => undefined,
+      signal: new AbortController().signal,
       read: async () => {
         throw failure;
       },

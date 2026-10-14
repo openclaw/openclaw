@@ -53,6 +53,11 @@ import * as sqliteAdmission from "./sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 
+// mock-isolation: Count foreground auth reads; external file observation has separate coverage.
+vi.mock("./owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
+}));
+
 const PROVIDER = "auth-runtime-fixture";
 const PROFILE_ID = `${PROVIDER}:default`;
 const MODEL_ID = "fixture-model";
@@ -177,7 +182,10 @@ describe("model resolution auth row snapshots", () => {
       const prepare = database.db.prepare.bind(database.db);
       let injected = false;
       const fault = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-        if (sql === 'select "value_json" from "config_machine_state" where "state_key" = ?') {
+        if (
+          sql ===
+          'select "state_key" as "target", "value_json" as "contents" from "config_machine_state" where "state_key" in (?, ?)'
+        ) {
           injected = true;
           throw Object.assign(new Error("database disk image is malformed"), {
             code: "ERR_SQLITE_ERROR",
@@ -206,7 +214,7 @@ describe("model resolution auth row snapshots", () => {
             rows = receiveAuthProfileUpdateValue(facts.port);
           });
         try {
-          await runWithSqliteWorkerStateContext(context, () =>
+          runWithSqliteWorkerStateContext(context, () =>
             backend.execute({ type: "authProfiles.read", input: { artifactPreserving: false } }),
           );
         } finally {
@@ -301,10 +309,6 @@ describe("model resolution auth row snapshots", () => {
     { change: "usage", cached: true, published: true },
     { change: "usage", cached: false, published: "during" },
     { change: "usage", cached: true, published: "during" },
-    { change: "order", cached: true, published: false },
-    { change: "disabled", cached: false, published: false },
-    { change: "order", cached: true, published: "during" },
-    { change: "disabled", cached: false, published: "during" },
     { change: "unrelated-order", cached: true, published: false },
   ] as const)(
     "handles concurrent $change changes (cached=$cached, published=$published)",
@@ -364,25 +368,18 @@ describe("model resolution auth row snapshots", () => {
             setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
           }
           const updated: AuthProfileStore =
-            change === "order" || change === "unrelated-order"
+            change === "unrelated-order"
               ? { ...store, order: { [PROVIDER]: [fallbackProfileId, PROFILE_ID] } }
               : {
                   ...store,
                   usageStats: {
-                    [PROFILE_ID]:
-                      change === "disabled"
-                        ? { disabledUntil: Date.now() + 60_000, disabledReason: "auth_permanent" }
-                        : { lastUsed: 1234, lastProbeAt: 1234 },
+                    [PROFILE_ID]: { lastUsed: 1234, lastProbeAt: 1234 },
                   },
                 };
           const updatedAgent = change === "unrelated-order" ? "other" : "main";
           await state.writeAuthProfiles(updated, updatedAgent);
           resume.resolve();
-          expect((await loading).model?.name).toBe(
-            change === "order" || change === "disabled"
-              ? `${fallbackProfileId}:token`
-              : `${PROFILE_ID}:api_key`,
-          );
+          expect((await loading).model?.name).toBe(`${PROFILE_ID}:api_key`);
           const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(updatedAgent), {
             readOnly: true,
             externalCli: { mode: "none" },

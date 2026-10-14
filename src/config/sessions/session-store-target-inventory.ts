@@ -42,6 +42,7 @@ import {
   dedupeSessionStoreTargetsBySqliteTarget,
   type SessionStoreTarget,
 } from "./targets-collision.js";
+import { listKnownSessionStoreAgentIds } from "./targets-discovery.native.js";
 import {
   shouldSkipDiscoveryError,
   toDiscoveredSessionStoreTarget,
@@ -50,7 +51,7 @@ import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
   type SessionStoreTargetsReadResult,
-} from "./targets-read-availability.js";
+} from "./targets-read-availability.worker.js";
 import {
   isPerAgentSessionStoreConfig,
   listConfiguredSessionStoreAgentIds,
@@ -185,7 +186,7 @@ export function captureSessionStoreWriteCandidates(storePath: string) {
 }
 
 export type SessionStoreTargetInventoryRequest = {
-  selection?: "configured" | "recovery";
+  selection?: "configured" | "recovery" | "known-owners";
   config: OpenClawConfig;
   agentIds: string[];
   env: NodeJS.ProcessEnv;
@@ -255,7 +256,14 @@ export function createSessionStoreRegistryMutationFilter(params: {
           params.preparedSources.some(
             (prepared) =>
               prepared.agentId === source.agentId &&
-              prepared.identity === source.identity &&
+              (prepared.identity === source.identity ||
+                // A creator's COMMIT promotes its captured absent locator to this file.
+                params.captured.some(
+                  ({ candidate, identity, birthtime }) =>
+                    birthtime === undefined &&
+                    identity === source.identity &&
+                    (candidate.path === prepared.path || candidate.physicalPath === prepared.path),
+                )) &&
               isCurrentRegistrySourceGeneration(prepared, source),
           ))
       ) {
@@ -429,6 +437,15 @@ export function readSessionStoreTargetInventory(
   const cache: SessionStoreTargetsReadCache = new Map();
   let readFailed = false;
   try {
+    if (request.selection === "known-owners") {
+      return {
+        kind: "session-target-inventory",
+        agents: listKnownSessionStoreAgentIds(config, {
+          env,
+          registeredDatabases: request.registeredDatabases,
+        }).map((agentId) => ({ agentId, result: { available: true, targets: [] }, reads: [] })),
+      };
+    }
     if (request.selection === "configured" || request.selection === "recovery") {
       const agents: Extract<
         SessionStoreTargetInventoryResult,
@@ -468,12 +485,10 @@ export function readSessionStoreTargetInventory(
         },
       };
       if (request.selection === "recovery") {
-        const selected = new Set(request.agentIds);
+        // Maintenance must retain retired and held stores in its discovered roster.
         resolveAllAgentSessionStoreTargetsSync(config, {
           ...options,
-          ...(isPerAgentSessionStoreConfig(config.session?.store)
-            ? { agentIds: selected }
-            : { fixedStoreAgentIds: selected }),
+          fixedStoreAgentIds: new Set(request.agentIds),
         });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(

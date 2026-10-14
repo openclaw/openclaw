@@ -172,7 +172,7 @@ struct DashboardGatewayCatalogTests {
             primaryHealth: .ok)
 
         #expect(entries.map(\.id) == ["primary", "profile:studio"])
-        #expect(entries[0].name == "Local Gateway")
+        #expect(entries[0].name == "This Mac")
     }
 }
 

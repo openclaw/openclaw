@@ -3,6 +3,10 @@ import { GatewayDispatchEvents } from "discord-api-types/v10";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import * as fixtures from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -727,6 +731,8 @@ describe("discord DM reaction handling", () => {
     },
   ])("preserves distinct normal and super reactions when $action", async (testCase) => {
     fixtures.resetSystemEventsForTest();
+    const params = makeReactionListenerParams();
+    setRuntimeConfigSnapshot(params.cfg);
     enqueueSystemEventSpy.mockImplementation((text: string, options: { sessionKey: string }) =>
       channelRuntimeModule.enqueueSystemEvent(text, options),
     );
@@ -741,7 +747,7 @@ describe("discord DM reaction handling", () => {
         makeReactionClient({ channelType: ChannelType.GuildText, channelName: "general" }),
         { rest: { get: fetchMessage } },
       );
-      const listener = new testCase.Listener(makeReactionListenerParams());
+      const listener = new testCase.Listener(params);
       const gatewayEvent = {
         user_id: "user-1",
         channel_id: "channel-1",
@@ -791,6 +797,7 @@ describe("discord DM reaction handling", () => {
     } finally {
       enqueueSystemEventSpy.mockReset();
       fixtures.resetSystemEventsForTest();
+      clearRuntimeConfigSnapshot();
     }
   });
 

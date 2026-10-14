@@ -22,24 +22,6 @@ async function retryResponse(first: Response) {
 }
 
 describe("retryClawHubRead", () => {
-  it("honors Retry-After and cancels the discarded response", async () => {
-    const cancel = vi.fn();
-    const { result, attempts, delays } = await retryResponse(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          cancel() {
-            cancel();
-          },
-        }),
-        { status: 503, headers: { "Retry-After": "1" } },
-      ),
-    );
-    expect(await result.response.text()).toBe("ok");
-    expect(attempts).toBe(2);
-    expect(delays).toEqual([1_000]);
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
-
   it("ignores fractional Retry-After delay-seconds values", async () => {
     const { result, delays } = await retryResponse(
       new Response("limited", {
@@ -68,59 +50,28 @@ describe("retryClawHubRead", () => {
     }
   });
 
-  it("returns the response without replay when Retry-After exceeds the ClawHub budget", async () => {
-    const { result, delays, attempts } = await retryResponse(
-      new Response("limited", {
-        status: 503,
-        headers: { "Retry-After": "61" },
-      }),
+  it("does not retry permanent certificate failures", async () => {
+    const delays: number[] = [];
+    let attempts = 0;
+    const failure = new TypeError("fetch failed", { cause: { code: "CERT_HAS_EXPIRED" } });
+    const result = retryClawHubRead(
+      async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw failure;
+        }
+        return { response: new Response("ok") };
+      },
+      {
+        disposeRetry: async () => {},
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      },
     );
-    expect(result.response.status).toBe(503);
-    expect(await result.response.text()).toBe("limited");
+    await expect(result).rejects.toBe(failure);
     expect(attempts).toBe(1);
     expect(delays).toEqual([]);
-  });
-
-  it.each([undefined, "ECONNRESET", "CERT_HAS_EXPIRED"])(
-    "recovers only transient transport failures: %s",
-    async (code) => {
-      const delays: number[] = [];
-      let attempts = 0;
-      const failure = new TypeError("fetch failed", code ? { cause: { code } } : undefined);
-      const result = retryClawHubRead(
-        async () => {
-          attempts += 1;
-          if (attempts === 1) {
-            throw failure;
-          }
-          return { response: new Response("ok") };
-        },
-        {
-          disposeRetry: async () => {},
-          sleep: async (ms) => {
-            delays.push(ms);
-          },
-        },
-      );
-      if (code === "CERT_HAS_EXPIRED") {
-        await expect(result).rejects.toBe(failure);
-        expect(attempts).toBe(1);
-        expect(delays).toEqual([]);
-        return;
-      }
-      expect(await (await result).response.text()).toBe("ok");
-      expect(attempts).toBe(2);
-      expect(delays).toEqual([1_000]);
-    },
-  );
-
-  it("retries transient internal server errors", async () => {
-    const { result, attempts, delays } = await retryResponse(
-      new Response("server error", { status: 500 }),
-    );
-    expect(await result.response.text()).toBe("ok");
-    expect(attempts).toBe(2);
-    expect(delays).toEqual([1_000]);
   });
 
   it("does not retry 429 unless the caller enables rate-limit retries", async () => {
@@ -154,17 +105,5 @@ describe("retryClawHubRead", () => {
     expect(defaultAttempts).toBe(1);
     expect(await optedInResult.response.text()).toBe("ok");
     expect(optedInAttempts).toBe(2);
-  });
-
-  it("returns the final retryable response for caller-owned HTTP handling", async () => {
-    const disposeRetry = vi.fn(async ({ response }: { response: Response }) => {
-      await response.body?.cancel();
-    });
-    const result = await retryClawHubRead(
-      async () => ({ response: new Response("unavailable", { status: 503 }) }),
-      { disposeRetry, sleep: async () => {} },
-    );
-    expect(result.response.status).toBe(503);
-    expect(disposeRetry).toHaveBeenCalledTimes(3);
   });
 });

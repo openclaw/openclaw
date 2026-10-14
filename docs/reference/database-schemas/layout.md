@@ -29,6 +29,11 @@ to reconstruct history; selecting `event_json` alone omits compressed events.
 Memory chunk/cache embeddings are little-endian Float64 BLOBs. See
 [compact agent payload storage](/reference/database-schemas/agent-schema-history#compact-agent-payload-storage).
 
+PostgreSQL stores transcript bodies as plain text in `event_json`, with native
+TOAST compression. `event_zstd` is SQLite-only and remains `NULL` on PostgreSQL.
+A SQLite-to-PostgreSQL agent port must decompress retained transcript bodies into
+`event_json`.
+
 Retired Task and TaskFlow feature records remain in place. The Codex plugin's
 [Doctor migration](/gateway/doctor/config-migrations#native-codex-recovery-after-tasks-removal)
 copies eligible, owner-stamped native child recovery facts into existing parent
@@ -45,6 +50,9 @@ After readiness, the Gateway samples Linux file-cache residency and checks it ag
 every 15 minutes. The sample observes up to 256 file pages without reading their
 contents; it estimates whole-file residency, not the residency of every hot query.
 Other platforms do not run this maintenance.
+Sampling requires effective write permission to the file; Linux can otherwise mask
+residency as fully cached. A denied or unavailable sample produces a maintenance
+warning instead of a residency estimate.
 
 A cold sample (below 80%) or a slow bounded session-projection read starts background
 warming through an independent read-only SQLite worker. Shared state is read
@@ -129,7 +137,7 @@ Canonical user messages may include the optional private field
 transcript recorder stores the first model-facing text, including prompt-hook
 prepend/append context or a model-prompt replacement, before provider dispatch.
 The ordinary `content` remains the original user transcript. Projection text is
-stored after transcript redaction and before deterministic timestamp and sender
+stored without secret masking and before deterministic timestamp and sender
 normalization. Both the first dispatch and replay use that recorded text, then
 apply the same normalization.
 
@@ -242,27 +250,31 @@ history already evicted by an older writer. See [ACP CLI](/cli/acp).
 
 Meeting captures use three `STRICT` tables in the shared
 `state/openclaw.sqlite` database, separate from per-agent conversation transcripts.
-The transcript store (`src/transcripts/store.ts`) owns their reads and writes;
-`src/transcripts/sqlite-schema.ts` ensures the tables on first use. Markdown and
+The transcript store (`src/transcripts/store.ts`) routes reads and writes through
+the shared-state worker; streaming exports use the read-only worker. The shared
+schema owner defines the tables, and `src/transcripts/sqlite-schema.ts` reuses
+admitted schema facts when ensuring them. Markdown and
 JSON files under the transcripts directory are explicit exports, not runtime
 storage. See [Transcripts CLI](/cli/transcripts).
 
 #### `meeting_transcript_sessions`
 
 One row per capture identity. The primary key is `(session_id, started_at)`;
-`selector` is unique. Indexes support start-time, session-ID, slug, and export-key
-lookups.
+`selector` is unique. Indexes support start-time, session-ID, slug, export-key,
+source identity, account, and metadata-agent lookups.
 
-| Columns                                  | Type                                        | Purpose                                                                 |
-| ---------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
-| `session_id`, `started_at`               | `TEXT NOT NULL`                             | Capture ID and original start time.                                     |
-| `selector`, `export_key`, `session_slug` | `TEXT NOT NULL`                             | Canonical selector and derived export identity.                         |
-| `provider_id`, `source_json`             | `TEXT NOT NULL`                             | Source provider and locator.                                            |
-| `title`, `stopped_at`, `metadata_json`   | Nullable `TEXT`                             | Display title, terminal time, and session metadata including ownership. |
-| `export_manifest_json`                   | `TEXT NOT NULL`, default `{}`               | Export artifact ownership manifest.                                     |
-| `export_pending_json`                    | `TEXT NOT NULL`, default `[]`               | Pending export artifacts.                                               |
-| `next_utterance_seq`                     | Nonnegative `INTEGER NOT NULL`, default `0` | Next append sequence.                                                   |
-| `created_at_ms`, `updated_at_ms`         | Nonnegative `INTEGER NOT NULL`              | Store timestamps.                                                       |
+| Columns                                                                                                                 | Type                                        | Purpose                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
+| `session_id`, `started_at`                                                                                              | `TEXT NOT NULL`                             | Capture ID and original start time.                                     |
+| `selector`, `export_key`, `session_slug`                                                                                | `TEXT NOT NULL`                             | Canonical selector and derived export identity.                         |
+| `provider_id`, `source_json`                                                                                            | `TEXT NOT NULL`                             | Source provider and locator.                                            |
+| `source_account_id`, `source_guild_id`, `source_channel_id`, `source_meeting_url`, `source_thread_ts`, `source_file_id` | Nullable `TEXT`                             | Query projections of string-valued source fields.                       |
+| `title`, `stopped_at`, `metadata_json`                                                                                  | Nullable `TEXT`                             | Display title, terminal time, and session metadata including ownership. |
+| `metadata_agent_id`                                                                                                     | Nullable `TEXT`                             | Query projection of the metadata's string-valued agent ID.              |
+| `export_manifest_json`                                                                                                  | `TEXT NOT NULL`, default `{}`               | Export artifact ownership manifest.                                     |
+| `export_pending_json`                                                                                                   | `TEXT NOT NULL`, default `[]`               | Pending export artifacts.                                               |
+| `next_utterance_seq`                                                                                                    | Nonnegative `INTEGER NOT NULL`, default `0` | Next append sequence.                                                   |
+| `created_at_ms`, `updated_at_ms`                                                                                        | Nonnegative `INTEGER NOT NULL`              | Store timestamps.                                                       |
 
 Reopening an occupancy-driven capture clears `stopped_at` without changing the
 primary key, so the same meeting retains its utterances.
@@ -305,11 +317,14 @@ One current summary per capture. The primary key is
 | `session_id`, `session_started_at` | `TEXT NOT NULL`                | Owning capture identity.                                                                                    |
 | `generated_at`                     | Nullable `TEXT`                | Summary generation time.                                                                                    |
 | `summary_json`                     | Nullable `TEXT`                | Free-form summary, including participants, `source` (`model` or `heuristic`), and optional model reference. |
+| `overview`                         | Nullable `TEXT`                | Query projection of the summary's string-valued overview.                                                   |
 | `markdown`                         | Nullable `TEXT`                | Rendered meeting notes.                                                                                     |
 | `utterance_count`                  | Nonnegative `INTEGER NOT NULL` | Number of utterances covered by the stored summary.                                                         |
 
-These are existing feature-local tables. Occupancy episodes and model-backed
-notes do not change their schema or database version.
+The source, metadata-agent, and overview projections were added in
+[state schema 21](/reference/database-schemas/state-schema-history#state-schema-21).
+Writers maintain them alongside canonical JSON; readers do not fall back to JSON
+predicates. Occupancy episodes and model-backed notes add no further schema change.
 
 ### Update run ledger
 

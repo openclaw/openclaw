@@ -180,6 +180,7 @@ vi.mock("./agent-auth-discovery.js", () => ({
     preparedModelRuntimeMocks.resolveAmbientCredentials(...args),
 }));
 
+// mock-isolation: Prepared-runtime fixtures own credential and model state independently of real stores.
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorageFacts: (...args: unknown[]) => {
     if ((args[1] as { skipCredentials?: boolean } | undefined)?.skipCredentials === true) {
@@ -211,7 +212,7 @@ vi.mock("./agent-model-discovery.js", () => ({
   },
   discoverAuthStorage: (...args: unknown[]) =>
     preparedModelRuntimeMocks.discoverAuthStorage(...args) ?? preparedModelRuntimeMocks.authStorage,
-  discoverModels: (...args: unknown[]) => {
+  discoverModelsAsync: async (...args: unknown[]) => {
     preparedModelRuntimeMocks.discoverModels(...args);
     return preparedModelRuntimeMocks.modelRegistry;
   },

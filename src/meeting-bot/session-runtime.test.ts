@@ -7,6 +7,7 @@ import { createMeetingNodeBrowserFixture } from "../plugin-sdk/test-helpers/meet
 import { defineMeetingChromeCleanupTests } from "../plugin-sdk/test-helpers/meeting-chrome-contract.js";
 import { useMeetingTestState } from "../plugin-sdk/test-helpers/meeting-state.js";
 import { createOpenClawTestState } from "../plugin-sdk/test-state.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -646,6 +647,41 @@ describe("MeetingSessionRuntime failed joins", () => {
 });
 
 describe("MeetingSessionRuntime leave cleanup", () => {
+  it("settles concurrent leaves through the meeting queue without repeating cleanup", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const stop = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const releaseBrowserTab = vi.fn(async () => true);
+    const { runtime } = createTestRuntime({
+      releaseBrowserTab,
+      joinTransport: async ({ session, context }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "leave-tab", openedByPlugin: true },
+        };
+        context.attachRuntimeHandles(session, { stop });
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+    const first = runtime.leave(session.id);
+    await entered.promise;
+    const second = runtime.leave(session.id);
+    release.resolve();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { found: true, session, browserLeft: true },
+      { found: true, session, browserLeft: true },
+    ]);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(releaseBrowserTab).toHaveBeenCalledOnce();
+  });
+
   it("clears stale in-call health after confirmed browser departure", async () => {
     const { runtime } = createTestRuntime({
       releaseBrowserTab: async () => true,

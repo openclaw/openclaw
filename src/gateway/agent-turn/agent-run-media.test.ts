@@ -12,6 +12,7 @@ import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -35,7 +36,7 @@ import { resolveManagedOutgoingMediaArtifactDownload } from "../managed-image-at
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
 import * as replyMedia from "../server-methods/chat-reply-media.js";
 import * as transcriptMedia from "../server-methods/chat-transcript-persistence.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 import { dispatchAgentRunWithMedia } from "./agent-run-media.js";
@@ -95,11 +96,13 @@ async function runMediaTurn(
     plugins: { enabled: false },
   };
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   const scope = {
     agentId: "main",
     sessionId,
     sessionKey,
-    storePath: logicalStore ?? loadSessionEntry(sessionKey, { agentId: "main" }).storePath,
+    storePath:
+      logicalStore ?? (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).storePath,
   };
   const transcriptScope = {
     ...scope,
@@ -258,7 +261,12 @@ async function runMediaTurn(
       context,
       isIncognito: final?.incognito,
     },
-    { cfg, client: null, activeSessionAgentId: "main" },
+    {
+      cfg,
+      client: null,
+      activeSessionAgentId: "main",
+      prepared: { lifecycleStorePath: scope.storePath },
+    },
   );
   return {
     result,
@@ -268,7 +276,7 @@ async function runMediaTurn(
     messageAtFinal,
     finalizationStatements,
     retargetedEntry: logicalStore
-      ? loadSessionEntry(sessionKey, { agentId: "main" }).entry
+      ? (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).entry
       : undefined,
   };
 }

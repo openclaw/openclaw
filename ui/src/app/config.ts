@@ -18,6 +18,7 @@ import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 type ApplicationConfig = {
+  preferences?: ControlUiBootstrapConfig["preferences"];
   assistantIdentity: ReturnType<typeof normalizeAssistantIdentity>;
   serverVersion: string | null;
   serverBuildId?: string | null;
@@ -27,6 +28,7 @@ type ApplicationConfig = {
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
   communityInvite: boolean;
+  chatBubblesEnabled?: boolean;
   /** Null until the serving Gateway publishes its bootstrap policy. */
   newSessionModelDefaults?: "last-used" | "configured" | null;
   terminalEnabled: boolean;
@@ -57,6 +59,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
   communityInvite: false,
+  chatBubblesEnabled: false,
   newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   uploadsEnabled: true,
@@ -90,6 +93,7 @@ function loadControlUiPresentation(
 
 function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): ApplicationConfig {
   return {
+    preferences: parsed.preferences,
     assistantIdentity: normalizeAssistantIdentity({
       agentId: parsed.assistantAgentId,
       name: parsed.assistantName,
@@ -106,6 +110,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
     communityInvite: parsed.communityInvite === true,
+    chatBubblesEnabled: parsed.chatBubblesEnabled === true,
     newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),
     uploadsEnabled: parsed.uploadsEnabled !== false,
@@ -174,6 +179,7 @@ export function createApplicationConfigCapability(params: {
   let authVersion = 0;
   let refreshVersion = 0;
   let publishedVersion = 0;
+  let preferenceAuthCandidates: string[] = [];
   const environmentAttribute = document.documentElement.getAttribute(
     CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   );
@@ -212,6 +218,18 @@ export function createApplicationConfigCapability(params: {
   return {
     get current() {
       return current;
+    },
+    get preferences() {
+      const auth = params.getAuth?.() ?? {};
+      const candidates = resolveControlUiAuthCandidates({
+        settings: auth.settings,
+        password: auth.password,
+      });
+      return sameOrigin &&
+        candidates.length === preferenceAuthCandidates.length &&
+        candidates.every((candidate, index) => candidate === preferenceAuthCandidates[index])
+        ? current.preferences
+        : undefined;
     },
     async refresh(options?: { ifNeeded?: boolean; signal?: AbortSignal }) {
       // Queued bootstrap work cannot own credentials: plugin activation may
@@ -275,6 +293,11 @@ export function createApplicationConfigCapability(params: {
           return next;
         }
         current = next;
+        const auth = params.getAuth?.() ?? {};
+        preferenceAuthCandidates = resolveControlUiAuthCandidates({
+          settings: auth.settings,
+          password: auth.password,
+        });
         loadedAt = Date.now();
         for (const listener of listeners) {
           listener(current);

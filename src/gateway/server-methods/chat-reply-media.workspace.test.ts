@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { onTestFinished, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,7 +13,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 import {
@@ -57,6 +58,7 @@ describe("WebChat reply media workspace ownership", () => {
         },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     return { cfg, workspaceDir };
   }
 
@@ -87,7 +89,7 @@ describe("WebChat reply media workspace ownership", () => {
       sessionKey: TEST_SESSION_KEY,
       sessionId: "changing-media-policy",
       agentId: "main",
-      storePath: loadSessionEntry(TEST_SESSION_KEY, { agentId: "main" }).storePath,
+      storePath: (await loadSessionEntryAsync(TEST_SESSION_KEY, { agentId: "main" })).storePath,
     };
     const entry: SessionEntry = {
       sessionId: target.sessionId,
@@ -97,12 +99,13 @@ describe("WebChat reply media workspace ownership", () => {
       updatedAt: 1,
     };
     await replaceSessionEntry(target, entry);
-    const scope = captureWebchatReplyMediaScope({
+    const scope = await captureWebchatReplyMediaScope({
       cfg,
       agentId: "main",
       sessionKey: TEST_SESSION_KEY,
       sessionLoadOptions: { agentId: "main" },
     });
+    onTestFinished(scope.release);
     const opened = createDeferred();
     const release = createDeferred();
     const readCounts: Array<() => number> = [];
@@ -153,6 +156,7 @@ describe("WebChat reply media workspace ownership", () => {
       sessionKey: TEST_SESSION_KEY,
       sessionEntry,
     });
+    onTestFinished(scope.release);
     const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
       ...scope,
       payloads: [{ mediaUrls: ["./chart.png"] }],
@@ -213,6 +217,7 @@ describe("WebChat reply media workspace ownership", () => {
         sessionKey: TEST_SESSION_KEY,
         sessionEntry,
       });
+      onTestFinished(scope.release);
       const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
         ...scope,
         payloads: imagePaths.map((source) => ({ mediaUrls: [source] })),
@@ -266,6 +271,7 @@ describe("WebChat reply media workspace ownership", () => {
         permissionMode,
       },
     });
+    onTestFinished(scope.release);
     const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
       ...scope,
       payloads: [{ mediaUrls: [source] }],
@@ -318,6 +324,7 @@ describe("WebChat reply media workspace ownership", () => {
         permissionMode,
       },
     });
+    onTestFinished(scope.release);
     const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
       ...scope,
       payloads: [{ mediaUrls: [source] }, { mediaUrls: ["./sandbox.png"] }],
@@ -376,6 +383,7 @@ describe("WebChat reply media workspace ownership", () => {
         sessionKey: TEST_SESSION_KEY,
         sessionEntry,
       });
+      onTestFinished(scope.release);
       const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
         ...scope,
         payloads: sources.map((source) => ({ mediaUrls: [source] })),
@@ -444,6 +452,7 @@ describe("WebChat reply media workspace ownership", () => {
       sessionKey: TEST_SESSION_KEY,
       sessionEntry,
     });
+    onTestFinished(scope.release);
     const [untrusted] = await normalizeWebchatReplyMediaPathsForDisplay({
       ...scope,
       payloads: [{ mediaUrls: [aliasedSource] }],

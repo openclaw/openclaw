@@ -358,7 +358,8 @@ export async function startTelegramTestApiProxy({
       });
     } catch (error) {
       recordDoneAt();
-      reportProxyFailure(error, failurePhase, method);
+      // Teardown and downstream disconnects cancel polls; they are not upstream failures.
+      if (!upstreamController.signal.aborted) reportProxyFailure(error, failurePhase, method);
       if (!response.headersSent) {
         response.writeHead(502, { "content-type": "application/json" });
       }

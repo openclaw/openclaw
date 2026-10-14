@@ -1,7 +1,6 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getPluginExecutionFrame } from "./plugin-instance-invocation.js";
 import { getPluginRegistryState } from "./runtime-state.js";
-import { getPluginRuntimeExecutionFrame } from "./runtime/execution-frame.js";
 
 // Source imports and SDK bundles share the budget, including across plugin reloads.
 const warned = resolveGlobalSingleton(
@@ -23,7 +22,7 @@ export function warnPluginSdkDeprecation(params: {
     params.pluginId ??
     frame?.invocation?.instance.pluginId ??
     getPluginRegistryState()?.registrationContext?.pluginId ??
-    getPluginRuntimeExecutionFrame(frame)?.gatewayScope?.pluginId;
+    frame?.runtimePluginId;
   // An unscoped consumer must not turn a path or arbitrary label into a diagnostic.
   const pluginId =
     candidate &&
@@ -37,7 +36,7 @@ export function warnPluginSdkDeprecation(params: {
   }
   warned.add(key);
   process.emitWarning(
-    `${pluginId ? `Plugin ${pluginId}` : "Plugin SDK"}: ${params.method} is deprecated; use ${params.replacement} instead. ${params.compatibility ?? "The legacy contract remains supported in the current Plugin SDK major."} It will be removed in the next Plugin SDK major.`,
+    `${pluginId ? `Plugin ${pluginId}` : "Plugin SDK"}: ${params.method} is deprecated; use ${params.replacement} instead. ${params.compatibility ?? "The legacy contract remains supported during its deprecation period."} It will be removed in a later release after stable deprecation.`,
     { code: params.code ?? "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
   );
 }

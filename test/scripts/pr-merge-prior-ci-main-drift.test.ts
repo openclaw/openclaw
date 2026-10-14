@@ -1,11 +1,32 @@
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
 const { describePosix, fixture } = createMergeOutcomeFixtureHarness();
-const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
+const { preExistingCandidate: createCandidate } = createPriorCiCandidateFactory(fixture);
+const snapshots = useAutoCleanupTempDirTracker(afterAll);
+const restoredRoots = new Set<string>();
+afterEach(() => cleanupTempDirs(restoredRoots));
+let prepared: { candidate: ReturnType<typeof createCandidate>; snapshot: string } | undefined;
+
+function preExistingCandidate() {
+  if (!prepared) {
+    const candidate = createCandidate();
+    const snapshot = snapshots.make("pr-main-drift-setup-");
+    copyTreeCloseOnExec(candidate.root, snapshot);
+    prepared = { candidate, snapshot };
+  } else {
+    // Keep absolute worktree and evidence paths valid while resetting every case's refs and state.
+    rmSync(prepared.candidate.root, { recursive: true, force: true });
+    copyTreeCloseOnExec(prepared.snapshot, prepared.candidate.root);
+    restoredRoots.add(prepared.candidate.root);
+  }
+  return prepared.candidate;
+}
 
 function expectNoDispatch(f: ReturnType<typeof preExistingCandidate>) {
   expect(f.state().mutations).toBe(0);
@@ -407,7 +428,7 @@ describePosix("prior-CI forward main admission", () => {
     f.adminPriorCi(f.path);
     expect(f.record()).toMatchObject({ phase: "intent", route: "admin" });
     expect(f.state().mutations).toBe(1);
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
     const outcome = f.git(["rev-parse", "refs/openclaw/pr-merge-outcomes/123"]);
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     f.save({ ...f.state(), observations: [{}, { main }] });

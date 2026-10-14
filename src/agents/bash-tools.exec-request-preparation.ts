@@ -75,6 +75,11 @@ export function assertSupportedExecParams(args: unknown): void {
   if (!isRecord(args)) {
     return;
   }
+  if (typeof args.command === "string" && args.command.includes("\0")) {
+    throw new ToolInputError(
+      "Execution command must not contain NUL bytes. Remove them and retry.",
+    );
+  }
   if (args.awaitResults !== undefined && typeof args.awaitResults !== "boolean") {
     throw new ToolInputError("exec awaitResults must be a boolean");
   }

@@ -1,7 +1,10 @@
 import type { StatementSync as NativeStatement } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { retainPreparedSessionSharingFacts } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { retainSessionEntryWorkerPublication } from "../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
@@ -206,6 +209,7 @@ describe("event Web Push classification", () => {
       release: () => {},
     });
     prepareSessionMutationFactsMock.mockResolvedValue({
+      prepareRead: () => undefined,
       readCurrent: () => ({ target: null, membership: new Set<string>() }),
       release: () => {},
     });
@@ -237,6 +241,69 @@ describe("event Web Push classification", () => {
       }),
     );
   });
+
+  it.each([false, true])(
+    "waits for session publication and fails closed on unknown settlement=%s",
+    async (unknown) => {
+      const sessionKey = "agent:main:publication";
+      const databaseIdentity = "synthetic-web-push-publication";
+      const retained = retainPreparedSessionSharingFacts({
+        databaseIdentity: `file:${databaseIdentity}`,
+        sessionKey,
+        entry: { sessionId: "publication-session", updatedAt: 1 },
+        membership: new Set<string>(),
+      });
+      const publication = retainSessionEntryWorkerPublication({
+        agentId: "main",
+        storePath: "/synthetic/web-push/sessions",
+        databaseIdentity,
+      });
+      const pairingEntered = createDeferred();
+      const publicationJoined = createDeferred();
+      prepareSessionMutationFactsMock.mockResolvedValue({
+        prepareRead: () => {
+          const pending = retained.prepareRead();
+          publicationJoined.resolve();
+          return pending;
+        },
+        readCurrent: () => {
+          const current = retained.readCurrent();
+          if (!current) {
+            throw new Error("session publication unavailable");
+          }
+          return { target: null, membership: current.membership };
+        },
+        release: retained.release,
+      });
+      prepareDevicePairingMock.mockImplementationOnce(async () => {
+        publication.begin([sessionKey], []);
+        pairingEntered.resolve();
+      });
+      createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleEvent(
+        "chat",
+        { state: "final", runId: "publication-run" },
+        { sessionKeys: [sessionKey] },
+      );
+      try {
+        await pairingEntered.promise;
+        await Promise.race([publicationJoined.promise, authorityCompleted.promise]);
+        expect(webPushWarnMock).not.toHaveBeenCalled();
+        expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+        publication.settle(undefined, unknown);
+        await authorityCompleted.promise;
+        if (unknown) {
+          await vi.waitFor(() => expect(webPushWarnMock).toHaveBeenCalled());
+          expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+        } else {
+          expect(preparedWebPushSendMock).toHaveBeenCalledOnce();
+          expect(webPushWarnMock).not.toHaveBeenCalled();
+        }
+      } finally {
+        publication.settle(undefined, false);
+        retained.release();
+      }
+    },
+  );
 
   it.each([
     {
@@ -603,17 +670,30 @@ describe("event Web Push classification", () => {
       expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2);
     });
 
-    it("omits sensitive details from an unexpected preparation error", async () => {
-      const failure = new Error("https://push.example.test/private-endpoint?secret=do-not-log");
+    it("records the raw cause and stage of an agent-finished preparation failure", async () => {
+      const failure = new TypeError("synthetic invalid VAPID key", {
+        cause: new Error("invalid key length"),
+      });
       prepareWebPushNotificationSenderMock.mockRejectedValueOnce(failure);
       createEventWebPushDelivery({
         getRuntimeConfig: () => ({}),
         log: { warn: webPushWarnMock },
-      }).deliverMention(humanMention());
+      }).handleEvent("chat", { state: "final", runId: "failure-run" });
 
       await vi.waitFor(() => expect(webPushWarnMock).toHaveBeenCalledOnce());
       expect(webPushWarnMock.mock.calls).toEqual([
-        ["event Web Push delivery could not complete", { category: "human-mentioned" }],
+        [
+          "event Web Push delivery could not complete",
+          {
+            category: "agent-finished",
+            stage: "sender",
+            error: "synthetic invalid VAPID key | invalid key length",
+            errorName: "TypeError",
+            errorCode: undefined,
+            stack: failure.stack,
+            retry: false,
+          },
+        ],
       ]);
     });
 
@@ -661,6 +741,7 @@ describe("event Web Push classification", () => {
               },
             },
           };
+          setRuntimeConfigSnapshot(cfg);
           const sessionKey = "agent:main:foreign-draft";
           await upsertSessionEntryCore(
             { agentId: "main", sessionKey },

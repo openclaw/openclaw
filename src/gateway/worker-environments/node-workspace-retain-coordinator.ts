@@ -18,6 +18,7 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { parseNodeWorkerResponse } from "./node-worker-response.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -45,11 +46,11 @@ type NodeWorkspaceRetainCoordinatorOptions = {
   bundleRetention?: NodeWorkerBundleRetention;
   additionalManifestRefs?: (
     placement: WorkerSessionPlacementRecord,
-  ) => Promise<() => readonly string[] | null>;
+  ) => Promise<(() => readonly string[] | null) & Disposable>;
   warn: (message: string) => void;
 };
 
-type PreparedManifestRefs = ReadonlyMap<string, () => readonly string[] | null>;
+type PreparedManifestRefs = ReadonlyMap<string, (() => readonly string[] | null) & Disposable>;
 type PreparedPlacement = Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>;
 type PreparedPlacementFacts = ReadonlyMap<string, PreparedPlacement>;
 
@@ -175,196 +176,192 @@ export function createNodeWorkspaceRetainCoordinator(
       !stopped &&
       transport === currentTransport &&
       currentTransport.isCurrent(node) &&
-      (!hostBuild || !bundleRetention!.isEnvironmentOwnedNode(node.nodeId));
-
-    if (!isCurrent()) {
-      return;
-    }
-    const preparedManifestRefs = new Map<string, () => readonly string[] | null>();
-    if (options.additionalManifestRefs) {
-      const environmentIds = new Set(
-        nodeEnvironments(options, node.nodeId).map((environment) => environment.environmentId),
-      );
-      for (const { placement } of preparedPlacements.values()) {
-        if (placement?.environmentId && environmentIds.has(placement.environmentId)) {
-          const current = await options.additionalManifestRefs(placement);
-          if (!isCurrent()) {
-            return;
-          }
-          preparedManifestRefs.set(placement.sessionId, current);
-        }
-      }
-    }
-    const inventory = await options.placements.prepareMaintenancePlacements();
+      (!hostBuild || !bundleRetention?.isEnvironmentOwnedNode(node.nodeId));
+    const preparedManifestRefs = new Map<string, (() => readonly string[] | null) & Disposable>();
     try {
-      inventory.assertCurrent();
-    } finally {
-      inventory.release();
-    }
-    if (!isCurrent()) {
-      return;
-    }
-    const environments = nodeEnvironments(options, node.nodeId);
-    // Provisioning and refresh install before recording receipts. Keep the current build until
-    // every live environment records it, so an acknowledged generation cannot prune it.
-    const retainCurrentBuild =
-      currentBuild &&
-      (hostBuild ||
-        environments.some(
-          (environment) =>
-            !isTerminalWorkerEnvironmentState(environment.state) &&
-            environment.bootstrapReceipt?.bundleHash !== currentBuild.bundleHash,
-        ));
-    const environmentIds = new Set(environments.map((environment) => environment.environmentId));
-    const retainedBundleHashes = [
-      ...new Set([
-        ...listRetainedWorkerBundleHashes({
-          environments,
-          placements: inventory.placements.filter(
-            (placement) =>
-              placement.environmentId !== null && environmentIds.has(placement.environmentId),
-          ),
-        }),
-        ...(retainCurrentBuild ? [currentBuild.bundleHash] : []),
-      ]),
-    ].toSorted();
-    const bundleStatusSupported =
-      node.workerHost.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION;
-    const baseInput: NodeWorkerWorkspaceRetainInput = {
-      version: 1,
-      gatewayNamespace: options.gatewayNamespace,
-      controllerId,
-      sequence: (sequence += 1),
-      retain: snapshotEntriesForNode(
-        options,
-        node.nodeId,
-        preparedManifestRefs,
-        preparedPlacements,
-      ),
-    };
-    const priorGeneration = acknowledgedBundleGenerationByNode.get(node.nodeId);
-    const acknowledgedBundleGeneration =
-      priorGeneration?.connId === node.connId ? priorGeneration.generation : undefined;
-    const retentionInput: NodeWorkerWorkspaceRetainInput = {
-      ...baseInput,
-      bundleHashes: retainedBundleHashes,
-      ...(acknowledgedBundleGeneration !== undefined ? { acknowledgedBundleGeneration } : {}),
-    };
-    const bundleHashesFit =
-      retainedBundleHashes.length <= NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES &&
-      Buffer.byteLength(JSON.stringify(retentionInput), "utf8") <=
-        NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
-    const bundleStatusTarget = bundleStatusSupported
-      ? (hostBuild ?? bundleStatusTargetForNode(options, node.nodeId))
-      : undefined;
-    const statusInput =
-      bundleStatusTarget && retainedBundleHashes.includes(bundleStatusTarget.bundleHash)
-        ? { ...retentionInput, bundleStatusHash: bundleStatusTarget.bundleHash }
-        : undefined;
-    const statusInputFits =
-      statusInput !== undefined &&
-      Buffer.byteLength(JSON.stringify(statusInput), "utf8") <=
-        NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
-    const input =
-      bundleRetentionSupported && bundlePreparationError === undefined && bundleHashesFit
-        ? statusInput && statusInputFits
-          ? statusInput
-          : retentionInput
-        : baseInput;
-    const previousBundleStatus = currentTransport.getBundleStatus?.(node.nodeId);
-    if (
-      !input.bundleStatusHash ||
-      (previousBundleStatus && previousBundleStatus.bundleHash !== input.bundleStatusHash)
-    ) {
-      currentTransport.acceptBundleStatus?.(node, undefined);
-    }
-    if (bundlePreparationError !== undefined) {
-      options.warn(`Node bundle retention skipped (${node.nodeId}): ${bundlePreparationError}`);
-    } else if (bundleRetentionSupported && !bundleHashesFit) {
-      options.warn(
-        `Node bundle retention skipped (${node.nodeId}): ${retainedBundleHashes.length} retained hashes exceed the bounded maintenance request`,
-      );
-    }
-    for (;;) {
-      const isDispatchAuthorized = () => {
-        try {
-          return (
-            isCurrent() &&
-            isDeepStrictEqual(
-              input.retain,
-              snapshotEntriesForNode(
-                options,
-                node.nodeId,
-                preparedManifestRefs,
-                preparedPlacements,
-              ),
-            )
-          );
-        } catch {
-          return false;
-        }
-      };
-      if (!isDispatchAuthorized()) {
-        currentTransport.acceptBundleStatus?.(node, undefined);
-        return;
-      }
-      const result = await currentTransport.invoke({
-        node,
-        command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
-        params: input,
-        timeoutMs: RETAIN_COMMAND_TIMEOUT_MS,
-        signal: abortController.signal,
-        isDispatchAuthorized,
-      });
-      if (!isCurrent()) {
-        return;
-      }
-      if (!result.ok) {
-        throw new Error(
-          result.error?.message ??
-            `workspace retain command failed (${result.error?.code ?? "unknown"})`,
+      if (options.additionalManifestRefs) {
+        const environmentIds = new Set(
+          nodeEnvironments(options, node.nodeId).map((environment) => environment.environmentId),
         );
+        for (const { placement } of preparedPlacements.values()) {
+          if (placement?.environmentId && environmentIds.has(placement.environmentId)) {
+            const current = await options.additionalManifestRefs(placement);
+            preparedManifestRefs.set(placement.sessionId, current);
+          }
+        }
       }
-      let payload: unknown;
-      try {
-        payload = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : undefined;
-      } catch {
-        throw new Error("workspace retain command returned malformed JSON");
-      }
-      const retained = parseNodeWorkerWorkspaceRetainResult(payload);
-      if (!retained) {
-        throw new Error("workspace retain command violated its private result contract");
-      }
-      if (retained.applied && retained.bundleGeneration !== undefined) {
-        acknowledgedBundleGenerationByNode.set(node.nodeId, {
-          connId: node.connId,
-          generation: retained.bundleGeneration,
-        });
-      }
-      if (!retained.applied || !retained.hasMore) {
-        const bundleStatus = retained.bundleStatus;
-        const requestedBundleHash = input.bundleStatusHash;
-        const currentStatusTarget = requestedBundleHash
+      const inventory = await options.placements.prepareMaintenancePlacements();
+      const placements = (() => {
+        try {
+          inventory.assertCurrent();
+          return inventory.placements;
+        } finally {
+          inventory.release();
+        }
+      })();
+      const environments = nodeEnvironments(options, node.nodeId);
+      // Provisioning and refresh install before recording receipts. Keep the current build until
+      // every live environment records it, so an acknowledged generation cannot prune it.
+      const retainCurrentBuild =
+        currentBuild &&
+        (hostBuild ||
+          environments.some(
+            (environment) =>
+              !isTerminalWorkerEnvironmentState(environment.state) &&
+              environment.bootstrapReceipt?.bundleHash !== currentBuild.bundleHash,
+          ));
+      const environmentIds = new Set(environments.map((environment) => environment.environmentId));
+      const retainedBundleHashes = [
+        ...new Set([
+          ...listRetainedWorkerBundleHashes({
+            environments,
+            placements: placements.filter(
+              (placement) =>
+                placement.environmentId !== null && environmentIds.has(placement.environmentId),
+            ),
+          }),
+          ...(retainCurrentBuild ? [currentBuild.bundleHash] : []),
+        ]),
+      ].toSorted();
+      const baseInput: NodeWorkerWorkspaceRetainInput = {
+        version: 1,
+        gatewayNamespace: options.gatewayNamespace,
+        controllerId,
+        sequence: (sequence += 1),
+        retain: snapshotEntriesForNode(
+          options,
+          node.nodeId,
+          preparedManifestRefs,
+          preparedPlacements,
+        ),
+      };
+      const priorGeneration = acknowledgedBundleGenerationByNode.get(node.nodeId);
+      const acknowledgedBundleGeneration =
+        priorGeneration?.connId === node.connId ? priorGeneration.generation : undefined;
+      const retentionInput: NodeWorkerWorkspaceRetainInput = {
+        ...baseInput,
+        bundleHashes: retainedBundleHashes,
+        ...(acknowledgedBundleGeneration !== undefined ? { acknowledgedBundleGeneration } : {}),
+      };
+      const bundleHashesFit =
+        retainedBundleHashes.length <= NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES &&
+        Buffer.byteLength(JSON.stringify(retentionInput), "utf8") <=
+          NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
+      const bundleStatusTarget =
+        node.workerHost.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION
           ? (hostBuild ?? bundleStatusTargetForNode(options, node.nodeId))
           : undefined;
-        if (
-          retained.applied &&
-          currentStatusTarget &&
-          bundleStatus &&
-          currentStatusTarget.bundleHash === requestedBundleHash &&
-          bundleStatus.bundleHash === requestedBundleHash
-        ) {
-          currentTransport.acceptBundleStatus?.(node, {
-            bundleHash: currentStatusTarget.bundleHash,
-            status:
-              bundleStatus.status === "installed"
-                ? { status: "installed", version: currentStatusTarget.openclawVersion }
-                : { status: "missing" },
-          });
-        } else if (input.bundleStatusHash) {
-          currentTransport.acceptBundleStatus?.(node, undefined);
+      const previousBundleStatus = currentTransport.getBundleStatus?.(node.nodeId);
+      // Bundles are content-addressed. Tampering while the node runs is detected by
+      // the next node launch/install or explicit inspection, not every retention pass.
+      const statusInput =
+        bundleStatusTarget &&
+        retainedBundleHashes.includes(bundleStatusTarget.bundleHash) &&
+        (previousBundleStatus?.bundleHash !== bundleStatusTarget.bundleHash ||
+          previousBundleStatus.status.status !== "installed")
+          ? { ...retentionInput, bundleStatusHash: bundleStatusTarget.bundleHash }
+          : undefined;
+      const input =
+        bundleRetentionSupported && bundlePreparationError === undefined && bundleHashesFit
+          ? statusInput &&
+            Buffer.byteLength(JSON.stringify(statusInput), "utf8") <=
+              NODE_WORKER_RETAIN_REQUEST_MAX_BYTES
+            ? statusInput
+            : retentionInput
+          : baseInput;
+      if (
+        !bundleStatusTarget ||
+        !input.bundleHashes?.includes(bundleStatusTarget.bundleHash) ||
+        (previousBundleStatus && previousBundleStatus.bundleHash !== bundleStatusTarget.bundleHash)
+      ) {
+        currentTransport.acceptBundleStatus?.(node, undefined);
+      }
+      if (bundlePreparationError !== undefined) {
+        options.warn(`Node bundle retention skipped (${node.nodeId}): ${bundlePreparationError}`);
+      } else if (bundleRetentionSupported && !bundleHashesFit) {
+        options.warn(
+          `Node bundle retention skipped (${node.nodeId}): ${retainedBundleHashes.length} retained hashes exceed the bounded maintenance request`,
+        );
+      }
+      for (;;) {
+        const isDispatchAuthorized = () => {
+          try {
+            return (
+              isCurrent() &&
+              isDeepStrictEqual(
+                input.retain,
+                snapshotEntriesForNode(
+                  options,
+                  node.nodeId,
+                  preparedManifestRefs,
+                  preparedPlacements,
+                ),
+              )
+            );
+          } catch {
+            return false;
+          }
+        };
+        if (!isDispatchAuthorized()) {
+          return;
         }
-        return;
+        const result = await currentTransport.invoke({
+          node,
+          command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+          params: input,
+          timeoutMs: RETAIN_COMMAND_TIMEOUT_MS,
+          signal: abortController.signal,
+          isDispatchAuthorized,
+          // Placement changes cannot undo pruning already dispatched to this node.
+          isCompletionAuthorized: isCurrent,
+        });
+        if (!isCurrent()) {
+          return;
+        }
+        if (!result.ok) {
+          throw new Error(
+            result.error?.message ??
+              `workspace retain command failed (${result.error?.code ?? "unknown"})`,
+          );
+        }
+        const payload = parseNodeWorkerResponse(
+          result.payloadJSON || "null",
+          "workspace retain command",
+        );
+        const retained = parseNodeWorkerWorkspaceRetainResult(payload);
+        if (!retained) {
+          throw new Error("workspace retain command violated its private result contract");
+        }
+        if (retained.applied && retained.bundleGeneration !== undefined) {
+          acknowledgedBundleGenerationByNode.set(node.nodeId, {
+            connId: node.connId,
+            generation: retained.bundleGeneration,
+          });
+        }
+        if (!retained.applied || !retained.hasMore) {
+          const bundleStatus = retained.bundleStatus;
+          if (
+            retained.applied &&
+            bundleStatusTarget &&
+            bundleStatus &&
+            bundleStatus.bundleHash === input.bundleStatusHash
+          ) {
+            currentTransport.acceptBundleStatus?.(node, {
+              bundleHash: bundleStatusTarget.bundleHash,
+              status:
+                bundleStatus.status === "installed"
+                  ? { status: "installed", version: bundleStatusTarget.openclawVersion }
+                  : { status: "missing" },
+            });
+          } else if (input.bundleStatusHash) {
+            currentTransport.acceptBundleStatus?.(node, undefined);
+          }
+          return;
+        }
+      }
+    } finally {
+      for (const read of preparedManifestRefs.values()) {
+        read[Symbol.dispose]();
       }
     }
   };
@@ -385,9 +382,6 @@ export function createNodeWorkspaceRetainCoordinator(
       );
       for (const sessionId of sessionIds) {
         prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
-        if (stopped || transport !== currentTransport || !currentTransport.isCurrent(node)) {
-          return;
-        }
       }
       await publishPreparedSnapshot(currentTransport, node, prepared);
     } finally {

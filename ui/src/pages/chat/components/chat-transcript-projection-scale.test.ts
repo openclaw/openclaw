@@ -3,12 +3,13 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { setExpansionState } from "../chat-thread.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   installTranscriptDomMocks,
@@ -50,6 +51,7 @@ it.each(["answer", "reasoning"] as const)(
           },
         ),
     );
+    const earlierReasoning = { itemId: "earlier", text: "Earlier thought", startedAt: 3_500 };
     const props = {
       ...threadProps("projection-scale", "agent:main:projection-scale", messages),
       runId: "active",
@@ -65,7 +67,10 @@ it.each(["answer", "reasoning"] as const)(
       },
       reasoning:
         kind === "reasoning"
-          ? { runId: "active", itemId: "thinking", text: "Reply", startedAt: 4_000 }
+          ? {
+              runId: "active",
+              items: [earlierReasoning, { itemId: "thinking", text: "Reply", startedAt: 4_000 }],
+            }
           : null,
     };
     const transcript = createTestTranscript(props.paneId);
@@ -92,7 +97,10 @@ it.each(["answer", "reasoning"] as const)(
         if (kind === "answer") {
           props.stream = stream;
         } else {
-          props.reasoning = { runId: "active", itemId: "thinking", text: stream, startedAt: 4_000 };
+          props.reasoning = {
+            runId: "active",
+            items: [earlierReasoning, { itemId: "thinking", text: stream, startedAt: 4_000 }],
+          };
         }
         reads = 0;
         project();
@@ -124,7 +132,13 @@ function drawThread(props: ReturnType<typeof threadProps>) {
   const container = document.body.appendChild(document.createElement("div"));
   return {
     container,
-    draw: () => render(renderChatThread(props, transcript), container),
+    draw: () => {
+      render(renderChatThread(props, transcript), container);
+      flush();
+      transcript.hostConnected();
+      transcript.hostUpdated();
+      flush();
+    },
     dispose: () => {
       render(nothing, container);
       transcript.hostDisconnected();

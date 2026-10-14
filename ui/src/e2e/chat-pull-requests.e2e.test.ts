@@ -399,17 +399,22 @@ describeControlUiE2e("session pull request chips", () => {
           path: path.join(stackingProofDir, `${label}-branch-spacing.png`),
         });
       }
-      const rowBox = await row.boundingBox();
-      const detailsBox = await page.locator('.chat-details[role="dialog"]').boundingBox();
-      expect(rowBox).not.toBeNull();
-      expect(detailsBox).not.toBeNull();
-      expect(rowBox!.x).toBeGreaterThanOrEqual(detailsBox!.x);
-      expect(rowBox!.x + rowBox!.width).toBeLessThanOrEqual(detailsBox!.x + detailsBox!.width);
-      expect(detailsBox!.x).toBeGreaterThanOrEqual(0);
-      expect(detailsBox!.x + detailsBox!.width).toBeLessThanOrEqual(viewport.width);
-      expect(await row.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
-        true,
-      );
+      // Viewport changes position the open Details panel asynchronously.
+      await expect
+        .poll(async () => {
+          const rowBox = await row.boundingBox();
+          const detailsBox = await page.locator('.chat-details[role="dialog"]').boundingBox();
+          return Boolean(
+            rowBox &&
+            detailsBox &&
+            rowBox.x >= detailsBox.x &&
+            rowBox.x + rowBox.width <= detailsBox.x + detailsBox.width &&
+            detailsBox.x >= 0 &&
+            detailsBox.x + detailsBox.width <= viewport.width &&
+            (await row.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)),
+          );
+        })
+        .toBe(true);
       await create.click({ trial: true });
 
       await dismiss.click();
@@ -867,7 +872,7 @@ describeControlUiE2e("session pull request chips", () => {
     expect(
       await page.getByRole("button", { name: "Publication account", exact: true }).count(),
     ).toBe(0);
-    expect(await page.locator(".chat-pr wa-dropdown, .chat-pr wa-popover").count()).toBe(0);
+    expect(await page.locator(".chat-pr__accounts-panel").count()).toBe(0);
     expect(await page.locator(".chat-prs").textContent()).not.toContain("reclaim the workspace");
     await page.getByRole("button", { name: "Publish PR" }).click();
     const request = await gateway.waitForRequest("sessions.github.publish");

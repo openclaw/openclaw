@@ -1,6 +1,6 @@
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
-  placementTurnOwner,
+  projectPlacementTurnClaim,
   type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
@@ -87,15 +87,9 @@ export async function forceAbandonWorkerEnvironment(
           refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
           repositoryWorkspaceId: pending.repositoryWorkspaceId,
         });
-        const claim = placement.turnClaim;
+        const claim = projectPlacementTurnClaim(placement);
         if (claim && claim.claimId === pending.claimId && claim.runId === pending.runId) {
-          await placements.closeWorkerTurnToolState({
-            sessionId: placement.sessionId,
-            claimId: claim.claimId,
-            runId: claim.runId,
-            placementGeneration: claim.generation,
-            owner: placementTurnOwner(placement),
-          });
+          await placements.closeWorkerTurnToolState(claim);
         }
         await placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
       } else {
@@ -117,14 +111,9 @@ export async function forceAbandonWorkerEnvironment(
       });
     }
     if (current?.state === "draining") {
-      if (current.turnClaim) {
-        await placements.closeWorkerTurnToolState({
-          sessionId: current.sessionId,
-          claimId: current.turnClaim.claimId,
-          runId: current.turnClaim.runId,
-          placementGeneration: current.turnClaim.generation,
-          owner: placementTurnOwner(current),
-        });
+      const claim = projectPlacementTurnClaim(current);
+      if (claim) {
+        await placements.closeWorkerTurnToolState(claim);
       }
       current = await placements.startReconcile({
         sessionId: current.sessionId,

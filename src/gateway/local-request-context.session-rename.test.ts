@@ -20,8 +20,10 @@ import {
 import { roleClient } from "./session-sharing.test-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
+// mock-isolation: Session routing uses no plugin tools and must not load ambient plugin state.
 vi.mock("../agents/openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [],
 }));
 
 afterEach(drainSessionToolsFixture);

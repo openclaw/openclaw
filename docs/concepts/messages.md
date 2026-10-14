@@ -75,6 +75,8 @@ Multiple devices/channels can map to the same session, but history is not fully 
 
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
+Failure notices remain in chat history without becoming user instructions in later model requests. This also applies to notices saved by earlier versions; stored transcript bytes remain unchanged.
+
 Details: [Session management](/concepts/session).
 
 ## Prompt bodies and history context
@@ -93,6 +95,8 @@ When a channel supplies history, it wraps it with:
 
 - `[Chat messages since your last reply - for context]`
 - `[Current message - respond to this]`
+
+Thread starter and thread history notes use the same current-message marker after their context, keeping the request separate from earlier messages. Queued turns insert newly active goals before this marker. The marker is runtime context and does not change the saved user message. Ambient room events omit it and keep their optional-response policy.
 
 For non-direct chats (groups/channels/rooms), the current message body is prefixed with the sender label, matching the style used for history entries. Directive stripping only applies to the current-message section, so history stays intact. Channels that wrap history should set `BodyForCommands` (or the legacy `CommandBody` / `RawBody`) to the original message text and keep `Body` as the combined prompt.
 
@@ -134,6 +138,10 @@ Channel plugins may preserve ordering, debounce input, and apply transport backp
 
 Once a turn is durably accepted, an unexpected failure before its answer produces a compact error reply in direct chats and explicitly addressed conversations where automatic replies are enabled. Progress acknowledgments do not replace that final outcome. The turn remains failed and is not replayed as a new inbound message; delivery policies and replies already sent through the message tool still apply.
 
+A final source reply completes only the input it answers. When another input steers the same running agent, its answer or failure remains visible even if an earlier input already received a final reply through the message tool.
+
+When delivery of the current input's reply is pending, OpenClaw waits for its outcome before sending a replacement answer or failure message.
+
 With the OpenClaw runtime, an assistant turn that errors or is aborted after producing partial text, without tool calls, appears as a short failure marker in the next model request. Its unfinished text is not replayed, and the stored failed turn stays unchanged. Empty and placeholder-only failures remain excluded; failed tool calls keep their existing pairing rules. The marker does not establish whether an earlier action completed.
 
 ## Streaming, chunking, and batching
@@ -159,20 +167,50 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 
 ## Prefixes, threading, and replies
 
-- Channels with reply-prefix support use `channels.<channel>.responsePrefix` and, when multi-account configuration is supported, `channels.<channel>.accounts.<id>.responsePrefix`. Account values win, including `""` to disable an inherited prefix. Use `"auto"` for the agent identity name or templates such as `"[{model}]"` for the selected model. Automatic-reply support is channel-specific. Doctor copies the global fallback into supported configured channel blocks when those canonical fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
+- Channels with reply-prefix support use `channels.<channel>.responsePrefix` and, when multi-account configuration is supported, `channels.<channel>.accounts.<id>.responsePrefix`. Account values win, including `""` to disable an inherited prefix. Use `"auto"` for the agent identity name or templates such as `"[{model}]"` for the selected model. Automatic-reply support is channel-specific. Doctor copies the global fallback into supported configured channel blocks when those current fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
 - Explicit `message` tool and CLI text sends also apply the resolved prefix, without duplicating a prefix already present. They resolve identity placeholders but do not select a model; a prefix containing unresolved model, provider, or thinking-level placeholders is omitted entirely.
 - Reply threading via `replyToMode` and per-channel defaults.
 
 Details: [Configuration](/gateway/config-agents/messages-and-talk#messages) and channel docs.
 
+## Agent reactions to WebChat prompts
+
+During an admitted WebChat turn, the agent can acknowledge the current prompt with
+the existing message tool:
+
+```json
+{ "action": "react", "emoji": "👍" }
+```
+
+Omit the target and message ID: the host binds this action to the committed current
+prompt and the running agent's identity. Set `remove: true` with the same emoji to
+remove that agent's reaction. Repeating an add or removal is a no-op. The reaction
+appears in session history and live updates; it does not mirror to an inherited
+external channel. External reactions still require the normal channel routing and
+external message ID.
+
+Queued turns bind the reaction to their own committed prompt when execution
+begins. Steering updates the current prompt only after the new input is committed
+and consumed by the running agent; pending or rejected input does not retarget a
+reaction. Collected inputs use their committed combined prompt.
+
+Omit `final` or set `final: false` when more work follows. An added reaction with
+explicit `final: true` can be the complete reply when the agent chooses it. Once
+delivery is confirmed on the current source message, OpenClaw ends the turn without
+requesting another text response. Removals, reactions to other messages, no-ops,
+dry runs, and failed reactions never count. Normal message-tool permissions
+still apply, and the current-prompt capability expires with its admitted turn.
+
 ## Silent replies
 
 The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is reserved for sessions connected to external message channels and is never delivered as user-visible text. Subagents, the Control UI, and other internal sessions must return a result or continue unfinished work; a silent token cannot complete their task. When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.
 
+Token-only uppercase fragments from `NO_` through `NO_REPL` are also suppressed if a model stops before completing `NO_REPLY`. A final `NO`, mixed-case text such as `No`, and longer replies such as `NO_R alert` remain visible. Streaming previews hold shorter prefixes until the text diverges from the token or the final reply arrives.
+
 Silence policy resolves by conversation type:
 
 - Direct conversations never receive `NO_REPLY` prompt guidance. An undelivered required answer still needs recovery; the token cannot waive that obligation.
-- Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; mentions and authorized commands still require a response.
+- Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; explicit mentions and authorized commands still require a response. Slack follow-ups admitted only through a reply to the bot or its participation in the thread can finish silently under that policy.
 - [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally; they do not need a silent token to keep that result private.
 
 Defaults live under `agents.defaults.silentReply.group`; `surfaces.<id>.silentReply.group` can override group policy per surface. Doctor removes the retired `internal` setting during config migration.

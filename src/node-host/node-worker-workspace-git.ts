@@ -18,9 +18,6 @@ export async function initializeNodeWorkerGitWorkspace(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   const objectFormat = params.baseCommit.length === 40 ? "sha1" : "sha256";
-  if (params.baseCommit.length !== 40 && params.baseCommit.length !== 64) {
-    throw new Error("workspace transfer Git base object id is invalid");
-  }
   const gitPrefix = process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
   const git = (args: string[], options: { input?: string; maxOutputBytes?: number } = {}) =>
     runWorkspaceCommand({

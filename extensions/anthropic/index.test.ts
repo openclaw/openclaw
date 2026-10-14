@@ -956,6 +956,7 @@ describe("anthropic provider replay hooks", () => {
   it.each([
     { status: "available", authenticated: true },
     { status: "unreadable", authenticated: false },
+    { status: "timeout", authenticated: false },
   ] as const)(
     "publishes native Claude auth only when its CLI reports $status",
     async ({ status, authenticated }) => {

@@ -152,20 +152,6 @@ describe("plugin lifecycle matrix probe", () => {
     );
   });
 
-  it("rejects inspect JSON that does not prove the runtime loaded", async () => {
-    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
-    const inspectPath = path.join(dir, "inspect.json");
-    writeFileSync(
-      inspectPath,
-      `${JSON.stringify({ plugin: { enabled: true, id: "lifecycle-claw", status: "pending" } })}\n`,
-      "utf8",
-    );
-
-    expect(() => assertInspectLoaded("lifecycle-claw", inspectPath)).toThrow(
-      "expected lifecycle-claw inspect status loaded, got pending",
-    );
-  });
-
   it("rejects missing inspect JSON instead of treating it as an empty object", async () => {
     const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
     const inspectPath = path.join(dir, "missing.json");

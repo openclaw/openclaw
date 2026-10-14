@@ -3,6 +3,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
 import {
   loadPluginDiscoveryDetail,
@@ -10,17 +11,16 @@ import {
   type PluginDiscoveryDetailResult,
   type PluginListResult,
 } from "../../lib/plugins/index.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { PluginsPageCatalogDetail, PluginsPageDetail } from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
-import type { PluginToolPreview } from "./tool-preview.ts";
+import type { PluginToolPreview } from "./tool-preview.tsx";
 
 /** Local inspection owns availability; optional metadata never delays the installed controls. */
 export async function loadInstalledPluginDetail(params: {
   pluginId: string | null;
   plugin: PluginCatalogItem | undefined;
   catalog: PluginDiscoveryDetailResult | null | undefined;
-  gateway: GatewayPageController;
+  gateway: GatewayPageBinding;
   canInspect: boolean;
   getDetail: () => PluginsPageDetail | null;
   onChange: (detail: PluginsPageDetail | null) => void;
@@ -47,12 +47,15 @@ export async function loadInstalledPluginDetail(params: {
     return;
   }
   const { client } = scope;
+  // A new detail snapshot retires this read, including when uninstall pauses inspection.
+  let ownedDetail: PluginsPageDetail = initial;
+  const isCurrent = () => gateway.isCurrent(scope) && params.getDetail() === ownedDetail;
   const publish = (patch: Partial<PluginsPageDetail>) => {
-    const detail = params.getDetail();
-    if (!gateway.isCurrent(scope) || !detail || detail.pluginId !== pluginId) {
+    if (!isCurrent()) {
       return;
     }
-    params.onChange({ ...detail, ...patch });
+    ownedDetail = { ...ownedDetail, ...patch };
+    params.onChange(ownedDetail);
   };
   const tools =
     isGatewayMethodAdvertised({ hello: gateway.snapshot?.hello }, "tools.catalog") === true
@@ -62,6 +65,9 @@ export async function loadInstalledPluginDetail(params: {
       : Promise.resolve(undefined);
   try {
     const inspection = await inspectPlugin(client, plugin.id);
+    if (!isCurrent()) {
+      return;
+    }
     publish({
       inspection,
       tools: undefined,
@@ -109,7 +115,7 @@ export async function loadInstalledPluginDetail(params: {
 /** Reconcile the selected catalog identity against authoritative local inventory. */
 export async function loadPluginCatalogDetail(params: {
   id: string | null;
-  gateway: GatewayPageController;
+  gateway: GatewayPageBinding;
   context: Pick<ApplicationContext, "replace" | "basePath">;
   location: PluginsRouteData["location"] | undefined;
   inventory: PluginListResult | null;

@@ -32,7 +32,7 @@ import {
 } from "./embedded-agent-helpers.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
-  hasMessageToolOnlySourceDelivery,
+  shouldSuppressSourceReplyOutput,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type {
@@ -40,7 +40,11 @@ import type {
   StreamBlockState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-import { createThinkingTagStreamState, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
+import {
+  createAssistantStreamBlockState,
+  createThinkingTagStreamState,
+  THINKING_TAG_SCAN_RE,
+} from "./embedded-agent-utils.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "final",
@@ -360,7 +364,7 @@ export function createStreamRendering({
       }
       state.toolExecutionSinceLastBlockReply = false;
     };
-    if (hasMessageToolOnlySourceDelivery({ params, state })) {
+    if (shouldSuppressSourceReplyOutput({ params, state })) {
       markBlockReplyTextHandled();
       return;
     }
@@ -670,11 +674,11 @@ export function createStreamRendering({
       source,
     );
 
-    // A message-tool-only reply suppresses later reasoning from channel rendering,
+    // A completed source reply suppresses later reasoning from channel rendering,
     // including reasoning attached to tool calls. The archive above still receives it.
     if (
       state.streamReasoning &&
-      !hasMessageToolOnlySourceDelivery({ params, state }) &&
+      !shouldSuppressSourceReplyOutput({ params, state }) &&
       params.onReasoningStream
     ) {
       runBestEffortCallback({
@@ -700,11 +704,7 @@ export function createStreamRendering({
     state.hasFlushedPartialText = false;
     blockChunker.reset();
     resetPartialReplyDirectives();
-    state.partialBlockState = {
-      thinking: false,
-      final: false,
-      inlineCode: createInlineCodeState(),
-    };
+    state.partialBlockState = createAssistantStreamBlockState();
     state.assistantStream = undefined;
     state.currentSourceMessagingToolHeldPartial = undefined;
     state.lastBlockReplyText = undefined;

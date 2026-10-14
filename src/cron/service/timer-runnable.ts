@@ -12,7 +12,6 @@ import {
   resolveJobErrorBackoffUntilMs,
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
-import type { CronServiceState } from "./state.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 /**
@@ -190,15 +189,4 @@ function isErrorBackoffPending(
   }
   const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs;
-}
-
-export function collectRunnableJobs(state: CronServiceState, nowMs: number): CronJob[] {
-  return (
-    state.store?.jobs.filter((job) =>
-      isRunnableJob({
-        job,
-        nowMs,
-      }),
-    ) ?? []
-  );
 }

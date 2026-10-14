@@ -11,7 +11,7 @@ import {
   removeAckReactionHandleAfterReply,
   shouldAckReaction,
 } from "../../channels/ack-reactions.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
 import { resolveAgentCatalogCreateTarget } from "../../plugins/runtime/runtime-agent-session-catalog.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -111,7 +111,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     ...createPluginModelRuntimeMock({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }),
     gateway: createPluginGatewayRuntimeMock(),
     config: {
-      current: vi.fn<PluginRuntime["config"]["current"]>(() => ({})),
+      current: vi.fn((): OpenClawConfig => ({})),
       mutateConfigFile: createGenericMock<PluginRuntime["config"]["mutateConfigFile"]>(
         async () => ({
           path: "/tmp/openclaw.json",
@@ -155,6 +155,9 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       resolveCliBackendDispatchEligibility: vi.fn<
         PluginRuntime["agent"]["resolveCliBackendDispatchEligibility"]
       >(() => undefined),
+      resolveCliBackendDispatchEligibilityAsync: vi.fn<
+        PluginRuntime["agent"]["resolveCliBackendDispatchEligibilityAsync"]
+      >(async () => undefined),
       normalizeThinkingLevel:
         vi.fn<PluginRuntime["agent"]["normalizeThinkingLevel"]>(normalizeThinkLevel),
       resolveThinkingPolicy: vi.fn<PluginRuntime["agent"]["resolveThinkingPolicy"]>(() => ({
@@ -250,6 +253,9 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         listSessionEntries: vi.fn<PluginRuntime["agent"]["session"]["listSessionEntries"]>(
           () => [],
         ),
+        listSessionEntriesAsync: vi
+          .fn<PluginRuntime["agent"]["session"]["listSessionEntriesAsync"]>()
+          .mockResolvedValue([]),
         createSessionEntryListReader: vi
           .fn<PluginRuntime["agent"]["session"]["createSessionEntryListReader"]>()
           .mockResolvedValue(async () => ({ entries: [], assertCurrent: () => {} })),
@@ -325,6 +331,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     },
     webSearch: {
       listProviders: vi.fn<PluginRuntime["webSearch"]["listProviders"]>(),
+      listProvidersAsync: vi.fn<PluginRuntime["webSearch"]["listProvidersAsync"]>(),
       search: vi.fn<PluginRuntime["webSearch"]["search"]>(),
     },
     channel: {
@@ -545,6 +552,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     state: createPluginStateRuntimeMock(),
     subagent: {
       complete: vi.fn(),
+      forkSession: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),

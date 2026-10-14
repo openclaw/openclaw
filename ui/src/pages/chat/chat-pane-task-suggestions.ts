@@ -9,17 +9,12 @@ import {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import {
-  hasOperatorAdminAccess,
-  hasOperatorReadAccess,
-  hasOperatorWriteAccess,
-} from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import type {
@@ -51,13 +46,18 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
   private explicitReadScope: string | undefined;
 
   protected setTaskSuggestions(suggestions: TaskSuggestion[]): void {
-    // Pending dismissals stay hidden when events or list snapshots arrive.
-    const visible = suggestions.filter(
-      (suggestion) => this.taskSuggestionOperations.get(suggestion.id)?.action !== "dismiss",
-    );
-    // Acceptance owns its submitted prompt through early resolved events and list snapshots.
+    // Launches and dismissals stay hidden through events and stale list snapshots.
+    const visible = suggestions.filter((suggestion) => {
+      const operation = this.taskSuggestionOperations.get(suggestion.id);
+      return !operation || (operation.action === "accept" && operation.outcome.phase === "failed");
+    });
+    // Keep submitted instructions for recovery, but only failed launches return to the tray.
     for (const operation of this.taskSuggestionOperations.values()) {
-      if (operation.action !== "accept" || !operation.canDisplay()) {
+      if (
+        operation.action !== "accept" ||
+        !operation.canDisplay() ||
+        operation.outcome.phase !== "failed"
+      ) {
         continue;
       }
       const index = visible.findIndex((suggestion) => suggestion.id === operation.suggestion.id);
@@ -130,11 +130,15 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     const scope = this.captureConnectionScope();
     if (
       !scope ||
-      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list") ||
+      !canCallGatewayMethod(
+        scope.context.gateway.snapshot,
+        "taskSuggestions.list",
+        "operator.read",
+      ) ||
       parseCatalogSessionKey(scope.state.sessionKey)
     ) {
       this.setTaskSuggestions([]);
-      this.requestUpdate();
+      this.chatState.requestBackgroundUpdate();
       return;
     }
     const sessionKey = scope.state.sessionKey;
@@ -161,7 +165,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       this.setTaskSuggestions(
         result.suggestions.filter((suggestion) => this.suggestionMatchesCurrentSession(suggestion)),
       );
-      this.requestUpdate();
+      this.chatState.requestBackgroundUpdate();
     } catch {
       // Suggestions are an optional ephemeral affordance; chat remains usable
       // when a reconnect loses the process-local registry.
@@ -188,7 +192,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         this.taskSuggestionBusyIds.delete(event.taskId);
       }
     }
-    this.requestUpdate();
+    this.chatState.requestBackgroundUpdate();
     // The replacement snapshot includes the event plus unrelated suggestions;
     // its request version prevents any older snapshot from overwriting either.
     void this.refreshTaskSuggestions({ automatic: true });
@@ -238,7 +242,10 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     return {
       taskSuggestions: this.taskSuggestions.filter((suggestion) => {
         const operation = this.taskSuggestionOperations.get(suggestion.id);
-        return operation?.action !== "accept" || operation.canDisplay();
+        return (
+          operation?.action !== "accept" ||
+          (operation.canDisplay() && operation.outcome.phase === "failed")
+        );
       }),
       activeTaskSuggestionId: this.activeTaskSuggestionId,
       taskSuggestionSwapDirection: this.taskSuggestionSwapDirection,
@@ -251,24 +258,6 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
           ? operation.outcome
           : undefined;
       },
-      canOpenTaskSuggestions:
-        connected && gatewaySnapshot.phase === "connected" && hasOperatorReadAccess(auth),
-      onOpenTaskSuggestion: this.onPaneSessionChange
-        ? (suggestion: TaskSuggestion) => {
-            const operation = this.taskSuggestionOperations.get(suggestion.id);
-            const snapshot = this.context.gateway.snapshot;
-            if (
-              snapshot.phase === "connected" &&
-              hasOperatorReadAccess(snapshot.hello?.auth ?? null) &&
-              ownsDisplayedOperation(suggestion) &&
-              operation?.action === "accept" &&
-              operation.canDisplay() &&
-              operation.outcome.phase === "started"
-            ) {
-              this.onPaneSessionChange?.(this.paneId, operation.outcome.sessionKey);
-            }
-          }
-        : undefined,
       sessionSuggestions: multiIdentity ? this.sessionSuggestions : [],
       sessionSuggestionRole: this.sessionSuggestionRole,
       sessionSuggestionBusyIds: this.sessionSuggestionBusyIds,
@@ -332,12 +321,6 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         return;
       }
       if (previous.outcome.phase === "started") {
-        if (action === "dismiss") {
-          this.taskSuggestionsRequestVersion += 1;
-          this.taskSuggestionOperations.delete(suggestion.id);
-          this.setTaskSuggestions(this.taskSuggestions.filter((item) => item.id !== suggestion.id));
-          this.requestUpdate();
-        }
         return;
       }
     }
@@ -417,17 +400,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         if (result.taskId !== suggestion.id || !key) {
           throw new Error(t("chat.taskSuggestions.startUnconfirmed"));
         }
-        operation.outcome = {
-          phase: "started",
-          sessionKey: key,
-          href: sessionNavigationTarget({
-            face: "chat",
-            sessionKey: key,
-            fallbackAgentId: suggestion.agentId ?? resolveChatAgentId(scope.state),
-            basePath: scope.context.basePath,
-            exactKey: true,
-          }).href,
-        };
+        operation.outcome = { phase: "started" };
       } else {
         await scope.client.request("taskSuggestions.dismiss", { taskId: suggestion.id });
         if (!isCurrent()) {
@@ -502,6 +475,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
             restored.splice(originalIndex, 0, suggestion);
             this.setTaskSuggestions(restored);
           }
+          this.setTaskSuggestions(this.taskSuggestions);
           this.requestUpdate();
           if (action === "dismiss") {
             // Replace stale reads after every outcome, including refused dismissals,

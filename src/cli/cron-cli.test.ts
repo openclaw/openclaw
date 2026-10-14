@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronDeliveryPreview, CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { ExitError } from "../runtime.js";
 import { registerCronCli } from "./cron-cli.js";
+import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {
@@ -557,6 +558,36 @@ describe("cron cli", () => {
       schedule: { kind: "cron", staggerMs: 0 },
       payload: { kind: "systemEvent", text: "tick", toolsAllow: ["read", "write"] },
     });
+  });
+
+  it("keeps invalid add target/payload guidance in JSON mode before RPC", async () => {
+    const argv = process.argv;
+    const args = [
+      ...CREATE,
+      "--at",
+      "+3m",
+      "--session",
+      "current",
+      "--system-event",
+      "resume",
+      "--json",
+    ];
+    process.argv = [...argv.slice(0, 2), ...args];
+    try {
+      const failure = await runCronCommand(args).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ExpectedCliError);
+      expect(formatCliJsonFailure(failure)).toEqual({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message:
+            'cron sessionTarget "current" cannot run systemEvent: systemEvent only runs in the main session; for sessionTarget "current" use payload {kind:"agentTurn",message}',
+        },
+      });
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argv;
+    }
   });
 
   it("accepts a positional every interval without delivery", async () => {

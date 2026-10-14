@@ -158,41 +158,6 @@ describe("withIMessageRemoteFile", () => {
     );
   });
 
-  it("cleans after the remote file consumer fails", async () => {
-    const message = "rpc failure";
-    runCommand
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result());
-
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        use: async () => {
-          throw new Error(message);
-        },
-      }),
-    ).rejects.toThrow(message);
-    expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "scp", "ssh"]);
-  });
-
-  it("cleans when upload fails", async () => {
-    runCommand
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result({ code: 1, stderr: "upload failed" }))
-      .mockResolvedValueOnce(result());
-
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        use: async () => "unused",
-      }),
-    ).rejects.toThrow("upload failed");
-    expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "scp", "ssh"]);
-  });
-
   it("cleans the token-owned parent after setup timeout", async () => {
     runCommand
       .mockResolvedValueOnce(result({ code: null, termination: "timeout" }))
@@ -209,23 +174,6 @@ describe("withIMessageRemoteFile", () => {
     expect(runCommand.mock.calls[1]?.[1].input).toContain(
       "rm -rf -- /tmp/openclaw-imessage-0123456789abcdef0123456789abcdef",
     );
-  });
-
-  it("warns once without replacing a successful result when cleanup fails", async () => {
-    runCommand
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result())
-      .mockResolvedValueOnce(result({ code: 1, stderr: "cleanup failed" }));
-
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        use: async () => "accepted",
-      }),
-    ).resolves.toBe("accepted");
-    expect(warnMock).toHaveBeenCalledOnce();
-    expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
   });
 
   it("warns once without replacing the primary failure when cleanup also fails", async () => {

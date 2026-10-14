@@ -65,7 +65,11 @@ export async function appendSessionCostLine(
       summary.missingCostEntries > 0
         ? `missing cost: ${formatMissingCostEntries(summary)}`
         : formatUsd(summary.totalCost);
-    const line = `💵 ${cost ? `${cost} · ` : ""}${formatTokenCount(summary.totalTokens)} tok (today)`;
+    const tokens =
+      summary.usageReport?.state === "unavailable"
+        ? `usage incomplete · ${formatTokenCount(summary.totalTokens)} known tokens`
+        : `${formatTokenCount(summary.totalTokens)} tok`;
+    const line = `💵 ${cost ? `${cost} · ` : ""}${tokens} (today)`;
     return [usageLine, line].filter(Boolean).join("\n");
   } catch {
     return usageLine;

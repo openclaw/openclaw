@@ -2,19 +2,9 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import { Icon } from "./icon.tsx";
 import { LoadingState } from "./loading-state.tsx";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
-        label: string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
-    }
-  }
-}
 
 export function AgentStartupState() {
   return (
@@ -52,64 +42,13 @@ export function LazyElementStateView(props: {
   );
 }
 
-export function LazyElementModal(props: {
-  controller: {
-    visibleState: LazyElementState | undefined;
-    retry(): void;
-    close(): void;
-  };
-}) {
-  const close = () => props.controller.close();
-  return (
-    <Show when={props.controller.visibleState}>
-      {(state) => (
-        <openclaw-modal-dialog
-          class={state().status === "loading" ? "lazy-element-loading-modal" : undefined}
-          label={state().element.label}
-          onModal-cancel={close}
-        >
-          {state().status === "loading" ? (
-            <section class="lazy-element-loading">
-              <header class="lazy-element-loading__header">
-                <h2>{state().element.label}</h2>
-                <button
-                  class="btn btn--ghost btn--icon"
-                  type="button"
-                  aria-label={t("common.close")}
-                  onClick={close}
-                >
-                  <Icon name="x" />
-                </button>
-              </header>
-              <div
-                class="lazy-element-loading__status"
-                role="status"
-                aria-live="polite"
-                aria-label={t("common.loading")}
-              >
-                <span class="btn__spinner" aria-hidden="true" />
-                <span>{t("common.loading")}</span>
-              </div>
-            </section>
-          ) : (
-            <LazyElementStateView
-              state={state()}
-              onRetry={() => props.controller.retry()}
-              onClose={close}
-            />
-          )}
-        </openclaw-modal-dialog>
-      )}
-    </Show>
-  );
-}
-
 export function LazyViewError(props: {
   actionLabel?: string;
   error: unknown;
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
   render?: () => SolidJSX.Element;
+  inline?: boolean;
   stale?: boolean;
   subtitle?: string;
 }) {
@@ -135,10 +74,21 @@ export function LazyViewError(props: {
           </>
         }
         detail={formatUiError(props.error)}
-        inline={Boolean(props.render)}
+        inline={props.inline ?? Boolean(props.render)}
         stale={props.stale}
       />
     </>
+  );
+}
+
+export function LegacyPanelErrorState(
+  props: Omit<Parameters<typeof PanelErrorState>[0], "actions"> & { actions?: unknown },
+) {
+  return (
+    <PanelErrorState
+      {...props}
+      actions={props.actions ? <LitContent value={props.actions} /> : undefined}
+    />
   );
 }
 

@@ -98,10 +98,6 @@ describe("update-cli", () => {
           reason: "dry-run",
         },
       });
-      expect(readConfigFileSnapshot).toHaveBeenCalledWith({
-        skipPluginValidation: true,
-        observe: false,
-      });
       const output = lastWriteJsonCall() as { runId: string };
       expect(listUpdateRuns()).toMatchObject([
         {

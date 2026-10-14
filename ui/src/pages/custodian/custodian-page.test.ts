@@ -119,6 +119,8 @@ describe("custodian page", () => {
       .mockResolvedValueOnce(chatReply("Setup complete.", { sessionId: "rich-wizard-session" }));
     const { page } = await mount(request);
 
+    expect(page.querySelector(".chat-read-aloud-btn")).toBeNull();
+
     const trigger = await element<HTMLButtonElement>(
       page,
       ".custodian__wizard-step .picker-select__trigger",

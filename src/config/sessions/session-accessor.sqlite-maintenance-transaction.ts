@@ -1,3 +1,4 @@
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -27,6 +28,7 @@ import {
 import type {
   ReclamationDatabaseOptions,
   SessionEntryMaintenanceInput,
+  SessionEntryMaintenancePlan,
   SessionMaintenanceMetadataCommand,
   SessionMaintenanceMetadataResult,
   SessionMaintenanceReadCommand,
@@ -39,9 +41,12 @@ import {
   invalidateSessionEntryMaintenanceAgeFact,
   applySessionEntryMaintenanceAgeChange,
   readSessionEntryMaintenanceNextAgeAt,
+  readSessionEntryMaintenanceAgeFact,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
+  emptySessionEntryMaintenancePlan,
+  readSessionMaintenanceFastPath,
   prepareSessionEntryMaintenanceInDatabase,
   refreshSessionPlannerStatisticsInDatabase,
   type SessionEntryMaintenanceApply,
@@ -149,34 +154,46 @@ export function readSessionMaintenanceInWorker(
     throw new Error("Read-only maintenance age requires its original planning input");
   }
   try {
-    const read = (database: OpenClawAgentReadOnlyDatabase) =>
-      withSqlitePostCommitPublications(database.db, () =>
+    const read = (database: OpenClawAgentReadOnlyDatabase): SessionMaintenanceReadResult => {
+      const observed = readOpenClawAgentDatabaseIdentity(database);
+      const expected = plan.expectedIdentity;
+      if (
+        !expected.key.startsWith("file:") ||
+        observed.identity !== expected.key.slice(5) ||
+        (expected.birthtime !== undefined && observed.birthtime !== expected.birthtime)
+      ) {
+        throw new Error("Maintenance reader opened a different physical source");
+      }
+      assertExistingDatabaseIdentity(database.path, expected.key, expected.birthtime);
+      if (plan.kind !== "maintenance-plan") {
+        for (const change of plan.ageChanges ?? []) {
+          applySessionEntryMaintenanceAgeChange(database.db, change);
+        }
+        // Scheduling hints can be corrected by the next kick; deletion checks stay native.
+        return {
+          kind: "maintenance-age",
+          nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
+          ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.maintenance),
+        };
+      }
+      prepareWorkerAgeFact(database, plan);
+      const fastPath = readSessionMaintenanceFastPath(database, input);
+      if (fastPath === "write") {
+        return { kind: "maintenance-write-required" };
+      }
+      if (fastPath === "no-op") {
+        return {
+          kind: "maintenance-plan",
+          value: emptySessionEntryMaintenancePlan(),
+          readOnlyInput: input,
+          nextAt: readSessionEntryMaintenanceNextAgeAt(database, input.maintenance),
+          ageFact: readSessionEntryMaintenanceAgeFact(database.db, input.maintenance),
+        };
+      }
+      return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
         runSqliteDeferredTransactionSync(
           database.db,
           (): SessionMaintenanceReadResult => {
-            const observed = readOpenClawAgentDatabaseIdentity(database);
-            const expected = plan.expectedIdentity;
-            if (
-              !expected.key.startsWith("file:") ||
-              observed.identity !== expected.key.slice(5) ||
-              (expected.birthtime !== undefined && observed.birthtime !== expected.birthtime)
-            ) {
-              throw new Error("Maintenance reader opened a different physical source");
-            }
-            assertExistingDatabaseIdentity(database.path, expected.key, expected.birthtime);
-            if (plan.kind === "maintenance-plan") {
-              prepareWorkerAgeFact(database, plan);
-            } else {
-              for (const change of plan.ageChanges ?? []) {
-                applySessionEntryMaintenanceAgeChange(database.db, change);
-              }
-              // This is a scheduling hint, not authority to delete. A stale hint is
-              // corrected by the next kick or periodic pass; deletion checks stay native.
-              return {
-                kind: "maintenance-age",
-                nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
-              };
-            }
             const prepared = prepareSessionEntryMaintenanceInDatabase(database, input, () =>
               readPreservation(input),
             );
@@ -188,11 +205,13 @@ export function readSessionMaintenanceInWorker(
               value: prepared.value,
               readOnlyInput: input,
               nextAt: readSessionEntryMaintenanceNextAgeAt(database, input.maintenance),
+              ageFact: readSessionEntryMaintenanceAgeFact(database.db, input.maintenance),
             };
           },
           { databaseLabel: database.path, operationLabel: "session.maintenance.read" },
         ),
       );
+    };
     const result = capturedDatabase
       ? { found: true as const, value: read(capturedDatabase) }
       : withOpenClawAgentDatabaseReadOnly(read, plan.databaseOptions);
@@ -268,7 +287,10 @@ export function runSessionMaintenanceMetadataInTransaction(
   callbacks: {
     beforeMutation?: (database: OpenClawAgentDatabase) => void;
     onCommit?: SqliteSessionReclamationCallbacks["onCommit"];
-    beforeCommit?: (database: OpenClawAgentDatabase) => void;
+    beforeCommit?: (
+      database: OpenClawAgentDatabase,
+      maintenance?: SessionEntryMaintenancePlan,
+    ) => void;
     onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3];
   },
   prepared?: ReturnType<typeof prepareSessionMaintenanceInWorker>,
@@ -301,6 +323,7 @@ export function runSessionMaintenanceMetadataInTransaction(
           return {
             kind: "maintenance-age",
             nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
+            ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.maintenance),
           };
         }
         if (!prepared) {
@@ -317,11 +340,12 @@ export function runSessionMaintenanceMetadataInTransaction(
         if (maintenance.archived > 0 || maintenance.entryRemovals.length > 0) {
           callbacks.onCommit?.(database);
         }
-        callbacks.beforeCommit?.(database);
+        callbacks.beforeCommit?.(database, maintenance);
         return {
           kind: plan.kind,
           value: maintenance,
           nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.input.maintenance),
+          ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.input.maintenance),
         };
       },
       plan.databaseOptions,

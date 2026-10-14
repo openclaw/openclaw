@@ -283,115 +283,32 @@ describe("Codex Computer Use native service", () => {
     });
   });
 
-  it("keeps a concurrent installer that wins with the same selected identity", async () => {
+  it("coalesces parallel installations for the same managed home", async () => {
     const root = tempDirs.make("openclaw-computer-use-service-");
     const sourcePath = path.join(root, "source", "Codex Computer Use.app");
     const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
     await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    await writeServiceFixture(targetPath, STALE_IDENTITY);
-
-    const result = await ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, sourcePath),
-      copyServiceApp: async (source, target) => {
-        await copyServiceFixture(source, target);
-        await writeFixtureIdentity(targetPath, CURRENT_IDENTITY);
-      },
-    });
-
-    expect(result).toMatchObject({ status: "already_current", changed: false });
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
-    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
-  });
-
-  it("restores an unexpected concurrent generation instead of overwriting it", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    await writeServiceFixture(targetPath, STALE_IDENTITY);
-
-    await expect(
-      ensureCodexComputerUseServiceApp({
-        ...serviceOptions(codexHome, sourcePath),
-        copyServiceApp: async (source, target) => {
-          await copyServiceFixture(source, target);
-          await writeFixtureIdentity(targetPath, UNEXPECTED_IDENTITY);
-        },
-      }),
-    ).rejects.toThrow("changed to an unexpected generation");
-
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(UNEXPECTED_IDENTITY);
-    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
-  });
-
-  it("serializes different selected sources and revalidates each selection", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const firstSourcePath = path.join(root, "first", "Codex Computer Use.app");
-    const secondSourcePath = path.join(root, "second", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(firstSourcePath, CURRENT_IDENTITY);
-    await writeServiceFixture(secondSourcePath, UNEXPECTED_IDENTITY);
-    const firstCopyStarted = createDeferred<void>();
-    const firstCopyGate = createDeferred<void>();
-    let activeCopies = 0;
-    let maxActiveCopies = 0;
+    const copyStarted = createDeferred<void>();
+    const releaseCopy = createDeferred<void>();
     const copyServiceApp = vi.fn(async (source: string, target: string) => {
-      activeCopies += 1;
-      maxActiveCopies = Math.max(maxActiveCopies, activeCopies);
-      try {
-        if (source === firstSourcePath) {
-          firstCopyStarted.resolve();
-          await firstCopyGate.promise;
-        }
-        await copyServiceFixture(source, target);
-      } finally {
-        activeCopies -= 1;
-      }
+      copyStarted.resolve();
+      await releaseCopy.promise;
+      await copyServiceFixture(source, target);
     });
-
-    const first = ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, firstSourcePath),
-      copyServiceApp,
-    });
-    await firstCopyStarted.promise;
-    const second = ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, secondSourcePath),
-      copyServiceApp,
-    });
-    firstCopyGate.resolve();
-
-    await expect(first).resolves.toMatchObject({
-      status: "installed",
-      sourceBuild: "1000761",
-    });
-    await expect(second).resolves.toMatchObject({
-      status: "refreshed",
-      previousBuild: "1000761",
-      sourceBuild: "1000900",
-    });
+    const params = { ...serviceOptions(codexHome, sourcePath), copyServiceApp };
+    const first = ensureCodexComputerUseServiceApp(params);
+    await copyStarted.promise;
+    const second = ensureCodexComputerUseServiceApp(params);
+    releaseCopy.resolve();
+    const results = await Promise.all([first, second]);
+    expect(results[0]).toMatchObject({ status: "installed", changed: true });
+    expect(copyServiceApp).toHaveBeenCalledOnce();
     await expect(
-      ensureCodexComputerUseServiceApp({
-        ...serviceOptions(codexHome, firstSourcePath),
-        copyServiceApp,
-      }),
-    ).resolves.toMatchObject({
-      status: "refreshed",
-      previousBuild: "1000900",
-      sourceBuild: "1000761",
-    });
-    expect(maxActiveCopies).toBe(1);
-    expect(copyServiceApp.mock.calls.map(([source]) => source)).toEqual([
-      firstSourcePath,
-      secondSourcePath,
-      firstSourcePath,
-    ]);
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
+      inspectServiceFixture(path.join(codexHome, "computer-use", "Codex Computer Use.app")),
+    ).resolves.toEqual(CURRENT_IDENTITY);
   });
 
-  it("leaves the prior service intact when its generation becomes stale before publication", async () => {
+  it("restores the prior service when authorization is revoked before publication", async () => {
     const root = tempDirs.make("openclaw-computer-use-service-stale-");
     const firstSourcePath = path.join(root, "first", "Codex Computer Use.app");
     const secondSourcePath = path.join(root, "second", "Codex Computer Use.app");
@@ -408,11 +325,11 @@ describe("Codex Computer Use native service", () => {
         assertCurrent: () => {
           currentnessChecks += 1;
           if (currentnessChecks === 2) {
-            throw new Error("desktop generation is stale");
+            throw new Error("installation authorization revoked");
           }
         },
       }),
-    ).rejects.toThrow("desktop generation is stale");
+    ).rejects.toThrow("installation authorization revoked");
     expect(currentnessChecks).toBe(2);
 
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);

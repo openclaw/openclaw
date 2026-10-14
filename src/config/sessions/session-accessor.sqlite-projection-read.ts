@@ -9,6 +9,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { captureSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -19,8 +20,13 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
+import { readSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
+import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
+import type { SessionTranscriptContextMetadata } from "./session-transcript-projection-facts.types.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
@@ -49,6 +55,7 @@ export type CurrentTranscriptProjection = {
   };
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;
+  contextMetadata?: SessionTranscriptContextMetadata;
 };
 
 export type SessionTranscriptMessageEvent = {
@@ -384,9 +391,18 @@ const projectionSnapshotReader = createSqliteQueryCache((db) =>
 );
 
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    return projectSessionTranscriptFacts(actor);
+  }
+  const retained = readSessionTranscriptProjectionReceipt(database, sessionId);
+  if (retained && !retained.contextOnly) {
+    return retained.facts;
+  }
   const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),
+    contextMetadata: retained?.facts.contextMetadata,
     generation: row.generation ?? undefined,
     updatedAt: row.transcript_updated_at ?? null,
     hasUnclassified: Boolean(row.has_unclassified),
@@ -435,6 +451,18 @@ export function readCurrentProjectionSnapshot<T>(
     if (snapshot.cold) {
       throw new SessionTranscriptColdError(resolved.sessionId);
     }
+    const version = {
+      generation: snapshot.generation ?? null,
+      rawSeq: snapshot.latestSeq,
+      updatedAt: snapshot.updatedAt,
+    };
+    retainTranscriptContextFacts(
+      database,
+      resolved.sessionId,
+      version,
+      getSqliteReadScopeRevision(database.db),
+      false,
+    );
     const empty = snapshot.latestSeq === null;
     const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
     if (
@@ -449,15 +477,12 @@ export function readCurrentProjectionSnapshot<T>(
       value: read({
         database,
         generation: snapshot.generation,
-        version: {
-          generation: snapshot.generation ?? null,
-          rawSeq: snapshot.latestSeq,
-          updatedAt: snapshot.updatedAt,
-        },
+        version,
         hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
         latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
         resolved,
         state,
+        contextMetadata: snapshot.contextMetadata,
       }),
     };
   };

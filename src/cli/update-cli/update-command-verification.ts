@@ -56,9 +56,11 @@ export async function readFailedUpdateGatewayState(
   }
   const executor = run.executorFence;
   executor?.assertCurrent();
-  const deadline = createGatewayRestartDeadline({
-    timeoutMs: Math.min(timeoutMs, GATEWAY_RESTART_PROBE_TIMEOUT_MS),
-  });
+  const deadline =
+    run.deadline ??
+    createGatewayRestartDeadline({
+      timeoutMs: Math.min(timeoutMs, GATEWAY_RESTART_PROBE_TIMEOUT_MS),
+    });
   let runtime: GatewayServiceRuntime | undefined;
   try {
     runtime = await deadline.run(() =>
@@ -75,7 +77,9 @@ export async function readFailedUpdateGatewayState(
       throw new CommandProcessCleanupError({ cause: error });
     }
   } finally {
-    deadline.dispose();
+    if (!run.deadline) {
+      deadline.dispose();
+    }
   }
   executor?.assertCurrent();
   const verified = getUpdateRun(run.runId, { env: run.env })?.verification;
@@ -212,16 +216,22 @@ export async function verifyUpdatedGateway(
   const { health, readyz, http, launchAgentRecovery } = await observeUpdateGatewayReadiness({
     ...params,
     assertCurrent,
+    deadline: params.opts.run?.deadline ?? params.deadline,
   });
-  const channelWarnings = (health.channelProbeTimeouts ?? []).map(({ id, error }) =>
+  const channelWarnings = [
+    ...(health.channelProbeTimeouts ?? []),
+    ...(health.channelRuntimeWarnings ?? []),
+  ].map(({ id, error }) =>
     redactSupportDiagnosticLine(
-      `Channel health collection incomplete (${id}: ${error}). Run openclaw health to check again.`,
+      `Channel health warning (${id}: ${error}). Run openclaw health --json to inspect it.`,
       { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
     ),
   );
-  if (launchAgentRecovery?.attempted) {
+  if (launchAgentRecovery && launchAgentRecovery.status !== "not-needed") {
     defaultRuntime.error(
-      launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
+      launchAgentRecovery.status === "recovered"
+        ? launchAgentRecovery.message
+        : launchAgentRecovery.detail,
     );
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
@@ -326,7 +336,7 @@ export async function verifyUpdatedGateway(
       score: 7,
       summary:
         channelWarnings.length > 0
-          ? "Gateway service, version, and readiness verified; channel health collection incomplete."
+          ? "Gateway service, version, and readiness verified; channel warnings need attention."
           : pluginWarnings.length > 0
             ? "Gateway service, version, channels, and readiness verified; plugin failures need a retry."
             : "Gateway service, version, plugins, channels, and readiness verified.",
@@ -360,9 +370,9 @@ export async function verifyUpdatedGateway(
       ? ["Gateway responded, but the managed service did not report running after restart."]
       : []),
     ...renderRestartDiagnostics(health),
-    ...(launchAgentRecovery?.attempted
+    ...(launchAgentRecovery && launchAgentRecovery.status !== "not-needed"
       ? [
-          launchAgentRecovery.recovered
+          launchAgentRecovery.status === "recovered"
             ? `LaunchAgent recovery: ${launchAgentRecovery.message}`
             : `LaunchAgent recovery failed: ${launchAgentRecovery.detail}`,
         ]
@@ -425,7 +435,7 @@ export async function verifyUpdatedGateway(
       code: health.waitOutcome ?? "restart-unhealthy",
       message:
         health.probeError ??
-        `Gateway did not settle${health.startupPhase ? `; startup phase: ${health.startupPhase}` : "."}`,
+        `Gateway readiness was not verified; service status: ${health.runtime.status ?? "unknown"}${health.startupPhase ? `; startup phase: ${health.startupPhase}` : ""}. Check ${formatCliCommand("openclaw gateway status --deep", params.serviceEnv)}.`,
     });
   }
   recordVerificationStep(

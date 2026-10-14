@@ -1,7 +1,3 @@
-import type {
-  SubagentMaintenanceDurableBasis,
-  SubagentRunsDurableBasis,
-} from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
@@ -31,12 +27,17 @@ import type {
   SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
+import type {
+  SessionEntryMaintenanceAgeChange,
+  SessionEntryMaintenanceAgeFact,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
+  TranscriptEvent,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -46,7 +47,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 /** Transportable planning facts; live guards and native identity remain with their owners. */
 type SessionDeletionPlanningParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "expectedDatabaseIdentity" | "descendantRunBasis"
+  "commitGuard" | "env" | "expectedDatabaseIdentity"
 >;
 
 export type SessionEntryDeletionPlanInput = {
@@ -117,6 +118,7 @@ export type LifecycleRemovalProjectionInput = {
 export type ProjectedLifecycleCommitResult = {
   archivedTranscripts: SessionLifecycleArchivedTranscript[];
   beforeCount: number;
+  afterCount: number;
   maintenancePlans: SessionEntryMaintenancePlan[];
   removedSessionKeys: string[];
   pendingArchives: boolean;
@@ -128,12 +130,20 @@ export type ProjectedLifecycleCommitInput = {
   projected: ProjectedLifecycleMutation;
   materializationFailed: boolean;
   allowCanonicalRepair?: boolean;
+  creation?: SessionLifecycleCreation;
   maintenance: SessionEntryMaintenanceInput | null;
 };
 
+type SessionLifecycleCreation = {
+  preparedTranscript?: {
+    sessionKey: string;
+    sessionId: string;
+    events: readonly TranscriptEvent[];
+  };
+  ownerAssignment?: { sessionKey: string; owner: SessionOwnerAssignment };
+};
+
 export type SessionEntryLifecycleMutationParams = {
-  /** Internal durable comparison paired with the caller's live descendant guard. */
-  descendantRunBasis?: SubagentRunsDurableBasis;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   storePath: string;
@@ -151,8 +161,7 @@ export type SessionEntryLifecycleMutationParams = {
   allowCanonicalRepair?: boolean;
   /** Doctor-only synchronous state transfer that commits with the destination entry. */
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
-  /** Fresh-row sidecar writes that must not retry unrelated pending archives. */
-  afterFreshUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
+  creation?: SessionLifecycleCreation;
   /**
    * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
    * Must not write the deleting agent database: its Worker may hold the transaction lock.
@@ -180,7 +189,7 @@ export type SqliteSessionReclamationCallbacks = {
 
 export type ReclamationDeleteParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "descendantRunBasis"
+  "commitGuard" | "env"
 >;
 
 /** Internal scope: a historical request cannot authorize whole-entry reclamation. */
@@ -203,8 +212,6 @@ export type SessionMaintenanceLiveProtection = Pick<
 >;
 
 type SessionReclamationPlanBase = {
-  descendantRunBasis?: SubagentRunsDurableBasis;
-  maintenanceRunBasis?: SubagentMaintenanceDurableBasis;
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
@@ -225,13 +232,18 @@ export type SessionMaintenanceMetadataCommand =
 
 export type SessionMaintenanceMetadataResult =
   | { kind: "maintenance-statistics"; value: true }
-  | { kind: "maintenance-age"; nextAt: number | undefined }
+  | {
+      kind: "maintenance-age";
+      nextAt: number | undefined;
+      ageFact?: SessionEntryMaintenanceAgeFact;
+    }
   | { kind: "maintenance-preservation-required" }
   | { kind: "maintenance-plan-stale" }
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
       nextAt: number | undefined;
+      ageFact?: SessionEntryMaintenanceAgeFact;
       readOnlyInput?: SessionEntryMaintenanceInput;
     };
 

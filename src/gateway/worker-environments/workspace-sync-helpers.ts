@@ -153,19 +153,6 @@ export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): strin
   return `.openclaw-worker/${bundleHash}/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`;
 }
 
-export function workerWorkspaceSshArgv(
-  prepared: PreparedWorkerSsh,
-  remoteArgv: readonly string[],
-  port = prepared.port,
-): string[] {
-  return [
-    ...workerSshCommandPrefix(prepared, port),
-    "--",
-    prepared.sshTarget,
-    workerSshRemoteCommand(remoteArgv),
-  ];
-}
-
 export async function resolveRemoteWorkspaceManifest(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
   remoteWorkspaceDir: string,

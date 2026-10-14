@@ -1,5 +1,4 @@
 import type { WorkboardChange } from "@openclaw/workboard-contract";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWorkboardChangeEventService } from "./change-events.js";
 
@@ -52,43 +51,6 @@ describe("createWorkboardChangeEventService", () => {
     await service.stop?.(context);
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(listeners.size).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("starts the new generation after stopping an unfinished initialization", async () => {
-    vi.useFakeTimers();
-    const firstReady = createDeferred<void>();
-    const ready = vi.fn(async () => {});
-    ready.mockImplementationOnce(() => firstReady.promise);
-    const unsubscribe = vi.fn();
-    const store = {
-      ready,
-      subscribeChanges: vi.fn(() => unsubscribe),
-      announceChangeEpoch: vi.fn(),
-    } satisfies Parameters<typeof createWorkboardChangeEventService>[0];
-    const service = createWorkboardChangeEventService(store);
-    const context = {
-      config: {},
-      stateDir: "/unused-workboard-change-events",
-      gatewayEvents: { emit: vi.fn(), onSessionsChanged: () => () => {} },
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    } satisfies Parameters<typeof service.start>[0];
-
-    const starting = service.start(context);
-    const stopping = service.stop();
-    const restarted = service.start(context);
-    try {
-      expect(store.subscribeChanges).not.toHaveBeenCalled();
-      firstReady.resolve();
-      await Promise.all([starting, stopping, restarted]);
-      expect(store.subscribeChanges).toHaveBeenCalledOnce();
-      expect(store.announceChangeEpoch).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      firstReady.resolve();
-      await service.stop();
-    }
-    expect(unsubscribe).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 });

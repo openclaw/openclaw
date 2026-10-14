@@ -93,6 +93,9 @@ async function assertControlledInputs(page: Page) {
   expect(await disabledQuality.getByRole("radio", { name: "Fast", exact: true }).isDisabled()).toBe(
     true,
   );
+}
+
+async function assertSecretInput(page: Page) {
   const secret = page.getByRole("textbox", { name: "Secret", exact: true });
   await page.getByRole("button", { name: "Toggle secret", exact: true }).click();
   await expect.poll(() => secret.getAttribute("type")).toBe("text");
@@ -246,6 +249,9 @@ suite.define(() => {
                 await captureGroup(page, `${renderer}-${theme}-${viewport.name}-${group}`);
                 if (group === "controls") {
                   await assertControlledInputs(page);
+                  if (renderer === "Solid") {
+                    await assertSecretInput(page);
+                  }
                   await captureGroup(
                     page,
                     `${renderer}-${theme}-${viewport.name}-controls-changed`,

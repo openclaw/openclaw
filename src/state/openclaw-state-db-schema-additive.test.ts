@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { ensureMemoryChunkProvenance } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
+import { ensureMemoryEntryOriginsSchema } from "../../packages/memory-host-sdk/src/memory-entry-origins.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
+import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
+import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
+import { ensureSessionGoalOperationsSchema } from "./openclaw-agent-goal-operations-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
@@ -17,6 +25,7 @@ import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const trailingSchema = vi.hoisted(() => ({
   tableName: "future_lazy_state",
@@ -43,6 +52,51 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+const { openDatabase } = useSqliteSchemaTestFixture();
+
+it.each([
+  {
+    name: "audit lifecycle binding",
+    schema: OPENCLAW_STATE_SCHEMA_SQL,
+    ensure: ensureExecutionOwnerLifecycleBindingSchema,
+  },
+  {
+    name: "goal receipt",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureSessionGoalOperationsSchema,
+  },
+  {
+    name: "board",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureOpenClawAgentBoardSchemaInTransaction,
+  },
+  {
+    name: "memory origin",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureMemoryEntryOriginsSchema,
+  },
+  {
+    name: "memory provenance",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureMemoryChunkProvenance,
+  },
+])("never issues persistent DDL on first or repeated warm $name use", ({ schema, ensure }) => {
+  const database = openDatabase(schema);
+  const observation = observeHostDataSql();
+  try {
+    for (let call = 0; call < 2; call += 1) {
+      database.exec("BEGIN IMMEDIATE");
+      ensure(database);
+      database.exec("COMMIT");
+    }
+    expect(
+      observation.queries.filter((sql) => classifySqliteMutation(sql, "batch").mainSchemaChange),
+    ).toEqual([]);
+  } finally {
+    observation.restore();
+  }
+});
 
 it("keeps secret-store first use from installing later additive schema", () => {
   const database = new DatabaseSync(":memory:");

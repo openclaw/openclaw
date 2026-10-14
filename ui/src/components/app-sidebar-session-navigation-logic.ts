@@ -1,9 +1,10 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
+import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
+import { parseSidebarEntry, serializeSidebarEntry, SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
@@ -21,7 +22,6 @@ import {
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
-import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -38,7 +38,7 @@ import {
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
+import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
@@ -46,6 +46,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
+import { restoreSnapshotSession, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -187,7 +188,7 @@ export function buildSidebarSessionNavigationState(input: {
       agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
       sessionId: row.sessionId,
       displayName: row.displayName,
-      incognito: row.incognito === true,
+      incognito: row.incognito === true || isIncognitoSessionKey(row.key),
       createdActor: row.createdActor,
       owner: row.owner,
       participants: row.participants,
@@ -297,7 +298,24 @@ export function buildReconciledSidebarZone(input: {
   rows: SidebarRecentSession[];
   pluginNavigation: readonly ControlUiRegistration<ControlUiNavigationItem>[];
   pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
+  snapshot?: { model: SidebarSnapshotModel; selectedKey: string };
+  pendingPlugins?: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
 }) {
+  if (input.snapshot) {
+    const { model, selectedKey } = input.snapshot;
+    const restoredRows = [...model.sessions, ...model.pinnedSessions].map((row) =>
+      restoreSnapshotSession(row, selectedKey),
+    );
+    return {
+      entries: model.entries.flatMap((entry) => {
+        const parsed = parseSidebarEntry(entry);
+        return parsed ? [parsed] : [];
+      }),
+      sidebarEntries: model.entries,
+      sessionRows: new Map(restoredRows.map((row) => [row.key, row])),
+      pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),
+    };
+  }
   const navigation = input.pluginNavigation;
   const occupiedPlacements = new Set(SIDEBAR_NAV_ROUTES.map((route) => `route:${route}`));
   const pluginTabs = new Map(
@@ -318,11 +336,35 @@ export function buildReconciledSidebarZone(input: {
     SIDEBAR_NAV_ROUTES,
     new Set([...pluginTabs.keys(), ...navigation.map((entry) => entry.key)]),
   );
-  return {
+  const live = {
     ...reconciled,
     sessionRows: new Map(availableRows.map((row) => [row.key, row])),
     pluginTabs,
   };
+  const retained = input.pendingPlugins;
+  if (retained) {
+    const visible = new Set(live.entries.map(serializeSidebarEntry));
+    for (const [index, key] of retained.entries.entries()) {
+      const entry = parseSidebarEntry(key);
+      if (entry?.type !== "plugin" || visible.has(key)) {
+        continue;
+      }
+      const tab = retained.plugins.find((plugin) => plugin.key === entry.key);
+      if (!tab) {
+        continue;
+      }
+      live.pluginTabs.set(entry.key, tab);
+      const following = retained.entries
+        .slice(index + 1)
+        .find((candidate) => visible.has(candidate));
+      const position = following
+        ? live.entries.findIndex((candidate) => serializeSidebarEntry(candidate) === following)
+        : live.entries.length;
+      live.entries.splice(position, 0, entry);
+      visible.add(key);
+    }
+  }
+  return live;
 }
 
 type SidebarSessionSelection = {
@@ -382,22 +424,13 @@ export function resolveActiveSidebarAgent(input: {
 
 export function resolveLatestSidebarAgentSession(input: {
   agentId: string;
-  sessionData: {
-    sessionsAgentId: string | null;
-    sessionsResult: SessionsListResult | null;
-    sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
-  };
+  result: SessionsListResult | null;
   context: ApplicationContext | undefined;
 }): SessionRow | null {
-  const { sessionData } = input;
   const normalized = normalizeAgentId(input.agentId);
-  const rows =
-    normalized === normalizeAgentId(sessionData.sessionsAgentId ?? "")
-      ? (sessionData.sessionsResult?.sessions ?? [])
-      : (sessionData.sessionResultsByAgent[normalized]?.sessions ?? []);
   // Unprefixed keys belong to the system default agent. Keeping them for
   // another agent would resume the wrong conversation with the raw key.
-  const visible = filterVisibleSessionRows(rows, {
+  const visible = filterVisibleSessionRows(input.result?.sessions ?? [], {
     agentId: normalized,
     defaultAgentId: resolveUiDefaultAgentId({
       agentsList: input.context?.agents.state.agentsList,
@@ -515,7 +548,6 @@ export function projectSidebarVisibleMainSession(
       agentId: string,
     ): SidebarRecentSession & { metadataVisible: boolean };
     selectedAgentMainSessionKey(agentId: string): string;
-    readonly effectiveNavigationScope: "mine" | "all";
     readonly sessionOwnerFilterActive: boolean;
     readonly sessionInvolvingMeFilterActive: boolean;
     readonly sessionsStatusFilter: SidebarSessionStatusFilter;
@@ -534,7 +566,6 @@ export function projectSidebarVisibleMainSession(
   }
   const key = host.selectedAgentMainSessionKey(agentId);
   if (
-    host.effectiveNavigationScope === "mine" ||
     host.sessionOwnerFilterActive ||
     host.sessionInvolvingMeFilterActive ||
     (host.sessionsStatusFilter !== "active" && host.sessionsStatusFilter !== "all") ||
@@ -560,24 +591,4 @@ export function projectSidebarVisibleMainSession(
     outboxAttentionCount: 0,
     hasComposerDraft: false,
   };
-}
-
-export function navigationScopesEquivalent(
-  snapshot: SessionListSnapshot | undefined,
-  viewerId: string,
-): boolean {
-  const result = snapshot?.result;
-  const counts = result?.ownerSessionCounts;
-  const ownCount = counts?.find((entry) => entry.profileId === viewerId)?.open ?? 0;
-  return Boolean(
-    snapshot &&
-    !snapshot.loading &&
-    !snapshot.startupPending &&
-    snapshot.readSucceeded !== false &&
-    !snapshot.error &&
-    counts &&
-    result?.totalCount !== undefined &&
-    result.totalCount === ownCount &&
-    counts.every((entry) => entry.profileId === viewerId),
-  );
 }

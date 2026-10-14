@@ -1,5 +1,9 @@
 // Commander registration for model catalog, status, auth, alias, and fallback commands.
+import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
+import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { registerModelsAccountsCli } from "./models-accounts-cli.js";
@@ -36,24 +40,120 @@ function runAgentModelCommand<T extends object>(
   });
 }
 
-// Auth commands can admit writable stores even while loading config or listing profiles.
+// Ownership is selected before loading any mutation-capable auth runtime.
 function runAuthModelCommand<T extends object>(
   command: Command,
   options: (agent: string | undefined) => T,
   load: () => Promise<(opts: T, runtime: ModelsCliRuntime["defaultRuntime"]) => Promise<void>>,
 ): Promise<void> {
   return withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-    const opts = options(resolveModelAgentOption(command));
-    await runWithLocalStateOwner({
-      method: "models.auth",
-      params: {},
-      target: "system/agent credentials",
-      onForeignOwner: "refuse",
+    const agent = resolveModelAgentOption(command);
+    const opts = options(agent);
+    if (command.name() === "login" || command.name() === "login-github-copilot") {
+      const loginOptions = command.opts<ModelsAuthLoginOptions>();
+      const copilot = command.name() === "login-github-copilot";
+      const sessionId = randomUUID();
+      const unsupported = [
+        loginOptions.profileId?.trim() ? "--profile-id" : undefined,
+        loginOptions.force ? "--force" : undefined,
+        loginOptions.setDefault ? "--set-default" : undefined,
+        loginOptions.yes ? "--yes" : undefined,
+      ].filter(Boolean);
+      let cancellationConfirmed = false;
+      await runWithLocalStateOwner({
+        method: "models.authLogin",
+        params: async (signal) => {
+          // Load the plugin registry only after choosing the Gateway owner, not during CLI help.
+          const { readGatewayLoginParams } =
+            await import("../commands/models/auth-login-gateway.js");
+          return readGatewayLoginParams(
+            {
+              provider: copilot ? "github-copilot" : loginOptions.provider,
+              method: copilot
+                ? "device"
+                : loginOptions.deviceCode
+                  ? "device-code"
+                  : loginOptions.method,
+              agent,
+            },
+            sessionId,
+            signal,
+          );
+        },
+        target: "system/agent provider sign-in",
+        requireLocalBackendSharedAuth: true,
+        requiredCapabilities: [GATEWAY_SERVER_CAPS.MODELS_AUTH_LOGIN_OWNER],
+        timeoutMs: 25 * 60_000,
+        onForeignOwner: unsupported.length
+          ? async () => {
+              throw new Error(
+                `${unsupported.join(", ")} cannot be represented by models.authLogin. Omit these options, or stop the Gateway through its service owner and rerun this command offline. No credential was changed.`,
+              );
+            }
+          : undefined,
+        onGatewayResponse: async (request, signal) => {
+          // Terminal auth runtime belongs to the accepted Gateway wizard, not CLI registration.
+          const { runGatewayLoginWizard } =
+            await import("../commands/models/auth-login-gateway.js");
+          await runGatewayLoginWizard(request, sessionId, signal, defaultRuntime);
+        },
+        onGatewaySignalAbort: async (request) => {
+          await request("wizard.cancel", { sessionId, closeInput: true });
+          cancellationConfirmed = true;
+        },
+        runLocal: async () => {
+          const run = await load();
+          await run(opts, defaultRuntime);
+        },
+      }).catch((error: unknown) => {
+        if (!cancellationConfirmed) {
+          throw error;
+        }
+        defaultRuntime.log("Login session closed. Credentials already saved were not undone.");
+      });
+      return;
+    }
+    const pasteApiKey = command.name() === "paste-api-key";
+    const { provider, profileId } = command.opts<{ provider?: string; profileId?: string }>();
+    const result = await runWithLocalStateOwner<ModelsAuthSetApiKeyResult | void>({
+      method: pasteApiKey ? "models.authSetApiKey" : "models.auth",
+      params: pasteApiKey
+        ? async (signal) => {
+            // Read-only input collection stays behind Gateway owner selection.
+            const { readGatewayApiKeyParams } = await import("../commands/models/auth-gateway.js");
+            return readGatewayApiKeyParams({ provider, agent }, signal);
+          }
+        : {},
+      target:
+        command.name() === "paste-token"
+          ? "token credentials (models.authSetApiKey cannot store token types or --expires-in)"
+          : "system/agent credentials",
+      requireLocalBackendSharedAuth: pasteApiKey,
+      requiredCapabilities: pasteApiKey
+        ? [GATEWAY_SERVER_CAPS.MODELS_AUTH_SET_API_KEY_OWNER]
+        : undefined,
+      onForeignOwner: !pasteApiKey
+        ? "refuse"
+        : profileId?.trim()
+          ? async () => {
+              throw new Error(
+                "--profile-id is not supported by models.authSetApiKey. Omit --profile-id to use the Gateway's API-key profile, or stop the Gateway through its service owner and rerun this command.",
+              );
+            }
+          : undefined,
       runLocal: async () => {
         const run = await load();
         await run(opts, defaultRuntime);
       },
     });
+    if (result) {
+      if (result.warning) {
+        defaultRuntime.error(sanitizeTerminalText(result.warning));
+      }
+      defaultRuntime.log(
+        `Auth profile: ${sanitizeTerminalText(result.profileId)} (${sanitizeTerminalText(result.provider)}/api_key)`,
+      );
+    }
   });
 }
 

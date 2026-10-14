@@ -2,10 +2,38 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  buildCodeModeCatalogPrompt,
+  createCodeModeTools,
+} from "./code-mode.js";
+import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("keeps serialized tool schemas stable across runs with different catalogs", () => {
+  const config: OpenClawConfig = { tools: { codeMode: true } };
+  const serializeRun = (runId: string, targetName: string) => {
+    const catalogRef = createToolSearchCatalogRef();
+    const ctx = { config, catalogRef, sessionKey: "agent:main:cache-proof", runId };
+    try {
+      const { tools } = applyCodeModeCatalog({
+        ...ctx,
+        tools: [...createCodeModeTools(ctx), createStubTool(targetName)],
+      });
+      return JSON.stringify(
+        tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+      );
+    } finally {
+      clearToolSearchCatalog(ctx);
+    }
+  };
+
+  const first = serializeRun("first", "exec");
+  const second = serializeRun("second", "lookup");
+  expect(second).toBe(first);
+});
 
 it("keeps core shell and file signatures visible when the real catalog overflows", () => {
   const workspaceDir = tempDirs.make("code-mode-catalog-index-");
@@ -54,11 +82,11 @@ it("keeps core shell and file signatures visible when the real catalog overflows
   const catalogRef = createToolSearchCatalogRef();
   const ctx = { config, agentId: "main", catalogRef };
   const render = (tools: typeof targets) => {
-    const compacted = applyCodeModeCatalog({
+    applyCodeModeCatalog({
       ...ctx,
       tools: [...createCodeModeTools(ctx), ...tools],
     });
-    return compacted.tools.find((tool) => tool.name === "exec")!.description;
+    return buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []);
   };
   try {
     const description = render(targets);

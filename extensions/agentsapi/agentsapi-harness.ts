@@ -13,14 +13,13 @@ import {
   type AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  combineNativeSessionBindingAuthority,
-  createNativeSessionBindingAuthority,
-  prepareNativeSessionGenerationAuthority,
+  combinePreparedNativeSessionBindingAuthority,
+  createNativeSessionBindingScope,
+  retainNativeSessionGenerationAuthority,
   wrapNativeSessionDeletionMutation,
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { migrateAgentsApiBinding } from "./agentsapi-binding-migration.js";
 import type { AgentsApiCleanupBinding } from "./agentsapi-binding-record.js";
@@ -68,7 +67,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
           assertCleanupCurrent();
           // Reacquire agent-scoped auth after restart without persisting credentials
           // or validating the new configuration against the session being removed.
-          const config = getRuntimeConfig();
+          const config = runtime.config.current({ clone: true });
           // Older hosted/external bindings have no executor metadata. The host
           // mutation target supplies their original agent, never the current default.
           const agentId = binding.executor?.agentId ?? targetAgentId;
@@ -177,7 +176,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
         throw new Error("Agents API harness is closing");
       }
       const target = validateAgentsApiInput(params);
-      const captured = await prepareNativeSessionGenerationAuthority({
+      const captured = await retainNativeSessionGenerationAuthority({
         target,
         config: params.config,
         storePath: target.storePath,
@@ -190,13 +189,14 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
             `Agents API session generation is no longer current: ${sessionId}`,
           ),
       });
+      using _ = { [Symbol.dispose]: captured.release };
       const authority = captured.authority;
       authority.assertLegacyCurrent();
       runningSessions.set(params.sessionId, (runningSessions.get(params.sessionId) ?? 0) + 1);
       try {
         return await getBindings().withSession(
           params.sessionId,
-          () => authority.assertLegacyCurrent(),
+          authority.assertLegacyCurrent,
           (binding, bind, assertLeaseCurrent) => {
             if (closing) {
               throw new Error("Agents API harness is closing");
@@ -205,9 +205,9 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
               params,
               binding,
               bind,
-              combineNativeSessionBindingAuthority(
+              combinePreparedNativeSessionBindingAuthority(
                 authority,
-                createNativeSessionBindingAuthority([], assertLeaseCurrent),
+                createNativeSessionBindingScope(assertLeaseCurrent),
               ).assertLegacyCurrent,
               () => {
                 assertCurrent();

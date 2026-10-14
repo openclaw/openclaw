@@ -1795,6 +1795,7 @@
                     ]
                   },
                   "plugins/copilot",
+                  "plugins/muse",
                   {
                     "group": "Meetings and calls",
                     "pages": [
@@ -1854,6 +1855,7 @@
                       "plugins/cloudflare",
                       "plugins/geolocation",
                       "plugins/logbook",
+                      "plugins/mcp-relay",
                       "plugins/oc-path",
                       "plugins/session-share",
                       "plugins/workboard",
@@ -2529,6 +2531,7 @@
                         "group": "Cloud Workers",
                         "pages": [
                           "gateway/cloud-workers/warm-images",
+                          "gateway/cloud-workers/environment-file",
                           "gateway/cloud-workers/per-project-default-profiles",
                           "gateway/cloud-workers/setup-and-bundle-installation",
                           "gateway/cloud-workers/verify-the-profile",
@@ -3014,6 +3017,7 @@
                     ]
                   },
                   "plugins/sdk-subpaths",
+                  "plugins/sdk-gateway-ingress",
                   "plugins/sdk-entrypoints",
                   {
                     "group": "Plugin entry points",
@@ -3086,6 +3090,7 @@
                       "plugins/sdk-migration/import-paths",
                       "plugins/sdk-migration/removed-surfaces",
                       "plugins/sdk-migration/talk",
+                      "plugins/sdk-migration/async-transcript-and-tts",
                       "plugins/sdk-migration/compatibility-policy",
                       "plugins/sdk-migration/removal-timeline"
                     ]
@@ -3150,6 +3155,7 @@
                   },
                   "reference/transcript-hygiene",
                   "reference/memory-config",
+                  "reference/database-engines",
                   "reference/database-schemas",
                   {
                     "group": "Database schemas",
@@ -3181,7 +3187,19 @@
                 "group": "Project and contributing",
                 "pages": [
                   "reference/credits",
-                  "reference/pull-request-review-flow"
+                  "reference/pull-request-review-flow",
+                  {
+                    "group": "Maintainer scripts",
+                    "pages": [
+                      "reference/scripts/pr-preparation",
+                      "reference/scripts/pr-tooling",
+                      "reference/scripts/remote-gates",
+                      "reference/scripts/github-transport",
+                      "reference/scripts/prior-ci",
+                      "reference/scripts/merge-admission",
+                      "reference/scripts/merge-recovery"
+                    ]
+                  }
                 ]
               }
             ]
@@ -3193,6 +3211,8 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.3",
+                  "releases/2026.10.2",
                   "releases/2026.10.1",
                   "releases/2026.9.9",
                   "releases/2026.9.8",

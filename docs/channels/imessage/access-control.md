@@ -141,7 +141,8 @@ Who is admitted, how messages route to sessions, and which chats can write confi
 
   </Tab>
 
-  <Tab title="Sessions and deterministic replies">
+  <Tab title="Sessions and reply routing">
+    <a id="sessions-and-deterministic-replies" />
     - DMs use direct routing; groups use group routing.
     - With default `session.dmScope=main`, iMessage DMs collapse into the agent main session.
     - Group sessions are isolated (`agent:<agentId>:imessage:group:<chat_id>`).

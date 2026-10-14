@@ -37,7 +37,7 @@ later turns, including sessions created before an update.
 The private checkout contains the selected source commit, not the host's shared
 Git configuration, credential helpers, other branches, or ignored files selected
 by `.worktreeinclude`. Guest preparation does not run the repository's host setup
-script. Canonical source-only checkout, snapshot, and restore operations use a
+script. Source-only checkout, snapshot, and restore operations use a
 command-scoped trusted Git configuration view, so repository, worktree, global,
 and included filter programs cannot execute on the Gateway—even if configuration
 changes while preparation is waiting. Private-checkout packing uses that same
@@ -48,12 +48,12 @@ index, HEAD, and snapshot refs; ordinary trusted maintainer checkouts are unchan
 The guest’s Git commands operate on private metadata. Initial non-ignored source
 paths are admitted before guest execution and retained in the projection binding.
 Later host-created paths enter an existing projection only after the host stages
-them in the canonical Git index (`git add`); changing an ignore rule alone does
+them in the host Git index (`git add`); changing an ignore rule alone does
 not admit host files, including newly provisioned files. Existing admitted source
 edits and guest-created files continue to reconcile, including guest-created
 ignored files. Source filenames must be valid UTF-8; rename invalid Git paths
 before retrying preparation. Publication uses the same admission boundary.
-Canonical recovery snapshots retain host data under their existing rules, but
+Host recovery snapshots retain host data under their existing rules, but
 restoration does not admit that data to the guest. Use the
 session's managed GitHub publication action to publish accepted changes; host credentials are not
 copied into the sandbox. The runtime-owned `.openclaw/sandbox-skills` subtree
@@ -68,7 +68,7 @@ The private checkout is writable with `none` or `rw` workspace access; explicit
 Other sandbox backends cannot use this local managed-project projection and
 fail with an explanation rather than falling back to host execution.
 
-The managed worktree remains the canonical workspace for files, snapshots, and
+The managed worktree remains the source of truth for files, snapshots, and
 publication. OpenClaw pauses the exact execution and browser runtimes that mount
 this checkout while capturing or applying changes, records pending results and
 rollback journals in SQLite, and resumes
@@ -86,9 +86,22 @@ does not force ignored paths into Git publication or import unrelated ignored ho
 files. Older versions leave that recovery receipt intact but do not apply it;
 return to a supporting version before continuing guest work.
 
-With the OpenShell backend, `mirror` mode still uses the local workspace as the canonical source between exec turns, and `remote` mode uses the remote OpenShell workspace as canonical after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
+With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+
+`image_generate`, `video_generate`, and `music_generate` also copy locally saved
+outputs into a private, Git-ignored directory under `media/inbound/` in the
+requesting sandbox. The tool result and asynchronous completion report a
+`Sandbox file` path for follow-up reads, edits, and shell processing. Channel
+delivery still uses the managed original. Each copy is limited to the smaller
+of the configured media size limit and 50 MiB. Remote-only video URLs are not
+downloaded for staging. If the workspace is read-only or staging fails, the
+result reports that the sandbox copy is unavailable; generation and delivery
+still succeed. Resetting or deleting the requesting session stops further sandbox
+copies and prevents completion delivery to a replacement session. If a configuration
+reload changes sandbox policy, workspace selection, or the media size limit before
+a copy, staging stops with the same warning while the original remains available.
 
 <Note>
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.

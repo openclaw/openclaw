@@ -7,6 +7,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import { supportsThreadBindingSpawn } from "../channels/conversation-resolution.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-policy.js";
 import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -88,6 +89,9 @@ export function resolveRuntimeChannelPromptContext(
   const runtimeCapabilities = collectRuntimeChannelCapabilities(context);
   return {
     runtimeChannel,
+    ...(runtimeChannel && getChannelPlugin(runtimeChannel)?.agentPrompt?.customInlineButtonHint
+      ? { customInlineButtonHint: true }
+      : {}),
     runtimeCapabilities,
     reactionGuidance:
       runtimeChannel && params.cfg ? resolveChannelReactionGuidance(context) : undefined,

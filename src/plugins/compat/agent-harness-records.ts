@@ -7,13 +7,16 @@ const AGENT_HARNESS_TOOL_CONSTRUCTION_COMPAT_RECORD = {
   introduced: "2026-09-08",
   deprecated: "2026-10-04",
   warningStarts: "2026-10-04",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "stable-deprecation-period",
   replacement:
-    "Await hostCapabilities.createToolSurfaceAsync or createOpenClawCodingToolsAsync with the existing arguments. Released synchronous factories retain their array results and completion timing until the next Plugin SDK major and explicit breaking-release approval.",
+    "Await hostCapabilities.createToolSurfaceAsync or createOpenClawCodingToolsAsync with the existing arguments. Released synchronous factories retain their array results and completion timing until an announced later stable release and explicit breaking-release approval.",
   docsPath: "/plugins/sdk-migration/compatibility-policy#harness-tool-construction",
-  surfaces: ["AgentHarnessHostCapabilities.createToolSurface", "createOpenClawCodingTools"],
+  surfaces: [
+    "AgentHarnessHostCapabilities.createToolSurface",
+    "openclaw/plugin-sdk/agent-harness.createOpenClawCodingTools",
+  ],
   diagnostics: [
-    "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    "TypeScript @deprecated annotations and migration documentation; bounded capability-family warnings on legacy preparation",
   ],
   tests: [
     "src/plugin-sdk/agent-harness-async-compat.test.ts",
@@ -26,6 +29,24 @@ const AGENT_HARNESS_TOOL_CONSTRUCTION_COMPAT_RECORD = {
 
 export const AGENT_HARNESS_COMPAT_RECORDS = [
   AGENT_HARNESS_TOOL_CONSTRUCTION_COMPAT_RECORD,
+  {
+    code: "agent-harness-tool-argument-redaction",
+    status: "removed",
+    owner: "agent-runtime",
+    introduced: "2026-10-11",
+    // Exclusive boundary: immediate removal was approved for October 11.
+    removeAfter: "2026-10-10",
+    replacement: "None; pass tool arguments unchanged. Secret masking belongs in diagnostics.",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#tool-argument-redaction",
+    surfaces: ["openclaw/plugin-sdk/agent-harness-runtime.sanitizeToolArgs"],
+    diagnostics: ["plugin SDK shipped-surface guard and migration guide"],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "test/scripts/plugin-sdk-shipped-surface.test.ts",
+    ],
+    releaseNote:
+      "Peter approved immediate removal of automatic tool argument and result masking on 2026-10-11. Drop sanitizeToolArgs imports and pass arguments unchanged; logging and diagnostic masking remains available.",
+  },
   {
     code: "agent-harness-sdk-alias",
     status: "deprecated",

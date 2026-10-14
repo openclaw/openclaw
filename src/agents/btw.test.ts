@@ -1,4 +1,3 @@
-import "./btw.mocks.test-support.js";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -19,6 +18,7 @@ import {
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import { executePreparedCliRunMock } from "./btw.mocks.test-support.js";
 import {
   state,
   runBtwSideQuestion,
@@ -87,6 +87,7 @@ import {
   preparedRuntimeSnapshotState,
   setupBtwTestHooks,
 } from "./btw.test-support.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelGenerationFixture,
   publishCurrentModelGeneration,
@@ -991,6 +992,58 @@ describe("runBtwSideQuestion", () => {
     ).rejects.toThrow('Selected agent harness "codex" does not support /btw side questions.');
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects CLI session forks before backend preparation or provider I/O", async () => {
+    mockCliOutput({ text: "CLI side answer." });
+    const params = {
+      cfg: createCliRuntimeConfig(),
+      model: "claude-opus-4-7",
+    };
+
+    await expect(runSideQuestion({ ...params, toolCalls: "deny" })).rejects.toThrow(
+      "Session forks are not supported for CLI runtime claude-cli",
+    );
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+
+    await expect(runSideQuestion(params)).resolves.toEqual({ text: "CLI side answer." });
+    expect(executePreparedCliRunMock).toHaveBeenCalledOnce();
+  });
+
+  it("answers ordinary CLI BTW without a side-question tool mode when the backend has no native tools", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "no-tools-cli",
+          modelProvider: "anthropic",
+          config: { command: "no-tools-cli" },
+          nativeToolMode: "none",
+          ownsNativeCompaction: false,
+        },
+      ],
+    });
+    try {
+      const { cleanup } = mockCliOutput({ text: "No-tools CLI side answer." });
+
+      await expect(
+        runSideQuestion({
+          cfg: createCliRuntimeConfig(),
+          model: "claude-opus-4-7",
+        }),
+      ).resolves.toEqual({ text: "No-tools CLI side answer." });
+
+      expect(prepareCliRunContextMock).toHaveBeenCalledWith(
+        expect.objectContaining({ executionMode: "side-question", disableTools: true }),
+      );
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(streamSimpleMock).not.toHaveBeenCalled();
+    } finally {
+      cliBackendsTesting.resetDepsForTest();
+    }
   });
 
   it.each([

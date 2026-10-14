@@ -13,7 +13,10 @@ const native = vi.hoisted(() => ({
   resolveRoot: vi.fn(),
   heapSpaces: vi.fn(),
 }));
-vi.mock("node:v8", () => ({ getHeapSpaceStatistics: native.heapSpaces }));
+vi.mock("node:v8", async (original) => ({
+  ...(await original<typeof import("node:v8")>()),
+  getHeapSpaceStatistics: native.heapSpaces,
+}));
 vi.mock("node:timers/promises", () => ({ setTimeout: native.wait }));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: () => undefined }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({

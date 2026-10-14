@@ -89,7 +89,7 @@ const message = {
   id: messageId,
   body: { content: "Permitted Teams context", contentType: "text" },
   from: { user: { id: memberId, displayName: "Member" } },
-  reactions: [{ reactionType: "👍", user: { id: memberId } }],
+  reactions: [{ reactionType: "👍", user: { user: { id: memberId } } }],
 };
 type Route = "tool" | "gateway";
 type Origin = "bundled" | "global";

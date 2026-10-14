@@ -1,21 +1,30 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   compareCronRunRecordsNewestFirst,
   cronRunRecordStoreKey,
+  cronRunLogEntryToDetail,
   cronRunRecordToRunLogEntry,
   parseCronRunDetailJson,
   resolveCronRunRecordTimestamp,
 } from "../run-history-detail.js";
+import { createCronExecutionId } from "../run-id.js";
+import { publishCronRunHistoryChange } from "./run-history-changes.js";
 import type { CronRunHistoryWrite, CronRunRecord } from "./run-history.types.js";
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
 const query = (db: DatabaseSync) =>
-  getNodeSqliteKysely<Pick<DB, "task_runs" | "execution_owner_lifecycle_bindings">>(db);
+  getNodeSqliteKysely<
+    Pick<DB, "task_runs" | "execution_owner_lifecycle_bindings" | "cron_run_receipts">
+  >(db);
 const RETENTION_MS = 7 * 24 * 60 * 60_000;
 const LOST_RETENTION_MS = 24 * 60 * 60_000;
 const CRON_HISTORY_KEEP_PER_JOB = 2000;
@@ -201,6 +210,63 @@ export function recordCronRunInDatabase(db: DatabaseSync, input: CronRunHistoryW
         }),
     );
   }
+  publishCronRunHistoryChange(db);
+}
+
+/** Queue rejection is durable even if the host never receives the commit result. */
+export function recordSkippedCronRequestInDatabase(
+  db: DatabaseSync,
+  input: {
+    storeKey: string;
+    jobId: string;
+    receiptId?: string;
+    agentId?: string;
+    startedAt: number;
+    endedAt: number;
+    error: string;
+    nextRunAtMs?: number;
+  },
+): void {
+  const requestRunId = input.receiptId
+    ? executeSqliteQueryTakeFirstSync(
+        db,
+        query(db)
+          .selectFrom("cron_run_receipts")
+          .select("request_run_id")
+          .where("receipt_id", "=", input.receiptId),
+      )?.request_run_id
+    : undefined;
+  const discriminator = input.receiptId ?? "queued";
+  const suffix = requestRunId && requestRunId !== discriminator ? `:${requestRunId}` : "";
+  recordCronRunInDatabase(db, {
+    ...input,
+    runId: `${createCronExecutionId(input.jobId, input.startedAt)}:${discriminator}${suffix}`,
+    status: "failed",
+    detail: cronRunLogEntryToDetail(
+      {
+        ts: input.endedAt,
+        jobId: input.jobId,
+        action: "finished",
+        status: "skipped",
+        error: input.error,
+        runId: requestRunId ?? undefined,
+        runAtMs: input.startedAt,
+        durationMs: 0,
+        nextRunAtMs: input.nextRunAtMs,
+      },
+      { storeKey: input.storeKey },
+    ),
+  });
+}
+
+function cronRunHistoryExpiry(row: CronRunRecord): number {
+  const defaultExpiry =
+    resolveCronRunRecordTimestamp(row) + (row.status === "lost" ? LOST_RETENTION_MS : RETENTION_MS);
+  return row.cleanupAfter === undefined
+    ? defaultExpiry
+    : row.status === "lost"
+      ? Math.min(row.cleanupAfter, defaultExpiry)
+      : row.cleanupAfter;
 }
 
 /** Same seven-day/lost-day and separate history/quiet-count bounds as released cron rows. */
@@ -211,14 +277,7 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
     if (row.status === "queued" || row.status === "running") {
       continue;
     }
-    const timestamp = resolveCronRunRecordTimestamp(row);
-    const defaultExpiry = timestamp + (row.status === "lost" ? LOST_RETENTION_MS : RETENTION_MS);
-    const expiry =
-      row.cleanupAfter === undefined
-        ? defaultExpiry
-        : row.status === "lost"
-          ? Math.min(row.cleanupAfter, defaultExpiry)
-          : row.cleanupAfter;
+    const expiry = cronRunHistoryExpiry(row);
     if (now >= expiry) {
       expired.add(row.id);
     }
@@ -244,7 +303,7 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
   return expired;
 }
 
-export function pruneCronRunHistoryInDatabase(
+function pruneCronRunHistoryInDatabase(
   db: DatabaseSync,
   now: number,
   schema: CronRunReceiptWriteSchema,
@@ -272,13 +331,12 @@ export function pruneCronRunHistoryInDatabase(
   return ids.length;
 }
 
-/** Caller holds the transaction and retains live job/receipt decisions through commit. */
-export function reconcileCronRunHistoryInDatabase(
-  db: DatabaseSync,
+/** Plan synchronous maintenance on the serialized writer before opening a write transaction. */
+export function planCronRunHistoryMaintenance(
   records: readonly CronRunRecord[],
   now: number,
   protectedJobIds: ReadonlySet<string>,
-): Set<string> {
+) {
   const key = (row: CronRunRecord) =>
     JSON.stringify([cronRunRecordStoreKey(row), row.jobId, row.runId]);
   const firstByRun = new Map<string, CronRunRecord>();
@@ -287,7 +345,7 @@ export function reconcileCronRunHistoryInDatabase(
       firstByRun.set(key(row), row);
     }
   }
-  const reconciled = new Set<string>();
+  const reconciliations: CronRunRecord[] = [];
   for (const row of records) {
     const active = row.status === "queued" || row.status === "running";
     const recoverableLost =
@@ -329,6 +387,40 @@ export function reconcileCronRunHistoryInDatabase(
         error: row.error ?? "backing session missing",
       });
     }
+    reconciliations.push(next);
+  }
+  const reconciledIds = new Set(reconciliations.map((row) => row.id));
+  // Newly lost rows retain their first lost observation until the next sweep.
+  const pruneCandidates = records.filter((row) => !reconciledIds.has(row.id));
+  const expired = collectExpiredCronRunIds(pruneCandidates, now);
+  let nextSweepAtMs = Infinity;
+  for (const row of [...pruneCandidates, ...reconciliations]) {
+    if (expired.has(row.id)) {
+      continue;
+    }
+    const active = row.status === "queued" || row.status === "running";
+    const deadline = active
+      ? protectedJobIds.has(row.jobId?.trim() ?? "")
+        ? now + 60_000
+        : (row.lastEventAt ?? row.startedAt ?? row.createdAt) + 5 * 60_000
+      : cronRunHistoryExpiry(row);
+    nextSweepAtMs = Math.min(nextSweepAtMs, deadline);
+  }
+  return {
+    reconciliations,
+    pruneCandidates,
+    prune: expired.size > 0,
+    nextSweepAtMs: Number.isFinite(nextSweepAtMs) ? nextSweepAtMs : null,
+  };
+}
+
+export function applyCronRunHistoryMaintenanceInDatabase(
+  db: DatabaseSync,
+  plan: ReturnType<typeof planCronRunHistoryMaintenance>,
+  now: number,
+  schema: CronRunReceiptWriteSchema,
+): { reconciled: number; pruned: number } {
+  for (const next of plan.reconciliations) {
     executeSqliteQuerySync(
       db,
       query(db)
@@ -345,9 +437,11 @@ export function reconcileCronRunHistoryInDatabase(
           detail_json: next.detail === undefined ? null : JSON.stringify(next.detail),
         })
         .where("runtime", "=", "cron")
-        .where("task_id", "=", row.id),
+        .where("task_id", "=", next.id),
     );
-    reconciled.add(row.id);
   }
-  return reconciled;
+  return {
+    reconciled: plan.reconciliations.length,
+    pruned: plan.prune ? pruneCronRunHistoryInDatabase(db, now, schema, plan.pruneCandidates) : 0,
+  };
 }

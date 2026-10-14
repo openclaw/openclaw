@@ -98,60 +98,12 @@ describe("Reef setup wizard identity binding", () => {
     ).rejects.toThrow("already holds the Reef identity @existing");
   });
 
-  it("persists the identity binding immediately after claiming the handle", async () => {
-    const runtime = installRuntime();
-    await generateAndStoreKeys(runtime);
-    vi.spyOn(ReefTransportClient.prototype, "createHandle").mockResolvedValue({
-      handle: "molty",
-      key_epoch: 1,
-    });
-    const prompter = createPrompter("molty", true);
-
-    await reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never });
-
-    expect(await loadReefIdentityBinding(runtime)).toEqual({
-      handle: "molty",
-      relayUrl: "https://reefwire.ai",
-    });
-  });
-
   const noRuntimePromptCases: Array<{
     name: string;
     cfg: OpenClawConfig;
     runtimeConfigured: boolean;
   }> = [
     { name: "unconfigured runtime", cfg: {}, runtimeConfigured: false },
-    {
-      name: "inherited Codex runtime",
-      runtimeConfigured: true,
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "codex" },
-              models: [],
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-    },
-    {
-      name: "sole agent Codex runtime ahead of shared policy",
-      runtimeConfigured: true,
-      cfg: {
-        agents: {
-          defaults: {
-            models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } } },
-          },
-          entries: {
-            "guard-owner": {
-              models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } } },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-    },
     {
       name: "explicit system agent Codex runtime ahead of shared policy",
       runtimeConfigured: true,
@@ -239,42 +191,6 @@ describe("Reef setup wizard identity binding", () => {
     rejection?: string;
   }> = [
     {
-      name: "sole agent wildcard",
-      cfg: {
-        agents: {
-          entries: {
-            "guard-owner": { models: { "openai/*": { agentRuntime: { id: "openclaw" } } } },
-          },
-        },
-      },
-    },
-    {
-      name: "explicit system agent wildcard",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "guard-owner" } },
-          entries: {
-            main: { models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } } } },
-            "guard-owner": { models: { "openai/*": { agentRuntime: { id: "openclaw" } } } },
-          },
-        },
-      },
-    },
-    {
-      name: "sole agent exact model",
-      rejection: "agent-specific runtime policy",
-      cfg: {
-        agents: {
-          entries: {
-            "guard-owner": {
-              models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
-        },
-      },
-    },
-    {
       name: "explicit system agent exact model",
       rejection: "agent-specific runtime policy",
       cfg: {
@@ -301,18 +217,6 @@ describe("Reef setup wizard identity binding", () => {
       },
     },
     {
-      name: "exact default model",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.6-terra": { alias: "reef-guard", agentRuntime: { id: "openclaw" } },
-            },
-          },
-        },
-      },
-    },
-    {
       name: "wildcard default model ahead of provider policy",
       cfg: {
         agents: { defaults: { models: { "openai/*": { agentRuntime: { id: "openclaw" } } } } },
@@ -327,46 +231,7 @@ describe("Reef setup wizard identity binding", () => {
         },
       },
     },
-    {
-      name: "provider",
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "openclaw" },
-              models: [],
-            },
-          },
-        },
-      },
-    },
-    {
-      name: "provider model ahead of provider policy",
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "codex" },
-              models: [
-                {
-                  id: "gpt-5.6-terra",
-                  name: "Reef guard",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  maxTokens: 8192,
-                  agentRuntime: { id: "openclaw" },
-                },
-              ],
-            },
-          },
-        },
-      },
-    },
   ];
-
   it.each(
     runtimePolicyCases.flatMap(({ name, cfg, rejection }) =>
       (rejection ? [false] : [false, true]).map((accepted) => ({

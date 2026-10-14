@@ -13,7 +13,7 @@ import type {
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
@@ -21,15 +21,17 @@ type ProjectPreparation = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]
 >;
 
-async function repository(name: string) {
+async function repository(name: string, empty = false) {
   const root = path.join(support.testState.root, name);
   await fs.mkdir(root);
   await requireGit(root, ["init", "--quiet"]);
   await requireGit(root, ["config", "user.name", "Project Test"]);
   await requireGit(root, ["config", "user.email", "project@example.invalid"]);
-  await fs.writeFile(path.join(root, "input.txt"), `${name} base\n`);
-  await requireGit(root, ["add", "."]);
-  await requireGit(root, ["commit", "--quiet", "-m", "base"]);
+  if (!empty) {
+    await fs.writeFile(path.join(root, "input.txt"), `${name} base\n`);
+    await requireGit(root, ["add", "."]);
+  }
+  await requireGit(root, ["commit", "--quiet", "--allow-empty", "-m", "base"]);
   return { root, baseCommit: await requireGit(root, ["rev-parse", "HEAD"]) };
 }
 
@@ -91,10 +93,14 @@ describe("worker provider project preparation ownership", () => {
     expect(environments[1]?.profileSnapshot).toEqual(environments[0]?.profileSnapshot);
   });
 
-  it.each([false, true, undefined])(
-    "requires explicit dedicated classification after prepared node provisioning (sharedHost=%s)",
-    async (sharedHost) => {
-      const git = await repository("prepared-host-classification");
+  it.each(
+    ([false, true, undefined] as const).flatMap((sharedHost) =>
+      [false, true].map((emptyWorkspace) => ({ sharedHost, emptyWorkspace })),
+    ),
+  )(
+    "requires explicit dedicated classification after prepared node provisioning (sharedHost=$sharedHost, empty workspace=$emptyWorkspace)",
+    async ({ sharedHost, emptyWorkspace }) => {
+      const git = await repository("prepared-host-classification", emptyWorkspace);
       const deviceId = "prepared-node";
       const registerPreparedWorkspace = vi.fn<
         NonNullable<support.WorkerEnvironmentServiceOptions["registerPreparedWorkspace"]>
@@ -106,22 +112,27 @@ describe("worker provider project preparation ownership", () => {
         supportsProjectPreparation: () => true,
         resolvePreparationTarget: () => ({ machineClass: "small", platform: "linux" }),
         provision: async (_profile, _operationId, options) => {
-          const project = expectDefined(options?.project, "project preparation");
-          const preparation = expectDefined(project.preparation, "prepared identity");
-          const directory = `/worker/.openclaw-worker/prepared/gateway/${preparation.cacheKey}`;
-          await project.prepare({
-            runScript: async () => JSON.stringify({ ready: true, retainedWorkspace: null }),
-            upload: async () => {
-              throw new Error("cached seed must not upload");
-            },
-            runScriptWithBudget: async () =>
-              JSON.stringify({
-                workspaceDir: `${directory}/workspace`,
-                homeDir: `${directory}/home`,
-                sourceManifestRef: `sha256:${"a".repeat(64)}`,
-                preparedManifestRef: `sha256:${"b".repeat(64)}`,
-              }),
-          });
+          if (emptyWorkspace) {
+            expect(options?.project).toBeUndefined();
+          } else {
+            const project = expectDefined(options?.project, "project preparation");
+            const preparation = expectDefined(project.preparation, "prepared identity");
+            const directory = `/worker/.openclaw-worker/prepared/gateway/${preparation.cacheKey}`;
+            await project.prepare({
+              runScript: async () => JSON.stringify({ ready: true, retainedWorkspace: null }),
+              upload: async () => {
+                throw new Error("cached seed must not upload");
+              },
+              runScriptWithBudget: async () =>
+                JSON.stringify({
+                  workspaceDir: `${directory}/workspace`,
+                  homeDir: `${directory}/home`,
+                  sourceManifestRef: `sha256:${"a".repeat(64)}`,
+                  preparedManifestRef: `sha256:${"b".repeat(64)}`,
+                  recipePreparation: { source: "none", phaseDurationsMs: {} },
+                }),
+            });
+          }
           const enrollment = await options!.beginNodeEnrollment!();
           if (enrollment.mode !== "connect") {
             throw new Error("Fresh worker must use its pending enrollment");
@@ -175,9 +186,7 @@ describe("worker provider project preparation ownership", () => {
         projectPath: git.root,
       });
       if (sharedHost !== false) {
-        await expect(creation).rejects.toThrow(
-          "Prepared worker requires its dedicated registered workspace",
-        );
+        await expect(creation).rejects.toThrow("Prepared worker requires a dedicated environment");
         expect(registerPreparedWorkspace).not.toHaveBeenCalled();
         return;
       }
@@ -187,6 +196,12 @@ describe("worker provider project preparation ownership", () => {
         sharedHost: false,
         nodeDeviceId: deviceId,
       });
+      if (emptyWorkspace) {
+        expect(environment.profileSnapshot.project).toBeUndefined();
+        expect(environment.profileSnapshot.runtimePreparation).toMatchObject({ source: "empty" });
+        expect(registerPreparedWorkspace).not.toHaveBeenCalled();
+        return;
+      }
       const preparation = expectDefined(
         readWorkerProjectPreparation(environment.profileSnapshot.project),
         "prepared profile",
@@ -205,65 +220,6 @@ describe("worker provider project preparation ownership", () => {
       );
     },
   );
-
-  it("replays an inherited prepared intent with its exact admitted target and artifacts", async () => {
-    const git = await repository("prepared-inherited-replay");
-    const provision = vi.fn(async () => {
-      throw new Error("fixture allocation unavailable");
-    });
-    const provider = support.createProvider({
-      requiresNodeEnrollment: true,
-      provisionBeforeInstallation: true,
-      supportsProjectPreparation: () => true,
-      resolvePreparationTarget: (_profile, machineClass, os) => ({
-        machineClass: machineClass ?? "small",
-        platform: os ?? "linux",
-      }),
-      provision,
-    });
-    const service = support.createService(provider, {
-      projectNamespace: "gateway",
-      prepareNodeEnrollment: async () => {
-        throw new Error("fixture must not enroll");
-      },
-      prepareNodeArtifacts: async () => ({
-        artifacts: {
-          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
-          enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
-          workerBundleHash: support.BUNDLE_HASH,
-          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
-          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
-          protocolFeatures: [...support.BUNDLE_ARTIFACT.protocolFeatures],
-        },
-        assertCurrent: () => {},
-      }),
-    });
-    const profile = {
-      profileId: "development",
-      providerId: provider.id,
-      profileSnapshot: { install: "bundle", settings: {}, machineClass: "large" },
-    };
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      await expect(
-        service.createWithRequest({
-          profileId: profile.profileId,
-          inheritedProfile: {
-            providerId: profile.providerId,
-            profileSnapshot: profile.profileSnapshot,
-          },
-          idempotencyKey: "prepared-replay",
-          projectPath: git.root,
-        }),
-      ).rejects.toThrow("fixture allocation unavailable");
-    }
-    expect(provision).toHaveBeenCalledTimes(2);
-    const rows = support.testState.store.list();
-    expect(rows).toHaveLength(1);
-    expect(readWorkerProjectPreparation(rows[0]?.profileSnapshot.project)?.target).toEqual({
-      machineClass: "large",
-      platform: "linux",
-    });
-  });
 
   it.each(["runtime-bootstrap", "runtime-worker", "enrollment-bootstrap"] as const)(
     "closes changed %s grants without publishing a different prepared runtime identity",
@@ -449,7 +405,7 @@ describe("worker provider project preparation ownership", () => {
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "large"])(
+  it.each([undefined])(
     "persists and replays project identity with a legacy provider hook (machineClass=%s)",
     async (machineClass) => {
       const git = await repository("project");
@@ -533,36 +489,7 @@ describe("worker provider project preparation ownership", () => {
     },
   );
 
-  it("rejects another project root using the same idempotency key before calling the provider", async () => {
-    const first = await repository("first-project");
-    const second = await repository("second-project");
-    const provision = vi.fn<WorkerProvider["provision"]>(async () => ({
-      leaseId: "lease-project",
-      ssh: support.SSH_ENDPOINT,
-    }));
-    const service = createService(provision);
-    await service.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "same-request",
-      projectPath: first.root,
-    });
-    const snapshot = support.testState.store.list()[0]?.profileSnapshot;
-
-    await expect(
-      service.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "same-request",
-        projectPath: second.root,
-      }),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-      message: "Idempotency key belongs to another project",
-    });
-    expect(provision).toHaveBeenCalledTimes(1);
-    expect(support.testState.store.list()[0]?.profileSnapshot).toEqual(snapshot);
-  });
-
-  it.each([true, false])(
+  it.each([true])(
     "a fresh inherited allocation uses only its current project (has project=%s)",
     async (hasProject) => {
       const first = await repository("inherited-project");

@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  registerSessionBindingAdapterV2,
   resolveThreadBindingLifecycle,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -10,7 +9,10 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createAccountScopedBindingAdapterV2 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import {
+  createAccountScopedBindingAdapterV2,
+  registerSessionBindingAdapterV2,
+} from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   loadBindingsFromStore,
@@ -572,9 +574,9 @@ function createSyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleF
   };
 }
 
-/** @deprecated Use setTelegramThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setTelegramThreadBindingIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
 export const setTelegramThreadBindingIdleTimeoutBySessionKey =
   createSyncLifecycleSetter("idleTimeoutMs");
 
-/** @deprecated Use setTelegramThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setTelegramThreadBindingMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
 export const setTelegramThreadBindingMaxAgeBySessionKey = createSyncLifecycleSetter("maxAgeMs");

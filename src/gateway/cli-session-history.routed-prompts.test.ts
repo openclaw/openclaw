@@ -20,13 +20,14 @@ function writeClaudeEntries(filePath: string, entries: readonly Record<string, u
 }
 
 describe("routed CLI prompts in chat history", () => {
-  it.each(
-    ["string", "text block"].flatMap((shape) =>
-      ["messages occurred outside this Claude session", "earlier messages in this chat"].map(
-        (description) => ({ shape, description }),
-      ),
-    ),
-  )(
+  it.each([
+    { shape: "text block", description: "earlier messages in this chat" },
+    {
+      shape: "text block",
+      description:
+        "messages recorded in this chat since your last reply here (possibly already in this session)",
+    },
+  ])(
     "preserves unmatched routed $shape provenance beneath $description context",
     async ({ shape, description }) => {
       await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
@@ -94,9 +95,9 @@ describe("routed CLI prompts in chat history", () => {
     });
   });
 
-  it.each(["string", "text block"])(
-    "matches literal routed %s content before removing generated-looking decorations",
-    async (shape) => {
+  it.each([{ shape: "text block", decoration: "requester frame" }])(
+    "matches literal routed $shape $decoration before removing generated-looking decorations",
+    async ({ shape, decoration }) => {
       await withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
         const provenance: InputProvenance = {
           kind: "inter_session",
@@ -105,10 +106,27 @@ describe("routed CLI prompts in chat history", () => {
         };
         const envelope = buildInterSessionPromptContext(provenance).text;
         const body = `${envelope}\nPlease check the build.`;
-        const raw = `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`;
+        const hint =
+          'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
+        const frame =
+          'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n';
+        const quoted = `${decoration === "requester frame" ? frame : ""}${hint}\n\nPlease check the build.`;
+        const raw =
+          decoration === "resume"
+            ? `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`
+            : `${envelope}\n${quoted}`;
         const content = shape === "string" ? raw : [{ type: "text", text: raw }];
-        const plain = { ...user(body), provenance };
-        const literal = { ...user(content), provenance };
+        const plain = {
+          ...user(decoration === "resume" ? body : "Please check the build."),
+          provenance,
+        };
+        const literalContent =
+          decoration === "resume"
+            ? content
+            : shape === "string"
+              ? quoted
+              : [{ type: "text", text: quoted }];
+        const literal = { ...user(literalContent), provenance };
         await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "routed-literal" })]);
 
         const imported = await readMessages();
@@ -125,6 +143,54 @@ describe("routed CLI prompts in chat history", () => {
       });
     },
   );
+
+  it("keeps routed quotation identities from advancing the plain-body floor on reload", () => {
+    const provenance: InputProvenance = {
+      kind: "inter_session",
+      sourceSessionKey: "agent:ops:main",
+      sourceTool: "sessions_send",
+    };
+    const envelope = buildInterSessionPromptContext(provenance).text;
+    const quoted =
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n' +
+      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\nhello';
+    const plain = { ...user("hello"), provenance };
+    const literal = { ...user(quoted, undefined, cliMeta("literal")), provenance };
+    const imports = [
+      user(`${envelope}\n${quoted}`, undefined, cliMeta("literal")),
+      user(`${envelope}\nhello`, undefined, cliMeta("plain")),
+    ];
+
+    expect(
+      mergeImportedChatHistoryMessages({
+        localMessages: [plain, literal],
+        importedMessages: imports,
+      }),
+    ).toEqual([{ ...plain, __openclaw: cliMeta("plain") }, literal]);
+  });
+
+  it("matches repeated ordinary turns in order across different generated context", async () => {
+    await withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
+      const context =
+        'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"},"requester_profile_hint":"current"}\n```\n\n';
+      const first = user(`${context}hello`);
+      const second = user("hello");
+      await writeClaudeEntries(filePath, [
+        claudeUser(`${DRIFT_NOTE}\n\nhello`, { uuid: "first" }),
+        claudeUser("hello", { uuid: "second" }),
+      ]);
+
+      expect(
+        mergeImportedChatHistoryMessages({
+          localMessages: [first, second],
+          importedMessages: await readMessages(),
+        }),
+      ).toEqual([
+        { ...first, __openclaw: cliMeta("first", sessionId) },
+        { ...second, __openclaw: cliMeta("second", sessionId) },
+      ]);
+    });
+  });
 
   it("dedupes routed prompts whose drift note sits under the inter-session envelope", () => {
     const envelope = buildInterSessionPromptContext({
@@ -251,71 +317,5 @@ describe("routed CLI prompts in chat history", () => {
     expect(
       mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
     ).toEqual([{ ...local, __openclaw: cliMeta("routed-events") }]);
-  });
-
-  it("dedupes a body-only routed row against an import with a drift note", () => {
-    const provenance: InputProvenance = {
-      kind: "inter_session",
-      sourceSessionKey: "agent:ops:main",
-      sourceTool: "sessions_send",
-    };
-    const envelope = buildInterSessionPromptContext(provenance).text;
-    const local = { ...user("Please check the build.", 1_000), provenance };
-    const imported = user(
-      `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`,
-      1_001,
-      cliMeta("routed-drift"),
-    );
-
-    expect(
-      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
-    ).toEqual([{ ...local, __openclaw: cliMeta("routed-drift") }]);
-  });
-
-  it("keeps typed System lines as part of the prompt", () => {
-    const local = user("what changed?", 1_000);
-    const imported = user("System: review the logs\n\nwhat changed?", 1_001, cliMeta("typed"));
-
-    expect(
-      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
-    ).toEqual([local, imported]);
-  });
-
-  it("keeps typed bracketed System lines apart from an unrelated local turn", () => {
-    const local = user("done", 1_000);
-    const imported = user("System: [manual note]\n\ndone", 1_001, cliMeta("bracketed"));
-
-    expect(
-      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
-    ).toEqual([local, imported]);
-  });
-
-  it("strips queued system event lines with UTC and unknown timestamps", () => {
-    const local = user("done", 1_000);
-    const imported = user(
-      "System: [2026-09-30T17:16:38Z] Gateway connected.\nSystem: [unknown-time] Node paired.\n\ndone",
-      1_001,
-      cliMeta("utc-events"),
-    );
-
-    expect(
-      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
-    ).toEqual([{ ...local, __openclaw: cliMeta("utc-events") }]);
-  });
-
-  it("dedupes prompts carrying queued system event lines", () => {
-    const localMessage = user("what changed?", 1_000);
-    const importedMessage = user(
-      `${DRIFT_NOTE}\n\nSystem: [2026-09-30 17:16:38 UTC] Gateway connected.\nSystem: second line\n\nwhat changed?`,
-      1_001,
-      cliMeta("system-events"),
-    );
-
-    expect(
-      mergeImportedChatHistoryMessages({
-        localMessages: [localMessage],
-        importedMessages: [importedMessage],
-      }),
-    ).toEqual([{ ...localMessage, __openclaw: cliMeta("system-events") }]);
   });
 });

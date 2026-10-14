@@ -3,7 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
-import { OpenClawChatCameraCapture } from "./chat-camera-capture.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import type { OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
+import "./chat-camera-capture.tsx";
 
 function media(deviceId = "front") {
   const track = Object.assign(new EventTarget(), {
@@ -33,18 +36,23 @@ describe("composer camera capture", () => {
 
   async function settle() {
     await component.updateComplete;
+    flush();
     await Promise.resolve();
-    await component.updateComplete;
+    flush();
   }
 
   function button(text: string) {
-    const result = [...component.renderRoot.querySelectorAll("button")].find(
+    const result = [...component.querySelectorAll("button")].find(
       (item) => item.textContent?.trim() === text,
     );
     if (!result) {
       throw new Error(`Missing button: ${text}`);
     }
     return result;
+  }
+
+  async function waitForCapture() {
+    await waitForSolid(() => expect(button("Capture").disabled).toBe(false));
   }
 
   beforeEach(async () => {
@@ -73,12 +81,12 @@ describe("composer camera capture", () => {
     vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(play);
     vi.spyOn(HTMLVideoElement.prototype, "videoWidth", "get").mockReturnValue(640);
     vi.spyOn(HTMLVideoElement.prototype, "videoHeight", "get").mockReturnValue(480);
-    component = new OpenClawChatCameraCapture();
+    component = document.createElement("openclaw-chat-camera-capture");
     component.onCapture = vi.fn();
     component.onUpload = vi.fn();
     component.onNativeCapture = vi.fn();
     component.readSignal = new AbortController().signal;
-    document.body.append(component);
+    mountSolid(() => component);
     await settle();
   });
 
@@ -107,7 +115,7 @@ describe("composer camera capture", () => {
       const capture = media();
       getUserMedia.mockResolvedValue(capture.stream);
       expect(getUserMedia).not.toHaveBeenCalled();
-      expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(component.querySelector("openclaw-modal-dialog")).toBeNull();
       component.show();
       expect(getUserMedia).toHaveBeenCalledWith({
         audio: false,
@@ -116,13 +124,13 @@ describe("composer camera capture", () => {
       component.show();
       expect(getUserMedia).toHaveBeenCalledOnce();
       await settle();
-      const video = component.renderRoot.querySelector("video");
+      const video = component.querySelector("video");
       expect(video?.srcObject).toBe(capture.stream);
       expect(video?.hasAttribute("playsinline")).toBe(true);
       expect(video?.hasAttribute("muted")).toBe(true);
-      expect(button("Capture").disabled).toBe(false);
+      await waitForCapture();
       if (action === "modal-cancel") {
-        component.renderRoot
+        component
           .querySelector("openclaw-modal-dialog")
           ?.dispatchEvent(new CustomEvent("modal-cancel"));
       }
@@ -144,7 +152,7 @@ describe("composer camera capture", () => {
       await settle();
       expect(capture.track.stop).toHaveBeenCalledOnce();
       expect(component.onCapture).not.toHaveBeenCalled();
-      expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(component.querySelector("openclaw-modal-dialog")).toBeNull();
     },
   );
 
@@ -162,7 +170,7 @@ describe("composer camera capture", () => {
     await settle();
     expect(oldCamera.track.stop).toHaveBeenCalledOnce();
     expect(newCamera.track.stop).not.toHaveBeenCalled();
-    expect(component.renderRoot.querySelector("video")?.srcObject).toBe(newCamera.stream);
+    expect(component.querySelector("video")?.srcObject).toBe(newCamera.stream);
   });
 
   it.each([
@@ -176,9 +184,9 @@ describe("composer camera capture", () => {
     getUserMedia.mockRejectedValue(new DOMException("camera error", name));
     component.show();
     await settle();
-    expect(component.renderRoot.querySelector("[role=alert]")?.textContent).toContain(copy);
+    expect(component.querySelector("[role=alert]")?.textContent).toContain(copy);
     expect(component.onUpload).not.toHaveBeenCalled();
-    expect(component.renderRoot.textContent).toContain("Use device camera");
+    expect(component.textContent).toContain("Use device camera");
     expect(component.onNativeCapture).not.toHaveBeenCalled();
     expect(button("Try again").disabled).toBe(false);
     const destination = action === "Upload photo" ? component.onUpload : component.onNativeCapture;
@@ -189,7 +197,7 @@ describe("composer camera capture", () => {
     } else {
       expect(destination).toHaveBeenCalledExactlyOnceWith(component);
     }
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(component.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
   it.each(["insecure", "unsupported"])(
@@ -202,7 +210,7 @@ describe("composer camera capture", () => {
       }
       component.show();
       await settle();
-      expect(component.renderRoot.textContent).toContain("camera or file picker");
+      expect(component.textContent).toContain("camera or file picker");
       expect(getUserMedia).not.toHaveBeenCalled();
       expect(component.onNativeCapture).not.toHaveBeenCalled();
       expect(component.onUpload).not.toHaveBeenCalled();
@@ -210,7 +218,7 @@ describe("composer camera capture", () => {
       button("Use device camera").click();
       await settle();
       expect(nativeCapture).toHaveBeenCalledExactlyOnceWith(component);
-      expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(component.querySelector("openclaw-modal-dialog")).toBeNull();
     },
   );
 
@@ -223,7 +231,7 @@ describe("composer camera capture", () => {
     button("Use device camera").click();
     expect(nativeCapture).not.toHaveBeenCalled();
     await settle();
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(component.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
   it("keeps a stopped-camera error when an old play promise finishes", async () => {
@@ -236,9 +244,7 @@ describe("composer camera capture", () => {
     capture.track.dispatchEvent(new Event("ended"));
     playing.resolve();
     await settle();
-    expect(component.renderRoot.querySelector("[role=alert]")?.textContent).toContain(
-      "Your camera stopped",
-    );
+    expect(component.querySelector("[role=alert]")?.textContent).toContain("Your camera stopped");
     expect(capture.track.stop).toHaveBeenCalledOnce();
   });
 
@@ -255,7 +261,7 @@ describe("composer camera capture", () => {
     });
     component.show();
     await settle();
-    const select = component.renderRoot.querySelector("select");
+    const select = component.querySelector("select");
     if (!select) {
       throw new Error("Missing camera selector");
     }
@@ -266,7 +272,7 @@ describe("composer camera capture", () => {
       audio: false,
       video: { deviceId: { exact: "back" } },
     });
-    expect(component.renderRoot.querySelector("video")?.srcObject).toBe(back.stream);
+    expect(component.querySelector("video")?.srcObject).toBe(back.stream);
   });
 
   function encodeFrames() {
@@ -289,14 +295,16 @@ describe("composer camera capture", () => {
     getUserMedia.mockResolvedValueOnce(first.stream).mockResolvedValueOnce(second.stream);
     component.show();
     await settle();
+    await waitForCapture();
     button("Capture").click();
     await settle();
     expect(first.track.stop).toHaveBeenCalledOnce();
     expect(component.onCapture).not.toHaveBeenCalled();
-    expect(component.renderRoot.querySelector("img")?.src).toBe("blob:camera-test");
+    expect(component.querySelector("img")?.src).toBe("blob:camera-test");
     button("Retake").click();
     await settle();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:camera-test");
+    await waitForCapture();
     button("Capture").click();
     await settle();
     const onCapture = component.onCapture;
@@ -310,7 +318,7 @@ describe("composer camera capture", () => {
       }),
     );
     expect(second.track.stop).toHaveBeenCalledOnce();
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(component.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
   it("ignores image encoding that finishes after the draft is replaced", async () => {
@@ -323,6 +331,7 @@ describe("composer camera capture", () => {
     getUserMedia.mockResolvedValue(capture.stream);
     component.show();
     await settle();
+    await waitForCapture();
     button("Capture").click();
     expect(capture.track.stop).toHaveBeenCalledOnce();
     component.readSignal = new AbortController().signal;
@@ -330,6 +339,6 @@ describe("composer camera capture", () => {
     await settle();
     expect(component.onCapture).not.toHaveBeenCalled();
     expect(createObjectURL).not.toHaveBeenCalled();
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(component.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 });

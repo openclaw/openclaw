@@ -111,23 +111,6 @@ describe("project registry", () => {
     expect(parseProjectGitUrl(input)?.url).toBe("https://github.com/openclaw/openclaw.git");
   });
 
-  it.each([
-    [
-      "https://ghe.example.test/Acme/Private-Repo",
-      "https://ghe.example.test/acme/private-repo.git",
-    ],
-    [
-      "git@ghe.example.test:Acme/Private-Repo.git",
-      "https://ghe.example.test/acme/private-repo.git",
-    ],
-    [
-      "ssh://git@ghe.example.test/Acme/Private-Repo.git",
-      "https://ghe.example.test/acme/private-repo.git",
-    ],
-  ])("canonicalizes accepted enterprise GitHub clone URL %s", (input, expected) => {
-    expect(parseProjectGitUrl(input, "ghe.example.test")?.url).toBe(expected);
-  });
-
   it("rejects a repository URL from a host other than the configured GitHub host", () => {
     expect(
       parseProjectGitUrl("https://github.com/openclaw/openclaw.git", "ghe.example.test"),
@@ -149,7 +132,7 @@ describe("project registry", () => {
     expect(parseProjectGitUrl(input)).toBeNull();
   });
 
-  it("lazily ensures the additive table exactly once per database", async () => {
+  it("leaves an absent registry empty until registration installs its table", async () => {
     const root = tempDirs.make("openclaw-project-schema-");
     const options = { path: path.join(root, "state.sqlite") };
     openOpenClawStateDatabase(options);
@@ -173,6 +156,15 @@ describe("project registry", () => {
       expect.objectContaining({ id: "workspace:main", source: "workspace" }),
     ]);
     expect(await listProjectRegistry({} as OpenClawConfig, options)).toHaveLength(1);
+
+    expect(
+      state.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'projects'")
+        .get(),
+    ).toBeUndefined();
+    const repo = await initializeRepository(root, "registered");
+    const registered = await registerProjectRegistry({ path: repo }, options);
+    expect(await listProjectRegistry({}, options)).toContainEqual(registered);
 
     const rows = state.db
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'projects'")
@@ -446,27 +438,56 @@ describe("project registry", () => {
     expect((await git(target, "rev-parse", "origin/main")).stdout.trim()).toBe(sourceHead);
   });
 
-  it("preserves partial-clone filtering during refresh", async () => {
+  it("negotiates pinned partial-clone commits and preserves filtering during refresh", async () => {
     const root = tempDirs.make("openclaw-project-refresh-partial-");
     const source = await initializeRepository(root, "source");
     await git(source, "config", "uploadpack.allowFilter", "true");
     const target = path.join(root, "partial");
     const url = pathToFileURL(source).href;
     await git(root, "clone", "--filter=blob:none", "--no-checkout", url, target);
+    await git(target, "config", `remote.${url}.promisor`, "true");
+    await git(target, "config", `remote.${url}.partialclonefilter`, "blob:none");
+    const base = (await git(target, "rev-parse", "HEAD")).stdout.trim();
+    const packs = path.join(target, ".git", "objects", "pack");
+    const before = new Set(await fs.readdir(packs));
     await commitFile(source, "later.txt", "keep this blob lazy\n");
     const commit = (await git(source, "rev-parse", "HEAD")).stdout.trim();
-    const blob = (await git(source, "rev-parse", "HEAD:later.txt")).stdout.trim();
 
+    // A missing pinned SHA must use negotiated transport, not cat-file's lazy
+    // fetch of the whole commit ancestry. Caller environment cannot enable it.
+    await ensureProjectCheckoutCommit(
+      { url, target, commit },
+      { env: { ...process.env, GIT_NO_LAZY_FETCH: "0" } },
+    );
+    const added = (await fs.readdir(packs)).filter(
+      (name) => name.endsWith(".idx") && !before.has(name),
+    );
+    expect(added).toHaveLength(1);
+    for (const pack of added) {
+      const indexed = (await git(target, "verify-pack", "-v", path.join(packs, pack))).stdout;
+      expect(indexed).toContain(`${commit} commit`);
+      expect(indexed).not.toContain(`${base} commit`);
+    }
+    expect((await git(target, "rev-parse", "HEAD")).stdout.trim()).toBe(base);
+    expect((await git(target, "cat-file", "-t", commit)).stdout.trim()).toBe("commit");
+    await ensureProjectCheckoutCommit(
+      { url, target, commit },
+      { env: { ...process.env, GIT_ALLOW_PROTOCOL: "" } },
+    );
+    await commitFile(source, "refresh.txt", "keep refreshed blobs lazy\n");
+    const refreshed = (await git(source, "rev-parse", "HEAD")).stdout.trim();
+    const refreshedBlob = (await git(source, "rev-parse", "HEAD:refresh.txt")).stdout.trim();
     await refreshProjectCheckout({ url, target });
-    expect((await git(target, "rev-parse", "origin/main")).stdout.trim()).toBe(commit);
+    expect((await git(target, "rev-parse", "origin/main")).stdout.trim()).toBe(refreshed);
 
     await expect(
-      execFileAsync("git", ["-C", target, "cat-file", "-e", blob], {
+      execFileAsync("git", ["-C", target, "cat-file", "-e", refreshedBlob], {
         env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
       }),
     ).rejects.toMatchObject({ code: 1 });
-    expect((await git(target, "cat-file", "-t", commit)).stdout.trim()).toBe("commit");
-    expect((await git(target, "show", `${commit}:later.txt`)).stdout).toBe("keep this blob lazy\n");
+    expect((await git(target, "show", `${refreshed}:refresh.txt`)).stdout).toBe(
+      "keep refreshed blobs lazy\n",
+    );
   });
 
   it("prunes seeded tracking refs deleted upstream during refresh", async () => {

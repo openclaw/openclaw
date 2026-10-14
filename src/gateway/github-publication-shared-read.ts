@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { SharedGitHubPublicationReadInput } from "../state/github-publication-read.types.js";
 import {
@@ -8,9 +7,11 @@ import {
   withArtifactPreservingStateReads,
 } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { PublicationSessionIdentity } from "./github-publication-availability.js";
+import {
+  prepareGitHubPublicationSession,
+  type PublicationSessionIdentity,
+} from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
-import { retainGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 
 type SharedGitHubPublicationSelector = SharedGitHubPublicationReadInput["selector"];
 
@@ -44,8 +45,8 @@ export async function readSharedGitHubPublication(
 ) {
   const capturedSelector = { ...selector };
   let workspaceIndependent = false;
-  const binding = captureIncognitoSessionBinding(session);
-  const context = binding ? captureOpenClawStateReadWorkerContext() : undefined;
+  const memory = captureSessionEntryMetadataRead(session, () => {});
+  const context = memory ? captureOpenClawStateReadWorkerContext() : undefined;
   const observe = async (entry: SessionEntry) => {
     const result = await withArtifactPreservingStateReads(() =>
       executeExistingOpenClawStateRead(
@@ -67,67 +68,57 @@ export async function readSharedGitHubPublication(
       (!row || row.status === "published" || row.status === "failed");
     return row;
   };
-  if (binding) {
-    const { actor, admissionSignal } = binding;
-    const claim = actor.sessions.captureCurrent(session.sessionKey);
-    const metadata = captureSessionEntryMetadataRead({ ...session, storePath: actor.path })!;
-    const authority = {
-      assertCurrent() {
-        admissionSignal?.throwIfAborted();
-        actor.assertReadable();
-        claim.assertCurrent();
-        context!.admission.assertCurrent();
-      },
-    };
-    return actor.sessions.withSharedState(async () => {
-      const { entry } = await actor.sessions.read(authority, { sessionKey: session.sessionKey });
+  if (memory) {
+    const readCurrent = () => {
+      const entry = memory.readCurrent();
       if (
         !entry ||
-        actor.agentId !== session.agentId ||
         entry.sessionId !== session.sessionId ||
         (session.lifecycleRevision !== undefined &&
           (entry.lifecycleRevision ?? null) !== session.lifecycleRevision)
       ) {
         throw new GitHubPublicationSessionChangedError();
       }
-      const row = await observe(entry);
-      authority.assertCurrent();
-      const current = metadata.readCurrent();
-      if (
-        !current ||
-        (!workspaceIndependent &&
-          !isDeepStrictEqual(workspaceSelection(entry), workspaceSelection(current)))
-      ) {
-        throw new GitHubPublicationSessionChangedError();
-      }
-      return row;
-    });
-  }
-  const selected = retainGatewaySessionEntryReadOnly(
-    session.sessionKey,
-    session.agentId,
-    (previous, current) =>
-      workspaceIndependent ||
-      isDeepStrictEqual(workspaceSelection(previous), workspaceSelection(current)),
-  );
-  try {
-    const entry = selected.entry;
+      return entry;
+    };
+    const entry = readCurrent();
+    const row = await observe(entry);
+    context!.admission.assertCurrent();
+    const current = readCurrent();
     if (
-      !entry ||
-      selected.agentId !== session.agentId ||
-      selected.canonicalKey !== session.sessionKey ||
-      entry.sessionId !== session.sessionId ||
-      (session.lifecycleRevision !== undefined &&
-        (entry.lifecycleRevision ?? null) !== session.lifecycleRevision)
+      !workspaceIndependent &&
+      !isDeepStrictEqual(workspaceSelection(entry), workspaceSelection(current))
     ) {
       throw new GitHubPublicationSessionChangedError();
     }
-    const row = await observe(entry);
-    if (!selected.isCurrentAtResponse()) {
-      throw new GitHubPublicationSessionChangedError();
-    }
     return row;
-  } finally {
-    selected.release();
   }
+  using selected = await prepareGitHubPublicationSession(session.sessionKey, {
+    agentId: session.agentId,
+    // Terminal receipts retain session authority independently of the current workspace.
+    fields: ["sessionId", "lifecycleRevision", "owner", "createdActor", "visibility", "incognito"],
+  });
+  const entry = selected.loaded.entry;
+  if (
+    !entry ||
+    selected.loaded.agentId !== session.agentId ||
+    selected.loaded.canonicalKey !== session.sessionKey ||
+    entry.sessionId !== session.sessionId ||
+    (session.lifecycleRevision !== undefined &&
+      (entry.lifecycleRevision ?? null) !== session.lifecycleRevision)
+  ) {
+    throw new GitHubPublicationSessionChangedError();
+  }
+  const row = await observe(entry);
+  const current = selected.readCurrent().entry;
+  if (
+    !current ||
+    current.sessionId !== entry.sessionId ||
+    current.lifecycleRevision !== entry.lifecycleRevision ||
+    (!workspaceIndependent &&
+      !isDeepStrictEqual(workspaceSelection(entry), workspaceSelection(current)))
+  ) {
+    throw new GitHubPublicationSessionChangedError();
+  }
+  return row;
 }

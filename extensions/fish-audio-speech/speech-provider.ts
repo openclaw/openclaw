@@ -21,6 +21,7 @@ import {
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  FISH_AUDIO_MODELS,
   type FishAudioFormat,
   type FishAudioLatency,
   type FishAudioModel,
@@ -31,7 +32,6 @@ import {
   normalizeFishAudioBaseUrl,
 } from "./tts.js";
 
-const FISH_AUDIO_MODELS = ["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"] as const;
 const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
 const DEFAULT_LATENCY: FishAudioLatency = "balanced";
 const DEFAULT_TIMEOUT_MS = 240_000;

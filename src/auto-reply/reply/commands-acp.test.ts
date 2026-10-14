@@ -757,7 +757,7 @@ describe("/acp command", () => {
 
     const result = await runDiscordAcpCommand("/acp spawn codex --cwd /home/bob/clawd");
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Created thread thread-created and bound it");
     expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("acpx");
     expectMockCallFields(hoisted.ensureSessionMock, {
@@ -787,7 +787,7 @@ describe("/acp command", () => {
           };
         }
       | undefined;
-    expect(upsertArgs?.sessionKey).toMatch(/^agent:codex:acp:/);
+    expect(upsertArgs?.sessionKey).toMatch(/^agent:main:acp:/);
     const seededWithoutEntry = upsertArgs?.mutate(undefined, undefined);
     expect(seededWithoutEntry?.backend).toBe("acpx");
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
@@ -833,7 +833,7 @@ describe("/acp command", () => {
     params.storePath = "/tmp/requester-sessions.json";
     hoisted.resolveSessionStorePathForAcpMock.mockReturnValue({
       cfg: baseCfg,
-      storePath: "/tmp/codex-sessions.json",
+      storePath: "/tmp/main-sessions.json",
     });
 
     const result = await handleAcpCommand(params, true);
@@ -843,7 +843,7 @@ describe("/acp command", () => {
     const spawnedSessionKey = (
       hoisted.ensureSessionMock.mock.calls[0]?.[0] as { sessionKey?: string } | undefined
     )?.sessionKey;
-    expect(spawnedSessionKey).toMatch(/^agent:codex:acp:/);
+    expect(spawnedSessionKey).toMatch(/^agent:main:acp:/);
     const updateCall = hoisted.updateSessionEntryMock.mock.calls[0] as
       | [
           { storePath: string; sessionKey: string },
@@ -851,7 +851,7 @@ describe("/acp command", () => {
         ]
       | undefined;
     expect(updateCall?.[0]).toEqual({
-      storePath: "/tmp/codex-sessions.json",
+      storePath: "/tmp/main-sessions.json",
       sessionKey: spawnedSessionKey,
     });
     expect(updateCall?.[1]({ sessionId: "target", updatedAt: 1 })).toEqual({
@@ -865,7 +865,7 @@ describe("/acp command", () => {
       "/acp spawn codex \u2014mode oneshot \u2014thread here \u2014cwd /home/bob/clawd \u2014label jeerreview",
     );
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Bound this thread to");
     expectMockCallFields(hoisted.ensureSessionMock, {
       agent: "codex",
@@ -946,7 +946,7 @@ describe("/acp command", () => {
   it("binds Telegram topic ACP spawns to full conversation ids", async () => {
     const result = await runTelegramAcpCommand("/acp spawn codex --thread here");
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Bound this conversation to");
     expect(result?.reply?.delivery).toEqual({ pin: { enabled: true } });
     expectBindingBindCall({
@@ -962,7 +962,7 @@ describe("/acp command", () => {
   it("binds Telegram DM ACP spawns to the DM conversation id", async () => {
     const result = await runTelegramDmAcpCommand("/acp spawn codex --thread here");
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Bound this conversation to");
     expect(result?.reply?.channelData).toBeUndefined();
     expectBindingBindCall({

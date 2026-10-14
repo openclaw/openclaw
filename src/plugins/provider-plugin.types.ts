@@ -238,7 +238,7 @@ export type ProviderPlugin = {
    */
   buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
   /**
-   * @deprecated Use sanitizeReplayHistoryAsync; removed in the next Plugin SDK major.
+   * @deprecated Use sanitizeReplayHistoryAsync; removal follows a stable deprecation period.
    * Provider-owned replay-history sanitization.
    *
    * Runs after OpenClaw performs generic transcript cleanup. Use this for
@@ -329,7 +329,13 @@ export type ProviderPlugin = {
    * provider-specific compat payload patches that do not justify a separate
    * transport implementation.
    */
-  wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) =>
+    | (StreamFn & {
+        /** A decorator that leaves shared request and output compatibility policy active. */
+        preservesGenericCompatibility?: boolean;
+      })
+    | null
+    | undefined;
   /**
    * Provider-owned wrapper for direct `completeSimple` callers.
    *
@@ -484,8 +490,8 @@ export type ProviderPlugin = {
    *
    * Prefer this over the individual thinking capability hooks when a provider
    * or model exposes a custom set of thinking levels. OpenClaw stores the
-   * canonical `id`, shows `label` when provided, and downgrades stale stored
-   * values by profile rank.
+   * canonical `id`, shows `label` when provided, and clamps execution by profile
+   * rank without replacing the stored preference.
    */
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
@@ -599,9 +605,10 @@ export type ProviderPlugin = {
    * OpenClaw calls this before falling back to the shared `shared model runtime` OAuth
    * refreshers. Use it when the provider has a custom refresh endpoint, or when
    * the provider needs custom refresh-failure behavior that should stay out of
-   * core auth-profile code.
+   * core auth-profile code. The optional second argument is the caller's
+   * effective config; prefer it over reading global runtime config.
    */
-  refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  refreshOAuth?: (cred: OAuthCredential, config?: OpenClawConfig) => Promise<OAuthCredential>;
   /**
    * Provider-owned auth-doctor hint.
    *

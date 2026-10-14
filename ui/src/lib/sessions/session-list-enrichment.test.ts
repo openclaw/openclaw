@@ -7,6 +7,50 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import { requestSessionListParams } from "./session-requests.ts";
+
+it.each([undefined, 1])(
+  "expands response-local sidebar facts before reconciliation (page size %s)",
+  async (pageSize) => {
+    const request = vi.fn(async (_method: string, raw?: unknown) => {
+      const offset = Number(asOptionalRecord(raw)?.offset ?? 0);
+      const actor = { type: "human", id: `profile-${offset}`, label: `Teammate ${offset}` };
+      return {
+        ...sessionsResult(
+          [
+            {
+              key: `agent:main:thread-${offset}`,
+              sessionId: `thread-${offset}`,
+              kind: "direct",
+              rowMode: "sidebar",
+              sharedFacts: [0],
+            },
+          ],
+          1,
+        ),
+        sharedFacts: [{ createdActor: actor, owner: { actor } }],
+        hasMore: offset === 0,
+        nextOffset: offset + 1,
+      };
+    });
+    const result = await requestSessionListParams(
+      createTestGatewayClient(request),
+      { rowMode: "sidebar", limit: 2, pageSize },
+      () => true,
+    );
+    expect(result?.sessions).toHaveLength(pageSize ? 2 : 1);
+    for (const [index, row] of result!.sessions.entries()) {
+      expect(row.createdActor).toEqual({
+        type: "human",
+        id: `profile-${index}`,
+        label: `Teammate ${index}`,
+      });
+      expect(row.owner?.actor).toEqual(row.createdActor);
+      expect(row).not.toHaveProperty("sharedFacts");
+    }
+    expect(result).not.toHaveProperty("sharedFacts");
+  },
+);
 
 it("retains titles and previews throughout a bounded managed window and its refresh", async () => {
   let revision = 1;

@@ -3,7 +3,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { selectSidebarView } from "../app-sidebar-setup.ts";
-import "../../pages/agents-home/agents-home-page.ts";
+import "../../pages/agents-home/agents-home-page.tsx";
 import {
   agentIds,
   mountRoster,
@@ -64,34 +64,41 @@ describe("AppSidebar agent roster", () => {
       ]);
       sidebar.sidebarAgentsMode = "roster";
       await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain(parent));
-      const row = sidebar.querySelector(`[data-session-key="${parent}"]`)!;
+      const row = () => sidebar.querySelector(`[data-session-key="${parent}"]`)!;
       const runningSelector =
         ".session-run-spinner, .session-glyph__ring:not(.session-glyph__ring--queued)";
       const needsAttention = mixed || parentState === "failed";
-      expect(row.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
+      expect(row().querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
         !needsAttention && parentState !== "running" ? 1 : 0,
       );
-      expect(row.querySelectorAll(runningSelector)).toHaveLength(
+      expect(row().querySelectorAll(runningSelector)).toHaveLength(
         !needsAttention && parentState === "running" ? 1 : 0,
       );
-      expect(row.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-      expect(row.querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
-      expect(row.querySelectorAll('[data-session-attention="error"]')).toHaveLength(
+      expect(row().querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(row().querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
+      expect(row().querySelectorAll('[data-session-attention="error"]')).toHaveLength(
         needsAttention ? 1 : 0,
       );
       sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parent}"]`)?.click();
       await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain("agent:working:queued-child"));
-      expect(row.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
+      expect(row().querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
         parentState === "queued" ? 1 : 0,
       );
-      expect(row.querySelectorAll(runningSelector)).toHaveLength(parentState === "running" ? 1 : 0);
+      expect(row().querySelectorAll(runningSelector)).toHaveLength(
+        parentState === "running" ? 1 : 0,
+      );
       expect(
         sidebar.querySelectorAll(
           '[data-session-key="agent:working:queued-child"] .session-glyph__ring--queued',
         ),
       ).toHaveLength(1);
       sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
-      await vi.waitFor(() => expect(sessionKeys(sidebar)).not.toContain(parent));
+      await vi.waitFor(() => {
+        expect(sessionKeys(sidebar)).not.toContain(parent);
+        expect(
+          sidebar.querySelector('[data-agent-collapse="working"]')?.getAttribute("aria-expanded"),
+        ).toBe("false");
+      });
       const header = sidebar.querySelector(
         '[data-agent-group="working"] .sidebar-agent-roster__signals',
       );
@@ -136,13 +143,15 @@ describe("AppSidebar agent roster", () => {
       sidebar.sidebarAgentsMode = "roster";
       await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
       await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual([childKey]));
-      const header = sidebar.querySelector(
-        '[data-agent-group="working"] .sidebar-agent-roster__header',
-      )!;
-      expect(header.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
-      expect(header.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-      const link = header.querySelector<HTMLAnchorElement>('[data-agent-id="working"]')!;
-      link.click();
+      const header = () =>
+        sidebar.querySelector('[data-agent-group="working"] .sidebar-agent-roster__header')!;
+      expect(header().querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
+      expect(header().querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      const link = () =>
+        header().querySelector<HTMLAnchorElement>(
+          '.sidebar-agent-roster__row[data-agent-id="working"]',
+        )!;
+      link().click();
       await vi.waitFor(() => expect(context.agentSelection.state.selectedId).toBe("working"));
       expect(onNavigate).toHaveBeenLastCalledWith(
         "chat",
@@ -150,13 +159,13 @@ describe("AppSidebar agent roster", () => {
       );
       sidebar.activeRouteId = "chat";
       sidebar.sessionKey = homeKey;
-      await vi.waitFor(() => expect(link.getAttribute("aria-current")).toBe("page"));
+      await vi.waitFor(() => expect(link().getAttribute("aria-current")).toBe("page"));
       sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')!.click();
       await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual([]));
-      expect(header.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
-      expect(header.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-      expect(header.querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
-      expect(link.getAttribute("aria-current")).toBe("page");
+      expect(header().querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
+      expect(header().querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(header().querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
+      expect(link().getAttribute("aria-current")).toBe("page");
     },
   );
 

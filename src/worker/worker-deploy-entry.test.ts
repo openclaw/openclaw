@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 
 const runtime = vi.hoisted(() => ({
@@ -14,7 +14,6 @@ vi.mock("node:module", async (importOriginal) => ({
 }));
 vi.mock("./worker-deploy-runtime.js", () => ({}));
 vi.mock("./worker.runtime.js", () => ({ loadWorkerTurnRuntime: runtime.loadWorkerTurnRuntime }));
-vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: vi.fn() }));
 vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: runtime.assertSupportedRuntime,
 }));
@@ -22,6 +21,10 @@ vi.mock("./worker-process.js", () => ({ runWorkerProcess: runtime.runWorkerProce
 
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
+const originalConnected = process.connected;
+const originalDisconnect = Object.getOwnPropertyDescriptor(process, "disconnect");
+const disconnect = vi.fn();
+let destroyStdin: MockInstance<typeof process.stdin.destroy>;
 
 beforeEach(() => {
   // Each case enters the executable again; the entry deliberately exports no runner.
@@ -31,12 +34,21 @@ beforeEach(() => {
   runtime.loadWorkerTurnRuntime.mockReset().mockResolvedValue();
   runtime.flushCompileCache.mockReset();
   process.exitCode = undefined;
+  process.connected = true;
+  process.disconnect = disconnect.mockReset();
+  destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnValue(process.stdin);
   vi.stubEnv("OPENCLAW_DEBUG", undefined);
 });
 
 afterEach(() => {
   process.argv = originalArgv;
   process.exitCode = originalExitCode;
+  process.connected = originalConnected;
+  if (originalDisconnect) {
+    Object.defineProperty(process, "disconnect", originalDisconnect);
+  } else {
+    Reflect.deleteProperty(process, "disconnect");
+  }
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -83,6 +95,8 @@ it.each([
     await expect(import("./worker-deploy-entry.js")).resolves.toBeDefined();
 
     expect(process.exitCode).toBe(1);
+    expect(destroyStdin).toHaveBeenCalledOnce();
+    expect(disconnect).toHaveBeenCalledOnce();
     expect(runtime.flushCompileCache).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledOnce();
     const diagnostic = String(stderr.mock.calls[0]?.[0]);
@@ -115,4 +129,23 @@ it("prewarms the turn runtime before flushing its compile cache", async () => {
   expect(runtime.flushCompileCache).toHaveBeenCalledOnce();
   expect(runtime.runWorkerProcess).not.toHaveBeenCalled();
   expect(process.exitCode).toBeUndefined();
+  expect(disconnect).toHaveBeenCalledOnce();
+});
+
+it("keeps the transport until worker execution has settled", async () => {
+  const started = createDeferred();
+  const settled = createDeferred();
+  runtime.runWorkerProcess.mockImplementation(async () => {
+    started.resolve();
+    await settled.promise;
+  });
+  process.argv = [process.execPath, "worker.mjs", "--internal-worker-ipc"];
+  const entry = import("./worker-deploy-entry.js");
+  await started.promise;
+  expect(disconnect).not.toHaveBeenCalled();
+  expect(destroyStdin).not.toHaveBeenCalled();
+  settled.resolve();
+  await entry;
+  expect(disconnect).toHaveBeenCalledOnce();
+  expect(destroyStdin).toHaveBeenCalledOnce();
 });

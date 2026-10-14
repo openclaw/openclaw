@@ -322,6 +322,8 @@ describe("existing shared-state schema admission", () => {
         change === "replacement" ? createExistingState(insertForeignKeyCorruption) : undefined;
       const { options, before } = createExistingState();
       await withExistingOpenClawStateSchema(options, async () => {
+        using sibling = openTrackedStateDatabase(options.path, { readOnly: true });
+        admitSqliteSchema(sibling);
         const capture = () =>
           captureSqliteWorkerStateContext(captureOpenClawStateReadWorkerContext(options));
         const context = capture();
@@ -358,10 +360,11 @@ describe("existing shared-state schema admission", () => {
             copyFileSync(replacement.options.path, options.path);
             expect(() => read()).toThrow(/foreign_key_check/i);
           } else {
+            sibling.close();
             await closeOpenClawStateDatabaseAsync();
             expect(read(capture())).toEqual(before);
           }
-          expect(checkCount()).toBe(change === "replacement" ? 2 : 1);
+          expect(checkCount()).toBe(change === "schema rollback" ? 1 : 2);
         } finally {
           reads.restore();
         }
@@ -429,9 +432,13 @@ describe("existing shared-state schema admission", () => {
       const { options, before } = createExistingState();
       const host = createOpenClawStateDatabaseAsyncLifecycle();
       await withExistingOpenClawStateSchema(options, async () => {
+        using sibling = openTrackedStateDatabase(options.path, { readOnly: true });
+        admitSqliteSchema(sibling);
         const context = captureSqliteWorkerStateContext(
           captureOpenClawStateReadWorkerContextWithAdmission(options, host.capture),
         );
+        const lifetime = context.stateIntegrity?.lifetime;
+        assert(lifetime);
         const run = <T>(operation: () => T) =>
           runWithSqliteWorkerStateContext(structuredClone(context), operation);
         const read = () =>
@@ -446,6 +453,7 @@ describe("existing shared-state schema admission", () => {
         try {
           expect(read()).toEqual(before);
           expect(read()).toEqual(before);
+          expect(Atomics.load(new BigInt64Array(lifetime.revision), 0)).toBe(lifetime.epoch);
           expect(
             reads.queries.filter((sql) => /^PRAGMA integrity_check\b/iu.test(sql)),
           ).toHaveLength(1);
@@ -483,6 +491,7 @@ describe("existing shared-state schema admission", () => {
               }),
             ).toThrow(corruption);
           }
+          expect(Atomics.load(new BigInt64Array(lifetime.revision), 0)).not.toBe(lifetime.epoch);
           const db = new DatabaseSync(options.path);
           try {
             insertForeignKeyCorruption(db);

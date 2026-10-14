@@ -7,7 +7,6 @@ export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
-  resolveRuntimeConversationBindingRouteAsync,
 } from "../channels/plugins/binding-routing.js";
 export type {
   ConfiguredBindingRouteResult,
@@ -45,13 +44,11 @@ export { resolveThreadBindingLifecycle } from "../shared/thread-binding-lifecycl
 export {
   getSessionBindingService,
   registerSessionBindingAdapter,
-  registerSessionBindingAdapterV2,
   unregisterSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 export type {
   BindingTargetKind,
   SessionBindingAdapter,
-  SessionBindingAdapterV2,
   SessionBindingBindInput,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";

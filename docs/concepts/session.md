@@ -11,12 +11,28 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+Session lists reconcile invalidated metadata before returning rows. If a native
+session changes ownership during a list read, the Gateway retries its runtime
+metadata once. Continued changes temporarily use the configured model metadata
+for that row while other sessions remain available. The next list read retries
+its native metadata.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
+
+Delivered command exchanges from the shared dispatcher are conversation history
+too. OpenClaw appends the user's command and delivered reply as ordinary
+user/assistant messages. Native menus and command acknowledgements on Discord
+and Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
+Later turns and chat history can read these exchanges.
+Login, pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
+`/new` and `/reset` put their confirmation exchange in the new session; they do not
+rewrite the old session. `/btw` and `/side` stay ephemeral, and message edits or
+deletions do not rewrite earlier transcript rows.
 
 ## How messages are routed
 
@@ -44,6 +60,15 @@ or fallback state refresh the relevant model facts.
 Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
+
+## Automatic session names
+
+Interactive chat sessions without an explicit name generate a topic title in the
+background when the Gateway dispatches their message. Naming starts alongside
+worktree and reply preparation; it does not wait for the agent’s first progress
+event and does not block the turn. The name appears when the title model finishes.
+If the title request fails while overlapping a turn, it retries once after that
+turn settles. Explicit names and manual renames are preserved.
 
 ## DM isolation
 
@@ -80,7 +105,7 @@ those conversations stay isolated even under `main`. See
 
 <Tip>
 If the same person contacts you from multiple channels, use
-`session.identityLinks` to map their identities to one canonical peer id so
+`session.identityLinks` to map their identities to one shared peer id so
 they share a session.
 </Tip>
 
@@ -134,13 +159,17 @@ context, and replies to the source room remain unchanged.
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
 
+<Warning>
+On the Codex runtime, the Codex app-server still writes each message you submit to its own diagnostic log database (`logs_2.sqlite` in that agent's Codex home), including messages in incognito threads. Codex currently offers no setting that turns this log off, so OpenClaw cannot prevent it. For conversations that must not reach disk, use an agent on the OpenClaw runtime.
+</Warning>
+
 Delegated work uses its native execution and completion owners. Live subagent activity and completion delivery remain available.
 
 The `incognito-` segment is reserved for dashboard, subagent, and hidden internal session keys; `openclaw doctor --fix` renames any colliding legacy durable keys.
 
 Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send. Incognito content is excluded from ordinary Gateway output, delivery and response diagnostics, WebSocket event previews, raw-stream, cache-trace, and Anthropic payload logs. Live replies remain available, and OpenClaw still records operational diagnostics and content-free audit metadata such as HMAC references.
 
-On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
+On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This limits persisted session history and access through other gateway-mediated sessions; it does not make all tool, upload, approval, or configured diagnostic data ephemeral. The gateway owner or process operator can still observe live sessions.
 
 ## Remember across conversations
 
@@ -216,9 +245,16 @@ Opt into automatic resets globally, then override them per chat type or channel:
 
 ## Gateway restart recovery
 
-When a Gateway restart interrupts an active turn, OpenClaw tries to continue
-the existing session automatically. Three attempts that fail to start a backend
-turn exhaust the recovery budget. Once a real backend turn starts,
+When a Gateway restart interrupts an admitted turn, including one still waiting
+in the queue or preparing to execute, OpenClaw tries to continue the existing
+session automatically. Shutdown records recovery before canceling queued work.
+If restart cancellation finishes a collected run before that record commits,
+shutdown retains its recovery custody unless the session or run owner changes.
+Backend-owned restart aborts retain the same custody even when the caller's
+abort signal stays open and lifecycle persistence finishes after reply cleanup.
+Skipped sessions are logged with a reason, including when other sessions recover.
+Three attempts that fail to start a backend turn exhaust the recovery budget.
+Once a real backend turn starts,
 the budget refreshes, so a later Gateway restart does not consume the old allowance.
 Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
@@ -238,6 +274,9 @@ the original caller's permission to run worktree setup scripts.
 
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
+A restart-aborted embedded response retains its already-streamed text as an
+interrupted assistant message when the transcript writer is still available.
+Unfinished tool calls in that response are discarded before persistence.
 A completed reply or a later user message closes that turn to replay.
 
 For authenticated operator turns, recovery revalidates the original caller's
@@ -253,6 +292,11 @@ This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a
 retry of the same notice joins that recovery instead of starting the turn again.
 Parents still waiting after yielding to children remain owned by their child batch.
+
+If a delegated turn's sender authority cannot be reconstructed, automatic recovery
+stops with a recorded reason and a visible notice in the transcript or original
+channel. The notice explains how to continue in a replacement session. A saved
+delegation alone does not authorize replay after restart.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
@@ -326,14 +370,15 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-Ordinary entry writes also arm background maintenance at the next age boundary,
+Ordinary entry writes and reply initialization arm background maintenance at the next age boundary,
 with a periodic recheck every 30 minutes while the store remains open. This lets
-eligible sessions age out without further traffic. Writes that cannot change
+eligible sessions age out without further traffic. Reply preparation does not wait
+for unrelated retention cleanup. Writes that cannot change
 age or count maintenance outcomes skip candidate scans. Automatic planning reads
 only retention and protection metadata before entering the foreground write queue;
-cap selection retains only the required oldest eligible entries. The writer checks
-the prepared store revision before applying changes, so concurrent updates are
-reconsidered instead of overwritten.
+cap selection retains only the required oldest eligible entries. The writer rechecks the selected rows and their protection before applying
+changes, so concurrent updates are reconsidered instead of overwritten. Activity
+on unrelated sessions and protection that has ended do not invalidate the plan.
 If writes invalidate an automatic maintenance plan, its replacement waits for
 a quiet window after the last write (one second, then two seconds). Three
 consecutive invalidations pause automatic retries and log the cause; a new
@@ -409,14 +454,17 @@ logs one outcome with the before/after bytes and removal counts.
 An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
 archives and history instead of deleting more data behind the blocked checkpoint.
 The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
-after, and the checkpoint outcome. Automatic and manual budget passes remain
-deferred until the checkpoint owner records completion after the pending cleanup
-work. Newer frames from concurrent writes do not erase that completion. Each SQLite cleanup
+after, and the checkpoint outcome. Manual cleanup and subsequent throttled
+automatic checks retry the checkpoint: an earlier blocked observation cannot
+suspend cleanup indefinitely when another connection completes a checkpoint
+without publishing its result. Cleanup still requires the checkpoint owner to
+record completion after the pending cleanup work. Newer frames from concurrent
+writes do not erase that completion. Each SQLite cleanup
 deletion or vacuum commit requires a new completion before further pruning, so a
 reader pinning those changes still defers cleanup. Ordering uses monotonic time;
 elapsed time, a budget change, or a system clock correction cannot release the gate.
-Normal periodic checkpointing continues, and subsequent activity can resume cleanup
-after recovery.
+Normal periodic checkpointing continues. A published completion allows the next
+activity to retry immediately; otherwise the normal check interval applies.
 
 Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
 in the Gateway log. Its checkpoint fields include bounded operation names for

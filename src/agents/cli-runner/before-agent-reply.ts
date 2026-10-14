@@ -85,6 +85,7 @@ export async function runCliBeforeAgentReply(
         },
         finalAssistantVisibleText: finalText,
         finalAssistantRawText: finalText,
+        providerStarted: false,
       },
     };
   }

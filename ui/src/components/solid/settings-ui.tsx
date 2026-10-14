@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { children, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -60,31 +60,6 @@ export function DocsLink(props: { url: string; children: JSX.Element }) {
     <a href={props.url} target={EXTERNAL_LINK_TARGET} rel={buildExternalLinkRel()}>
       {props.children}
     </a>
-  );
-}
-
-export function SettingsHelpTrigger(props: {
-  id: string;
-  label: string;
-  tooltip: string;
-  icon: "question" | "info";
-  popoverId: string;
-}) {
-  return (
-    <openclaw-tooltip prop:content={props.tooltip}>
-      <button
-        id={props.id}
-        type="button"
-        class="settings-section__help-button"
-        aria-label={props.label}
-        aria-controls={props.popoverId}
-        aria-haspopup="dialog"
-      >
-        <span aria-hidden="true">
-          <Icon name={props.icon === "info" ? "info" : "circleQuestionMark"} />
-        </span>
-      </button>
-    </openclaw-tooltip>
   );
 }
 
@@ -226,6 +201,7 @@ function SettingsRowText(
 }
 
 export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status" }) {
+  const control = children(() => props.control);
   return (
     <div
       class={[
@@ -244,9 +220,9 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
         description={props.description}
         carapace={props.carapace}
       />
-      <Show when={props.control !== undefined && props.control !== null && props.control !== false}>
+      <Show when={control() !== undefined && control() !== null && control() !== false}>
         <div class={["settings-row__control", { "oc-settings-row-control": props.carapace }]}>
-          {props.control}
+          {control()}
         </div>
       </Show>
     </div>
@@ -297,15 +273,7 @@ function ToggleControl(
 }
 
 export function SettingsToggle(props: SettingsToggleControl & { ariaLabel: string }) {
-  return (
-    <ToggleControl
-      checked={props.checked}
-      disabled={props.disabled}
-      onChange={(checked) => props.onChange(checked)}
-      onAct={(checked) => props.onAct?.(checked)}
-      label={props.ariaLabel}
-    />
-  );
+  return <ToggleControl {...props} label={props.ariaLabel} />;
 }
 
 export function SettingsToggleRow(
@@ -326,10 +294,7 @@ export function SettingsToggleRow(
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
       <div class="settings-row__control">
         <ToggleControl
-          checked={props.checked}
-          disabled={props.disabled}
-          onChange={(checked) => props.onChange(checked)}
-          onAct={(checked) => props.onAct?.(checked)}
+          {...props}
           label={props.ariaLabel}
           labelledBy={props.ariaLabel == null ? titleId : undefined}
         />
@@ -351,7 +316,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
       when={props.mode === "buttons"}
       fallback={
         <div
-          class={["settings-segmented", props.className]}
+          class={["settings-segmented", props.class]}
           role="radiogroup"
           aria-label={props.ariaLabel}
           aria-describedby={props.descriptionId}
@@ -397,7 +362,7 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
     <div
       class={[
         "settings-segmented",
-        props.className,
+        props.class,
         { [`settings-segmented--${variant()}`]: Boolean(variant()) },
       ]}
       role={props.ariaLabel ? "group" : undefined}

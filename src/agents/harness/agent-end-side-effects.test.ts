@@ -209,6 +209,7 @@ describe("agent end side effects", () => {
         ctx: {
           runId: "run-1",
           workspaceDir: "/workspace",
+          config: {},
           foregroundPromptContext: {
             agentId: "main",
             agentDir: "/agent",

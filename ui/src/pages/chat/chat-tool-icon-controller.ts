@@ -69,8 +69,7 @@ export class ChatToolIconController implements ReactiveController {
   }
 
   private getIcon(name: string): PluginToolIcon | undefined {
-    const owner = this.owner;
-    if (!owner || !this.isCurrent()) {
+    if (!this.isCurrent()) {
       return undefined;
     }
     this.requested.add(name);
@@ -87,18 +86,7 @@ export class ChatToolIconController implements ReactiveController {
     }
     this.loader.load(iconKey);
     const url = this.urls[iconKey];
-    return url
-      ? {
-          url,
-          onError: () => {
-            // Removed images can fail after reconnect; only the current owner
-            // and URL may retire the replacement plugin's image.
-            if (this.owner === owner && this.isCurrent() && this.urls[iconKey] === url) {
-              this.loader.handleError(iconKey);
-            }
-          },
-        }
-      : undefined;
+    return url ? { url, onError: () => this.loader.handleError(iconKey) } : undefined;
   }
 
   private isCurrent() {

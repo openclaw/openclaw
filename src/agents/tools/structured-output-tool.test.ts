@@ -16,7 +16,10 @@ describe("structured_output", () => {
     consumeSwarmStructuredOutput(runId);
   });
 
-  it("records a valid structured result", async () => {
+  it.each([
+    { label: "object", result: { answer: "yes" } },
+    { label: "encoded object", result: '{"answer":"yes"}' },
+  ])("records a valid $label result", async ({ result: input }) => {
     const tool = createStructuredOutputTool({
       runId,
       schema: {
@@ -26,12 +29,37 @@ describe("structured_output", () => {
         additionalProperties: false,
       },
     });
-    const result = await tool.execute("call-1", { result: { answer: "yes" } });
+    const result = await tool.execute("call-1", { result: input });
     expect(isToolResultError(result)).toBe(false);
-    expect(peekSwarmStructuredOutput(runId)?.structured).toEqual({ answer: "yes" });
+    expect(consumeSwarmStructuredOutput(runId)).toEqual({
+      structured: { answer: "yes" },
+      invalidAttempts: 0,
+    });
   });
 
-  it("nudges once then freezes schemaError", async () => {
+  it("preserves unsafe integer literals when decoding a result", async () => {
+    const tool = createStructuredOutputTool({ runId, schema: { type: "object" } });
+    await tool.execute("call-1", { result: '{"id":9007199254740993}' });
+    expect(consumeSwarmStructuredOutput(runId)?.structured).toEqual({ id: "9007199254740993" });
+  });
+
+  it.each([{ type: "string" }, {}, { anyOf: [{ type: "string" }, { type: "object" }] }])(
+    "preserves JSON-looking strings that satisfy schema %j",
+    async (schema) => {
+      const tool = createStructuredOutputTool({ runId, schema });
+      const result = '{"answer":"yes"}';
+      await tool.execute("call-1", { result });
+      expect(consumeSwarmStructuredOutput(runId)?.structured).toBe(result);
+    },
+  );
+
+  it.each([
+    { count: "bad" },
+    "not JSON",
+    '{"count":"bad"}',
+    '{"count":9007199254740993}',
+    JSON.stringify('{"count":3}'),
+  ])("nudges once then freezes schemaError for %j", async (result) => {
     const tool = createStructuredOutputTool({
       runId,
       schema: {
@@ -40,13 +68,11 @@ describe("structured_output", () => {
         required: ["count"],
       },
     });
-    expect(Value.Check(tool.parameters, { result: { count: "bad" } })).toBe(true);
+    expect(Value.Check(tool.parameters, { result })).toBe(true);
     expect(tool.description).toContain('"count"');
-    await expect(tool.execute("call-1", { result: { count: "bad" } })).rejects.toThrow(
-      "Retry once",
-    );
-    const rejectedRetry = await tool.execute("call-2", { result: { count: "still bad" } });
-    const rejectedLaterCall = await tool.execute("call-3", { result: { count: 3 } });
+    await expect(tool.execute("call-1", { result })).rejects.toThrow("Retry once");
+    const rejectedRetry = await tool.execute("call-2", { result });
+    const rejectedLaterCall = await tool.execute("call-3", { result: '{"count":3}' });
     expect(rejectedRetry.details).toMatchObject({ status: "rejected", success: false });
     expect(rejectedLaterCall.details).toMatchObject({ status: "rejected", success: false });
     expect(isToolResultError(rejectedRetry)).toBe(true);
@@ -58,17 +84,20 @@ describe("structured_output", () => {
     expect(peekSwarmStructuredOutput(runId)?.schemaError).toBeTruthy();
   });
 
-  it("accepts general JSON Schemas and rejects malformed schemas before spawn", async () => {
-    const arraySchema = { type: "array", items: { type: "string" } };
-    expect(validateStructuredOutputSchema({})).toBeUndefined();
-    expect(validateStructuredOutputSchema(arraySchema)).toBeUndefined();
-    expect(validateStructuredOutputSchema({ type: "object", properties: "invalid" })).toContain(
-      "Invalid sessions_spawn outputSchema",
-    );
-    const tool = createStructuredOutputTool({ runId, schema: arraySchema });
-    await expect(tool.execute("call-array", { result: ["one", "two"] })).resolves.toBeDefined();
-    expect(peekSwarmStructuredOutput(runId)?.structured).toEqual(["one", "two"]);
-  });
+  it.each([{ result: ["one", "two"] }, { result: '["one","two"]' }])(
+    "accepts array result %j and rejects malformed schemas before spawn",
+    async ({ result }) => {
+      const arraySchema = { type: "array", items: { type: "string" } };
+      expect(validateStructuredOutputSchema({})).toBeUndefined();
+      expect(validateStructuredOutputSchema(arraySchema)).toBeUndefined();
+      expect(validateStructuredOutputSchema({ type: "object", properties: "invalid" })).toContain(
+        "Invalid sessions_spawn outputSchema",
+      );
+      const tool = createStructuredOutputTool({ runId, schema: arraySchema });
+      await expect(tool.execute("call-array", { result })).resolves.toBeDefined();
+      expect(peekSwarmStructuredOutput(runId)?.structured).toEqual(["one", "two"]);
+    },
+  );
 
   it("resumes the one-retry budget from durable state", async () => {
     let durableState: ReturnType<typeof peekSwarmStructuredOutput>;

@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
-import type { PluginPage } from "../pages/plugin/plugin-page.ts";
+import type { PluginPageElement } from "../pages/plugin/plugin-page.tsx";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -10,6 +10,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI plugin tab slugs" });
 const pluginId = "reports-fixture";
@@ -61,15 +62,12 @@ async function expectReports(page: Page, pathname = "/reports") {
     .waitFor();
   expect(new URL(page.url()).pathname).toBe(pathname);
   expect(
-    await page.locator("openclaw-plugin-page").evaluate((element: PluginPage) => ({
+    await page.locator("openclaw-plugin-page").evaluate((element: PluginPageElement) => ({
       pluginId: element.pluginId,
       id: element.tabId,
     })),
   ).toEqual({ pluginId, id: tabId });
-  await page
-    .locator("openclaw-app-sidebar")
-    .getByRole("button", { name: "Pages", exact: true })
-    .click();
+  await openSidebarPages(page);
   const sidebarEntry = page.locator(
     `.sidebar-pages [data-sidebar-entry="plugin:${pluginId}/${tabId}"] a`,
   );
@@ -162,13 +160,11 @@ suite.define(() => {
       async ({ page }) => {
         const { frameRequests } = await installReports(page);
         await page.goto(`${suite.server.baseUrl}chat`);
-        // Bootstrap must publish the script policy before the scripted fixture mounts.
-        await page.waitForFunction(() => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          return app?.runtime?.context.config.current.embedSandboxMode === "scripts";
-        });
+        await expect
+          .poll(() =>
+            evaluateControlUiContext(page, (context) => context.config.current.embedSandboxMode),
+          )
+          .toBe("scripts");
         await page
           .locator("openclaw-app-sidebar")
           .getByRole("button", { name: "Pages", exact: true })
@@ -177,6 +173,9 @@ suite.define(() => {
           .locator(".sidebar-pages")
           .getByRole("link", { name: "Reports", exact: true })
           .click();
+        // The first frame must receive the script policy without a corrective reload.
+        const sandbox = await page.locator("openclaw-plugin-page iframe").getAttribute("sandbox");
+        expect(sandbox?.split(/\s+/u)).toContain("allow-scripts");
         const frame = page.frameLocator("openclaw-plugin-page iframe");
         const receivedTheme = frame.getByLabel("Received OpenClaw theme");
         expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: light)").matches)).toBe(

@@ -3,7 +3,7 @@ import type {
   SessionEntryPlaceholder,
   SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type PreparedSessionEntryPredicate = {
   entry: SessionEntry | undefined;
@@ -57,6 +57,7 @@ export function publishRetainedSessionEntryPredicate(
   read: PreparedSessionSharingRead,
   entry: SessionEntry | undefined,
   known: boolean,
+  options?: { preserveMatchingEntry?: boolean },
 ): void {
   const predicate = read.predicate;
   if (!predicate) {
@@ -77,7 +78,7 @@ export function publishRetainedSessionEntryPredicate(
   } else if (!matches) {
     predicate.revision += 1;
     predicate.state = "changed";
-  } else {
+  } else if (!options?.preserveMatchingEntry) {
     predicate.entry = entry;
   }
 }
@@ -105,9 +106,11 @@ export function projectSessionEntryPredicateChange(
         ? { ...entry, owner: change.owner }
         : undefined;
     case "participants":
-      return change.projection
-        ? { ...entry, participants: undefined, participantCount: undefined, ...change.projection }
-        : undefined;
+      return change.projectionChanged === false
+        ? entry
+        : change.projection
+          ? { ...entry, participants: undefined, participantCount: undefined, ...change.projection }
+          : undefined;
     case "category":
       return entry.sessionId === change.sessionId
         ? { ...entry, category: change.category ?? undefined }

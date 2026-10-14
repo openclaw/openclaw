@@ -8,7 +8,7 @@ import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { callGateway } from "./call.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -145,7 +145,9 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
                 await deleteSubagentSessionForCleanup(cleanupParams),
               );
               order.push(
-                loadSessionEntry(childSessionKey).entry ? "child retained" : "child deleted",
+                (await loadSessionEntryAsync(childSessionKey)).entry
+                  ? "child retained"
+                  : "child deleted",
               );
               const result = await params.onSettled?.(outcome);
               order.push("finalizer settled");

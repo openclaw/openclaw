@@ -81,25 +81,16 @@ export function createCodexSessionCatalogControl(params: {
     { config: OpenClawConfig; byAgent: Map<string, CodexCatalogRequestOptions> }
   >();
   const indexes = new Map<string, CodexCatalogIndex>();
-  const retiringState = new Map<string, Promise<void>>();
   const directHomes = new Map<string, Promise<string>>();
   const residentRequests = new Set<Promise<CodexCatalogIndex>>();
   let generation = params.getRuntimeConfig();
-  let residentEpoch = 0;
   let closed = false;
   let runBackground = (run: () => Promise<void>) => run();
   let retiring: Promise<void> | undefined;
   const retireIndexes = (): Promise<void> => {
-    residentEpoch++;
     const closing: Promise<void>[] = [];
-    for (const [homeId, index] of indexes) {
-      const writes = index.retire().finally(() => {
-        if (retiringState.get(homeId) === writes) {
-          retiringState.delete(homeId);
-        }
-      });
-      retiringState.set(homeId, writes);
-      closing.push(writes, index.close());
+    for (const index of indexes.values()) {
+      closing.push(index.close());
     }
     indexes.clear();
     directHomes.clear();
@@ -123,7 +114,6 @@ export function createCodexSessionCatalogControl(params: {
       generation = config;
       void retireIndexes();
     }
-    const epoch = residentEpoch;
     const runtime =
       source?.appServer ?? resolveRuntimeOptions({ pluginConfig: params.getPluginConfig() });
     const requestOptions = resolveRequestOptions(runtime.start, agentId, source);
@@ -138,12 +128,6 @@ export function createCodexSessionCatalogControl(params: {
       directHomes.set(key, home);
     }
     const homeId = await home;
-    // Only already-admitted writes can affect the replacement's snapshot.
-    // Retired native reads remain owned by stop(), without delaying this list.
-    await retiringState.get(homeId);
-    if (closed || generation !== config || residentEpoch !== epoch) {
-      throw new Error("Codex catalog configuration changed");
-    }
     let index = indexes.get(homeId);
     if (!index) {
       const [
@@ -153,9 +137,8 @@ export function createCodexSessionCatalogControl(params: {
         import("./session-catalog-index.js"),
         import("./session-catalog-projection.js"),
       ]);
-      source?.assertCurrent();
-      if (closed || generation !== config || residentEpoch !== epoch) {
-        throw new Error("Codex catalog configuration changed");
+      if (closed) {
+        throw new Error("Codex resident catalog is closed");
       }
       index = indexes.get(homeId);
       if (index) {
@@ -197,9 +180,8 @@ export function createCodexSessionCatalogControl(params: {
           }
         },
         assertCurrent: () => {
-          source?.assertCurrent();
-          if (closed || params.getRuntimeConfig() !== config || residentEpoch !== epoch) {
-            throw new Error("Codex catalog configuration changed");
+          if (closed) {
+            throw new Error("Codex resident catalog is closed");
           }
         },
         readNative: async (query, remainingRows, foreground) => {

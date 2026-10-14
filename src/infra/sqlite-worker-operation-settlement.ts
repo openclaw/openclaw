@@ -1,19 +1,24 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { sqlPublicationAnchor, type PostgresSqlConnection } from "./sql-connection.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   SqliteWorkerError,
   type SqliteWorkerAdmissionTimeoutError,
+  type SqliteWorkerExecutionAuthority,
 } from "./sqlite-worker-contract.js";
+import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-request-custody.js";
 
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
+  /** Present for broker-owned work; standalone admission owners keep their own lifetime. */
+  requestCustody?: SqliteWorkerRequestCustodyDescriptor;
+  executionAuthority?: SqliteWorkerExecutionAuthority;
   attachment?: { value: unknown };
   refusal?: SqliteWorkerError | InstanceType<typeof SqliteWorkerAdmissionTimeoutError>;
   committed?: { facts: unknown };
@@ -24,7 +29,6 @@ export type SqliteWorkerOperationContext = {
 
 export type NativeCommitReceipt = {
   version: 1;
-  operationId: string;
   sequence: number;
   facts: unknown;
 };
@@ -33,8 +37,6 @@ export function readNativeCommitReceipt(value: unknown): NativeCommitReceipt | u
   if (
     !isRecord(value) ||
     value.version !== 1 ||
-    typeof value.operationId !== "string" ||
-    value.operationId.length === 0 ||
     typeof value.sequence !== "number" ||
     !Number.isSafeInteger(value.sequence) ||
     value.sequence < 1 ||
@@ -44,13 +46,12 @@ export function readNativeCommitReceipt(value: unknown): NativeCommitReceipt | u
   }
   return {
     version: 1,
-    operationId: value.operationId,
     sequence: value.sequence,
     facts: value.facts,
   };
 }
 
-// Private wire identity follows the native operation across transformed module copies.
+// Keep the latest committed evidence for settlement if ordinary delivery fails.
 const nativeCommitReceipts = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerNativeCommitReceipts"),
   () => new WeakMap<SqliteWorkerOperationContext, NativeCommitReceipt>(),
@@ -82,7 +83,7 @@ export type RetainedWorkerTransactionAdmission = {
 
 export function deferSqliteWorkerNativeCommitReceipt(
   owner: SqliteWorkerOperationContext,
-  database: DatabaseSync,
+  database: DatabaseSync | PostgresSqlConnection,
   facts: unknown,
   delivery: "commit" | "settlement",
 ): void {
@@ -93,21 +94,21 @@ export function deferSqliteWorkerNativeCommitReceipt(
     );
   }
   const captured = structuredClone(facts);
-  const operationId = nativeCommitReceipts.get(owner)?.operationId ?? randomUUID();
+  const anchor = sqlPublicationAnchor(database);
   const counts = owner.sourceReservations ? (owner.pendingReceipts ??= new Map()) : undefined;
   const pending = (delta: number) => {
     if (!counts) {
       return;
     }
-    const count = (counts.get(database) ?? 0) + delta;
+    const count = (counts.get(anchor) ?? 0) + delta;
     if (count === 0) {
-      counts.delete(database);
+      counts.delete(anchor);
     } else {
-      counts.set(database, count);
+      counts.set(anchor, count);
     }
   };
   if (
-    !stageSqliteTransactionState(database, {
+    !stageSqliteTransactionState(anchor, {
       stage: () => pending(1),
       rollback: () => pending(-1),
       commit() {
@@ -115,7 +116,6 @@ export function deferSqliteWorkerNativeCommitReceipt(
         const previous = nativeCommitReceipts.get(owner);
         const receipt: NativeCommitReceipt = {
           version: 1,
-          operationId: previous?.operationId ?? operationId,
           sequence: (previous?.sequence ?? 0) + 1,
           facts: captured,
         };

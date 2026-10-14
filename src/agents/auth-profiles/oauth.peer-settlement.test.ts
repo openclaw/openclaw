@@ -5,6 +5,9 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
@@ -34,6 +37,7 @@ import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { closeAuthProfileReadPool, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
+import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const {
@@ -74,6 +78,19 @@ function candidate(agentId: string, agentDir: string) {
     databaseIdentity: readDatabasePathIdentitySync(resolveAuthProfileDatabasePath(agentDir)),
     env: process.env,
   };
+}
+
+function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
+  const shared = openOpenClawStateDatabase();
+  const { databasePath } = captureAuthProfileStorePersistenceSnapshot(agentDir).owner;
+  const source = readDatabasePathIdentitySync(databasePath);
+  const authority = captureAuthProfileCredentialAuthority(
+    captureOpenClawStateWorkerContext({ path: shared.path }),
+    { databasePath, identity: `${source.key}:${source.birthtime ?? ""}` },
+    selectedProfileId,
+  );
+  authority.observe(loadPersistedAuthProfileStore(agentDir)?.profiles[selectedProfileId]);
+  return authority;
 }
 
 function read(agentDir: string, id = profileId) {
@@ -349,6 +366,7 @@ describe("OAuth refresh peer settlement", () => {
     ]);
     await fs.writeFile(resolveAuthProfileDatabasePath(brokenAgentDir), "not a sqlite database");
     saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, healthyAgentDir);
+    const authority = retainPersistedCredential(healthyAgentDir, profileId);
     const persistedFence = read(healthyAgentDir);
     if (persistedFence?.type !== "oauth") {
       throw new Error("expected persisted OAuth fence");
@@ -370,6 +388,7 @@ describe("OAuth refresh peer settlement", () => {
         ],
       }),
     ).rejects.toThrow(AggregateError);
+    expect(authority.readCurrentCredential()).toEqual(read(healthyAgentDir));
     expect(read(healthyAgentDir)).toMatchObject({
       type: "oauth",
       provider,
@@ -472,6 +491,8 @@ describe("OAuth refresh peer settlement", () => {
     saveAuthProfileStore(original, peerAgentDir);
     saveAuthProfileStore(original, mainAgentDir);
     saveAuthProfileStore(replacement, otherAgentDir);
+    const ownerAuthority = retainPersistedCredential(mainAgentDir, profileId);
+    const peerAuthority = retainPersistedCredential(peerAgentDir, profileId);
     expect(read(peerAgentDir)).toEqual(original.profiles[profileId]);
     const peerScope = {
       agentDir: peerAgentDir,
@@ -507,6 +528,8 @@ describe("OAuth refresh peer settlement", () => {
         peerScope,
       ],
     );
+    expect(ownerAuthority.readCurrentCredential()).toBeUndefined();
+    expect(peerAuthority.readCurrentCredential()).toEqual(replacement.profiles[profileId]);
     expect(read(mainAgentDir)).toBeUndefined();
     expect(read(peerAgentDir)).toEqual(replacement.profiles[profileId]);
     expect(read(otherAgentDir)).toEqual(replacement.profiles[profileId]);

@@ -877,7 +877,7 @@ describe("Doctor repair followed by gateway readiness", () => {
           exit: (code) => { throw new Error("doctor exited " + code); },
         };
         const prompter = createDoctorPrompter({ runtime, options });
-        const configResult = await loadAndMaybeMigrateDoctorConfig({
+        await using configResult = await loadAndMaybeMigrateDoctorConfig({
           options,
           confirm: async () => false,
           runtime,

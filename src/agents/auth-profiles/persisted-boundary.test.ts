@@ -16,7 +16,6 @@ import {
   coercePersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
-import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
@@ -419,12 +418,11 @@ describe("persisted auth profile boundary", () => {
     });
   });
 
-  it("carries built-in CLI provenance only with the winning external profile", () => {
+  it("keeps the winning external profile when stores are merged", () => {
     const profileId = "openai:default";
     const base: RuntimeAuthProfileStore = {
       version: AUTH_STORE_VERSION,
       runtimeExternalProfileIds: [profileId],
-      runtimeExternalCliProfileIds: [profileId],
       profiles: {
         [profileId]: {
           type: "oauth",
@@ -440,7 +438,7 @@ describe("persisted auth profile boundary", () => {
       { version: AUTH_STORE_VERSION, profiles: {} },
       { preserveBaseRuntimeExternalProfiles: true },
     );
-    expect(getRuntimeExternalCliProfileIds(inherited)).toEqual([profileId]);
+    expect(inherited.profiles).toEqual(base.profiles);
 
     const pluginOverride: RuntimeAuthProfileStore = {
       version: AUTH_STORE_VERSION,
@@ -457,7 +455,6 @@ describe("persisted auth profile boundary", () => {
     };
     const collided = mergeAuthProfileStores(base, pluginOverride);
     expect(collided.profiles[profileId]).toMatchObject({ access: "plugin-access" });
-    expect(getRuntimeExternalCliProfileIds(collided)).toEqual([]);
   });
 });
 

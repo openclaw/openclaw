@@ -1,7 +1,7 @@
-import type { ReactiveController } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -23,7 +23,7 @@ function createBrowser(
   view?: { host: TestReactiveControllerHost; root: HTMLElement },
 ) {
   const host = view?.host ?? new TestReactiveControllerHost();
-  const controllers: ReactiveController[] = [];
+  const controllers: Parameters<ControllerHost["addController"]>[0][] = [];
   vi.spyOn(host, "addController").mockImplementation((controller) => controllers.push(controller));
   const client = {
     request,
@@ -58,11 +58,11 @@ function createBrowser(
         hello,
       },
     },
+    agents: { state: { agentsList: { sessionPlacement: {} } } },
     sessions: {
       state: {
         groupSettings: [{ name: "Client", cwd: "/workspace/client", worktree: false }],
       },
-      groupsGeneration: () => 1,
       groupsStatus: () => "ready",
     },
   } as unknown as ApplicationContext;
@@ -81,6 +81,7 @@ function createBrowser(
       runtimeId: "",
     }),
     {
+      readAgents: () => context.agents,
       requestUpdate: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate,
@@ -215,9 +216,7 @@ describe("DraftPlaceBrowser", () => {
   );
 
   it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
-    const request = vi.fn(async (method: string) =>
-      method === "agents.list" ? { sessionPlacement: {} } : { projects: [] },
-    );
+    const request = vi.fn(async (_method: string) => ({ projects: [] }));
     const fixture = createBrowser(request);
     await fixture.browser.refreshProjects();
     const reads = request.mock.calls.length;
@@ -233,7 +232,7 @@ describe("DraftPlaceBrowser", () => {
         .slice(reads)
         .map(([method]) => method)
         .toSorted(),
-    ).toEqual(["agents.list", "projects.list"]);
+    ).toEqual(["projects.list"]);
   });
   it("keeps environment search transient and separate from project search", () => {
     const { browser } = createBrowser(async () => ({}));
@@ -556,9 +555,6 @@ describe("DraftGatewayState", () => {
 
   it("discovers places from authenticated hello without refetching or losing input during migration", async () => {
     const request = vi.fn(async (method: string) => {
-      if (method === "agents.list") {
-        return { sessionPlacement: {} };
-      }
       if (method === "system.info") {
         return { machineName: "Gateway A" };
       }
@@ -620,13 +616,9 @@ describe("DraftGatewayState", () => {
       method === "projects.list" ? { projects: [] } : { machineName: "Visible Gateway" },
     );
     const fixture = createBrowser(request);
-    const task = (
-      fixture.gateway as unknown as { gatewayNameTask: { taskComplete: Promise<unknown> } }
-    ).gatewayNameTask;
     fixture.hello.features.methods.push("system.info");
     fixture.connectHost();
     fixture.update();
-    await task.taskComplete;
     const requestUpdate = vi.spyOn(fixture.host, "requestUpdate");
     expect(fixture.gateway.gatewayName).toBe("");
     expect(request.mock.calls.some(([method]) => method === "system.info")).toBe(false);
@@ -634,8 +626,7 @@ describe("DraftGatewayState", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(requestUpdate).toHaveBeenCalledOnce();
     fixture.queuedUpdate();
-    await task.taskComplete;
-    expect(fixture.gateway.gatewayName).toBe("Visible Gateway");
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Visible Gateway"));
   });
 
   it("ignores a late name from the replaced client", async () => {

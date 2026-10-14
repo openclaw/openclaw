@@ -75,7 +75,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
         params.onUserMessagePersisted?.(makeUserMessage("hello", 1));
         return session.makeAttemptResult({
           timedOut: true,
-          lastAssistant: { usage: { input: 160_000 } } as never,
+          lastAssistant: { role: "assistant", content: [], usage: { input: 160_000 } } as never,
         });
       })
       .mockResolvedValueOnce(
@@ -147,7 +147,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
       return session.makeAttemptResult({
         timedOut: true,
-        lastAssistant: { usage: { input: 160_000 } } as never,
+        lastAssistant: { role: "assistant", content: [], usage: { input: 160_000 } } as never,
       });
     });
     mockedCompactDirect.mockResolvedValueOnce(
@@ -183,12 +183,14 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
   it("leaves timeout recovery to a forced unlocked Codex compaction owner", async () => {
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     const state = await createOpenClawTestState({ label: "run.timeout-triggered-compaction" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     fixture = state;
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       makeAttemptResult({
         timedOut: true,
-        lastAssistant: { usage: { input: 150_000 } } as never,
+        lastAssistant: { role: "assistant", content: [], usage: { input: 150_000 } } as never,
       }),
     );
     const nativeCompact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
@@ -206,13 +208,15 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       compact: nativeCompact,
     });
 
+    const config = {
+      agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
+    };
+    setRuntimeConfigSnapshot(config);
     const result = await runEmbeddedAgent({
       ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.5",
-      config: {
-        agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
-      },
+      config,
       runId: "forced-unlocked-codex-timeout-owner",
     }).finally(clearAgentHarnesses);
 
@@ -237,7 +241,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       session.makeAttemptResult({
         timedOut: true,
         aborted: true,
-        lastAssistant: { usage: { input: 150_000 } } as never,
+        lastAssistant: { role: "assistant", content: [], usage: { input: 150_000 } } as never,
       }),
     );
     mockedCompactDirect.mockResolvedValue({
@@ -261,6 +265,8 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
   it("lets one silent idle timeout retry before the normal timeout surface", async () => {
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     const state = await createOpenClawTestState({ label: "run.timeout-triggered-compaction" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     fixture = state;
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
@@ -268,7 +274,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
           timedOut: true,
           idleTimedOut: true,
           assistantTexts: [],
-          lastAssistant: { usage: { input: 20_000 } } as never,
+          lastAssistant: { role: "assistant", content: [], usage: { input: 20_000 } } as never,
         }),
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));

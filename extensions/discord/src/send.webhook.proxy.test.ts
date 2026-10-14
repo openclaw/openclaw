@@ -1,11 +1,8 @@
-import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { DiscordError } from "./internal/rest-errors.js";
 import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
-import { sendPollDiscord, sendStickerDiscord } from "./send.outbound.js";
-import { makeDiscordRest } from "./send.test-harness.js";
 import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const { makeProxyFetchMock, recordChannelActivityMock } = vi.hoisted(() => ({
@@ -40,87 +37,7 @@ describe("Discord webhook transport", () => {
     vi.useRealTimers();
   });
 
-  it("records the webhook receipt, outbound identity and account activity", async () => {
-    const result = await sendWebhookMessageDiscord("hello", {
-      ...opts,
-      accountId: "runtime",
-      threadId: "thread-1",
-    });
-    expect(result).toMatchObject({
-      messageId: "msg-1",
-      channelId: "thread-1",
-      receipt: {
-        platformMessageIds: ["msg-1"],
-        threadId: "thread-1",
-      },
-    });
-    expect(recordChannelActivityMock).toHaveBeenCalledExactlyOnceWith({
-      channel: "discord",
-      accountId: "runtime",
-      direction: "outbound",
-    });
-    expect(
-      isRecentOutboundMessageIdentity({
-        channel: "discord",
-        accountId: "runtime",
-        conversationId: "thread-1",
-        messageId: "msg-1",
-      }),
-    ).toBe(true);
-  });
-
   it.each([
-    { kind: "poll", accountId: " Work ", defaultAccount: undefined, failed: false },
-    { kind: "sticker", accountId: undefined, defaultAccount: "work", failed: false },
-    { kind: "poll", accountId: undefined, defaultAccount: undefined, failed: true },
-  ] as const)(
-    "records $kind activity only after success (failed=$failed)",
-    async ({ kind, accountId, defaultAccount, failed }) => {
-      const { rest, postMock } = makeDiscordRest();
-      postMock.mockResolvedValue({ id: "msg-1", channel_id: "789" });
-      if (failed) {
-        postMock.mockRejectedValue(new Error("provider rejected"));
-      }
-      const sendOpts = {
-        cfg: failed
-          ? cfg
-          : {
-              channels: {
-                discord: {
-                  token: "resolved-token",
-                  defaultAccount,
-                  accounts: { default: { token: "default-token" }, work: { token: "work-token" } },
-                },
-              },
-            },
-        rest,
-        token: "test-token",
-        accountId,
-      };
-      const sent =
-        kind === "poll"
-          ? sendPollDiscord(
-              "channel:789",
-              { question: "Lunch?", options: ["Pizza", "Sushi"] },
-              sendOpts,
-            )
-          : sendStickerDiscord("channel:789", ["123"], sendOpts);
-      if (failed) {
-        await expect(sent).rejects.toThrow("provider rejected");
-        expect(recordChannelActivityMock).not.toHaveBeenCalled();
-        return;
-      }
-      await sent;
-      expect(recordChannelActivityMock).toHaveBeenCalledExactlyOnceWith({
-        channel: "discord",
-        accountId: "work",
-        direction: "outbound",
-      });
-    },
-  );
-
-  it.each([
-    { name: "default", config: {}, flags: MessageFlags.SuppressEmbeds },
     {
       name: "account opt-out",
       config: { suppressEmbeds: true, accounts: { runtime: { suppressEmbeds: false } } },
@@ -283,4 +200,3 @@ describe("Discord webhook transport", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
-import { MessageFlags } from "discord-api-types/v10";

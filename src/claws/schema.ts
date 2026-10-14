@@ -85,7 +85,7 @@ const exactVersion = nonEmptyString.refine(
 );
 const clawHubPackageName = nonEmptyString.refine(
   isCanonicalClawHubPackageName,
-  "ClawHub package references must use their canonical lowercase name.",
+  "ClawHub package references must use their lowercase name.",
 );
 const portableEnvKey = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

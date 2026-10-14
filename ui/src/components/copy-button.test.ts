@@ -1,10 +1,9 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { solidContent } from "../lit/solid-content.tsx";
 import { renderWorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.ts";
-import { renderDevicePairSetup } from "../pages/devices/view-pairing.runtime.ts";
-import { renderSessionsCard } from "../pages/usage/view-overview.ts";
-import { createUsageProps } from "../pages/usage/view.test-support.ts";
+import { DevicePairSetup } from "../pages/devices/view-pairing.tsx";
 import { renderCopyButton } from "./copy-button.ts";
 import { renderWizardStepControls } from "./wizard-step-controls.ts";
 
@@ -58,7 +57,7 @@ const surfaces = [
   {
     name: "device pairing code",
     view: (text: string) =>
-      renderDevicePairSetup({
+      solidContent(DevicePairSetup, {
         open: true,
         lifecycle: {
           phase: "waiting",
@@ -82,15 +81,6 @@ const surfaces = [
         onGetApps: vi.fn(),
       }),
     selector: ".device-pair-setup__actions button",
-  },
-  {
-    name: "usage session label",
-    view: (text: string) => {
-      const props = createUsageProps();
-      props.display.sessionSort = "recent";
-      return renderSessionsCard([{ key: "session", label: text, usage: null }], props, 1);
-    },
-    selector: ".session-bar-actions button",
   },
   {
     name: "workspace conflict command",

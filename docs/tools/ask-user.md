@@ -54,6 +54,15 @@ does not expose their questions or make them answerable. Secret, administrative,
 and sessionless questions keep their existing privileged access requirements.
 Answering a question does not grant the agent additional permissions.
 
+An accepted answer belongs to the waiting agent turn, which can save its tool
+result and continue after the answer enters conversation history. An unrelated
+new user turn, a changed transcript branch, or revoked run authority still
+prevents that older turn from appending a response.
+
+If a standalone question link cannot refresh after reconnecting, use **Retry**
+to load it again without losing the answer you typed in that page. A question
+that is no longer available remains unavailable.
+
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
@@ -77,6 +86,10 @@ channels. The Control UI and TUI keep the full structured stepper. The TUI shows
 the time remaining, dismisses expired prompts, and restores pending questions
 for the selected session after reconnecting or switching sessions. Local mode
 keeps questions in the running process; they do not survive exiting the TUI.
+
+A turn started through the `agent` Gateway method with a messaging-channel
+target also delivers its question to that conversation. The question is an
+explicit tool message; automatic final-reply delivery is configured separately.
 
 ## Async questions
 

@@ -6,12 +6,16 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { readSqliteDatabaseSiblingWriteRevision } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseSiblingWriteRevision,
+  withSqliteDatabaseWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { readSqliteNativeMutationRevision } from "../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../state/openclaw-agent-execution-contract.js";
 import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "./paths.js";
 import type {
   TrajectoryRuntimeRetentionInput,
@@ -24,7 +28,8 @@ const SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
 const DELETE_RUN_BATCH_SIZE = 16;
 type Run = TrajectoryRuntimeRetentionPlan["runs"][number];
 type RetentionState = { sweptAt?: number; pending?: Promise<void> };
-const states = new WeakMap<OpenClawAgentDatabase, RetentionState>();
+type RetentionOwner = OpenClawAgentDatabase | AgentDatabaseExecutionFileIdentity;
+const states = new WeakMap<RetentionOwner, RetentionState>();
 type Sweep = {
   id: string;
   lease: Int32Array;
@@ -44,11 +49,11 @@ type Sweep = {
 const sweeps = new WeakMap<DatabaseSync, Sweep>();
 const observedConnections = new WeakSet<DatabaseSync>();
 
-export function trajectoryRuntimeRetentionState(database: OpenClawAgentDatabase) {
-  let state = states.get(database);
+export function trajectoryRuntimeRetentionState(owner: RetentionOwner) {
+  let state = states.get(owner);
   if (!state) {
     state = {};
-    states.set(database, state);
+    states.set(owner, state);
   }
   return state;
 }
@@ -338,12 +343,15 @@ export function deleteTrajectoryRuntimeRetention(
       invalidated++;
       break;
     }
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("trajectory_runtime_events")
-        .where("session_id", "=", run.sessionId)
-        .where("run_id", run.runId === null ? "is" : "=", run.runId),
+    // Retention removes runtime events only; session/transcript facts remain current.
+    withSqliteDatabaseWriteScope(database.db, [], () =>
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("trajectory_runtime_events")
+          .where("session_id", "=", run.sessionId)
+          .where("run_id", run.runId === null ? "is" : "=", run.runId),
+      ),
     );
     totalBytes -= run.bytes;
     expiredRuns -= Number(run.newest < sweep.plan.cutoff);

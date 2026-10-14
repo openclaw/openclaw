@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -23,18 +23,18 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { recoverGatewaySession } from "./session-recovery-service.js";
-import {
-  resolveSessionMutationAuthorization,
-  SessionMutationAuthorizationChangedError,
-} from "./session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
+  resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -45,9 +45,28 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const titleGeneration = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../auto-reply/reply/conversation-label-generator.js").generateConversationLabelWithFallback
+  >(),
+);
 
+// Recovery owns identity and continuation; title model behavior has separate boundary coverage.
+vi.mock("../auto-reply/reply/conversation-label-generator.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/conversation-label-generator.js")>()),
+  generateConversationLabelWithFallback: titleGeneration,
+}));
+
+// Reverse hook order joins accepted fixture work before draining global owners.
 afterEach(() => drainGlobalSingletonLifecycleState());
+
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const prepareProfiles = useUserProfileCatalogForTest();
+
+beforeEach(async () => {
+  await prepareProfiles();
+  titleGeneration.mockReset().mockResolvedValue("Recovered session");
+});
 
 function recoveryWorkerPlacement(params: {
   sessionId: string;
@@ -205,7 +224,7 @@ test("sessions.recover settles its active placement before archiving a real sess
     loadSessionRuntime: async () => ({
       managedWorktrees,
       resolveCanonicalSessionEntryFromStoreKeys,
-      resolveGatewaySessionStoreTargetWithStore,
+      resolveGatewaySessionStoreTargetInWorker,
     }),
     revokeSessionAuthority: vi.fn(),
   });
@@ -363,7 +382,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
         return {
           managedWorktrees,
           resolveCanonicalSessionEntryFromStoreKeys,
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveGatewaySessionStoreTargetInWorker,
         };
       },
       revokeSessionAuthority: vi.fn(),
@@ -645,6 +664,7 @@ test.each([
     if (recovering && !systemActor) {
       setUserProfileRole(recovering.id, "requester");
     }
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const sourceKey = "agent:main:dashboard:creator-policy-recovery";
     const sourceStamp = {
       createdVia: "operator" as const,
@@ -751,6 +771,7 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("restricted-session-recovery@example.com");
   setUserProfileRole(profile.id, "guest");
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const key = "agent:main:dashboard:role-denied-recovery";
   await writeSessionStore({
     entries: {
@@ -834,12 +855,13 @@ test("sessions.recover revalidates participation at the recovery writer commit",
   } as never;
   // Use an already-registered single-key mutation to isolate handler/writer propagation from
   // the separate sessions.recover registry regression covered at the router boundary.
-  const authorization = resolveSessionMutationAuthorization({
+  const authorization = await resolveSessionMutationAuthorizationAsync({
     client,
     method: "sessions.reset",
     requestParams: { key: sourceKey, agentId: "main" },
     context: { getRuntimeConfig } as never,
   });
+  using _ = { [Symbol.dispose]: () => authorization.authorization?.release?.() };
   expect(authorization.error).toBeNull();
   if (!authorization.authorization) {
     throw new Error("failed to capture recovery source participation");

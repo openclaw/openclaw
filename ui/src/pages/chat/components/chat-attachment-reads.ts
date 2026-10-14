@@ -35,18 +35,24 @@ type PendingChatAttachmentRead = ChatAttachmentRead & {
 
 export class ChatAttachmentReadLifecycle {
   pendingReads = 0;
+  revision = 0;
   private controller = new AbortController();
   private entries: ChatAttachmentRead[] = [];
 
-  constructor(private notify: () => void) {}
+  constructor(private onChange: () => void) {}
 
   retarget(destination: ChatAttachmentReadDestination, notify: () => void): void {
-    this.notify = notify;
+    this.onChange = notify;
     for (const entry of this.entries) {
       if (entry.destination) {
         entry.destination = destination;
       }
     }
+  }
+
+  private notify(): void {
+    this.revision += 1;
+    this.onChange();
   }
 
   get readSignal(): AbortSignal {

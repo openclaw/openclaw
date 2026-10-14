@@ -2,9 +2,12 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
+import type { SessionActorHotState } from "./session-actor-state.types.js";
 import type { SessionMembershipFact } from "./session-membership-facts.types.js";
 import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
+import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -39,6 +42,10 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
       ? structuredClone(entry.mainRestartRecovery)
       : undefined,
     modelSelectionLocked: entry.modelSelectionLocked,
+    pluginOwnerId: entry.pluginOwnerId,
+    skillLibrarySelections: entry.skillLibrarySelections
+      ? structuredClone(entry.skillLibrarySelections)
+      : undefined,
     pendingProjectGitUrl: entry.pendingProjectGitUrl,
     pendingWorktree: entry.pendingWorktree ? structuredClone(entry.pendingWorktree) : undefined,
     lifecycleRevision: entry.lifecycleRevision,
@@ -74,6 +81,10 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
     permissionMode: entry.permissionMode,
+    execNode: entry.execNode,
+    sessionRoot: entry.sessionRoot,
+    spawnedCwd: entry.spawnedCwd,
+    spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
     toolOverrides: entry.toolOverrides ? structuredClone(entry.toolOverrides) : undefined,
   };
 }
@@ -82,7 +93,7 @@ export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 
 export type SessionTranscriptInitializationPublication = {
   kind: "session-transcript-initialized";
-  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
+  transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   sessionKey: string;
   placeholder?: SessionEntryPlaceholder;
 };
@@ -123,6 +134,7 @@ export type PreparedSessionEntryChanges = {
   source: SessionEntryPublicationSource;
   entries: ReadonlyMap<string, SessionEntry>;
   fullEntries?: ReadonlyMap<string, SessionEntry>;
+  actorPostimages?: ReadonlyMap<string, SessionActorHotState>;
   sharing?: ReadonlyMap<string, SessionSharingEntry>;
   projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
 };
@@ -134,13 +146,16 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  maintenancePlans?: readonly SessionMaintenancePreservationPlan[];
   kind: "session-entry-replacements";
-  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
+  transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
   /** Full snapshots belong to bounded entry readers, not resident display rows. */
   fullEntries?: ReadonlyMap<string, SessionEntry>;
+  /** Closed entry patches preserve the resident actor's unchanged custody and transcript facts. */
+  actorPostimages?: ReadonlyMap<string, SessionActorHotState>;
   /** Canonical metadata is committed, but these entries lack a valid display projection. */
   unavailableParticipantKeys?: readonly string[];
   ageChanges: SessionEntryMaintenanceAgeChange[];
@@ -205,6 +220,7 @@ export type SessionEntryPublicationRecord = {
         | {
             entry?: SessionEntry;
             fullEntry?: SessionEntry;
+            actorPostimage?: SessionActorHotState;
             sharing?: SessionSharingEntry;
             projection?: SessionEntryProjectionFacts;
           }
@@ -218,6 +234,13 @@ export type PendingSessionEntryPublication = {
   superseded: Set<string>;
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
+  /** Planned metadata under the writer lock; matching fields survive COMMIT or rollback. */
+  entryPostimages?: ReadonlyMap<string, SessionEntry>;
+  /** An undefined value records a participant command with no projection change. */
+  participantProjections?: ReadonlyMap<
+    string,
+    Pick<InternalSessionEntry, "participants" | "participantCount"> | undefined
+  >;
   /** Keys whose committed sessionId and lifecycleRevision are unchanged by this publication. */
   generationUnchanged: Set<string>;
   settled: boolean;
@@ -258,12 +281,14 @@ export function assertSessionEntryCreationTarget(
   assertSessionEntryCreationCurrent(creation);
   const sourcePath =
     creation.source.kind === "native" ? creation.source.database.path : creation.source.path;
+  const sourceIdentity =
+    creation.source.kind === "native"
+      ? findOpenClawAgentDatabaseIdentity(creation.source.database)?.identity
+      : creation.source.databaseIdentity;
   const matchesDatabaseIdentity =
-    creation.source.kind !== "native" &&
+    typeof sourceIdentity === "string" &&
     target.databaseIdentity ===
-      (creation.source.kind === "actor"
-        ? creation.source.databaseIdentity
-        : `file:${creation.source.databaseIdentity}`);
+      (creation.source.kind === "actor" ? sourceIdentity : `file:${sourceIdentity}`);
   const matchesTarget =
     target.databaseIdentity !== undefined
       ? matchesDatabaseIdentity

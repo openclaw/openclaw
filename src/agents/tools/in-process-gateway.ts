@@ -30,7 +30,7 @@ import {
   runWithOperatorToolGatewayContinuationContext,
 } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { TrustedSessionCreation } from "../../gateway/session-creation-provenance.js";
-import { isGatewayNativeApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
+import { isGatewayWorkerApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -309,7 +309,7 @@ async function callAgentToolGatewayRequestBound<T>(
         ])
       : captureExternalSessionCommitGuard(request.sessionMutationCommitGuard);
   if (
-    isGatewayNativeApprovalMethod(method) &&
+    isGatewayWorkerApprovalMethod(method) &&
     !request.sessionMutationCommitGuard &&
     !assertDispatchCurrent
   ) {

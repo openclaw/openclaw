@@ -1,4 +1,4 @@
-import type { Worker } from "node:worker_threads";
+import type { LeaseHeartbeatCarrier } from "./openclaw-state-lease-heartbeat-carrier.js";
 
 export type LeaseHeartbeatCleanup = {
   readonly pending: boolean;
@@ -6,8 +6,7 @@ export type LeaseHeartbeatCleanup = {
 };
 
 export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
-  let worker: Worker | undefined;
-  let exitCode: number | undefined;
+  let carrier: LeaseHeartbeatCarrier | undefined;
   const startupRenewals = new Set<Promise<unknown>>();
   let closed = false;
   let stopping: Promise<number> | undefined;
@@ -20,9 +19,7 @@ export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
     cancel();
     if (!stopping) {
       stopping = Promise.resolve().then(async () => {
-        if (worker && exitCode === undefined) {
-          await worker.terminate();
-        }
+        const exitCode = await carrier?.close();
         await Promise.allSettled(startupRenewals);
         return exitCode ?? 0;
       });
@@ -36,8 +33,8 @@ export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
     get pending() {
       // Publication precedes acquisition, so startup itself retains this owner.
       return (
-        (!closed && worker === undefined) ||
-        (worker !== undefined && exitCode === undefined) ||
+        (!closed && carrier === undefined) ||
+        carrier?.pending === true ||
         startupRenewals.size !== 0
       );
     },
@@ -62,13 +59,10 @@ export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
       const settled = () => startupRenewals.delete(operation);
       void operation.then(settled, settled);
     },
-    start(createWorker: () => Worker) {
+    start(acquire: () => LeaseHeartbeatCarrier) {
       assertOpen();
-      worker = createWorker();
-      worker.once("exit", (code) => {
-        exitCode = code;
-      });
-      return worker;
+      carrier = acquire();
+      return carrier;
     },
     failStartup(error: unknown): never {
       cancel();

@@ -6,6 +6,10 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.ts";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../src/config/runtime-snapshot.js";
+import {
   appendTranscriptMessages,
   createSessionEntryWithTranscript,
 } from "../../../src/config/sessions/session-accessor.js";
@@ -23,6 +27,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 const agentIds = ["main", "second", "third", "fourth", "fifth"];
@@ -228,7 +233,12 @@ const suite = createControlUiE2eSuite({
         },
       };
       await owner.state.writeConfig(config);
-      await seedSessions(owner, config);
+      setRuntimeConfigSnapshot(config);
+      try {
+        await seedSessions(owner, config);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
       await owner.startGateway();
       return {
         baseUrl: `http://127.0.0.1:${owner.port}/`,
@@ -597,10 +607,7 @@ suite.define(() => {
           ]);
 
           // Category membership spans accessible owners, beyond the default Mine scope.
-          await page
-            .locator(".sidebar-navigation-scope")
-            .getByRole("button", { name: "All", exact: true })
-            .click();
+          await selectAllSidebarSessions(page);
           const otherKey = "agent:fifth:search-roster-4";
           await page
             .locator(

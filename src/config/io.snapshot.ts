@@ -4,10 +4,7 @@ import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js
 import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
-import {
-  withArtifactPreservingStateReads,
-  withSynchronousArtifactPreservingStateSnapshot,
-} from "../state/openclaw-state-db-readonly.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
@@ -37,7 +34,7 @@ import {
 } from "./io.read-helpers.js";
 import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
 import {
-  materializeConfigSnapshotDefaults,
+  materializeConfigSnapshotDefaultsAsync,
   prepareConfigSnapshotValidation,
 } from "./io.snapshot-preparation.js";
 import type {
@@ -64,7 +61,6 @@ import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { captureManagedConfigSnapshotPreparation } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
-import { validateConfigObjectWithPlugins } from "./validation.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
@@ -90,11 +86,10 @@ export async function readConfigFileSnapshotInternal(
       ? captureManagedConfigSnapshotPreparation(context.configPath)
       : options.preparation;
   preparation?.assertCurrent();
-  const result = await readConfigSnapshotWithPreparation(
-    context,
-    { ...options, preparation },
-    sourceRaw,
-  );
+  const read = () =>
+    readConfigSnapshotWithPreparation(context, { ...options, preparation }, sourceRaw);
+  // Unobserved callers retain source artifacts throughout asynchronous preparation.
+  const result = await (context.deps.observe ? read() : withArtifactPreservingStateReads(read));
   preparation?.assertCurrent();
   return result;
 }
@@ -176,7 +171,7 @@ async function readConfigSnapshotWithPreparation(
             ? await preparation((prepare) =>
                 prepare({ kind: "materialize", context, metadata, config }),
               )
-            : materializeConfigSnapshotDefaults(context, config, metadata),
+            : await materializeConfigSnapshotDefaultsAsync(context, config, metadata),
           hash: hashConfigRaw(null),
           issues: [],
           warnings: [],
@@ -293,22 +288,7 @@ async function readConfigSnapshotWithPreparation(
       () =>
         preparation
           ? preparation((prepare) => prepare(validationRequest))
-          : options.prepareValidation
-            ? prepareConfigSnapshotValidation(validationRequest)
-            : withSynchronousArtifactPreservingStateSnapshot(() => {
-                const pending = context.resolveDeferredPluginMigrations();
-                return {
-                  deferredPluginMigrations: pending,
-                  validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {
-                    ...pathResolution,
-                    pluginValidation: context.options.pluginValidation,
-                    loadPluginMetadataSnapshot: pluginMetadata.load,
-                    sourceRaw: effectiveParsed,
-                    preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
-                    deferredPluginMigrations: pending,
-                  }),
-                };
-              }),
+          : prepareConfigSnapshotValidation(validationRequest),
     );
     const snapshotSource = () => ({
       path: configPath,
@@ -554,10 +534,8 @@ export async function readConfigFileSnapshotWithPluginMetadataFromContext(
   options: ConfigSnapshotMetadataReadOptions = {},
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   const read = () => readConfigSnapshotWithPluginMetadata(context, options);
-  // Explicit CLI validation prepares async state facts before command admission.
-  return options.prepareValidation && !context.deps.observe
-    ? withArtifactPreservingStateReads(read)
-    : read();
+  // Include metadata-only completion in the unobserved caller's inspection scope.
+  return context.deps.observe ? read() : withArtifactPreservingStateReads(read);
 }
 
 async function readConfigSnapshotWithPluginMetadata(
@@ -573,7 +551,11 @@ async function readConfigSnapshotWithPluginMetadata(
     allowSuspiciousRecovery: options.allowSuspiciousRecovery,
   });
   let pluginMetadataSnapshot = result.pluginMetadataSnapshot;
-  if (!pluginMetadataSnapshot && result.snapshot.valid) {
+  if (
+    options.completePluginMetadata !== false &&
+    !pluginMetadataSnapshot &&
+    result.snapshot.valid
+  ) {
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
       env: context.deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
@@ -586,10 +568,8 @@ async function readConfigSnapshotWithPluginMetadata(
           config: result.snapshot.sourceConfig,
         }),
       );
-    } else if (options.prepareValidation) {
-      await pluginMetadata.loadAsync(result.snapshot.sourceConfig);
     } else {
-      pluginMetadata.load(result.snapshot.sourceConfig);
+      await pluginMetadata.loadAsync(result.snapshot.sourceConfig);
     }
     pluginMetadataSnapshot = pluginMetadata.getSnapshot();
   }

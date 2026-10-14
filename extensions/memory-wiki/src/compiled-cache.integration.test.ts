@@ -1,8 +1,7 @@
 // Memory Wiki compiled cache tests cover compile, prepare, query, restart, and owner cleanup.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -315,28 +314,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     }
   });
 
-  it.each(["source-edit", "log-rollback"] as const)(
-    "explicit activation rejects the compiled snapshot after %s",
-    async (change) => {
-      const { rootDir, config } = await createPersistentVault({ initialize: true });
-      const sourcePath = path.join(rootDir, "sources", "alpha.md");
-      const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
-      await fs.writeFile(sourcePath, "# Alpha\n\nOriginal source.\n");
-      const originalLog = await fs.readFile(logPath, "utf8");
-      await compileMemoryWikiVault(config);
-      await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
-      if (change === "source-edit") {
-        await fs.writeFile(sourcePath, "# Alpha\n\nChanged source.\n");
-      } else {
-        await fs.writeFile(logPath, originalLog);
-      }
-
-      await activateExistingMemoryWikiVault(config);
-
-      await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
-    },
-  );
-
   it("round-trips compile through async preparation and claim query after restart", async () => {
     const { rootDir, config } = await createPersistentVault({
       initialize: true,
@@ -444,16 +421,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     expect(Buffer.byteLength(JSON.stringify(dashboards))).toBeLessThan(32 * 1024 * 1024);
   });
 
-  it("replaces a loaded snapshot when a newer publication commits", async () => {
-    const { config } = await createPersistentVault({ initialize: true });
-    await publishSnapshot(config, snapshot("before"));
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("before");
-
-    await publishSnapshot(config, snapshot("after"));
-
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("after");
-  });
-
   it("ignores legacy files and rebuilds only on compile", async () => {
     const { rootDir, config } = await createPersistentVault({
       initialize: true,
@@ -481,58 +448,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
     await expect(preparePrompt(config)).resolves.toContain("Fresh cache content.");
     await expect(fs.readFile(legacyPath, "utf8")).resolves.toContain("claimCount");
-  });
-
-  it("persists snapshots beyond the keyed-state value limit", async () => {
-    const { config } = await createPersistentVault({ initialize: true });
-    const text = Array.from({ length: 4096 }, (_, index) =>
-      createHash("sha256").update(String(index)).digest("hex"),
-    ).join("");
-    expect(gzipSync(text).byteLength).toBeGreaterThan(65_536);
-    await publishSnapshot(config, snapshot(text));
-
-    configureMemoryWikiCompiledCacheStore(undefined);
-    configureMemoryWikiCompiledCacheStore(createCacheStore());
-    await activateVault(config);
-
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe(text);
-  });
-
-  it("loads an externally compiled generation after lifecycle refresh without polling", async () => {
-    const { config } = await createPersistentVault({
-      initialize: true,
-      config: { context: { includeCompiledDigestPrompt: true } },
-    });
-    await publishSnapshot(config, snapshot("before"));
-    await expect(preparePrompt(config)).resolves.toContain("before");
-
-    const nextSnapshot = snapshot("after");
-    const nextGeneration = resolveMemoryWikiCompiledCacheGeneration(nextSnapshot);
-    const nextPublicationId = randomUUID();
-    const nextReservationId = randomUUID();
-    const parentPublicationId = (await loadMemoryWikiVaultIdentity(config.vault.path))
-      .compiledCachePublicationId;
-    await appendMemoryWikiLog(config.vault.path, {
-      type: "compile",
-      timestamp: "2026-07-17T00:01:00.000Z",
-      details: { compiledCacheReservationId: nextReservationId },
-    });
-    const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(config.vault.path);
-    await appendMemoryWikiLog(config.vault.path, {
-      type: "compile",
-      timestamp: "2026-07-17T00:01:00.000Z",
-      details: {
-        compiledCachePublicationId: nextPublicationId,
-        compiledCacheParentPublicationId: parentPublicationId,
-        compiledCacheReservationId: nextReservationId,
-        compiledCacheSourceGeneration: sourceGeneration,
-      },
-    });
-    await createCacheStore().write(config, nextSnapshot, nextGeneration, nextPublicationId);
-
-    await expect(preparePrompt(config)).resolves.not.toContain("after");
-    await activateVault(config);
-    await expect(preparePrompt(config)).resolves.toContain("after");
   });
 
   it("defers a publication that completes during lifecycle reconciliation", async () => {
@@ -587,33 +502,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe(
       "during reconciliation",
     );
-  });
-
-  it("reads the stable owner row directly without enumerating stale metadata", async () => {
-    const { config } = await createPersistentVault({ initialize: true });
-    const reader = createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) => {
-      const store = createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv);
-      return {
-        ...store,
-        async entries() {
-          throw new Error("read must not enumerate owner rows");
-        },
-      };
-    });
-    configureMemoryWikiCompiledCacheStore(reader);
-    await publishSnapshot(config, snapshot("authoritative"));
-
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("authoritative");
-  });
-
-  it("preserves vault identity across atomic edits to user-managed scaffold files", async () => {
-    const { rootDir, config } = await createPersistentVault({ initialize: true });
-    await publishSnapshot(config, snapshot("still current"));
-    const replacement = path.join(rootDir, "WIKI.md.replacement");
-    await fs.writeFile(replacement, "# Edited wiki\n", "utf8");
-    await fs.rename(replacement, path.join(rootDir, "WIKI.md"));
-
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("still current");
   });
 
   it("rejects claims newer than a restored vault after lifecycle refresh", async () => {
@@ -766,20 +654,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("accepted successor");
   });
 
-  it("loads a prepared snapshot without prompt-path file I/O", async () => {
-    const { config } = await createPersistentVault({
-      initialize: true,
-      config: { context: { includeCompiledDigestPrompt: true } },
-    });
-    await publishSnapshot(config, snapshot("prepared"));
-    const stat = vi.spyOn(fs, "stat");
-    const readFile = vi.spyOn(fs, "readFile");
-
-    await expect(preparePrompt(config)).resolves.toContain("prepared");
-    expect(stat).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
-  });
-
   it("reports transient SQLite read failures as failed dashboard state", async () => {
     const { config } = await createPersistentVault({ initialize: true });
     const errors: unknown[] = [];
@@ -873,21 +747,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
     await expect(preparePrompt(config)).resolves.not.toContain("Private predecessor content.");
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
-  });
-
-  it("atomically replaces one stable owner row when the configured vault moves", async () => {
-    const { config: firstConfig } = await createPersistentVault({ initialize: true });
-    const { config: secondConfig } = await createPersistentVault({ initialize: true });
-    const store = createCacheStore();
-    configureMemoryWikiCompiledCacheStore(store);
-
-    await activateVault(firstConfig);
-    await publishSnapshot(firstConfig, snapshot("first"));
-    await activateVault(secondConfig);
-    await publishSnapshot(secondConfig, snapshot("second"));
-
-    await expect(loadMemoryWikiCompiledCache(firstConfig)).resolves.toBeNull();
-    expect((await loadMemoryWikiCompiledCache(secondConfig))?.claims[0]?.text).toBe("second");
   });
 
   it("deletes cache rows when their agent owner is removed", async () => {

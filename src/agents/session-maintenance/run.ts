@@ -204,6 +204,7 @@ export function scheduleSessionMaintenance(
               await loadSessionStoreRuntime();
             let entry: SessionEntry | undefined;
             const admission = await beginSessionWorkAdmission({
+              agentId: followupRun.run.agentId,
               scope: prepared.storePath,
               identities: [sessionKey, request.sessionId],
               signal: owner.signal,

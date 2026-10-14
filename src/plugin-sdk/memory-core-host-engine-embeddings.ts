@@ -38,6 +38,7 @@ export {
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
   resolveEmbeddingEndpointUrl,
+  resolveEmbeddingProviderSsrFPolicy,
   resolveEmbeddingInputFormatVersion,
   resolveRemoteEmbeddingBearerClient,
   resolveRemoteEmbeddingClient,

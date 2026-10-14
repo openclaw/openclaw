@@ -27,6 +27,11 @@ const enLabs = {
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
     },
+    chatBubbles: {
+      title: "Speech bubbles",
+      description:
+        "Try speech bubbles with compact tool activity. Home uses bubbles by default while enabled; each browser keeps its explicit conversation choices. Disabling this lab restores the standard view without clearing those choices.",
+    },
     customPluginUi: {
       title: "Custom plugin UI",
       description:

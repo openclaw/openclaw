@@ -1,6 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionSourcePredicate } from "../config/sessions/session-source-authority.js";
-import { readSessionSourceValidation } from "../config/sessions/session-source-predicate.worker.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
@@ -19,7 +16,6 @@ import {
   applyBoardOpsToDatabase,
   ensureBoardSchema,
   grantBoardWidgetInDatabase,
-  hasBoardSession,
   putBoardWidgetInDatabase,
   type BoardSessionIdentity,
 } from "./sqlite-board-store.kernel.js";
@@ -29,7 +25,6 @@ export type BoardWorkerInput =
       agentId: string;
       sessionKey: string;
       expectedSession: BoardSessionIdentity;
-      sources: SessionSourcePredicate[];
     }
   | undefined;
 
@@ -50,30 +45,6 @@ export function bindSqliteWorkerBackend(
   if (input && (!canonical || canonical.db !== context.database)) {
     throw new Error("Board publication lost its canonical database owner");
   }
-  const admission = {
-    ...context,
-    admit(stage: "transaction" | "commit") {
-      const validation =
-        input && canonical && readSessionSourceValidation(canonical, input.sources);
-      context.admit(
-        stage,
-        validation
-          ? (request, dispatch) => {
-              if (!isRecord(request.facts)) {
-                throw new Error("Board admission omitted its database identity");
-              }
-              dispatch({
-                ...request,
-                facts: { ...request.facts, boardSourceValidation: validation },
-              });
-            }
-          : undefined,
-      );
-      if (validation?.refusedSource) {
-        throw new Error("Board source refusal was not rejected");
-      }
-    },
-  };
   ensureBoardSchema(database);
   let closed = false;
   return {
@@ -81,27 +52,21 @@ export function bindSqliteWorkerBackend(
       if (closed) {
         throw new Error("Board publication scope is closed");
       }
-      const assertSessionCurrent = () => {
-        if (
-          input &&
-          (command.input.sessionKey !== input.sessionKey ||
-            !hasBoardSession(database, input.sessionKey, input.expectedSession))
-        ) {
-          throw new BoardValidationError("invalid_operation", "board session changed; retry");
-        }
-      };
+      if (input && command.input.sessionKey !== input.sessionKey) {
+        throw new BoardValidationError("invalid_operation", "board session changed; retry");
+      }
       // Nested actor publication scopes flush after this receipt has returned.
       const { result: value, changes } = captureSessionRowChanges(database.db, () =>
         withSqlitePostCommitPublications(database.db, () =>
           runSqliteWorkerTransactionSync(
-            admission,
+            context,
             () => {
-              assertSessionCurrent();
               if (command.type === "boards.applyOps") {
                 return applyBoardOpsToDatabase(
                   database,
                   command.input.sessionKey,
                   command.input.ops,
+                  input?.expectedSession,
                 );
               }
               if (command.type === "boards.putWidget") {
@@ -110,6 +75,7 @@ export function bindSqliteWorkerBackend(
                   command.input.sessionKey,
                   normalizeBoardWidgetPutParams(command.input.params, command.input.sessionKey),
                   command.input.viewGeneration,
+                  input?.expectedSession,
                 );
               }
               return grantBoardWidgetInDatabase(
@@ -119,15 +85,12 @@ export function bindSqliteWorkerBackend(
                 command.input.decision,
                 command.input.revision,
                 command.input.instanceId,
+                input?.expectedSession,
               );
             },
             {
               databaseLabel: database.path,
               operationLabel: command.type,
-              withCommit(commit) {
-                assertSessionCurrent();
-                return commit();
-              },
             },
           ),
         ),

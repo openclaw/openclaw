@@ -70,7 +70,14 @@ export async function captureClientVoiceEntrySource(
         : { expectedCreationIdentity: observed }),
       requestedPath: target.path,
     });
-    return { options, execution, agentId, storePath, assertCurrent };
+    return {
+      options,
+      execution,
+      agentId,
+      storePath,
+      assertCurrent,
+      creating: !observed.key.startsWith("file:"),
+    };
   };
   return canonical.agentId
     ? capture(canonical)

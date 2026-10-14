@@ -705,6 +705,25 @@ export const SessionsUsageParamsSchema = closedObject({
   timeZone: Type.Optional(NonEmptyString),
   /** Maximum sessions to return (default 50). */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** Bounded, server-filtered usage view; omitted preserves the full legacy projection. */
+  projection: Type.Optional(Type.Literal("overview")),
+  offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  query: Type.Optional(Type.String()),
+  selectedDays: Type.Optional(Type.Array(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }))),
+  selectedHours: Type.Optional(Type.Array(Type.Integer({ minimum: 0, maximum: 23 }))),
+  selectedSessions: Type.Optional(Type.Array(NonEmptyString)),
+  /** Restrict only the comparison roster; charts keep their selected population. */
+  recentKeys: Type.Optional(Type.Array(NonEmptyString, { maxItems: 8 })),
+  sort: Type.Optional(
+    Type.Union([
+      Type.Literal("recent"),
+      Type.Literal("tokens"),
+      Type.Literal("cost"),
+      Type.Literal("messages"),
+      Type.Literal("errors"),
+    ]),
+  ),
+  sortDirection: Type.Optional(Type.Union([Type.Literal("asc"), Type.Literal("desc")])),
   /** Include context weight breakdown (systemPromptReport). */
   includeContextWeight: Type.Optional(Type.Boolean()),
 });

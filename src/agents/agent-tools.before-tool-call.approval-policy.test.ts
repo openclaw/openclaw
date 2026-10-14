@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../logging/diagnostic-run-activity.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
@@ -11,6 +15,7 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -22,8 +27,10 @@ const hookRunner = vi.hoisted(() => ({
 vi.mock("../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => hookRunner }));
 vi.mock("./tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 const mockCallGateway = vi.mocked(callGatewayTool);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   resetDiagnosticSessionStateForTest();
   resetDiagnosticEventsForTest();
   hookRunner.hasHooks.mockImplementation((hookName) => hookName === "before_tool_call");
@@ -33,6 +40,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticRunActivityForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
@@ -118,5 +126,97 @@ describe("plugin approval policy subject and setup guidance", () => {
       accountId: "default",
     });
     expect(mockCallGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks turn-source plugin approval timeouts with setup guidance", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            approvalCapability: {
+              native: {},
+              getActionAvailabilityState: () => ({ kind: "enabled" as const }),
+              getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
+              describePluginApprovalSetup: () => "Configure Telegram native approval setup.",
+            },
+          },
+        },
+      ]),
+    );
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: { title: "Approval", description: "Review tool execution" },
+    });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id",
+      status: "accepted",
+      deliveryRoute: "turn-source",
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id", decision: null });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-100123456789",
+        turnSourceAccountId: "default",
+      },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("disposition", "timed_out");
+    expect(result).toHaveProperty(
+      "reason",
+      "Approval timed out\n\nConfigure Telegram native approval setup.",
+    );
+  });
+
+  it("uses the transport channel when tool policy provider differs", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Transport routed approval",
+        description: "Must use the transport channel",
+        pluginId: "my-plugin",
+      },
+    });
+
+    const tempDir = tempDirs.make("openclaw-hook-route-");
+    await fs.writeFile(join(tempDir, "note.txt"), "hello");
+    mockCallGateway.mockResolvedValueOnce({ id: "transport-route-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "transport-route-id",
+      decision: "allow-once",
+    });
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tempDir,
+      messageProvider: "discord-voice",
+      messageChannel: "discord",
+      currentChannelId: "native-channel-1",
+      currentMessagingTarget: "channel:deliverable-1",
+      agentAccountId: "acct-1",
+      currentThreadTs: "thread-1",
+      approvalReviewerDeviceId: "device-tui-reviewer",
+    });
+    const readTool = tools.find((tool) => tool.name === "read");
+    if (!readTool) {
+      throw new Error("missing read tool");
+    }
+    await readTool.execute("tool-hook-route", { path: "note.txt" }, undefined, undefined);
+
+    const requestCall = mockCallGateway.mock.calls[0];
+    expect(requestCall?.[0]).toBe("plugin.approval.request");
+    expect(requestCall?.[2]).toMatchObject({
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:deliverable-1",
+      turnSourceAccountId: "acct-1",
+      turnSourceThreadId: "thread-1",
+      approvalReviewerDeviceIds: ["device-tui-reviewer"],
+    });
   });
 });

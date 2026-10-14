@@ -162,7 +162,7 @@ export function readDirectErrorMessage(err: unknown): string | undefined {
   return readStringField(asOptionalObjectRecord(err), "message") || undefined;
 }
 
-export function getErrorMessage(err: unknown): string {
+function getErrorMessage(err: unknown): string {
   return findErrorProperty(err, readDirectErrorMessage) ?? "";
 }
 

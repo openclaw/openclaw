@@ -1,11 +1,10 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import {
   clearEmbeddedSessionPromptStates,
   beginSessionSystemPrompt,
   prepareEmbeddedSessionActiveProjectKeys,
-  getEmbeddedSessionPromptState,
   prepareSessionSystemPrompt,
   persistSessionSystemPrompt,
   retainEmbeddedSessionPromptState,
@@ -31,22 +30,27 @@ it("unloads prompt payloads after the last attempt while retaining recent projec
   first.state.toolResults.frozen.add("sent-result");
   first[Symbol.dispose]();
   first[Symbol.dispose]();
-  expect(getEmbeddedSessionPromptState(sessionId)).toBe(overlapping.state);
+  {
+    using active = retainEmbeddedSessionPromptState(sessionId);
+    expect(active.state).toBe(overlapping.state);
+  }
   expect(overlapping.state.toolResults.frozen.has("sent-result")).toBe(true);
   overlapping[Symbol.dispose]();
-  expect(getEmbeddedSessionPromptState(sessionId)).not.toBe(first.state);
+  using reloaded = retainEmbeddedSessionPromptState(sessionId);
+  expect(reloaded.state).not.toBe(first.state);
   expect(prepare(sessionId, null)).toEqual(["project-one"]);
 
   const retired = retainEmbeddedSessionPromptState(sessionId);
   clearEmbeddedSessionPromptStates([sessionId]);
   const replacement = retainEmbeddedSessionPromptState(sessionId);
   retired[Symbol.dispose]();
-  expect(getEmbeddedSessionPromptState(sessionId)).toBe(replacement.state);
+  using activeReplacement = retainEmbeddedSessionPromptState(sessionId);
+  expect(activeReplacement.state).toBe(replacement.state);
   expect(prepare(sessionId, null)).toEqual([]);
   replacement[Symbol.dispose]();
 });
 
-it("keeps active attempts canonical when concurrency exceeds the idle cache", () => {
+it("keeps active attempts canonical beyond the session cache limit", () => {
   const leases = Array.from({ length: 70 }, (_, index) => {
     const id = `concurrent-prompt-${index}`;
     sessionIds.add(id);
@@ -54,7 +58,8 @@ it("keeps active attempts canonical when concurrency exceeds the idle cache", ()
   });
   try {
     for (const { id, lease } of leases) {
-      expect(getEmbeddedSessionPromptState(id)).toBe(lease.state);
+      using active = retainEmbeddedSessionPromptState(id);
+      expect(active.state).toBe(lease.state);
     }
   } finally {
     for (const { lease } of leases) {
@@ -62,11 +67,17 @@ it("keeps active attempts canonical when concurrency exceeds the idle cache", ()
     }
   }
   for (const { id, lease } of leases) {
-    expect(getEmbeddedSessionPromptState(id)).not.toBe(lease.state);
+    using reloaded = retainEmbeddedSessionPromptState(id);
+    expect(reloaded.state).not.toBe(lease.state);
   }
 });
 
 describe("system prompt series", () => {
+  let lease: ReturnType<typeof retainEmbeddedSessionPromptState>;
+  beforeEach(() => {
+    lease = retainEmbeddedSessionPromptState("system-series");
+  });
+  afterEach(() => lease[Symbol.dispose]());
   const routeKey = "anthropic/claude-opus-5/anthropic-messages";
   const base =
     "Opening instructions.\n## Stable\nKeep this.\n## Changed\nOld.\n## Removed\nRetire this.\n";
@@ -76,7 +87,7 @@ describe("system prompt series", () => {
     const id = "system-series";
     sessionIds.add(id);
     const result = prepareSessionSystemPrompt({
-      state: getEmbeddedSessionPromptState(id),
+      state: lease.state,
       routeKey: route,
       systemPrompt: prefix.trimEnd(),
       entries,
@@ -85,19 +96,16 @@ describe("system prompt series", () => {
     return result;
   }
   async function persist(entries: SessionEntry[]) {
-    await persistSessionSystemPrompt(
-      getEmbeddedSessionPromptState("system-series"),
-      (customType, data) => {
-        entries.push({
-          type: "custom",
-          customType,
-          data: structuredClone(data),
-          id: `marker-${entries.length}`,
-          parentId: null,
-          timestamp: "2026-10-01T00:00:00Z",
-        });
-      },
-    );
+    await persistSessionSystemPrompt(lease.state, (customType, data) => {
+      entries.push({
+        type: "custom",
+        customType,
+        data: structuredClone(data),
+        id: `marker-${entries.length}`,
+        parentId: null,
+        timestamp: "2026-10-01T00:00:00Z",
+      });
+    });
   }
 
   it("pins stable bytes and emits only changed, added, and removed sections", () => {
@@ -117,7 +125,8 @@ describe("system prompt series", () => {
     let first: string | undefined;
     sessionIds.add("system-series");
     for (let turn = 0; turn < 30; turn++) {
-      using lease = retainEmbeddedSessionPromptState("system-series");
+      lease[Symbol.dispose]();
+      lease = retainEmbeddedSessionPromptState("system-series");
       const prompt = `## Skills\nskill-${turn}\n## Project Context\nmemory-${turn}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\nday-${turn}`;
       const prepared = prepareSessionSystemPrompt({
         state: lease.state,
@@ -163,6 +172,8 @@ describe("system prompt series", () => {
     const withNotice = `${base.trimEnd()}\n\n<!-- openclaw:attempt:PERMISSION -->\n${notice}\n<!-- /openclaw:attempt:PERMISSION -->`;
     for (const prompt of [withNotice, base, withNotice]) {
       clearEmbeddedSessionPromptStates(["system-series"]);
+      lease[Symbol.dispose]();
+      lease = retainEmbeddedSessionPromptState("system-series");
       const prepared = project(prompt, entries);
       expect(prepared.systemPrompt).toBe(first.systemPrompt);
       expect(prepared.update?.content).toBe(
@@ -174,6 +185,8 @@ describe("system prompt series", () => {
       await persist(entries);
       expect(entries).toHaveLength(checkpoints + 1);
       clearEmbeddedSessionPromptStates(["system-series"]);
+      lease[Symbol.dispose]();
+      lease = retainEmbeddedSessionPromptState("system-series");
       expect(project(prompt, entries).update).toBeUndefined();
       await persist(entries);
       expect(entries).toHaveLength(checkpoints + 1);
@@ -184,7 +197,7 @@ describe("system prompt series", () => {
     const entries: SessionEntry[] = [];
     project(base);
     await persist(entries);
-    const state = getEmbeddedSessionPromptState("system-series");
+    const state = lease.state;
     const first = project(changed, entries);
     beginSessionSystemPrompt({ state, routeKey, enabled: true, entries });
     const retry = project(changed, entries);
@@ -216,7 +229,7 @@ describe("system prompt series", () => {
       display: false,
       details: update.details,
     });
-    const state = getEmbeddedSessionPromptState("system-series");
+    const state = lease.state;
     await expect(
       persistSessionSystemPrompt(state, (customType, data) => {
         entries.push({
@@ -264,8 +277,10 @@ describe("system prompt series", () => {
       expect(project(changed, entries).restart).toBe(false);
       if (processRestart) {
         clearEmbeddedSessionPromptStates(["system-series"]);
+        lease[Symbol.dispose]();
+        lease = retainEmbeddedSessionPromptState("system-series");
       }
-      const state = getEmbeddedSessionPromptState("system-series");
+      const state = lease.state;
       beginSessionSystemPrompt({ state, routeKey, enabled: true, entries });
       const recovered = project(base, entries);
       expect(recovered.restart).toBe(true);
@@ -287,7 +302,7 @@ describe("system prompt series", () => {
     await persist(entries);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ data: { restart: true } });
-    expect(getEmbeddedSessionPromptState("system-series").pendingSystemPrompt).toBeUndefined();
+    expect(lease.state.pendingSystemPrompt).toBeUndefined();
   });
 
   it.each(["first request", "route", "compaction"])(
@@ -300,7 +315,7 @@ describe("system prompt series", () => {
       const notice =
         "## Permission change\nThe operator changed workspace permissions to read-only.";
       const input = {
-        state: getEmbeddedSessionPromptState("system-series"),
+        state: lease.state,
         routeKey: reason === "route" ? "other route" : routeKey,
         systemPrompt: `${changed}${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic\n\n<!-- openclaw:attempt:PERMISSION -->\n${notice}\n<!-- /openclaw:attempt:PERMISSION -->`,
         entries:
@@ -336,7 +351,7 @@ describe("system prompt series", () => {
     await persist(entries);
     project(changed, entries);
     await persist(entries);
-    const state = getEmbeddedSessionPromptState("system-series");
+    const state = lease.state;
     expect(beginSessionSystemPrompt({ state, routeKey: "other", enabled: false, entries })).toBe(
       true,
     );
@@ -355,6 +370,8 @@ describe("system prompt series", () => {
       await persist(entries);
       expect(entries).toHaveLength(2);
       clearEmbeddedSessionPromptStates(["system-series"]);
+      lease[Symbol.dispose]();
+      lease = retainEmbeddedSessionPromptState("system-series");
       const resumed = project(mismatch ? base : changed, entries);
       expect(resumed.restart).toBe(false);
       if (mismatch) {

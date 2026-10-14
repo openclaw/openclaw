@@ -16,6 +16,16 @@ All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
 including these entry helpers. Pin and test the OpenClaw host versions your
 plugin supports.
 
+Gateway adapters use the existing `core` or `gateway-runtime`
+`GatewayRequestHandlerOptions.context.githubPublicationService` contract for
+GitHub publication. Prepare its required capabilities with
+`prepareGitHubPublicationRequesterV2` or `preparePersonalGitHubSessionActionV2`
+from `gateway-runtime`, using admitted handler options, and release them after
+the operation settles. The host's worker and source-fence modules remain private.
+Migrate wrappers and lifecycle calls using the
+[GitHub publication method mapping](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations),
+without adding imports from Gateway internals.
+
 <Tip>
   **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
   [Channel Plugins](/plugins/sdk-channel-plugins), or
@@ -51,6 +61,10 @@ OpenClaw classifies loaded plugins by their registration behavior:
 | **non-capability**    | Tools/commands/services but no capabilities        |
 
 Use `openclaw plugins inspect <id>` to see a plugin's shape.
+
+Managed agent-database schema extension belongs to private worker backends, not
+the typed public Plugin SDK. Bundled backend authors should follow the
+[private worker schema-extension contract](/reference/database-schemas/worker-access#private-worker-schema-extensions).
 
 ## Related
 
@@ -162,7 +176,7 @@ restrict this bridge to native bootstrap documents and the configured
 `bootstrap-extra-files` patterns. Check `canList` for directory metadata,
 `canRead` for file bytes, and `canWrite` for the four owner-editable documents.
 Directory access does not grant reads of other files. The underlying bridge
-still enforces filesystem containment and returns the read's canonical source.
+still enforces filesystem containment and returns the read's resolved source.
 
 Workspace access that has not started or has stopped throws
 `WorkspaceAccessUnavailableError`. Use `isWorkspaceAccessUnavailableError(error)`
@@ -172,7 +186,7 @@ The error code is `WORKSPACE_ACCESS_UNAVAILABLE`; do not match message text.
 The optional `memoryFiles` provider keeps workspace Memory files on the host while
 the native index, embedding providers and original sessions stay on Gateway. It
 supplies discovery, file inspection, reads and change notifications. Both indexing
-and `memory_get` use it; index publication rechecks the host file. The canonical
+and `memory_get` use it; index publication rechecks the host file. The resolved
 source returned with a read supplies provenance, without resolving a stale Gateway
 copy. Stopping the workspace binding revokes retained file access and subscriptions.
 The Memory file worker supports `--files <workspace>` for native file
@@ -222,7 +236,7 @@ File-inspecting Gateway policies receive a temporary tree from the existing Skil
 resource reader; Gateway-owned sources remain local. Resource bundle limits apply.
 
 `readWorkspaceSkillResources` lazily reuses the bounded native bundle reader.
-File-transfer adapters can check each file's requested and verified canonical paths
+File-transfer adapters can check each file's requested and verified resolved filesystem paths
 before returning a bundle; admitting the Skill directory alone does not admit every child.
 
 Hosts can provide `watchSkills(request, onChange, signal)` to notify the existing
@@ -316,6 +330,15 @@ for already prepared data. `session-transcript-runtime` provides
 synchronous and opaque transaction callback forms remain deprecated until the
 next Plugin SDK major. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
 and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
+
+For ordinary session preparation, await `getSessionEntryAsync`,
+`readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
+`readAmbientTranscriptWatermarkAsync` from `session-store-runtime`. Native command
+preparation uses `resolveStoredModelOverrideAsync` and
+`resolveCommandArgMenuAsync` from `command-auth-native`; the menu helper is also
+available from `native-command-registry`. Their synchronous compatibility APIs
+remain deprecated until the next Plugin SDK major. See
+[session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
 
 ## Stateful CLI commands
 

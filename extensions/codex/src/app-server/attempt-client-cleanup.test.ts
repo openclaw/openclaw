@@ -15,29 +15,11 @@ import {
   CodexAppServerScopedRequestRejectedError,
   codexPrewriteRejectionCause,
 } from "./rpc-error.js";
-import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
-import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 describe("Codex app-server attempt client cleanup", () => {
   it.each([
-    {
-      name: "startup selection",
-      cause: Object.assign(new Error("selection changed"), {
-        code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
-      }),
-      matches: isCodexAppServerStartSelectionChangedError,
-      retireBefore: false,
-    },
-    {
-      name: "context restart",
-      cause: Object.assign(new Error("context selection changed"), {
-        code: "CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED",
-      }),
-      matches: isCodexContextRestartSelectionChangedError,
-      retireBefore: true,
-    },
     {
       name: "startup timeout",
       cause: new CodexAppServerStartupError("timed_out"),
@@ -145,6 +127,36 @@ describe("Codex app-server attempt client cleanup", () => {
     await expect(closeCodexStartupClientBestEffort({ closeAndWait } as never)).rejects.toThrow(
       "strict client retirement failed",
     );
+  });
+
+  it("does not retry interruption after its requester expires during overload backoff", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    let current = true;
+    try {
+      const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        timeoutMs: 5_000,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Requester expired");
+          }
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const first = JSON.parse(harness.writes[0] ?? "{}");
+      harness.send({ id: first.id, error: { code: -32_001, message: "Server overloaded" } });
+      await vi.advanceTimersByTimeAsync(0);
+      current = false;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await completion).toBe(false);
+      expect(harness.writes).toHaveLength(1);
+      expect(harness.client.getCloseError()).toBeUndefined();
+    } finally {
+      harness.client.close();
+      vi.useRealTimers();
+    }
   });
 
   it("retains the startup interrupt acknowledgement contract", async () => {

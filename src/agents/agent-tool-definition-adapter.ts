@@ -16,7 +16,6 @@ import {
   recordStructuredReplayTrustForToolCall,
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { consumeFinalClientVoiceToolConfirmation } from "./agent-tools.before-tool-call.policy.js";
 import {
   finalizeBeforeToolCallExecutionParams,
   prepareBeforeToolCallExecutionParams,
@@ -32,10 +31,12 @@ import {
 } from "./code-mode-control-tools.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import { readNodePermissionError } from "./node-permission-error.js";
 import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import {
   attachInternalToolExecutionPreparer,
+  copyInternalToolResultState,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
@@ -218,11 +219,14 @@ function normalizeToolExecutionResult(params: {
 function buildToolExecutionErrorResult(params: {
   toolName: string;
   message: string;
+  cause?: unknown;
 }): AgentToolResult<unknown> {
+  const permissionMissing = readNodePermissionError(params.cause);
   return jsonResult({
     status: "error",
     tool: params.toolName,
     error: params.message,
+    ...(permissionMissing ? { permissionMissing } : {}),
   });
 }
 
@@ -257,10 +261,15 @@ async function executeAdaptedToolOperation(params: {
     logError(
       `[tools] ${params.normalizedToolName} failed: ${described.message}${operatorHint} ${inputPreview}`,
     );
-    return buildToolExecutionErrorResult({
+    const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
+      cause: err,
     });
+    // Error presentation must preserve private execution and content provenance.
+    return typeof err === "object" && err !== null
+      ? copyInternalToolResultState(err, result)
+      : result;
   }
 }
 
@@ -405,23 +414,6 @@ export function toToolDefinitions(
               if (decision && !decision.launch) {
                 return { content: [], details: { status: "skipped" } };
               }
-              // A voice grant binds the post-finalizer execution shape. Consuming it
-              // earlier would let later alias or tool-owned rewrites escape the grant.
-              const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-                toolCallId,
-                toolName: name,
-                toolKind: hookMetadata?.toolKind,
-                params: executeParams,
-                ctx: hookContext,
-              });
-              if (!voiceConfirmation.allowed) {
-                return buildBlockedToolResult({
-                  reason: voiceConfirmation.reason,
-                  deniedReason: "client-voice-confirmation",
-                  toolCallId,
-                  runId: hookContext?.runId,
-                });
-              }
               decision?.start?.();
               recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
             }
@@ -451,6 +443,7 @@ export function toToolDefinitions(
         { kind: "immediate" }
       >["outcome"];
       const settleImmediate = async (outcome: ImmediateOutcome, dispose: () => void) => {
+        let settled: ImmediateOutcome;
         try {
           const result = await settle(async () => {
             if (outcome.kind === "error") {
@@ -458,22 +451,15 @@ export function toToolDefinitions(
             }
             return outcome.result;
           });
-          return {
-            kind: "immediate" as const,
-            outcome: {
-              kind: "result" as const,
-              result,
-              isError: outcome.kind === "result" && outcome.isError,
-            },
-            dispose,
+          settled = {
+            kind: "result",
+            result,
+            isError: outcome.kind === "result" && outcome.isError,
           };
         } catch (error) {
-          return {
-            kind: "immediate" as const,
-            outcome: { kind: "error" as const, error },
-            dispose,
-          };
+          settled = { kind: "error", error };
         }
+        return { kind: "immediate" as const, outcome: settled, dispose };
       };
       let prepared: Awaited<ReturnType<typeof sourcePreparer>>;
       try {
@@ -578,21 +564,6 @@ export function toClientToolDefinitions(
           if (decision && !decision.launch) {
             recorder?.discard?.(toolCallId, func.name);
             return { content: [], details: { status: "skipped" } };
-          }
-          const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-            toolCallId,
-            toolName: func.name,
-            params: paramsRecord,
-            ctx: hookContext,
-          });
-          if (!voiceConfirmation.allowed) {
-            recorder?.discard?.(toolCallId, func.name);
-            return buildBlockedToolResult({
-              reason: voiceConfirmation.reason,
-              deniedReason: "client-voice-confirmation",
-              toolCallId,
-              runId: hookContext?.runId,
-            });
           }
           signal?.throwIfAborted();
           decision?.start?.();

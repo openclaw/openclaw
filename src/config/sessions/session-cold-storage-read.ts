@@ -1,17 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
-import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
-import {
-  assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
-} from "../../infra/sqlite-transaction.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import {
-  assertSessionTranscriptHot,
   SessionTranscriptColdError,
   type SessionColdArchive,
 } from "./session-cold-storage-state.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
+
+export { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
 
 /** History callers retain their prepared physical target and read owner through restoration. */
 export type SessionColdReadPreparation = {
@@ -21,39 +16,6 @@ export type SessionColdReadPreparation = {
     phase: "initial" | "queued",
   ) => Promise<Omit<SessionColdArchive, "archive_blob"> | undefined>;
 };
-
-/** The cold marker and hot rows must belong to one snapshot, including cached statement lookups. */
-export function readHotSessionTranscriptSnapshot<T>(
-  database: { db: DatabaseSync },
-  sessionId: string,
-  purpose:
-    | "identity"
-    | "header"
-    | "tail"
-    | "incremental"
-    | "checkpoint"
-    | "events"
-    | "raw rows"
-    | "storage rows"
-    | "presence"
-    | "match",
-  read: () => T,
-): T {
-  const readSnapshot = () => {
-    assertSessionTranscriptHot(database.db, sessionId);
-    return read();
-  };
-  if (database.db.isTransaction) {
-    // These callbacks only read; the caller already owns their snapshot and rollback.
-    assertTransactionUsable(database.db);
-    const result = runSqliteReadOperationSync(database.db, readSnapshot);
-    assertTransactionUsable(database.db);
-    return result;
-  }
-  return runSqliteDeferredTransactionSync(database.db, readSnapshot, {
-    operationLabel: `session transcript ${purpose} read`,
-  });
-}
 
 /** A peer can archive after restoration settles but before the read completes. */
 export async function readRestoredSessionTranscript<T>(

@@ -569,7 +569,7 @@ openclaw-session-discussion {
   z-index: var(--z-dropdown);
 }
 
-.sidebar-file-view__editor-menu::part(menu) {
+.sidebar-file-view__editor-panel {
   min-width: 132px;
   padding: 5px;
   border: 1px solid var(--overlay-border);
@@ -644,6 +644,10 @@ openclaw-session-discussion {
 .chat-html-preview[hidden],
 .sidebar-attachment-preview__text[hidden] {
   display: none;
+}
+
+openclaw-chat-html-preview {
+  display: contents;
 }
 
 .chat-html-preview {

@@ -1,9 +1,7 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
-import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -110,7 +108,7 @@ async function updateCommandWithRuntime(
       defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
     }
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
-    assertUpdatePackageActivationAdmission(root, { serviceRoot });
+    assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
     const needsInitialization = await updateStateNeedsInitialization(env);
     const captureOriginal =
       !inputOpts.dryRun &&
@@ -171,29 +169,6 @@ async function updateCommandInternal(
     prepared.timeoutMs ?? admittedRun.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   let target = initialization?.target;
-  let reselected = false;
-  if (target && initialization && !opts.channel && !opts.sourceUpdate) {
-    const config =
-      target.legacyConfigPlan?.config ??
-      (target.configSnapshot.valid
-        ? target.configSnapshot.config
-        : target.configSnapshot.sourceConfig);
-    if (normalizeUpdateChannel(config.update?.channel) !== target.storedChannel) {
-      defaultRuntime.error(
-        "Warning: Stored update channel changed during admission; selecting the current channel's target.",
-      );
-      admittedRun.executorFence?.assertCurrent();
-      await initialization.stagedPackage?.close();
-      admittedRun.executorFence?.assertCurrent();
-      // Candidate verdicts and downgrade confirmation belong to the old target.
-      initialization.stagedPackage = undefined;
-      initialization.candidateAdmission = undefined;
-      initialization.downgradeConfirmed = undefined;
-      admittedRun.candidateAdmissionChecks = undefined;
-      target = undefined;
-      reselected = true;
-    }
-  }
   const selectTarget = () =>
     resolveUpdateCommandTarget(
       opts,
@@ -210,17 +185,6 @@ async function updateCommandInternal(
   }
   if (!target) {
     return;
-  }
-  if (reselected && initialization) {
-    admittedRun.executorFence = await executor.enter(target.root, {
-      preflight: true,
-      serviceRoot: target.managedServiceRoot,
-    });
-    admittedRun.executorFence.assertCurrent();
-    assertUpdatePackageActivationAdmission(target.root, {
-      serviceRoot: target.managedServiceRoot,
-    });
-    initialization.target = target;
   }
   const runResolvedUpdate = async (stagedPackage?: StagedPackageInstallUpdate): Promise<void> => {
     const {
@@ -352,18 +316,11 @@ async function updateCommandInternal(
       stop: presentation.stop,
       refuseUpdate,
     };
-    const pluginCount = Object.keys(configSnapshot.config.plugins?.entries ?? {}).length;
     const activateCurrentCore = async () => {
       run.executorFence = await executor.enter(root, {
         preflight: true,
         serviceRoot: managedServiceRoot,
-        activationTimeoutMs: (run.activationTimeoutMs ??=
-          timeoutMs === undefined
-            ? undefined
-            : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
-                env: run.env,
-                pluginCount,
-              })),
+        activationTimeoutMs: run.deadline?.remainingMs() ?? run.activationTimeoutMs,
       });
       run.executorFence.assertCurrent();
       assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
@@ -457,7 +414,7 @@ async function updateCommandInternal(
       }
       const fence = await executor.enter(root, {
         serviceRoot: managedServiceRoot,
-        activationTimeoutMs,
+        activationTimeoutMs: run.deadline?.remainingMs() ?? activationTimeoutMs,
       });
       admitExecutor(fence);
       run.activationTimeoutMs ??= activationTimeoutMs;

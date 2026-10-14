@@ -15,15 +15,10 @@ import {
 import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionActor } from "./session-entry-provenance.js";
+import type { SqliteSessionOwnerRow } from "./session-entry-storage.types.js";
 import type { SessionEntry } from "./types.js";
 
-export type SqliteSessionOwnerRow = {
-  owner_actor_type?: string | null;
-  owner_actor_id?: string | null;
-  owner_assigned_by_type?: string | null;
-  owner_assigned_by_id?: string | null;
-  owner_assigned_at?: number | null;
-};
+export type { SqliteSessionOwnerRow } from "./session-entry-storage.types.js";
 
 const ownerColumnAvailability = new WeakMap<SqliteSchemaFacts, boolean>();
 const rawOwnerColumnRead = createSqliteQueryCache((database) =>

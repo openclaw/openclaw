@@ -215,6 +215,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
   }),
 }));
 
+// mock-isolation: Startup fixtures provide auth and catalog snapshots without opening real stores.
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorageFacts: (agentDir: string, options?: unknown) => {
     const authStorage = mocks.discoverAuthStorage(agentDir, options);
@@ -234,7 +235,7 @@ vi.mock("./agent-model-discovery.js", () => ({
     };
   },
   discoverAuthStorage: mocks.discoverAuthStorage,
-  discoverModels: mocks.discoverModels,
+  discoverModelsAsync: mocks.discoverModels,
   discoverModelsFromCapturedSources: mocks.discoverModels,
 }));
 

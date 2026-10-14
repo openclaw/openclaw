@@ -4,7 +4,6 @@ import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversat
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
-  registerSessionBindingAdapterV2,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingRecord,
@@ -17,6 +16,7 @@ import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk
 import {
   createAccountScopedBindingAdapterV2,
   projectThreadBindingRecord,
+  registerSessionBindingAdapterV2,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
 type FeishuBindingTargetKind = "subagent" | "acp";
@@ -98,10 +98,6 @@ export function createFeishuThreadBindingManager(params: {
 }): FeishuThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const { managersByAccountId, bindingsByAccountConversation } = getState();
-  const existing = managersByAccountId.get(accountId);
-  if (existing) {
-    return existing;
-  }
 
   const idleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
     cfg: params.cfg,

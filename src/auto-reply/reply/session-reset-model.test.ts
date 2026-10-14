@@ -1,6 +1,7 @@
 // Tests reset model selection and persisted model override cleanup.
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { buildModelAliasIndex } from "../../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -332,6 +333,7 @@ describe("applyResetModelOverride", () => {
   });
 
   it("clears auth profile overrides when reset applies a model", async () => {
+    await prepareSharedAuthStoreOwnership();
     const { sessionEntry } = await applyResetFixture({
       resetTriggered: true,
       sessionEntry: {

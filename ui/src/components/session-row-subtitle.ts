@@ -1,11 +1,7 @@
-import { html, nothing } from "lit";
-import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { t } from "../i18n/index.ts";
-import { resolveToolDisplayIcon } from "../lib/chat/tool-display-icon.ts";
 import { isCriticalObserverHealth, pickFreshestObserverDigest } from "../lib/observer-digest.ts";
+import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
 import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
-import { icons } from "./icons.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 
 type SidebarSessionSubtitle = {
@@ -13,6 +9,37 @@ type SidebarSessionSubtitle = {
   narration: string | undefined;
   toolName?: string;
 };
+
+export function resolveSidebarSessionRowSubtitle(
+  host: {
+    readonly sidebarAgentsMode?: "chip" | "roster";
+    readonly sessionsShowPreview: boolean;
+    readonly sidebarLiveActivity: boolean;
+    readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
+    readonly sessionProjection: { resolveSubtitle: typeof resolveSidebarSessionSubtitle };
+    readonly sidebarNarrationLines: ReadonlyMap<string, string>;
+    readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
+  },
+  session: SidebarRecentSession,
+  display?: CatalogBackingSessionDisplay,
+) {
+  const toolActivity =
+    host.sidebarAgentsMode !== "roster" &&
+    host.sessionsShowPreview &&
+    session.hasActiveRun &&
+    host.sidebarLiveActivity
+      ? host.sidebarTools.get(session.key)
+      : undefined;
+  return host.sessionProjection.resolveSubtitle({
+    session,
+    hasDisplay: display !== undefined,
+    sidebarLiveActivity: host.sidebarLiveActivity,
+    showPreview: host.sessionsShowPreview,
+    narrationLine: host.sidebarNarrationLines.get(session.key),
+    toolActivity,
+    observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
+  });
+}
 
 /** Resolves the single subtitle slot without displacing visible status. */
 export function resolveSidebarSessionSubtitle(params: {
@@ -92,28 +119,4 @@ export function resolveSidebarSessionSubtitle(params: {
     !running && !params.hasDisplay ? session.lastMessagePreview?.trim() || undefined : undefined;
   const subtitle = attention ?? agentStatus ?? observer ?? narration ?? finalReply ?? workSubtitle;
   return { subtitle, narration };
-}
-
-export function renderSidebarSessionSubtitle(value: SidebarSessionSubtitle) {
-  if (!value.subtitle) {
-    return nothing;
-  }
-  const label = value.toolName ? `${t("chat.toolCards.tool")}: ${value.toolName}` : undefined;
-  const icon = value.toolName
-    ? html`<openclaw-tooltip .content=${label} .describe=${false}
-        ><span class="sidebar-session-tool" role="img" aria-label=${label}
-          >${icons[resolveToolDisplayIcon(value.toolName)]}</span
-        ></openclaw-tooltip
-      >`
-    : nothing;
-  const text = value.narration
-    ? keyed(
-        value.narration,
-        html`<span
-          class="sidebar-recent-session__subtitle sidebar-recent-session__subtitle--narration"
-          >${value.subtitle}</span
-        >`,
-      )
-    : html`<span class="sidebar-recent-session__subtitle">${value.subtitle}</span>`;
-  return html`${icon}${text}`;
 }

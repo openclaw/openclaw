@@ -28,7 +28,7 @@ type WizardStepControlsProps = {
   answerLabel?: string;
   busyLabel?: string;
   confirmAffirmativeLabel?: string;
-  leadingAction?: TemplateResult;
+  leadingAction?: TemplateResult | HTMLElement;
   externalAuthInput?: boolean;
   sensitiveRevealed?: boolean;
   onToggleSensitiveVisibility?: () => void;

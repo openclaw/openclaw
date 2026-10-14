@@ -11,6 +11,21 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
+When indexing Markdown, the builtin engine attaches a heading-only chunk to the
+following content chunk. This keeps short headings from taking search result slots
+on their own while preserving section context and source line references. A final
+heading with no following content stays searchable. Oversized headings already
+split across chunks keep their fragments, and provider input limits still apply
+to merged chunks.
+Headings with their own recall annotations remain independent, preserving their
+project scope, triggers, and importance. Heading-like fragments inside a curated
+entry stay with that entry's annotation scope.
+
+After upgrading, existing builtin indexes rebuild once on the next normal search
+or sync to apply this chunking change. No configuration change or manual
+`memory index --force` is needed. Memory files and database schemas are unchanged;
+keyword search remains available if the rebuild cannot finish immediately.
+
 ## Quick start
 
 OpenClaw uses OpenAI embeddings by default. To use another provider, set it
@@ -40,6 +55,11 @@ openclaw plugins install @openclaw/llama-cpp-provider
 Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service
 configuration.
+
+Managed `local` and Ollama embeddings index one file at a time when batch
+indexing is disabled. This bounds background embedding requests during a full
+rebuild; large indexes can take longer on hosts that previously ran several
+local jobs in parallel.
 
 EmbeddingGemma uses its trained task prefixes automatically for queries and
 indexed documents, including through Ollama, LM Studio, and OpenAI-compatible
@@ -104,7 +124,7 @@ If only one path is available, the other runs alone. Keyword boosts stay bounded
 without clipping distinct lexical scores to the same maximum, so relevance
 continues to influence ranking when dated notes decay.
 
-The builtin engine then applies deterministic ranking:
+The builtin engine then applies fixed ranking rules:
 
 ```text
 hybrid relevance × recency decay × importance multiplier
@@ -137,7 +157,9 @@ Hybrid ranking also scores retrieved keyword candidates from their stored
 embeddings when they fall outside the top vector candidates. This keeps a
 strong keyword answer eligible when many similar notes fill the vector window.
 
-## Deterministic trigger recall
+<a id="deterministic-trigger-recall" />
+
+## Rule-based trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound
 message with short trigger phrases stored on indexed entries. Strong matches
@@ -180,7 +202,7 @@ vectors. Verify the provider's model, then rebuild with
 
 ## Improving search quality
 
-Two deterministic ranking passes are enabled by default for hybrid search.
+Two rule-based ranking passes are enabled by default for hybrid search.
 
 ### Recency decay
 

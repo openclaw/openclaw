@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import type { MediaGenerateToolOptions } from "./tools/media-generate-background.js";
@@ -68,7 +69,11 @@ const mediaConfig = {
 } satisfies OpenClawConfig;
 
 describe("createOpenClawTools context wiring", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+    vi.clearAllMocks();
+  });
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   it("passes the session agent and active account configuration into TTS", async () => {
     const config = {
@@ -151,12 +156,21 @@ describe("createOpenClawTools context wiring", () => {
       "agent:main:main",
       "agent:main:qa-channel:default:direct:media-requester",
     ],
+    ["agent:main:policy", "agent:work:run", "agent:main:policy"],
   ])(
     "passes a separate durable requester key for background media from %s",
-    (agentSessionKey, runSessionKey, taskSessionKey) => {
-      createTools({
-        config: mediaConfig,
+    async (agentSessionKey, runSessionKey, taskSessionKey) => {
+      await createOpenClawToolsAsync({
+        disableMessageTool: true,
+        disablePluginTools: true,
+        authProfileStore: { version: 1, profiles: {} },
+        config: {
+          ...mediaConfig,
+          agents: { ...mediaConfig.agents, entries: { main: {}, work: {} } },
+        },
         agentSessionKey,
+        sandboxAgentId: "main",
+        sandboxed: true,
         runSessionKey,
         onYield: vi.fn(),
       });
@@ -165,7 +179,11 @@ describe("createOpenClawTools context wiring", () => {
           expect.objectContaining({
             agentSessionKey: taskSessionKey,
             requesterRunSessionKey: runSessionKey,
+            sandboxSessionKey: agentSessionKey,
+            sandboxAgentId: "main",
+            requesterAgentId: runSessionKey.startsWith("agent:work:") ? "work" : "main",
           }),
+          true,
         );
       }
     },

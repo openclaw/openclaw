@@ -3,7 +3,7 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
@@ -160,15 +160,21 @@ export function createGatewayAuthRateLimiter(
   let overflowLockedUntil: number | undefined;
   let disposed = false;
 
-  const pruneJob =
-    pruneIntervalMs > 0
-      ? scheduler.schedule({
-          id: `${id}:prune`,
-          atMs: scheduler.now() + pruneIntervalMs,
-          everyMs: pruneIntervalMs,
-          run: prune,
-        })
-      : null;
+  let pruneJob: GatewayScheduledJob | undefined;
+
+  function updatePruneJob(): void {
+    if (entries.size === 0) {
+      pruneJob?.cancel();
+      pruneJob = undefined;
+    } else if (!pruneJob && pruneIntervalMs > 0 && !disposed) {
+      pruneJob = scheduler.schedule({
+        id: `${id}:prune`,
+        atMs: scheduler.now() + pruneIntervalMs,
+        everyMs: pruneIntervalMs,
+        run: prune,
+      });
+    }
+  }
 
   function resolveKey(
     rawIp: string | undefined,
@@ -259,6 +265,7 @@ export function createGatewayAuthRateLimiter(
     } else if (!exempt && entry.attempts.length >= policy.maxAttempts) {
       entry.lockedUntil = now + policy.lockoutMs;
     }
+    updatePruneJob();
   }
 
   function recordFailureAndDelay(rawIp: string | undefined, rawScope?: string): Promise<void> {
@@ -316,6 +323,7 @@ export function createGatewayAuthRateLimiter(
   function reset(rawIp: string | undefined, rawScope?: string): void {
     const { key } = resolveKey(rawIp, rawScope);
     entries.delete(key);
+    updatePruneJob();
   }
 
   function pruneExpiredEntries(now: number): void {
@@ -328,6 +336,7 @@ export function createGatewayAuthRateLimiter(
         entries.delete(key);
       }
     }
+    updatePruneJob();
   }
 
   function checkOverflowLock(now: number): RateLimitCheckResult | undefined {
@@ -383,6 +392,7 @@ export function createGatewayAuthRateLimiter(
   function dispose(): void {
     disposed = true;
     pruneJob?.cancel();
+    pruneJob = undefined;
     entries.clear();
     overflowLockedUntil = undefined;
     for (const key of loopbackPenaltyWaiters.keys()) {

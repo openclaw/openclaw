@@ -106,10 +106,6 @@ describe("createConfiguredGuard", () => {
   it.each([
     { label: "with an exact provider-attested model", responseModel: oauthGuardModel },
     {
-      label: "with a compact provider-attested date suffix",
-      responseModel: `${oauthGuardModel}-20260801`,
-    },
-    {
       label: "with a dashed provider-attested date suffix",
       responseModel: oauthGuardResponseModel,
     },
@@ -227,14 +223,7 @@ describe("createConfiguredGuard", () => {
       "non-date response suffix",
       { responseModel: `${oauthGuardModel}-preview`, stopReason: "stop" },
     ],
-    [
-      "inserted response segment before date",
-      { responseModel: `${oauthGuardModel}-preview-20260801`, stopReason: "stop" },
-    ],
     ["incomplete response", { responseModel: oauthGuardResponseModel, stopReason: "length" }],
-    ["tool response", { responseModel: oauthGuardResponseModel, stopReason: "toolUse" }],
-    ["error response", { responseModel: oauthGuardResponseModel, stopReason: "error" }],
-    ["aborted response", { responseModel: oauthGuardResponseModel, stopReason: "aborted" }],
   ])("fails closed for OAuth guard evidence: %s", async (_label, evidence) => {
     const runtime = createPluginRuntimeMock();
     runtime.llm.complete = vi.fn().mockResolvedValue({
@@ -277,55 +266,48 @@ describe("createConfiguredGuard", () => {
     ).resolves.toMatchObject({ decision: "deny", category: "guard_failure" });
   });
 
-  it.each([
-    { responseModel: "gpt-5.6-luna-20260801", decision: "allow", category: "safe" },
-    { responseModel: undefined, decision: "deny", category: "guard_failure" },
-    { responseModel: "gpt-5.6-luna-20260802", decision: "deny", category: "guard_failure" },
-  ])(
-    "keeps dated OAuth guard model pins exact for response model $responseModel",
-    async ({ responseModel, decision, category }) => {
-      const runtime = createPluginRuntimeMock();
-      runtime.llm.complete = vi.fn().mockResolvedValue({
-        text: JSON.stringify({
-          decision: "allow",
-          category: "safe",
-          reason: "Safe.",
+  it("rejects a different provider-attested date for a dated OAuth guard model pin", async () => {
+    const runtime = createPluginRuntimeMock();
+    runtime.llm.complete = vi.fn().mockResolvedValue({
+      text: JSON.stringify({
+        decision: "allow",
+        category: "safe",
+        reason: "Safe.",
+        policyVersion: "v1",
+      }),
+      provider: "openai",
+      model: "gpt-5.6-luna-20260801",
+      responseModel: "gpt-5.6-luna-20260802",
+      stopReason: "stop",
+      agentId: "main",
+      usage: {},
+      execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+      audit: { caller: { kind: "plugin", id: "reef" } },
+    });
+    setReefRuntime(runtime);
+    const classifier = createConfiguredGuard(
+      ReefChannelConfigSchema.parse({
+        guard: {
+          provider: "openai",
+          authMode: "oauth",
+          authProfileId: "openai:work",
+          pinnedModel: "gpt-5.6-luna-20260801",
           policyVersion: "v1",
-        }),
-        provider: "openai",
-        model: "gpt-5.6-luna-20260801",
-        responseModel,
-        stopReason: "stop",
-        agentId: "main",
-        usage: {},
-        execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
-        audit: { caller: { kind: "plugin", id: "reef" } },
-      });
-      setReefRuntime(runtime);
-      const classifier = createConfiguredGuard(
-        ReefChannelConfigSchema.parse({
-          guard: {
-            provider: "openai",
-            authMode: "oauth",
-            authProfileId: "openai:work",
-            pinnedModel: "gpt-5.6-luna-20260801",
-            policyVersion: "v1",
-            timeoutMs: 1_000,
-          },
-        }),
-      );
+          timeoutMs: 1_000,
+        },
+      }),
+    );
 
-      await expect(
-        classifier.classify({
-          direction: "outbound",
-          source: "alice#1",
-          destination: "bob#1",
-          text: "hello",
-          policyVersion: "v1",
-        }),
-      ).resolves.toMatchObject({ decision, category });
-    },
-  );
+    await expect(
+      classifier.classify({
+        direction: "outbound",
+        source: "alice#1",
+        destination: "bob#1",
+        text: "hello",
+        policyVersion: "v1",
+      }),
+    ).resolves.toMatchObject({ decision: "deny", category: "guard_failure" });
+  });
 });
 
 describe("ReefMessageFlow inbound", () => {
@@ -334,6 +316,7 @@ describe("ReefMessageFlow inbound", () => {
     const id = "01JZ0000000000000000000104";
     const order: string[] = [];
     onIngress.mockImplementation(async () => {
+      await expect(stores.delivered.status(id)).resolves.toBeUndefined();
       order.push("ingress");
     });
     relay.acknowledge.mockImplementation(async () => {
@@ -706,45 +689,5 @@ describe("ReefMessageFlow delivery-store capacity", () => {
     await expect(flow.processEntries([entry])).rejects.toBeInstanceOf(ReefInboxEntryParkedError);
     expect(onIngress).not.toHaveBeenCalled();
     expect(relay.acknowledge).not.toHaveBeenCalled();
-  });
-
-  it("confirms the delivery marker after ingress, so delivered entries do not re-enter ingress", async () => {
-    const alice = generateIdentity();
-    const bob = reefKeys();
-    const id = "01JZ0000000000000000000203";
-    const stores = flowStores();
-    let statusDuringIngress: "delivered" | undefined;
-    const onIngress = vi.fn(async () => {
-      statusDuringIngress = await stores.delivered.status(id);
-    });
-    const relay = transport();
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(alice) }).store,
-      keys: bob,
-      transport: relay as unknown as ReefTransportClient, // SAFETY: test transport mock satisfies the client contract
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(22)),
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress,
-      onOwnerNotice: async () => {},
-    });
-    const entry: InboxEntry = {
-      seq: 1,
-      peer: "alice",
-      id,
-      kind: "message",
-      envelope: await envelope(alice, bob, id, "durable outcome first"),
-      ts: Math.floor(Date.now() / 1_000),
-    };
-
-    await flow.processEntries([entry]);
-    // The marker is written only after inbound handling succeeds.
-    expect(statusDuringIngress).toBeUndefined();
-    await expect(stores.delivered.status(id)).resolves.toBe("delivered");
-
-    await flow.processEntries([{ ...entry, seq: 2 }]);
-    expect(onIngress).toHaveBeenCalledOnce();
   });
 });

@@ -25,7 +25,7 @@ import {
 } from "./github-identity-view.tsx";
 
 /** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
-export function GitHubConnectionsContent() {
+function GitHubConnectionsContent() {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0);
   const [purpose, setPurpose] = createSignal<"personal" | "system">("personal");
@@ -424,6 +424,8 @@ export function GitHubConnectionsContent() {
 export const GitHubConnections = defineSolidBridge(
   "openclaw-github-connections",
   () => <GitHubConnectionsContent />,
-  { properties: {} },
+  {
+    properties: {},
+  },
 );
 registerGitHubEnglish();

@@ -22,7 +22,7 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
   const user = normalizeOptionalString(input.user) ?? "";
   const base = user ? `${user}@${host}` : host;
   const port = input.port ?? 22;
-  if (port && port !== 22) {
+  if (input.port !== undefined && port) {
     return `${base}:${port}`;
   }
   return base;
@@ -43,6 +43,7 @@ export async function resolveSshTarget(params: {
     return null;
   }
   const config = await resolveSshConfig(parsed, {
+    explicitPort: /:\d+$/.test(params.rawTarget.trim()),
     identity: params.identity ?? undefined,
     timeoutMs: Math.min(800, params.overallTimeoutMs),
   });

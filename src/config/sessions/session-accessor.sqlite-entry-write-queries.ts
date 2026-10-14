@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import { createSqliteQueryCache, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
@@ -71,14 +72,20 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => 
           })),
         ),
     );
-  return {
-    node: prepareSqliteQuerySync<ReturnType<typeof bindSessionNode>>(database, (parameter) =>
+  const node = (withLegacySources: boolean) =>
+    prepareSqliteQuerySync<
+      ReturnType<typeof bindSessionNode> & { legacy_acp_migration_json?: string | null }
+    >(database, (parameter) =>
       db
         .insertInto("session_nodes")
         .values({
           session_key: parameter((row) => row.session_key),
           current_session_id: parameter((row) => row.current_session_id),
           entry_json: parameter((row) => row.entry_json),
+          session_started_at: /* kysely-allow-raw: exact int64 bind; generated INTEGER reads are numbers. */ sql<
+            number | null
+          >`${parameter((row) => row.session_started_at)}`,
+          has_optional_references: parameter((row) => row.has_optional_references),
           entry_valid: parameter((row) => row.entry_valid),
           updated_at: parameter((row) => row.updated_at),
           status: parameter((row) => row.status),
@@ -101,11 +108,20 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => 
           last_read_at: parameter((row) => row.last_read_at),
           last_interaction_at: parameter((row) => row.last_interaction_at),
           last_activity_at: parameter((row) => row.last_activity_at),
+          ...(withLegacySources
+            ? {
+                legacy_acp_migration_json: parameter(
+                  (row) => row.legacy_acp_migration_json ?? null,
+                ),
+              }
+            : {}),
         })
         .onConflict((conflict) =>
           conflict.column("session_key").doUpdateSet((eb) => ({
             current_session_id: eb.ref("excluded.current_session_id"),
             entry_json: eb.ref("excluded.entry_json"),
+            session_started_at: eb.ref("excluded.session_started_at"),
+            has_optional_references: eb.ref("excluded.has_optional_references"),
             entry_valid: eb.ref("excluded.entry_valid"),
             updated_at: eb.ref("excluded.updated_at"),
             status: eb.ref("excluded.status"),
@@ -128,9 +144,15 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => 
             last_read_at: eb.ref("excluded.last_read_at"),
             last_interaction_at: eb.ref("excluded.last_interaction_at"),
             last_activity_at: eb.ref("excluded.last_activity_at"),
+            ...(withLegacySources
+              ? { legacy_acp_migration_json: eb.ref("excluded.legacy_acp_migration_json") }
+              : {}),
           })),
         ),
-    ),
+    );
+  return {
+    node: node(false),
+    nodeWithLegacySources: node(true),
     claimWindow: window(false),
     retainWindow: window(true),
   };

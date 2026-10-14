@@ -1,6 +1,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEvents,
@@ -11,17 +13,23 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
+import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { prepareModelVisibleToolTextBlock } from "../../logging/redact.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { assertOpenClawAgentWriterReleased } from "../../state/openclaw-agent-write-admission-state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { sessionManagerReadMessageAnchor } from "./session-manager-message-anchor.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { SessionManager } from "./session-manager.js";
@@ -351,7 +359,7 @@ it("persists the native first content getter result before provenance reads", as
   });
 });
 
-it("expands message toJSON with its envelope key before applying transcript redaction", async () => {
+it("expands message toJSON with its envelope key without changing tool text", async () => {
   const { target, manager } = await fixture(state, "message-json-redaction");
   await manager.appendMessageAsync(user("json-redaction"));
   const message = {
@@ -380,7 +388,7 @@ it("expands message toJSON with its envelope key before applying transcript reda
     role: "toolResult",
     toolCallId: "json-result",
     toolName: "lookup",
-    content: [{ type: "text", text: "opaque(abcdef…qrst)" }],
+    content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }],
     details: { serializationKey: "message" },
     isError: false,
     timestamp: 2,
@@ -389,17 +397,16 @@ it("expands message toJSON with its envelope key before applying transcript reda
   expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({ message: expected });
 });
 
-it("persists prepared tool text once when JSON normalization copies a frozen content block", async () => {
+it("preserves tool text when JSON normalization copies a frozen content block", async () => {
   const { target, manager } = await fixture(state, "frozen-prepared-tool-text");
   await manager.appendMessageAsync(user("frozen-prepared-text"));
   const config = { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } };
-  const block = Object.freeze(
-    prepareModelVisibleToolTextBlock(
-      { type: "text", text: "opaque(abcdefghijklmnopqrst)", optional: undefined },
-      config.logging,
-    ),
-  );
-  expect(block.text).toBe("opaque(abcdef…qrst)");
+  const block = Object.freeze({
+    type: "text" as const,
+    text: "opaque(abcdefghijklmnopqrst)",
+    optional: undefined,
+  });
+  expect(block.text).toBe("opaque(abcdefghijklmnopqrst)");
   const committed = await manager.appendMessageWithTranscriptAnchorAsync(
     {
       role: "toolResult",
@@ -411,7 +418,7 @@ it("persists prepared tool text once when JSON normalization copies a frozen con
     },
     { config },
   );
-  const expected = [{ type: "text", text: "opaque(abcdef…qrst)" }];
+  const expected = [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }];
   expect(committed.message).toHaveProperty("content", expected);
   expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
     message: { content: expected },
@@ -752,4 +759,117 @@ it("rolls back worker promotion when pending authority retires at commit", async
     receipt.finish("interrupted");
   }
   expect(await loadTranscriptEvents(target)).toEqual(before);
+});
+
+async function withSelectedTranscriptReader<T>(
+  target: Parameters<typeof SessionManager.openModelContextAsync>[0],
+  run: (actor?: SessionActor) => Promise<T>,
+  retainActor = false,
+): Promise<T> {
+  const { databaseClaim } = await loadSessionEntryForAdmission(target);
+  let actor: SessionActor | undefined;
+  try {
+    if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
+      throw new Error("Expected admitted durable session reader");
+    }
+    const reader = databaseClaim.reader;
+    const assertCurrent = () => reader.assertCurrent();
+    if (retainActor) {
+      const identity = readDatabasePathIdentitySync(reader.database.path);
+      if (!identity.key.startsWith("file:")) {
+        throw new Error("Expected a physical actor database");
+      }
+      const acquired = await createDurableSessionActorFactory(reader.database).acquire(
+        {
+          sessionKey: target.sessionKey,
+          database: {
+            kind: "file",
+            physicalIdentity: identity.key.slice(5),
+            birthtime: identity.birthtime,
+            nativeLocation: reader.database.path,
+          },
+        },
+        { assertCurrent, assertReadable: assertCurrent },
+      );
+      if ("kind" in acquired) {
+        throw new Error("Expected a durable session actor");
+      }
+      actor = acquired;
+      await actor.read({ assertCurrent, authorize: assertCurrent });
+    }
+    return await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: target,
+        sessionReader: reader,
+        ...(actor && { sessionActor: { actor, database: reader.database } }),
+        withTranscriptWrite: async (write) => write(),
+      },
+      () => run(actor),
+    );
+  } finally {
+    try {
+      await actor?.release();
+    } finally {
+      await databaseClaim.release();
+    }
+  }
+}
+
+it("lets another session write between actor appends while retaining manager order", async () => {
+  const target = {
+    agentId: "main",
+    sessionId: "append-owner",
+    sessionKey: "agent:main:append-owner",
+    storePath: state.statePath("transcript.sqlite"),
+  };
+  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await withSelectedTranscriptReader(
+    target,
+    async () => {
+      const manager = await SessionManager.openAsync(target);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const order: string[] = [];
+      const batch = withSessionManagerAppend(manager, async () => {
+        await manager.appendMessageAsync(makeUserMessage("first", 1));
+        // Assembly and view adoption must permit storage resource cleanup and unrelated writes.
+        assertOpenClawAgentWriterReleased("prepare the next session append");
+        entered.resolve();
+        await release.promise;
+        await manager.appendMessageAsync(makeUserMessage("second", 2));
+        order.push("batch");
+      });
+      let follower: Promise<unknown> | undefined;
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          batch,
+          "Append batch settled before preparation",
+        );
+        follower = manager
+          .appendMessageAsync(makeUserMessage("third", 3))
+          .then(() => order.push("follower"));
+        await upsertSessionEntryCore(
+          { ...target, sessionKey: "agent:main:other" },
+          { sessionId: "other", updatedAt: 1 },
+        );
+        expect(order).toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([batch, ...(follower ? [follower] : [])]);
+      }
+      await batch;
+      await follower;
+      expect(order).toEqual(["batch", "follower"]);
+      const messages = manager.getEntries().filter((entry) => entry.type === "message");
+      expect(messages.map((entry) => entry.message)).toMatchObject([
+        { role: "user", content: "first" },
+        { role: "user", content: "second" },
+        { role: "user", content: "third" },
+      ]);
+      expect(messages[1]?.parentId).toBe(messages[0]?.id);
+      expect(messages[2]?.parentId).toBe(messages[1]?.id);
+    },
+    true,
+  );
 });

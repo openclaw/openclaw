@@ -68,25 +68,6 @@ describe("Reef inbound dispatch content", () => {
     });
   });
 
-  it("carries transport reply correlation only in trusted context", () => {
-    const content = resolveReefInboundDispatchContent({
-      id: "message-2",
-      peer: "clanky",
-      text: "correlated reply",
-      provenance: "Untrusted third-party data from @clanky's agent.",
-      autonomy: "bounded",
-      replyTo: "message-1",
-      thread: "thread-1",
-    });
-
-    expect(content.rawBody).toBe("correlated reply");
-    expect(content.extraContext).toMatchObject({
-      ReplyToId: "message-1",
-      ReplyToIdFull: "message-1",
-      MessageThreadId: "thread-1",
-    });
-  });
-
   it("does not invent a thread for an explicitly correlated unthreaded reply", () => {
     const content = resolveReefInboundDispatchContent({
       id: "message-2",
@@ -154,12 +135,13 @@ describe("Reef message-tool threading", () => {
 
 describe("Reef conversation directory", () => {
   let stateDir = "";
+  let runtime: ReturnType<typeof createPluginRuntimeMock>;
 
   beforeEach(async () => {
     resetPluginStateStoreForTests();
     // openclaw-temp-dir: allow Reef directory tests need an on-disk state root; afterEach removes it.
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-directory-"));
-    const runtime = createPluginRuntimeMock();
+    runtime = createPluginRuntimeMock();
     runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       createPluginStateSyncKeyedStoreForTests<T>("reef", {
         ...options,
@@ -211,6 +193,32 @@ describe("Reef conversation directory", () => {
         runtime: defaultRuntime,
       }),
     ).resolves.toEqual([{ kind: "user", id: "molty", name: "@molty's agent", handle: "@molty" }]);
+  });
+
+  it("refreshes channel trust policies after worker writes without native storage", async () => {
+    const cfg = { channels: { reef: { handle: "clawd" } } };
+    const account = reefPlugin.config.resolveAccount(cfg);
+    runtime.state.openSyncKeyedStore = () => {
+      throw new Error("channel trust policies must not open native storage");
+    };
+    const trust = openReefTrustStore(runtime, account.config);
+    const readPolicies = async () => ({
+      allowFrom: await reefPlugin.config.resolveAllowFromAsync!({ cfg }),
+      description: await reefPlugin.config.describeAccountAsync!(account, cfg),
+      dmPolicy: await reefPlugin.security!.resolveDmPolicyAsync!({ cfg, account }),
+    });
+
+    await expect(readPolicies()).resolves.toMatchObject({
+      allowFrom: ["molty"],
+      description: { extra: { friendCount: 1 } },
+      dmPolicy: { policy: "pairing", allowFrom: ["molty"] },
+    });
+    await trust.remove("molty");
+    await expect(readPolicies()).resolves.toMatchObject({
+      allowFrom: [],
+      description: { extra: { friendCount: 0 } },
+      dmPolicy: { policy: "pairing", allowFrom: [] },
+    });
   });
 });
 
@@ -727,27 +735,6 @@ describe("Reef channel lifecycle", () => {
     expect(order).toEqual(["reconcile", "ready", "inbox"]);
     parent.beginClose();
     await lifecycle;
-  });
-
-  it("rejects startup when the reconcile error is not retryable", async () => {
-    const parent = createTestPluginServiceScheduler();
-    const inbox = hangingInbox();
-    const onReady = vi.fn(async () => {});
-    const error = new Error("approval store unavailable");
-    await expect(
-      runReefChannelLifecycle({
-        scheduler: parent,
-        startInbox: inbox.startInbox,
-        reconcile: async () => {
-          throw error;
-        },
-        onReconcileError: () => {},
-        shouldContinueAfterStartupReconcileError: () => false,
-        onReady,
-      }),
-    ).rejects.toBe(error);
-    expect(onReady).not.toHaveBeenCalled();
-    expect(inbox.seen).toHaveLength(0);
   });
 
   it("does not activate when the parent aborts during startup reconcile", async () => {

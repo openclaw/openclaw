@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ConversationBindingInspection } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
-import { inspectRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
+  inspectRuntimeConversationBindingRoute,
   resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
+  type resolveRuntimeConversationBindingRoute,
   resolveRuntimeConversationBindingRouteAsync,
   type RuntimeConversationBindingRouteResult,
-} from "openclaw/plugin-sdk/conversation-runtime";
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { parseSlackTarget } from "./targets.js";
 
 type SlackRouteBinding = NonNullable<OpenClawConfig["bindings"]>[number];
@@ -90,15 +90,16 @@ type SlackConversationBindingRouteParams = {
   inspections?: Record<"base" | "thread", ConversationBindingInspection>;
 };
 
-export function resolveSlackConversationBindingRoute(params: SlackConversationBindingRouteParams) {
+export function resolveSlackConversationBindingRoute(
+  params: SlackConversationBindingRouteParams & {
+    inspections: NonNullable<SlackConversationBindingRouteParams["inspections"]>;
+  },
+) {
   const { resolveRoute } = params;
   const resolveRuntime = (
     input: Parameters<typeof resolveRuntimeConversationBindingRoute>[0],
     role: "base" | "thread",
-  ) =>
-    params.inspections
-      ? inspectRuntimeConversationBindingRoute({ ...input, inspection: params.inspections[role] })
-      : resolveRuntimeConversationBindingRoute(input);
+  ) => inspectRuntimeConversationBindingRoute({ ...input, inspection: params.inspections[role] });
   let baseRuntimeRoute: RuntimeConversationBindingRouteResult | undefined;
   const resolveBaseRoute = (
     threadInspection?: Parameters<typeof inspectRuntimeConversationBindingRoute>[0]["inspection"],

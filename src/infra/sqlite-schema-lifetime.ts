@@ -1,11 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getSqliteDatabaseSchemaRevision } from "./sqlite-database-admission.js";
-import { invalidateTrackedSqliteSchemaFacts as invalidate } from "./sqlite-schema-admission.js";
 import {
-  bindSqliteSchemaScope as bindScope,
-  publishSqliteSchemaChange as publishSchemaChange,
-  type SqliteSchemaOwner as SchemaOwner,
-} from "./sqlite-schema-scope.js";
+  getSqliteDatabaseSchemaRevision,
+  publishSqliteDatabaseSchemaChange,
+} from "./sqlite-database-admission.js";
+import { invalidateTrackedSqliteSchemaFacts as invalidate } from "./sqlite-schema-admission.js";
+import type { SqliteSchemaOwner as SchemaOwner } from "./sqlite-schema-scope.js";
 
 export function observeSchemaLifetime(
   database: DatabaseSync,
@@ -17,11 +16,9 @@ export function observeSchemaLifetime(
     owner.snapshot = undefined;
     owner.qualifiedSnapshot = undefined;
   }
-  const scope = bindScope(database, owner);
   const processRevision = getSqliteDatabaseSchemaRevision(database);
   const scopeChanged =
-    owner.scopeRevision !== scope.revision ||
-    (owner.processRevision !== undefined && owner.processRevision !== processRevision);
+    owner.processRevision !== undefined && owner.processRevision !== processRevision;
   if (
     scopeChanged &&
     owner.facts &&
@@ -37,14 +34,13 @@ export function observeSchemaLifetime(
   owner.processRevision = processRevision;
   if (scopeChanged) {
     invalidate(owner);
-    owner.scopeRevision = scope.revision;
   }
   if (
     (owner.transactionalSchema || owner.transactionalTempSchema || owner.transactionalFacts) &&
     !database.isTransaction
   ) {
     if (owner.transactionalSchema) {
-      publishSchemaChange(database, owner);
+      publishSqliteDatabaseSchemaChange(database);
     }
     invalidate(owner);
     owner.transactionalSchema = false;

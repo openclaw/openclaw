@@ -1,4 +1,5 @@
 /** Client ownership and synchronous retirement, independent of startup/auth execution. */
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
@@ -7,7 +8,6 @@ import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 export type CodexAppServerAcquireBoundary =
   | "context"
   | "entry-selection"
-  | "prestart-artifact-drain"
   | "transport-registration"
   | "initialize"
   | "catalog-observation"
@@ -169,7 +169,6 @@ export type SharedCodexAppServerClientState = {
   liveClients: Set<CodexAppServerClient>;
   isolatedClients: Set<CodexAppServerClient>;
   entriesByClient: WeakMap<CodexAppServerClient, SharedCodexAppServerClientEntry>;
-  desktopGenerationDrainChecks: Set<() => void>;
   startup: CodexAppServerStartupLifetime;
   startMetadata: WeakMap<CodexAppServerClient, CodexAppServerClientStartMetadata>;
 };
@@ -206,7 +205,6 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
     liveClients: new Set(),
     isolatedClients: new Set(),
     entriesByClient: new WeakMap(),
-    desktopGenerationDrainChecks: new Set(),
     startup: createCodexAppServerStartupLifetime(),
     startMetadata: new WeakMap(),
   }),
@@ -368,7 +366,14 @@ export function waitForCodexAppServerClientExit(client: CodexAppServerClient): P
 }
 
 /** Acquire the recorded owner atomically, or join its exit before a replacement writes. */
-export async function retainSharedCodexAppServerClientByInstanceId(clientId: string | undefined) {
+export async function retainSharedCodexAppServerClientByInstanceId(
+  clientId: string | undefined,
+  options?: {
+    signal?: AbortSignal;
+    createAbortError?: (signal: AbortSignal) => Error;
+    waitForExit?: boolean;
+  },
+) {
   const id = clientId?.trim();
   if (!id) {
     return undefined;
@@ -380,7 +385,17 @@ export async function retainSharedCodexAppServerClientByInstanceId(clientId: str
     }
     const entry = state.entriesByClient.get(client);
     if (entry?.client !== client || entry.closeError || client.getCloseError()) {
-      await waitForCodexAppServerClientExit(client);
+      // Stop must reach the parent while the transport owner finishes shutdown.
+      // Replacement writers keep joining physical exit before acquiring ownership.
+      if (options?.waitForExit === false && client.getCloseError()) {
+        return undefined;
+      }
+      // Cancellation ends only this waiter; discovery still fences later writers.
+      await racePromiseWithAbortSignal(
+        waitForCodexAppServerClientExit(client),
+        options?.signal,
+        options?.createAbortError,
+      );
       return undefined;
     }
     const release = retainSharedClientEntry(entry);
@@ -389,19 +404,14 @@ export async function retainSharedCodexAppServerClientByInstanceId(clientId: str
       // Only writer handoffs should wait for a still-usable retired owner.
       release: (waitForRetirement = false) => {
         release();
-        return client.getCloseError() || (waitForRetirement && entry.closeWhenIdle)
+        return options?.waitForExit !== false &&
+          (client.getCloseError() || (waitForRetirement && entry.closeWhenIdle))
           ? waitForCodexAppServerClientExit(client)
           : undefined;
       },
     };
   }
   return undefined;
-}
-
-export function notifyDesktopGenerationDrainChecks(state: SharedCodexAppServerClientState): void {
-  for (const check of state.desktopGenerationDrainChecks) {
-    check();
-  }
 }
 
 // Cold initialization measured 1–5 seconds; keep adjacent discovery/status requests warm.
@@ -462,5 +472,4 @@ export function releaseSharedClientEntry(
   entry[counter] -= 1;
   closeRetiredSharedClientEntryIfIdle(entry);
   scheduleSharedClientIdleRetirement(entry);
-  notifyDesktopGenerationDrainChecks(getSharedCodexAppServerClientState());
 }

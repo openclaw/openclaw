@@ -5,6 +5,7 @@ import { guard } from "lit/directives/guard.js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
@@ -433,6 +434,7 @@ describe("chat media resource lifecycle", () => {
     expect(originalResource.subscribers.size).toBe(1);
 
     root.setConnected(false);
+    flush();
     expect(isChatMediaResourceCurrent(originalResource)).toBe(false);
 
     root.setConnected(true);

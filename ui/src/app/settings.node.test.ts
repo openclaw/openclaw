@@ -303,7 +303,7 @@ describe("gateway settings and layout persistence", () => {
     },
   );
 
-  it("persists sidebar entries across save and load, normalizing bad values", () => {
+  it("persists rail shortcuts across save and load, normalizing bad values", () => {
     const gwUrl = expectedGatewayUrl("");
     saveSettings(
       makeUiSettings(gwUrl, {
@@ -313,41 +313,40 @@ describe("gateway settings and layout persistence", () => {
       }),
     );
     expect(loadSettings().sidebarEntries).toEqual(["route:cron"]);
+    expect(readStored().railShortcuts).toEqual(["route:tasks", "route:cron"]);
+    expect(readStored()).not.toHaveProperty("sidebarEntries");
     expect(loadSettings().navWidth).toBe(258);
     expect(readStored()).not.toHaveProperty("navCollapsed");
 
-    // Corrupt the persisted list; load falls back to the default pinned set.
+    // Corrupt the persisted list; load falls back to the empty rail.
     writeStored({
       ...readStored(),
-      sidebarEntries: "route:tasks",
+      railShortcuts: "route:tasks",
       navWidth: 220,
       navCollapsed: true,
     });
-    expect(loadSettings().sidebarEntries).toEqual([
-      "route:agents-home",
-      "route:dashboards",
-      "route:systems",
-      "route:cron",
-      "route:plugins",
-    ]);
+    expect(loadSettings().sidebarEntries).toEqual([]);
     expect(loadSettings().navWidth).toBe(258);
     expect(loadSettings().navCollapsed).toBe(false);
   });
 
   it.each(["direct save", "unrelated locale patch"])(
-    "loads and upgrades 2026.7.1 settings through %s",
+    "keeps legacy sidebar order and pins out of rail shortcuts through %s",
     (action) => {
       const gatewayUrl = expectedGatewayUrl("");
       const sessionsByGateway = {
         [gatewayUrl]: { sessionKey: "agent:main:work", lastActiveSessionKey: "agent:main:work" },
       };
+      const sidebarEntries = ["route:chat", "route:activity", "route:usage", "route:cron"];
+      const sidebarPinnedRoutes = ["workboard", "usage", "tasks", "usage", "worktrees", 7];
       writeStored({
         gatewayUrl,
         theme: "claw",
         themeMode: "dark",
         navWidth: 300,
         sessionsByGateway,
-        sidebarPinnedRoutes: ["workboard", "usage", "tasks", "usage", "worktrees", 7],
+        sidebarEntries,
+        sidebarPinnedRoutes,
       });
       if (action === "unrelated locale patch") {
         patchSettings({ locale: "de" });
@@ -360,11 +359,14 @@ describe("gateway settings and layout persistence", () => {
         themeMode: "dark",
         navWidth: 300,
       });
-      expect(settings.sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
-      expect(readStored().sidebarEntries).toEqual(settings.sidebarEntries);
+      expect(settings.sidebarEntries).toEqual([]);
       saveSettings(settings);
       expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
-      expect(readStored()).not.toHaveProperty("sidebarPinnedRoutes");
+      expect(readStored()).toMatchObject({
+        sidebarEntries,
+        sidebarPinnedRoutes,
+        railShortcuts: [],
+      });
       expect(loadSettings()).toEqual(settings);
     },
   );

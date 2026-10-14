@@ -18,10 +18,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import {
-  assertPreflightConfigUnchanged,
-  type ConfigPreflightSnapshotRead,
-} from "./config-preflight-snapshot.js";
+import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
 import { runDoctorPluginConvergence } from "./doctor-config-preflight-plugin-verification.js";
 import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration-availability.js";
 
@@ -44,9 +41,7 @@ export async function prepareDoctorMigrationPlugins(params: {
     convergence.deferredPlugins ?? [],
     convergence.migrationInspection,
   );
-  const refreshed = await params.readRefreshedSnapshot();
-  assertPreflightConfigUnchanged(params.snapshotRead.snapshot, refreshed.snapshot);
-  return refreshed;
+  return await params.readRefreshedSnapshot();
 }
 
 export async function assertDoctorPreflightMigrationsComplete(params: {

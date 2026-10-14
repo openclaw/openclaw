@@ -2,7 +2,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { captureGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
@@ -65,6 +65,8 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.before-agent-reply-cron" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
@@ -420,6 +422,8 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(hookContext?.channel).toBeUndefined();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
+    // No provider ran; diagnostic capture must not attribute the hook text to a model.
+    expect(result.meta.providerStarted).toBe(false);
   });
 
   it("passes the heartbeat queue and re-arms setup progress when its hook does not claim", async () => {
@@ -452,8 +456,8 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
   });
 
   it.each([
-    { name: "stable cron root", sessionKey: "agent:main:cron:hook-authority", fenced: true },
-    { name: "ordinary session", sessionKey: "agent:main:hook-authority", fenced: false },
+    { name: "stable cron root", sessionKey: "agent:main:cron:hook-authority" },
+    { name: "ordinary session", sessionKey: "agent:main:hook-authority" },
   ])("retains before-reply authority through a handled hook for $name", async (scenario) => {
     const params = await prepareHookSession(scenario.sessionKey);
     let requestAuthority: (() => void) | undefined;
@@ -465,15 +469,10 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     mockedGlobalHookRunner.runBeforeAgentReply.mockImplementation(async (_event, context) => {
       requestAuthority = captureGuardedFetchRequestAuthority();
       claimAuthority = readClaimingHookAdmission(context)?.assertCurrent;
-      if (scenario.fenced) {
-        expect(requestAuthority).toBeTypeOf("function");
-        expect(claimAuthority).toBeTypeOf("function");
-        requestAuthority?.();
-        claimAuthority?.();
-      } else {
-        expect(requestAuthority).toBeUndefined();
-        expect(claimAuthority).toBeUndefined();
-      }
+      expect(requestAuthority).toBeTypeOf("function");
+      expect(claimAuthority).toBeTypeOf("function");
+      requestAuthority?.();
+      claimAuthority?.();
       effect();
       return { handled: true, reply: { text: "hook completed" } };
     });
@@ -483,9 +482,39 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(result.payloads).toEqual([{ text: "hook completed" }]);
     expect(effect).toHaveBeenCalledOnce();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-    if (scenario.fenced) {
-      expect(() => requestAuthority?.()).toThrow("Guarded request authority is no longer active");
-      expect(() => claimAuthority?.()).toThrow();
+    expect(() => requestAuthority?.()).toThrow("Guarded request authority is no longer active");
+    expect(() => claimAuthority?.()).toThrow();
+  });
+
+  it("stops ordinary reply effects when cancelled during attribution capture", async () => {
+    const entered = createDeferred();
+    const baseline = createDeferred();
+    const controller = new AbortController();
+    const failure = new Error("ordinary turn cancelled");
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_agent_reply",
+    );
+    const pending = runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      trigger: "user",
+      abortSignal: controller.signal,
+      awaitSessionDiffBaseline: () => {
+        entered.resolve();
+        return baseline.promise;
+      },
+    });
+    void pending.catch(() => {});
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "Reply bypassed attribution");
+      expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+      controller.abort(failure);
+      baseline.resolve();
+      await expect(pending).rejects.toBe(failure);
+      expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    } finally {
+      baseline.resolve();
+      await pending.catch(() => undefined);
     }
   });
 

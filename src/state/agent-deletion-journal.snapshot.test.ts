@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   beginAgentDeletionJournal,
   removeAgentDeletionJournal,
@@ -9,7 +12,10 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "./agent-deletion-discovery.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
-import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
+import {
+  completeAgentDeletionJournalInDatabase,
+  updateAgentDeletionJournalPathsInDatabase,
+} from "./agent-deletion-journal.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "./agent-deletion-journal.read.js";
 import {
   registerOpenClawAgentDatabase,
@@ -37,15 +43,39 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
         agentDir,
         workspaceDir: state.workspaceDir,
         sessionsDir: state.sessionsDir("retired"),
-        databasePaths: [survivor.path],
+        databasePaths: [],
         deleteFiles: false,
       },
       options,
     );
+    expect(
+      (await prepareAgentDatabaseDeletionSnapshotRead(options).read()).snapshot?.retainedDeletions,
+    ).toMatchObject({ status: "present", entries: [{ agentId: "retired" }] });
+    expect(
+      (await prepareAgentDatabaseDeletionSnapshotRead(options, "runtime").read()).snapshot
+        ?.retainedDeletions,
+    ).toEqual({ status: "empty" });
     runOpenClawStateWriteTransaction((database) => {
-      expect(completeAgentDeletionJournalInDatabase(database, "retired", "retained-owner")).toBe(
-        true,
+      expect(
+        updateAgentDeletionJournalPathsInDatabase(
+          database,
+          "retired",
+          "retained-owner",
+          "database_paths_json",
+          [survivor.path],
+        ),
+      ).toBe(true);
+      const reads = trackSqliteStatementExecutions(database.db, ["journal"], (sql) =>
+        /^select\b.*from "agent_deletion_journal"/iu.test(sql) ? "journal" : null,
       );
+      try {
+        expect(completeAgentDeletionJournalInDatabase(database, "retired", "retained-owner")).toBe(
+          true,
+        );
+        expect(reads.counts.journal).toBe(0);
+      } finally {
+        reads.restore();
+      }
     }, options);
     const input = {
       path: resolveOpenClawStateSqlitePath(state.env),

@@ -19,9 +19,21 @@ Stop the Gateway through its service owner before running `plugins update`,
 fallbacks. `plugins marketplace entries --offline` reads the saved feed without
 refreshing it. Refused commands report how to retry.
 
+While a plugin or config operation is running, the CLI waits and retries only if
+the Gateway confirms that it did not accept the mutation. Admission stays within
+the command's existing ten-minute budget, including `plugins reload --wait`.
+Interrupting the command cancels pending admission retries. An already accepted
+mutation may still finish; inspect plugin status before retrying it.
+Lost replies and failures after acceptance are reported without automatic replay;
+inspect plugin status before retrying them. Older Gateways that do not provide
+the admission fact keep the explicit busy response.
+
+If a command encounters offline database maintenance, it reports the reason
+without `OPENCLAW_DEBUG`. Wait for maintenance to finish, then retry the command.
+
 `plugins enable` and `plugins disable` accept case-insensitive plugin IDs, including
 when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
-policy keys in config use the canonical lowercase form.
+policy keys in config use the required lowercase form.
 The same policy applies to live activation and the next Gateway start. Runtime
 IDs and Gateway method names retain the plugin's declared spelling.
 
@@ -91,7 +103,7 @@ reader job. Open the page that matches your task.
 
 | Page                                                              | Read it when                                                                     |
 | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| [Author plugins](/cli/plugins/authoring)                          | You are scaffolding, building, validating, or packing a plugin project.          |
+| [Author plugins](/cli/plugins/authoring)                          | You are creating, building, validating, or packing a plugin project.             |
 | [Install plugins](/cli/plugins/install)                           | You are installing from ClawHub, npm, git, a path, an archive, or a marketplace. |
 | [List installed plugins](/cli/plugins/list)                       | You want the installed inventory, discovery diagnostics, or the plugin index.    |
 | [Uninstall and update plugins](/cli/plugins/uninstall-and-update) | You are removing or reloading a plugin, or updating its version and source.      |

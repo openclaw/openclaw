@@ -135,10 +135,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     #if DEBUG
-    func _test_resolvedAppModel() -> NodeAppModel? {
-        self.resolvedAppModel()
-    }
-
     func _test_wakeRefreshTaskIdentifier() -> String {
         Self.wakeRefreshTaskIdentifier
     }
@@ -469,20 +465,12 @@ enum WatchPromptNotificationBridge {
     {
         guard sendResult.queuedForDelivery || !sendResult.deliveredImmediately else { return }
 
-        let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty || !body.isEmpty else { return }
         guard await self.isNotificationAuthorizationAllowed(notificationCenter: notificationCenter),
               !Task.isCancelled
         else { return }
 
-        let normalizedActions = (params.actions ?? []).compactMap { action -> OpenClawWatchAction? in
-            let id = action.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            let label = action.label.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !id.isEmpty, !label.isEmpty else { return nil }
-            return OpenClawWatchAction(id: id, label: label, style: action.style)
-        }
-        let displayedActions = Array(normalizedActions.prefix(4))
+        // The node invoke boundary normalizes display fields and caps actions before delivery.
+        let displayedActions = params.actions ?? []
 
         var categoryIdentifier = ""
         if !displayedActions.isEmpty {
@@ -523,8 +511,8 @@ enum WatchPromptNotificationBridge {
         }
 
         let content = UNMutableNotificationContent()
-        content.title = title.isEmpty ? "OpenClaw" : title
-        content.body = body
+        content.title = params.title.isEmpty ? "OpenClaw" : params.title
+        content.body = params.body
         content.sound = .default
         content.userInfo = userInfo
         if !categoryIdentifier.isEmpty {

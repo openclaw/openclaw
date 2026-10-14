@@ -7,11 +7,11 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 type Exit = { reason?: string; exitCode: number | null; signal?: number | null; error?: string };
 const normalExit: Exit = { reason: "process_exit", exitCode: 0, signal: null };
@@ -42,7 +42,7 @@ async function mount(options: { fullscreen?: boolean; earlyExit?: Exit } = {}) {
     }
     return method === "terminal.list" ? { sessions: [] } : {};
   });
-  const panel = document.createElement(tag) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(tag);
   panel.client = {
     forceReconnect: vi.fn(),
     request: request as TerminalGatewayClient["request"],
@@ -74,8 +74,9 @@ describe("terminal process exit", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     await i18n.setLocale("en");
   });
-  afterEach(() => {
+  afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     createTerminal.mockReset();
     vi.unstubAllGlobals();
   });

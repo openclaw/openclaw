@@ -828,9 +828,14 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let payloadJSON = result["payloadJSON"] as? String
         let rawError = result["error"] as? [String: Any]
         let code = OpenClawNodeErrorCode(rawValue: rawError?["code"] as? String ?? "UNAVAILABLE") ?? .unavailable
+        let details = rawError?["details"].flatMap { rawDetails -> OpenClawPermissionDetails? in
+            guard let data = try? JSONSerialization.data(withJSONObject: rawDetails) else { return nil }
+            return try? JSONDecoder().decode(OpenClawPermissionDetails.self, from: data)
+        }
         let error = ok ? nil : OpenClawNodeError(
             code: code,
-            message: rawError?["message"] as? String ?? "UNAVAILABLE: node-host worker failed")
+            message: rawError?["message"] as? String ?? "UNAVAILABLE: node-host worker failed",
+            details: details)
         return BridgeInvokeResponse(id: id, ok: ok, payload: payload, payloadJSON: payloadJSON, error: error)
     }
 

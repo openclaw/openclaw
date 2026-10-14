@@ -21,7 +21,7 @@ export type SettingsSegmentedProps<T extends string, Label> = {
   disabled?: boolean;
   ariaLabel?: string;
   descriptionId?: string;
-  className?: string;
+  class?: string;
 } & (
   | {
       mode?: undefined;

@@ -76,6 +76,13 @@ that process stops, restart the host with `openclaw node run --session-host`,
 which reuses the saved pairing. See
 [Reconnect a paired node](/cli/connect#reconnect-a-paired-node).
 
+After a host reboot, the node releases interrupted native worker slots and records
+the interrupted turn when its saved launch boot identity differs from the current
+OS boot identity. The next turn can start normally after the node reconnects.
+Older launch records and hosts whose boot identity cannot be read keep the existing
+conservative cleanup checks. Container workers still require their container
+engine to confirm cleanup, including when that engine runs on another host.
+
 In Control UI New Session, a
 write-scoped operator chooses either a specific paired device or **Auto**.
 Without an explicit project or folder selection, **New workspace** starts an
@@ -152,7 +159,7 @@ local turns, including the Gateway's resolved model settings and limits. Code
 Mode runs on the node and calls each catalog tool at its declared execution
 location. Its catalog and pending cells belong to the current turn; a retained
 worker receives a fresh presentation on the next turn.
-Node workers use `tool_call` for Tool Search, including when directory mode is configured.
+Node workers use `dispatch_action` for Tool Search, including when directory mode is configured.
 
 Concurrent Gateway tool calls wait for the existing transport budget, so larger
 model tool batches do not lose calls. Cancellation and heartbeats remain independent.
@@ -264,6 +271,9 @@ not merely its declared capabilities. A declared command is usable only when
 the approved pairing and Gateway command allowlist both authorize it.
 Connected non-hosts, ineligible or saturated hosts, update-required devices,
 and unavailable hosts remain visible but disabled with an actionable reason.
+The session picker and command palette show a warning icon and **Unavailable**
+for these computers. Focus or tap the row to read why it cannot host the session;
+the command palette shows one unavailable row instead of repeating project choices.
 For an already-paired headless node, enable `nodeHost.workerRuns.enabled` and
 run `openclaw node install --force` as shown above. Update-required hosts must
 be upgraded and restarted before selection.
@@ -333,6 +343,12 @@ While a device runner is unavailable, including after session hosting is disable
 the Gateway pauses advisory disk-space checks and retains the last sample for
 that placement. Checks resume on the next scheduled sweep after the current
 runner reconnects. Disabling hosting does not discard the session's workspace.
+
+The Gateway samples the volume containing the placement's remote workspace.
+New placements, placement activity, and runner availability changes refresh the
+sample on the next maintenance pass. An unchanged idle placement reuses its
+successful sample for up to 15 minutes. Samples are advisory and do not block
+turns or workspace writes.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.

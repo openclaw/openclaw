@@ -208,6 +208,12 @@ export async function assembleModelCatalogBundle(options: {
     }
   }
 
+  // Runtime-discovered providers can intentionally have no static catalog rows.
+  for (const [providerId, provider] of Object.entries(providers)) {
+    if (isRecord(provider) && Array.isArray(provider.models) && provider.models.length === 0) {
+      delete providers[providerId];
+    }
+  }
   if (!Object.hasOwn(providers, "anthropic") || !Object.hasOwn(providers, "openai")) {
     throw new Error("catalog must include anthropic and openai providers");
   }

@@ -43,6 +43,9 @@ export function buildGuardianNoticeItem(
     icon: "shieldCheck" as const,
     timestamp: notice.timestamp,
   };
+  if (notice.permissionMissing) {
+    return { ...item, text: "", permissionMissing: notice.permissionMissing };
+  }
   if (notice.source === "system") {
     return {
       ...item,
@@ -274,7 +277,7 @@ export function sumRunOutputTokens(
   let total = 0;
   for (const runId of runIds) {
     const usage = usageByRun?.get(runId);
-    if (!usage) {
+    if (!usage || usage.outputTokens === null) {
       return null;
     }
     total += usage.outputTokens;
@@ -317,10 +320,11 @@ export function resolveTurnRecap(
   if (!watch) {
     return null;
   }
-  const outputTokens =
-    sumRunOutputTokens(usageByRun, [...(watch.request?.runIds ?? []), watch.runId]) ??
-    watch.recap?.outputTokens ??
-    null;
+  const runIds = [...(watch.request?.runIds ?? []), watch.runId];
+  const unavailable = runIds.some((runId) => usageByRun?.get(runId)?.outputTokens === null);
+  const outputTokens = unavailable
+    ? null
+    : (sumRunOutputTokens(usageByRun, runIds) ?? watch.recap?.outputTokens ?? null);
   if (row?.lastRunId === watch.runId) {
     const runtimeMs = row.runtimeMs;
     if (row.status === "done" && typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {

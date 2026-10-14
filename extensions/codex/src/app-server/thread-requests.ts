@@ -182,15 +182,15 @@ export function buildCodexThreadConfiguration(
   };
 }
 
-export function buildThreadStartParams(
+export async function buildThreadStartParams(
   params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
-): CodexThreadStartParams {
-  const resolvedModelProvider = resolveCodexAppServerModelProvider({
+): Promise<CodexThreadStartParams> {
+  const resolvedModelProvider = await resolveCodexAppServerModelProvider({
     ...params,
     homeScope: options.appServer.start.homeScope,
   });
-  const modelSelection = resolveCodexAppServerRequestModelSelection({
+  const modelSelection = await resolveCodexAppServerRequestModelSelection({
     ...params,
     homeScope: options.appServer.start.homeScope,
     model: options.model ?? params.modelId,
@@ -221,27 +221,27 @@ export function buildThreadStartParams(
   };
 }
 
-export function buildThreadResumeParams(
+export async function buildThreadResumeParams(
   params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & {
     threadId: string;
     authProfileId?: string;
     preserveNativeModel?: boolean;
   },
-): CodexThreadResumeParams & { developerInstructions: string } {
+): Promise<CodexThreadResumeParams & { developerInstructions: string }> {
   const modelSelection = options.preserveNativeModel
     ? undefined
-    : resolveCodexAppServerRequestModelSelection({
+    : await resolveCodexAppServerRequestModelSelection({
         ...params,
         homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider:
           options.modelProvider ??
-          resolveCodexAppServerModelProvider({
+          (await resolveCodexAppServerModelProvider({
             ...params,
             homeScope: options.appServer.start.homeScope,
             authProfileId: options.authProfileId ?? params.authProfileId,
-          }),
+          })),
         authProfileId: options.authProfileId ?? params.authProfileId,
       });
   return {

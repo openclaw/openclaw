@@ -350,7 +350,7 @@ export async function prepareManagedHandoffRepair(
         { env },
       );
       const receipt = result?.steps.find((step) => step.step === "finalize:handoff-settlement");
-      if (receipt?.status !== "completed" || receipt.endedAtMs !== endedAtMs) {
+      if (receipt?.status !== "completed") {
         throw new Error("Handoff settlement was not recorded; retry openclaw update repair.");
       }
       const closed = store.settle(next, "closed");

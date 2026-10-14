@@ -82,10 +82,13 @@ export function registerGatewayForcedRestartTests({
           if (settles) {
             expect(start).toHaveBeenCalledTimes(2);
           } else {
-            expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+            expect(abortActiveCronTaskRuns).toHaveBeenCalledWith(undefined);
             await vi.advanceTimersByTimeAsync(9_999);
             expect(runtime.exit).not.toHaveBeenCalled();
             await vi.advanceTimersByTimeAsync(1);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            closing.resolve();
+            await vi.advanceTimersByTimeAsync(0);
             expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
             expect(start).toHaveBeenCalledOnce();
           }
@@ -163,7 +166,7 @@ export function registerGatewayForcedRestartTests({
             expect(completeBoot).not.toHaveBeenCalled();
           }
           await vi.advanceTimersByTimeAsync(budget > 0 ? 1 : 0);
-          expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+          expect(abortActiveCronTaskRuns).toHaveBeenCalledWith(undefined);
           expectRestartCloseCall(close, 0);
           const warning = `restart drain budget ${budget - refreshMs}ms exhausted; cutting short cronRuns=1 agentRuns=1`;
           if (stallClose) {
@@ -174,6 +177,9 @@ export function registerGatewayForcedRestartTests({
             expect(completeBoot).not.toHaveBeenCalled();
             expect(runtime.exit).not.toHaveBeenCalled();
             await vi.advanceTimersByTimeAsync(1);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            closing.resolve();
+            await vi.advanceTimersByTimeAsync(0);
             expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
             expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
               outcome: "forced_stop",

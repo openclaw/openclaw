@@ -1,3 +1,4 @@
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import {
@@ -98,10 +99,7 @@ describe("managed inference route ownership", () => {
       let retained = false;
       let admissions = 0;
       const authority: CodexBindingAuthority = {
-        lineage: [],
-        prepareMutation: async () => ({ assertCurrent: () => {} }),
-        assertCurrent: () => {},
-        assertLegacyCurrent: () => {},
+        ...createNativeSessionBindingScope(() => {}),
         withCurrent: async (consume) => {
           admissions += 1;
           retained = true;
@@ -153,10 +151,7 @@ describe("managed inference route ownership", () => {
       let accountType = "apiKey";
       const failure = new Error("route owner superseded");
       const authority: CodexBindingAuthority = {
-        lineage: [],
-        prepareMutation: async () => ({ assertCurrent: () => {} }),
-        assertCurrent: () => {},
-        assertLegacyCurrent: () => {},
+        ...createNativeSessionBindingScope(() => {}),
         withCurrent: async (consume) => {
           admissions += 1;
           if (admissions === rejectAdmission) {

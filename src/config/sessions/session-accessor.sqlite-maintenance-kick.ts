@@ -9,6 +9,7 @@ import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
 } from "../../process/gateway-work-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { captureAgentDatabaseAdmission } from "../../state/agent-database-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
@@ -27,11 +28,13 @@ import {
 } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
+import { readPreparedSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
-  isMonotoneSessionEntryMaintenanceAgeChange,
   observeSessionEntryMaintenanceAgeChanges,
+  updateSessionEntryMaintenanceAgeFact,
+  type SessionEntryMaintenanceAgeFact,
   type SessionEntryMaintenanceAgeChange,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
@@ -43,11 +46,12 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
+import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   normalizeResolvedMaintenanceConfigInput,
-  type ResolvedSessionMaintenanceConfig,
+  shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfigInput,
 } from "./store-maintenance.js";
 
@@ -71,13 +75,12 @@ type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & {
   retirement?: Promise<void>;
   generation: number;
   running: boolean;
-  completedMaintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  ageFact?: SessionEntryMaintenanceAgeFact;
   rejections: number;
   retryDelayMs?: number;
   immediate?: ReturnType<typeof setImmediate>;
   timer?: ReturnType<typeof setTimeout>;
   timerDeadlineMonotonicMs?: number;
-  timerKind?: "periodic" | "write-batch" | "retry";
   unregisterClose?: () => void;
 };
 
@@ -100,20 +103,30 @@ export function kickSessionEntryMaintenanceAfterWrite(
   if (params.skipMaintenance) {
     return;
   }
-  if (owner && isMaintenanceOwnerCurrent(databasePath, owner)) {
+  if (owner) {
     owner.activeSessionKeys.add(params.activeSessionKey);
     Object.assign(owner, params, { scope: owner.scope, generation: owner.generation + 1 });
-    const canBatch = () =>
-      owner.ageChanges.size > 0 &&
-      [...owner.ageChanges.values()].every(isMonotoneSessionEntryMaintenanceAgeChange) &&
-      isDeepStrictEqual(
-        owner.completedMaintenanceConfig,
-        owner.maintenanceConfig
-          ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
-          : resolveMaintenanceConfig(),
-      );
-    if (owner.timerKind === "write-batch" && !canBatch()) {
-      scheduleImmediateMaintenance(databasePath, owner);
+    const maintenance = owner.maintenanceConfig
+      ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
+      : resolveMaintenanceConfig();
+    const fact = owner.ageFact;
+    if (
+      !owner.running &&
+      fact?.entryCount !== undefined &&
+      isDeepStrictEqual(fact.maintenance, maintenance) &&
+      Date.now() < Math.min(fact.next.at, fact.recheckAt) &&
+      !shouldRunSessionEntryMaintenance({
+        entryCount: fact.entryCount,
+        maxEntries: maintenance.maxEntries,
+        force: false,
+      })
+    ) {
+      // Acknowledged activity cannot require a scan before this conservative deadline.
+      owner.activeSessionKeys.clear();
+      const nextAt = Math.min(fact.next.at, fact.recheckAt);
+      if (nextAt - Date.now() < (owner.timerDeadlineMonotonicMs ?? Infinity) - performance.now()) {
+        scheduleMaintenanceAt(databasePath, owner, nextAt);
+      }
       return;
     }
     if (!owner.running) {
@@ -122,16 +135,11 @@ export function kickSessionEntryMaintenanceAfterWrite(
           owner.rejections = 0;
         }
         scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
-      } else if (canBatch()) {
-        scheduleMaintenanceWriteBatch(databasePath, owner);
       } else {
         scheduleImmediateMaintenance(databasePath, owner);
       }
     }
     return;
-  }
-  if (owner) {
-    retireMaintenanceOwner(databasePath, owner);
   }
   const env = cloneEnvWithPlatformSemantics(params.scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -181,11 +189,36 @@ export function kickSessionEntryMaintenanceAfterWrite(
     if (identity) {
       unregister.push(
         observeSessionEntryMaintenanceAgeChanges(identity.key.slice(5), (change) => {
+          created.ageFact = updateSessionEntryMaintenanceAgeFact(created.ageFact, change);
           const previous = created.ageChanges.get(change.sessionKey);
           created.ageChanges.set(change.sessionKey, {
             ...change,
             previousEntry: previous ? previous.previousEntry : change.previousEntry,
           });
+        }),
+      );
+      unregister.push(
+        sessionChanges.subscribeFacts((change) => {
+          if (
+            change.factsInvalidated !== true &&
+            !("facts" in change && change.facts?.kind === "removed")
+          ) {
+            return;
+          }
+          const source = readPreparedSessionEntryPublicationSource(change);
+          const storePath =
+            "all" in change
+              ? typeof change.scope === "object"
+                ? change.scope.storePath
+                : undefined
+              : change.storePath;
+          if (source.identity !== identity.key.slice(5) && storePath !== databasePath) {
+            return;
+          }
+          created.ageFact = undefined;
+          if (!created.running) {
+            scheduleImmediateMaintenance(databasePath, created);
+          }
         }),
       );
     }
@@ -296,7 +329,6 @@ function scheduleImmediateMaintenance(
   clearTimeout(owner.timer);
   owner.timer = undefined;
   owner.timerDeadlineMonotonicMs = undefined;
-  owner.timerKind = undefined;
   owner.running = true;
   // Database maintenance outlives the writer's turn and carries its own admission.
   owner.immediate = runInDetachedAsyncContext(() =>
@@ -307,25 +339,21 @@ function scheduleImmediateMaintenance(
   );
 }
 
-function scheduleMaintenanceWriteBatch(
+function scheduleMaintenanceAt(
   databasePath: string,
   owner: SessionEntryMaintenanceOwner,
+  nextAt: number,
 ): void {
-  const now = performance.now();
-  const delayMs = Math.max(
-    1,
-    Math.min(
-      MAINTENANCE_WRITE_QUIET_MS,
-      Math.ceil((owner.timerDeadlineMonotonicMs ?? Infinity) - now),
-    ),
-  );
+  // Bound relative delays: Node clamps overflowed timeouts to 1 ms.
+  const delayMs = Math.max(1, Math.min(SESSION_ENTRY_MAINTENANCE_INTERVAL_MS, nextAt - Date.now()));
   clearTimeout(owner.timer);
-  // Further kicks join this bounded batch; they cannot refresh or postpone its deadline.
-  owner.running = true;
-  owner.timerKind = "write-batch";
-  owner.timerDeadlineMonotonicMs = now + delayMs;
+  owner.running = false;
+  owner.timerDeadlineMonotonicMs = performance.now() + delayMs;
   owner.timer = runInDetachedAsyncContext(() =>
-    setTimeout(() => startPendingMaintenance(databasePath, owner), delayMs),
+    setTimeout(() => {
+      owner.running = true;
+      startPendingMaintenance(databasePath, owner);
+    }, delayMs),
   );
   owner.timer.unref();
 }
@@ -337,7 +365,6 @@ function scheduleMaintenanceAfterWriteQuiet(
   owner.running = false;
   owner.retryDelayMs = MAINTENANCE_WRITE_QUIET_MS * 2 ** Math.max(0, owner.rejections - 1);
   owner.timerDeadlineMonotonicMs = performance.now() + owner.retryDelayMs;
-  owner.timerKind = "retry";
   if (owner.timer) {
     // A write restarts this one-shot quiet window; no polling or competing retry owner.
     owner.timer.refresh();
@@ -357,17 +384,15 @@ function scheduleMaintenanceAfterWriteQuiet(
 function startPendingMaintenance(databasePath: string, owner: SessionEntryMaintenanceOwner): void {
   owner.timer = undefined;
   owner.timerDeadlineMonotonicMs = undefined;
-  owner.timerKind = undefined;
   // Publish the join before a pass can synchronously retire itself.
   owner.active = Promise.resolve().then(async () => {
     if (!isMaintenanceOwnerCurrent(databasePath, owner)) {
       retireMaintenanceOwner(databasePath, owner);
       return;
     }
-    // Detach turn context, but keep Doctor/temporary-command database custody
-    // so background borrowing cannot move handles outside their cleanup scope.
+    // Keep command cleanup custody while automatic work uses the runtime worker path.
     const run = () => runPendingMaintenance(databasePath, owner);
-    await (owner.maintenanceResource ? owner.maintenanceResource.run(run) : run());
+    await (owner.maintenanceResource ? owner.maintenanceResource.runWorker(run) : run());
   });
 }
 
@@ -446,7 +471,6 @@ async function runPendingMaintenance(
       }
       return;
     }
-    let admitted = false;
     const assertInputsCurrent = () => {
       if (!isCurrent()) {
         if (getGatewayRestartDrainSignal().aborted) {
@@ -455,52 +479,48 @@ async function runPendingMaintenance(
         planningChanged = true;
         throw new SqliteReclamationInputsChangedError("SQLite automatic maintenance owner retired");
       }
-      if (
-        (admitted &&
-          [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key))) ||
-        (admitted &&
-          operation.input.preservation !== null &&
-          !isDeepStrictEqual(operation.input.preservation, capturePreservation()))
-      ) {
-        planningChanged = true;
-        throw new SqliteReclamationInputsChangedError(
-          "SQLite automatic maintenance inputs changed before commit",
-        );
-      }
     };
-    const readOnlyPhase: { deadline?: { nextAt: number | undefined } } = {};
     const runPlanning = async () => {
-      delete readOnlyPhase.deadline;
       const pending = capturePendingAgeChanges(owner);
       operation.ageChanges = pending.changes;
       const result = await runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
         assertCommitAllowed: assertInputsCurrent,
-        consumeReadOnlyMaintenancePlan(read, assertCurrent) {
+        assertMaintenanceCommitAllowed(plans) {
           assertInputsCurrent();
-          pending.acknowledge();
-          if (owner.ageChanges.size > 0) {
+          try {
+            // A late kick can protect an ancestor; the next writer refresh resolves that ancestry.
+            if ([...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key))) {
+              throw new SqliteReclamationInputsChangedError(
+                "SQLite maintenance active keys changed",
+              );
+            }
+            const currentPreservation = capturePreservation();
+            if (operation.input.preservation !== null && currentPreservation !== null) {
+              assertMaintenancePreservationCompatible(
+                operation.input.preservation,
+                currentPreservation,
+                plans,
+              );
+            }
+          } catch (error) {
             planningChanged = true;
-            throw new SqliteReclamationInputsChangedError(
-              "SQLite automatic maintenance activity changed before age consumption",
-            );
+            throw error;
           }
-          assertCurrent();
-          readOnlyPhase.deadline = { nextAt: read.nextAt };
+        },
+        consumeReadOnlyMaintenancePlan() {
+          pending.acknowledge();
         },
         refreshMaintenanceProtection: () => {
-          // Refresh only at writer admission; commit still checks this exact live capture.
-          admitted = false;
+          // Preparation can yield to foreground writes; commit checks only affected protection.
           assertInputsCurrent();
           activeSessionKeys = [...new Set([...activeSessionKeys, ...owner.activeSessionKeys])];
           operation.input.activeSessionKeys = activeSessionKeys;
           if (operation.input.preservation !== null) {
             operation.input.preservation = capturePreservation();
           }
-          admitted = true;
           return { activeSessionKeys, preservation: operation.input.preservation };
         },
-        forceInProcess: false,
         plan: operation,
       });
       if (result.kind === "maintenance-plan") {
@@ -525,13 +545,19 @@ async function runPendingMaintenance(
       throw new Error("SQLite automatic maintenance returned another operation's result");
     }
     const plan = result.value;
+    const installAgeFact = (fact: SessionEntryMaintenanceAgeFact | undefined) => {
+      owner.ageFact = fact;
+      for (const change of owner.ageChanges.values()) {
+        owner.ageFact = updateSessionEntryMaintenanceAgeFact(owner.ageFact, change);
+      }
+    };
+    installAgeFact(result.ageFact);
     const readAge = async () => {
       assertInputsCurrent();
       const pending = capturePendingAgeChanges(owner);
       const age = await runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-age" },
         assertCommitAllowed: assertInputsCurrent,
-        forceInProcess: false,
         plan: {
           kind: "maintenance-age",
           databaseOptions: operation.databaseOptions,
@@ -553,15 +579,12 @@ async function runPendingMaintenance(
       if (age.kind !== "maintenance-age") {
         throw new Error("SQLite automatic maintenance returned another age result");
       }
+      installAgeFact(age.ageFact);
       return age.nextAt;
     };
     const noChanges = plan.archived === 0 && plan.entryRemovals.length === 0;
     const noFinalization = noChanges && plan.stateDeletePlans.length === 0;
-    const verifiedNextAt = noChanges
-      ? readOnlyPhase.deadline
-        ? readOnlyPhase.deadline.nextAt
-        : await readAge()
-      : undefined;
+    const verifiedNextAt = noChanges ? result.nextAt : undefined;
     if (!noFinalization) {
       await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
         isCurrent,
@@ -582,7 +605,6 @@ async function runPendingMaintenance(
       }
     }
     owner.rejections = 0;
-    owner.completedMaintenanceConfig = structuredClone(maintenance);
   } catch (error) {
     preservation?.dispose();
     if (planningChanged && isCurrent()) {
@@ -601,9 +623,7 @@ async function runPendingMaintenance(
           { error, path: databasePath, rejections: owner.rejections },
         );
       } else {
-        owner.running = true;
-        owner.retryDelayMs = undefined;
-        await runPendingMaintenance(databasePath, owner);
+        scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
       }
       return;
     }
@@ -631,20 +651,7 @@ async function runPendingMaintenance(
       retireMaintenanceOwner(databasePath, owner);
       return;
     }
-    owner.running = false;
-    // Bound relative delays too: Node clamps overflowed timeouts to 1 ms.
-    const delayMs = Math.max(
-      1,
-      Math.min(SESSION_ENTRY_MAINTENANCE_INTERVAL_MS, nextMaintenanceAt - Date.now()),
-    );
-    owner.timerDeadlineMonotonicMs = performance.now() + delayMs;
-    owner.timerKind = "periodic";
-    owner.timer = setTimeout(() => {
-      owner.timer = undefined;
-      owner.running = true;
-      startPendingMaintenance(databasePath, owner);
-    }, delayMs);
-    owner.timer.unref();
+    scheduleMaintenanceAt(databasePath, owner, nextMaintenanceAt);
     return;
   }
   scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
