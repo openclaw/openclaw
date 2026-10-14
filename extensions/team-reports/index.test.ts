@@ -40,7 +40,10 @@ const config: OpenClawConfig = {
   plugins: { entries: { "team-reports": { enabled: true, config: pluginConfig } } },
 };
 
-function captureReports(runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url))) {
+function captureReports(
+  runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url)),
+  runtimeConfig = config,
+) {
   const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const scheduler = createTestPluginServiceScheduler();
   onTestFinished(() => scheduler.stop());
@@ -49,7 +52,7 @@ function captureReports(runtimeSource = fileURLToPath(new URL("./index.ts", impo
   const captured = capturePluginRegistration({
     id: plugin.id,
     name: plugin.name,
-    config,
+    config: runtimeConfig,
     register(api) {
       plugin.register({
         ...api,
@@ -195,82 +198,98 @@ describe("Team Reports registration", () => {
     expect(createTeamReportsStore).not.toHaveBeenCalled();
   });
 
-  it("serves stored JSON and Markdown after starting without the LLM runtime", async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-lazy-llm-"));
-    const actual = await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
-    const store = await actual.createTeamReportsStore({
-      stateDir: directory,
-      workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
-    });
-    vi.mocked(createTeamReportsStore).mockResolvedValueOnce(store);
-    const { services, methods, scheduler } = captureReports();
-    const service = services[0]!;
-    const context: OpenClawPluginServiceContextV2 = {
-      scheduler,
-      config,
-      stateDir: directory,
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    };
-    try {
-      await expect(service.start(context)).resolves.toBeUndefined();
-      expect(await store.listPeriods()).toEqual([]);
-      const handler = methods.find(([name]) => name === "team-reports.get")?.[1];
-      if (!handler) {
-        throw new Error("Team Reports must register its get method");
-      }
-      const request = async (format: "json" | "markdown") => {
-        const params = { period: "day", key: "2026-08-19", format };
-        const respond = vi.fn<Parameters<typeof handler>[0]["respond"]>();
-        await handler({
-          req: { type: "req", id: "report-read", method: "team-reports.get", params },
-          params,
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-          get context(): never {
-            throw new Error("Stored report reads do not need Gateway runtime context");
-          },
-        });
-        expect(respond).toHaveBeenCalledOnce();
-        return respond;
-      };
-      for (const format of ["json", "markdown"] as const) {
-        expect(await request(format)).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "UNAVAILABLE",
-            message: "Report not found; generate the requested UTC day first",
-          }),
-        );
-      }
-      const report = aggregateDay({
-        period: describePeriod("day", "2026-08-19"),
-        nowMs: Date.parse("2026-08-20T00:00:00Z"),
-        orgs: ["sample"],
-        roster: buildRoster([]),
-        items: [],
-        messages: [],
-        githubStatus: { ok: true, warnings: [], stats: {} },
+  it.each([true, false])(
+    "serves stored JSON and Markdown with scheduling enabled=%s",
+    async (enabled) => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-lazy-llm-"));
+      const actual = await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
+      const store = await actual.createTeamReportsStore({
+        stateDir: directory,
+        workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
       });
-      const summary = {
-        source: "fallback" as const,
-        generatedAtMs: report.generatedAtMs,
-        globalSummary: "No recorded activity.",
-        highlights: [],
-        fingerprint: "stored-summary",
+      vi.mocked(createTeamReportsStore).mockResolvedValueOnce(store);
+      const runtimeConfig: OpenClawConfig = {
+        ...config,
+        plugins: {
+          entries: {
+            "team-reports": {
+              enabled: true,
+              config: { ...pluginConfig, schedule: { enabled } },
+            },
+          },
+        },
       };
-      const markdown = "# Stored report\n\né 🦞\0\n";
-      await store.upsertPeriod({ report, summary, markdown });
-      expect(await request("json")).toHaveBeenCalledWith(true, { report, summary });
-      expect(await request("markdown")).toHaveBeenCalledWith(true, { markdown });
-      await store.upsertPeriod({ report, markdown: "Updated report" });
-      expect(await request("json")).toHaveBeenCalledWith(true, { report, summary: null });
-      expect(await request("markdown")).toHaveBeenCalledWith(true, { markdown: "Updated report" });
-    } finally {
-      await service.stop?.(context);
-      await store.close();
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
-  });
+      const { services, methods, scheduler } = captureReports(undefined, runtimeConfig);
+      const service = services[0]!;
+      const context: OpenClawPluginServiceContextV2 = {
+        scheduler,
+        config: runtimeConfig,
+        stateDir: directory,
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      };
+      try {
+        await expect(service.start(context)).resolves.toBeUndefined();
+        expect(await store.listPeriods()).toEqual([]);
+        const handler = methods.find(([name]) => name === "team-reports.get")?.[1];
+        if (!handler) {
+          throw new Error("Team Reports must register its get method");
+        }
+        const request = async (format: "json" | "markdown") => {
+          const params = { period: "day", key: "2026-08-19", format };
+          const respond = vi.fn<Parameters<typeof handler>[0]["respond"]>();
+          await handler({
+            req: { type: "req", id: "report-read", method: "team-reports.get", params },
+            params,
+            client: null,
+            isWebchatConnect: () => false,
+            respond,
+            get context(): never {
+              throw new Error("Stored report reads do not need Gateway runtime context");
+            },
+          });
+          expect(respond).toHaveBeenCalledOnce();
+          return respond;
+        };
+        for (const format of ["json", "markdown"] as const) {
+          expect(await request(format)).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "UNAVAILABLE",
+              message: "Report not found; generate the requested UTC day first",
+            }),
+          );
+        }
+        const report = aggregateDay({
+          period: describePeriod("day", "2026-08-19"),
+          nowMs: Date.parse("2026-08-20T00:00:00Z"),
+          orgs: ["sample"],
+          roster: buildRoster([]),
+          items: [],
+          messages: [],
+          githubStatus: { ok: true, warnings: [], stats: {} },
+        });
+        const summary = {
+          source: "fallback" as const,
+          generatedAtMs: report.generatedAtMs,
+          globalSummary: "No recorded activity.",
+          highlights: [],
+          fingerprint: "stored-summary",
+        };
+        const markdown = "# Stored report\n\né 🦞\0\n";
+        await store.upsertPeriod({ report, summary, markdown });
+        expect(await request("json")).toHaveBeenCalledWith(true, { report, summary });
+        expect(await request("markdown")).toHaveBeenCalledWith(true, { markdown });
+        await store.upsertPeriod({ report, markdown: "Updated report" });
+        expect(await request("json")).toHaveBeenCalledWith(true, { report, summary: null });
+        expect(await request("markdown")).toHaveBeenCalledWith(true, {
+          markdown: "Updated report",
+        });
+      } finally {
+        await service.stop?.(context);
+        await store.close();
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 });
