@@ -67,6 +67,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     isMarkedAsUntransferable: actual.isMarkedAsUntransferable,
     Worker: edge.forbidden,
     MessageChannel: actual.MessageChannel,
+    MessagePort: actual.MessagePort,
     receiveMessageOnPort: actual.receiveMessageOnPort,
   };
 });
