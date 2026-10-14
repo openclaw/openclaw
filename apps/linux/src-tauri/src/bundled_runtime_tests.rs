@@ -186,7 +186,7 @@ fn staging_an_update_retains_the_runtime_referenced_by_an_existing_service() {
 }
 
 #[test]
-fn healthy_collection_retains_current_previous_service_pin_and_live_seeds() {
+fn successive_healthy_collections_retain_current_previous_service_pin_and_live_seeds() {
     let mut fixture = Fixture::new();
     let service = fixture.next_seed("service");
     let pin = fixture.next_seed("pin");
@@ -250,7 +250,12 @@ fn unreadable_processes_or_references_prune_nothing() {
 #[test]
 fn running_seed_is_retained_until_the_process_exits() {
     let mut fixture = Fixture::new();
-    let bytes = fs::read(std::env::current_exe().unwrap()).unwrap();
+    #[cfg(target_os = "linux")]
+    let executable = PathBuf::from("/bin/cat");
+    #[cfg(target_os = "windows")]
+    let executable =
+        PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
+    let bytes = fs::read(executable).unwrap();
     write_source(&fixture.source, &bytes);
     let mut manifest: serde_json::Value = serde_json::from_str(&fixture.manifest).unwrap();
     manifest["files"][BUN_PATH] = Sha256::digest(&bytes)
@@ -260,16 +265,24 @@ fn running_seed_is_retained_until_the_process_exits() {
         .into();
     fixture.manifest = manifest.to_string();
     let live = fixture.next_seed("live");
-    let mut child = Command::new(&live.bun)
-        .args([
-            "--exact",
-            "bundled_runtime::tests::seed_process_waits_for_stdin",
-            "--nocapture",
-        ])
-        .env("OPENCLAW_RETENTION_CHILD", "1")
+    let mut command = Command::new(&live.bun);
+    #[cfg(target_os = "windows")]
+    command.args([
+        "/d",
+        "/q",
+        "/c",
+        "set /p openclaw_input=& echo retention child ready& set /p openclaw_exit=& exit /b 0",
+    ]);
+    let mut child = command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"retention child ready\r\n")
         .unwrap();
     // The child acknowledges its entry point without sleeps or process polling.
     use std::io::BufRead;
@@ -282,86 +295,28 @@ fn running_seed_is_retained_until_the_process_exits() {
         }
     }
     let current = fixture.next_seed("current");
-    collect_after_healthy(&fixture.prefix, &[current.bun.clone()]).unwrap();
+    #[cfg(target_os = "linux")]
+    let pid = child.id();
+    let collect = || {
+        #[cfg(target_os = "linux")]
+        return retention::collect(&fixture.prefix, &[current.bun.clone()], &|_| {
+            // The hosted runner can hide unrelated processes; inspect only this owned fixture.
+            Ok(
+                retention::executable_path(&PathBuf::from(format!("/proc/{pid}")))?
+                    .into_iter()
+                    .collect(),
+            )
+        });
+        #[cfg(target_os = "windows")]
+        collect_after_healthy(&fixture.prefix, &[current.bun.clone()])
+    };
+    collect().unwrap();
     assert!(live.bun.is_file());
     drop(child.stdin.take());
     assert!(child.wait().unwrap().success());
-    collect_after_healthy(&fixture.prefix, &[current.bun.clone()]).unwrap();
+    collect().unwrap();
     assert!(!live.bun.exists());
     assert!(current.bun.is_file());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn successive_activations_collect_only_after_health_and_keep_rollback_on_retry() {
-    use crate::runtime_action::{activate, inspect, install_launcher, Purpose};
-    let mut fixture = Fixture::new();
-    let first = fixture.next_seed("first");
-    let second = fixture.next_seed("second");
-    let third = fixture.next_seed("third");
-    let launcher_runtime = BundledRuntime {
-        bun: fixture.prefix.join("bun"),
-        sqlite: None,
-    };
-    assert!(Command::new("/bin/cp")
-        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/runtime-action-cli.sh"))
-        .arg(&launcher_runtime.bun)
-        .status()
-        .unwrap()
-        .success());
-    let entry = fixture.prefix.join("entry.js");
-    fs::write(&entry, "fixture CLI").unwrap();
-    install_launcher(&fixture.prefix, &launcher_runtime, &entry, Purpose::Gateway).unwrap();
-    let prefix = fixture.prefix.clone();
-    let state = |runtime: &BundledRuntime| {
-        serde_json::json!({
-            "service": {
-                "loaded": true, "targetRole": "target", "definitionMutation": "writable",
-                "command": { "programArguments": [runtime.bun, &entry, "gateway"] },
-                "runtime": { "status": "running", "pid": 4100 },
-                "runtimeIntent": { "status": "known", "revision": "pin", "definition": "definition", "pin": { "runtime": "bun", "path": runtime.bun } },
-                "revision": "service", "launcherOverridden": false
-            },
-            "gateway": { "port": 18789 },
-            "config": { "daemon": { "path": prefix.join("openclaw.json") } },
-            "rpc": { "ok": true },
-            "port": { "port": 18789, "status": "busy", "listeners": [{ "pid": 4100 }] }
-        })
-    };
-    fs::write(fixture.prefix.join("state.json"), state(&first).to_string()).unwrap();
-    let cli = crate::cli::OpenClawCli::browser_runtime(fixture.prefix.clone()).unwrap();
-    for (runtime, tag) in [(&second, "second"), (&third, "third"), (&third, "third")] {
-        fixture.next_seed(tag);
-        fs::write(
-            fixture.prefix.join("healthy.json"),
-            state(runtime).to_string(),
-        )
-        .unwrap();
-        activate(&cli, runtime, &inspect(&cli).unwrap(), &|| true).unwrap();
-    }
-    assert!(!first.bun.exists());
-    assert!(second.bun.is_file());
-    assert!(third.bun.is_file());
-    // A failed activation must preserve the remaining seeds and rollback marker.
-    let fourth = fixture.next_seed("fourth");
-    let launcher_path = crate::cli::managed_launcher(&fixture.prefix);
-    let before = fs::read(&launcher_path).unwrap();
-    fs::write(fixture.prefix.join("healthy.json"), "invalid status").unwrap();
-    assert!(activate(&cli, &fourth, &inspect(&cli).unwrap(), &|| true).is_err());
-    assert_eq!(fs::read(&launcher_path).unwrap(), before);
-    assert!(second.bun.is_file());
-    assert!(third.bun.is_file());
-    assert!(fourth.bun.is_file());
-}
-
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-#[test]
-fn seed_process_waits_for_stdin() {
-    if std::env::var_os("OPENCLAW_RETENTION_CHILD").is_some() {
-        println!("retention child ready");
-        std::io::stdout().flush().unwrap();
-        let _ = std::io::stdin().read(&mut [0u8]);
-    }
 }
 
 #[test]

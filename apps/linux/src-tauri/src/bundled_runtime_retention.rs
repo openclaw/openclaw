@@ -78,26 +78,35 @@ fn live_executables(_: &BTreeSet<OsString>) -> RuntimeResult<Vec<PathBuf>> {
         if metadata.uid() != unsafe { libc::geteuid() } {
             continue;
         }
-        match fs::read_link(directory.join("exe")) {
-            Ok(path) => paths.push(path),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // Exited processes and zombies have no executable; unreadable live ones defer GC.
-                let stat = match fs::read_to_string(directory.join("stat")) {
-                    Ok(stat) => stat,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(error.into()),
-                };
-                if !stat
-                    .rsplit_once(") ")
-                    .is_some_and(|(_, tail)| tail.starts_with('Z'))
-                {
-                    return Err(error.into());
-                }
-            }
-            Err(error) => return Err(error.into()),
+        if let Some(path) = executable_path(&directory)? {
+            paths.push(path);
         }
     }
     Ok(paths)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn executable_path(directory: &Path) -> RuntimeResult<Option<PathBuf>> {
+    match fs::read_link(directory.join("exe")) {
+        Ok(path) => Ok(Some(path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Exited processes and zombies have no executable; unreadable live ones defer GC.
+            let stat = match fs::read_to_string(directory.join("stat")) {
+                Ok(stat) => stat,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            if stat
+                .rsplit_once(") ")
+                .is_some_and(|(_, tail)| tail.starts_with('Z'))
+            {
+                Ok(None)
+            } else {
+                Err(error.into())
+            }
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
@@ -105,10 +114,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn process_census_includes_this_running_executable() {
+    fn native_reader_finds_this_running_executable() {
         let executable = fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
-        let names = BTreeSet::from([executable.file_name().unwrap().to_owned()]);
-        assert!(live_executables(&names).unwrap().contains(&executable));
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            executable_path(Path::new("/proc/self")).unwrap(),
+            Some(executable)
+        );
+        #[cfg(target_os = "windows")]
+        {
+            let names = BTreeSet::from([executable.file_name().unwrap().to_owned()]);
+            assert!(live_executables(&names).unwrap().contains(&executable));
+        }
     }
 }
 
