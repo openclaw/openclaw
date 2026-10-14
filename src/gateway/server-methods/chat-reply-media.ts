@@ -326,6 +326,7 @@ function resolveWebchatReplyWorkspace(
   // Placement can be remote before any workspace metadata has been published.
   const remote = Boolean(
     entry?.execNode ||
+    entry?.deviceFolder ||
     entry?.repositoryWorkspaceId ||
     isCloudWorkerPlacementState(placement?.state),
   );

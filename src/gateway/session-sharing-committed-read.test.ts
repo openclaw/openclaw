@@ -1,3 +1,4 @@
+import { mkdirSync, symlinkSync } from "node:fs";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -46,6 +47,42 @@ function inWriterTransaction(db: DatabaseSync, check: () => void) {
 }
 
 describe("committed session mutation authorization", () => {
+  it("retains a worker grant through a configured directory alias", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      ensureUserProfilesSchema({});
+      const profileCatalog = await prepareUserProfileCatalog();
+      using _ = { [Symbol.dispose]: () => profileCatalog.release() };
+      const directory = state.statePath("physical");
+      const alias = state.statePath("selected");
+      mkdirSync(directory);
+      symlinkSync(directory, alias, "junction");
+      const cfg = rolePolicyConfig();
+      cfg.session = { store: `${alias}/sessions.json` };
+      const sessionKey = "agent:main:aliased-worker-grant";
+      const scope = { agentId: "main", sessionKey, storePath: cfg.session.store };
+      replaceSessionEntrySync(scope, {
+        sessionId: "aliased-worker-grant",
+        updatedAt: 1,
+        visibility: "shared",
+      });
+      const client = roleClient("view", "aliased-worker-grant");
+      const identityId = client.authenticatedUserProfile!.profileId;
+      addSessionMember(scope, { identityId, addedBy: "test-owner" });
+      const result = await resolveSessionMutationAuthorizationAsync({
+        client,
+        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        method: "sessions.dispatch",
+        requestParams: { key: sessionKey },
+      });
+      expect(result.error).toBeNull();
+      const grant = await result.authorization!.prepareWorkerGrant!();
+      try {
+        expect(() => grant.assertCurrent()).not.toThrow();
+      } finally {
+        await grant.release();
+      }
+    });
+  });
   it.each(["resident", "fixed"] as const)(
     "revokes %s worker grants after committed membership changes without main-thread reads",
     async (mode) => {

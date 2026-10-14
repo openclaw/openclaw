@@ -131,6 +131,7 @@ describe("type suppression inventory", () => {
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks where-reference string literals.",
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks grouped column string literals.",
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks order references and selected aliases.",
+        "src/infra/database-engine/transcript-reader.conformance.test.ts:@ts-expect-error -- The PostgreSQL bridge deliberately lacks unused SQLite-only methods.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
         "src/plugin-sdk/plugin-config-runtime.test.ts:@ts-expect-error Arrays are also invalid persisted plugin config objects.",

@@ -52,10 +52,13 @@ export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
 
 const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
 
-function DraftBlock(props: { page: () => NewSessionPageOwner; revision: () => object }) {
+function DraftBlock(props: {
+  page: () => NewSessionPageOwner;
+  revision: () => object;
+  options: () => ReturnType<NewSessionPageOwner["composerOptions"]>;
+}) {
   const submission = () => props.page().submission;
   const place = () => props.page().place;
-  const options = createMemo(() => props.page().composerOptions());
   const placeOptions = createMemo((): NewSessionPlaceControlsOptions => ({
     context: props.page().context,
     data: props.page().data,
@@ -162,7 +165,11 @@ function DraftBlock(props: { page: () => NewSessionPageOwner; revision: () => ob
         />
       </Show>
       <NewSessionComposer
-        options={Object.assign(options(), { permissionControl, dictationStatus, voiceControl })}
+        options={Object.assign(props.options(), {
+          permissionControl,
+          dictationStatus,
+          voiceControl,
+        })}
       />
       <Show when={!catalog.isTarget(props.page().data)}>
         <NewSessionIncognitoNotice active={submission().visibility === "incognito"} />
@@ -181,9 +188,11 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     revision();
     return owner;
   };
+  // Both draft presentations share one preparation per revision, not one per binding.
+  const options = createMemo(() => page().composerOptions());
   // The retained Lit slot must not republish identical Solid inputs on each
   // draft edit; the revision accessor already carries the changed state.
-  const draftProps = { page, revision };
+  const draftProps = { page, revision, options };
   createEffect(revision, () =>
     untrack(() => {
       owner.updated();
@@ -270,7 +279,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
                 />
               }
             >
-              <DraftBlock page={page} revision={revision} />
+              <DraftBlock page={page} revision={revision} options={options} />
             </Show>
           )}
           onOpenImage={owner.setImageLightbox}

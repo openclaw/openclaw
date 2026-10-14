@@ -259,6 +259,15 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
+Durable actor residency retains narrow navigation and exact byte accounting,
+not settled append bodies. Full bodies stay in SQLite and committed append
+receipts; retries read canonical storage when their payload is no longer in the
+current transaction. Actor append slow-hold warnings include `context.payloadBytes`,
+the UTF-8 size of the primary prepared event or message payload (summed message
+bodies for turn appends). This count excludes optional initialization headers.
+The reported `phases.sqlMs` includes synchronous JavaScript work inside the
+transaction; it is not a sum of SQLite statement timings.
+
 Cold input preparation uses the turn planner instead of fetching a full actor
 replica first. The planner carries its recovery expectation into the input
 command; prepared, explicit, and warm replica expectations remain fixed across
@@ -444,6 +453,10 @@ worker snapshot; discovery still reads only metadata. Its transcript statistics
 batch carries the rewrite generation and hot/cold state alongside the bounds,
 so the subsequent scan reuses those facts without another watermark read. A
 rewrite during a background scan converges on the next receipt-driven refresh.
+Each operation captures its logical session-store selectors and physical database
+owners before borrowing custody. Discovery, archive reads, and replay reuse those
+bindings, so a warm worker cannot substitute an older registry lookup. Existing
+custody and read-only ownership validation still guard every database read.
 Usage reports capture cache metadata, bodies, and selected monthly partitions in
 one synchronous engine read snapshot, then close it before asynchronous transcript
 discovery, replay, or pricing. Concurrent refreshes cannot change those captured
@@ -548,7 +561,7 @@ replacement, and content edits continue to invalidate retained context.
 
 Exact metadata rewrites that preserve transcript admission and navigation carry
 their canonical replacement rows in the existing committed authority receipt.
-The resident actor updates its payloads and mutation timestamp in that same
+The resident actor updates its byte accounting and mutation timestamp in that same
 transaction; the main-thread replica installs those rows without another worker
 read. This includes an identical model-prompt capture after hydration. Rollback
 leaves stored messages unchanged and retains the database owner's failed-write
@@ -4543,12 +4556,18 @@ fallback preparation; it retains current environment and execution-policy checks
 Reads retain the original physical store; admission and initial routing also
 retain a revocable placement observation
 until their caller consumes the facts.
-If a placement publication overlaps read preparation, the owner joins its
-settlement and reads fresh facts from the same physical store. A preceding turn
-finishing or setup advancing cannot reject the next turn merely by superseding
-that read. Only read preparation repeats; consumer effects and writes never do.
-Unknown publication outcomes, cancellation, and store replacement still refuse
-the read, and an observation already handed to its consumer remains revocable.
+Read preparation fails closed. If a same-session placement publication other than
+tool authority commits while the projection read runs, or is still pending when
+it returns, the owner releases the observation and rejects with
+`Session <id> placement authority changed`; it neither waits for settlement nor
+repeats the read. A preceding turn finishing or setup advancing at that moment
+can therefore reject the next turn, which fails visibly and is not retried
+automatically. This is an accepted best-effort tradeoff: the window is a single
+worker read, and admission, file reads, and sandbox preparation recheck the same
+observation while consuming it, so repeating only the read would not remove the
+race. Unknown publication outcomes, cancellation, and store replacement also
+refuse the read, and an observation already handed to its consumer remains
+revocable.
 Chat admission reruns its session, reservation, and caller checks after preparation;
 reply admission rechecks its session and lifecycle after the worker read. Runtime
 selection is a prepared default that tolerates setup and preceding-turn publications;

@@ -83,6 +83,7 @@ async function fork(requestModel = model) {
   return runEmbeddedSessionFork({
     ...identity,
     model: requestModel,
+    apiKey: "synthetic-key",
     question: "Review only",
     assertCurrent: () => {},
   });
@@ -513,8 +514,9 @@ describe("prepared session fork provider boundary", () => {
     await expect(fork()).rejects.toThrow("requires a parent turn");
   });
 
-  it("does not re-enter the parent's one-shot prepared payload hook", async () => {
-    const payloads: Record<string, unknown>[] = [];
+  it("isolates replayed wire data without re-entering the parent's one-shot payload hook", async () => {
+    const { parent, physicalFetch } = guardedTransport();
+    const metadata = { acknowledged: "review", unicode: "🦞" };
     const onPayload = vi.fn((payload: unknown) => {
       if (onPayload.mock.calls.length > 1) {
         throw new Error("Provider review continuation cannot rebuild or retry its request");
@@ -522,12 +524,20 @@ describe("prepared session fork provider boundary", () => {
       if (!isRecord(payload)) {
         throw new Error("Expected request");
       }
-      return { ...payload, client_metadata: { acknowledged: "review" } };
+      return { ...payload, client_metadata: metadata };
     });
-    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
-    await (await parent(model, context, { onPayload })).result();
+    await (await parent(model, context, { apiKey: "synthetic-key", onPayload })).result();
+    metadata.acknowledged = "changed after parent send";
+    await expect(fork()).resolves.toBe("Answer");
     await expect(fork()).resolves.toBe("Answer");
     expect(onPayload).toHaveBeenCalledTimes(1);
-    expect(payloads[1]?.client_metadata).toEqual({ acknowledged: "review" });
+    const bodies = await Promise.all(
+      physicalFetch.mock.calls.map(([url, init]) => new Request(url, init).json()),
+    );
+    expect(bodies).toHaveLength(3);
+    for (const body of bodies) {
+      expect(body).toMatchObject({ client_metadata: { acknowledged: "review", unicode: "🦞" } });
+    }
+    expect(bodies[2]).toEqual(bodies[1]);
   });
 });

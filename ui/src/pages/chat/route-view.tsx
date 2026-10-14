@@ -58,8 +58,7 @@ function ChatRouteView(props: { data?: ChatRouteData; presented: boolean }) {
       <Match when={missing()}>
         {(data) => (
           <PanelErrorState
-            // oxlint-disable-next-line solid/no-react-specific-props -- Shared status component names its CSS class prop className.
-            className="session-route-not-found"
+            class="session-route-not-found"
             role="status"
             title={t("chat.sessionRoute.notFoundTitle")}
             subtitle={t("chat.sessionRoute.notFoundExplanation")}

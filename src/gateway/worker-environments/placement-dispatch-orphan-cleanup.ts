@@ -39,7 +39,7 @@ export async function cleanupPendingWorkspaceResultOrphans(
     if (root === undefined) {
       try {
         const workspace = await deps.resolveWorkspace(placement);
-        root = workspace.kind === "repository" ? null : workspace.path;
+        root = workspace.kind === "local" ? workspace.path : null;
         rootsBySession.set(placement.sessionId, root);
       } catch {
         // Cleanup refs are independently retryable on the next sweep or after the next restart.

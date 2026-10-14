@@ -62,6 +62,11 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     ],
   },
   {
+    file: "packages/normalization-core/src/session-key-comparison.ts",
+    kind: "function",
+    names: ["normalizeSessionKeyForComparison"],
+  },
+  {
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
@@ -196,6 +201,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
 export const CANONICAL_COERCION_MODULES = [
   "packages/normalization-core/src/agent-id.ts",
   "packages/normalization-core/src/string-coerce.ts",
+  "packages/normalization-core/src/session-key-comparison.ts",
   "packages/normalization-core/src/string-normalization.ts",
   "packages/normalization-core/src/number-coercion.ts",
   "packages/normalization-core/src/record-coerce.ts",
