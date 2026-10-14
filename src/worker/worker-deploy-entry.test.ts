@@ -21,7 +21,7 @@ vi.mock("./worker-process.js", () => ({ runWorkerProcess: runtime.runWorkerProce
 
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
-const originalConnected = process.connected;
+const originalConnected = Object.getOwnPropertyDescriptor(process, "connected");
 const originalDisconnect = Object.getOwnPropertyDescriptor(process, "disconnect");
 const disconnect = vi.fn();
 let destroyStdin: MockInstance<typeof process.stdin.destroy>;
@@ -34,7 +34,7 @@ beforeEach(() => {
   runtime.loadWorkerTurnRuntime.mockReset().mockResolvedValue();
   runtime.flushCompileCache.mockReset();
   process.exitCode = undefined;
-  process.connected = true;
+  Object.defineProperty(process, "connected", { configurable: true, value: true, writable: true });
   process.disconnect = disconnect.mockReset();
   destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnValue(process.stdin);
   vi.stubEnv("OPENCLAW_DEBUG", undefined);
@@ -43,7 +43,11 @@ beforeEach(() => {
 afterEach(() => {
   process.argv = originalArgv;
   process.exitCode = originalExitCode;
-  process.connected = originalConnected;
+  if (originalConnected) {
+    Object.defineProperty(process, "connected", originalConnected);
+  } else {
+    Reflect.deleteProperty(process, "connected");
+  }
   if (originalDisconnect) {
     Object.defineProperty(process, "disconnect", originalDisconnect);
   } else {

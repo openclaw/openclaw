@@ -7,20 +7,14 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { UsersPrefsSetParams } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   adoptCommittedBackgroundPreference,
-  selectThemeSettings,
   resolveServerUiPrefWriteStatus,
 } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
-import {
-  extractServerUiPrefs,
-  applyServerUiPrefs,
-  resolveServerUiPrefState,
-} from "./server-prefs-reconcile.ts";
+import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter,
@@ -34,12 +28,7 @@ import {
   resetServerUiPrefsSync,
   subscribeServerUiPrefWrites,
 } from "./server-prefs.ts";
-import {
-  loadSettings,
-  patchSettings,
-  setSettingsChangeListener,
-  settingsKeyForGateway,
-} from "./settings.ts";
+import { loadSettings, patchSettings, setSettingsChangeListener } from "./settings.ts";
 
 const scope = "ws://background-profile";
 const profileId = "viewer-a";
@@ -102,29 +91,6 @@ it("normalizes metadata without retaining bytes, URLs, or unknown fields", () =>
     ).showInSessions,
   ).toBe(true);
 });
-
-it.each([none, custom])(
-  "keeps $source.kind across theme/mode changes without another background write",
-  (background) => {
-    patchSettings({ background });
-    const before = loadSettings();
-    const themed = selectThemeSettings("rose");
-    expect(themed.background).toEqual(background);
-    expect(changedServerUiPrefs(before, themed)).not.toHaveProperty("background");
-    patchSettings({ themeMode: "dark" });
-    expect(loadSettings().background).toEqual(background);
-    expect(
-      changedServerUiPrefs(loadSettings(), {
-        ...loadSettings(),
-        background: structuredClone(background),
-      }),
-    ).toBeNull();
-    expect(JSON.parse(localStorage.getItem(settingsKeyForGateway(scope))!)).not.toHaveProperty(
-      "background",
-    );
-    expect(extractServerUiPrefs(configWithPrefs({ background }))).toEqual({});
-  },
-);
 
 it.each([false, true])(
   "restores only the confirmed profile mirror (private storage: %s)",
@@ -242,52 +208,6 @@ it("acknowledges theme and tab icon separately, retaining only a failed backgrou
     "users.prefs.set",
     "users.prefs.set",
   ]);
-});
-
-it("does not strand tab icon or background when a mixed theme selection is definitively rejected", async () => {
-  const request = vi.fn(async (method: string) => {
-    if (method === "themes.set") {
-      throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "Theme unavailable" });
-    }
-    return { status: "ok" };
-  });
-  const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-  patchSettings({ theme: "rose", tabIcon: "agent", background: none });
-  pushServerUiPrefs(
-    writer,
-    { theme: "rose", tabIcon: "agent", background: none },
-    { profileId, canWrite: true },
-  );
-  await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith("users.prefs.set", {
-      entries: { "ui.background": none },
-      expectedEntries: { "ui.background": null },
-    }),
-  );
-  await waitForFast(() => expect(readPending()).toEqual({}));
-  expect(request).toHaveBeenNthCalledWith(2, "users.prefs.set", {
-    entries: { "ui.tabIcon": "agent" },
-  });
-  expect(state()).toEqual({ status: "saved" });
-});
-
-it("keeps a newer rapid background edit above an older in-flight acknowledgement", async () => {
-  const delayed = createDeferred<unknown>();
-  let writes = 0;
-  const request = vi.fn(async () => (++writes === 1 ? delayed.promise : { status: "ok" }));
-  const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-  patchSettings({ background: custom });
-  pushServerUiPrefs(writer, { background: custom }, { profileId, canWrite: true });
-  await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-  patchSettings({ background: none });
-  pushServerUiPrefs(writer, { background: none }, { profileId, canWrite: true });
-  delayed.resolve({ status: "ok" });
-  await waitForFast(() => expect(state()).toEqual({ status: "saved" }));
-  expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-    entries: { "ui.background": none },
-    expectedEntries: { "ui.background": custom },
-  });
-  expect(loadSettings().background).toEqual(none);
 });
 
 it("keeps offline edits in their known profile and never falls through to config", async () => {

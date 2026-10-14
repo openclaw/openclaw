@@ -172,6 +172,7 @@ const changedPaths = (() => {
 })();
 const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
 const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const rootProseOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY);
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
 const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
@@ -1248,6 +1249,7 @@ const nodeTestShards = targetNodeTestShards
           "src/agents/sessions/tools/grep.byte-path.test.ts",
           "src/agents/filesystem-tools-output-contract.test.ts",
           "test/scripts/check-database-worker-ratchet.test.ts",
+          "test/scripts/pr-baseline-publication.test.ts",
           "test/scripts/pr-baseline-signing.test.ts",
           "test/scripts/pr-baseline-successor.test.ts",
           "test/scripts/pr-correction-continuation.test.ts",
@@ -1563,6 +1565,7 @@ const manifest = {
   shared_sdk_declarations: sharedSdkDeclarations,
   check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
   run_check_docs: docsChanged && eventName !== "push",
+  run_docs_content: !(ordinaryPullRequest && docsOnly && rootProseOnly),
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
   run_ui_tests: runUiTests,

@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { html, nothing, render } from "lit";
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { publishTranscriptScroll } from "../pages/chat/components/chat-transcript-scroll-events.ts";
-import { observeTranscript } from "./session-progress-card.test-support.ts";
-import { renderSessionProgressCard } from "./session-progress-card.ts";
+import {
+  observeTranscript,
+  renderProgressCard as render,
+} from "./session-progress-card.test-support.tsx";
 import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-controller.ts";
 
 const containers: HTMLDivElement[] = [];
@@ -42,10 +44,17 @@ function renderTranscriptCard(
   collapsed = false,
 ) {
   return render(
-    html`<div class="chat-main">
-      <div class="chat-thread"></div>
-      ${renderSessionProgressCard(card, "composer", undefined, sessionStatus, RUN_STARTED_MS, sessionStatus === "done" ? RUN_ENDED_MS : undefined, sessionStatus === "running", collapsed, context)}
-    </div>`,
+    {
+      card,
+      placement: "composer",
+      sessionStatus,
+      startedAt: RUN_STARTED_MS,
+      endedAt: sessionStatus === "done" ? RUN_ENDED_MS : undefined,
+      hasActiveRun: sessionStatus === "running",
+      collapseComposerByDefault: collapsed,
+      composerDisclosureContext: context,
+      transcript: true,
+    },
     container,
   );
 }
@@ -61,11 +70,34 @@ describe("elastic progress disclosure controller", () => {
       cleanup();
     }
     for (const container of containers.splice(0)) {
-      render(nothing, container);
+      render(null, container);
       container.remove();
     }
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("parks disclosure gestures and restores the retained choice on reveal", () => {
+    const container = createContainer();
+    const view = renderTranscriptCard(container, { cardLifetime: {} });
+    const summary = container.querySelector("summary")!;
+    const wheel = () => {
+      const event = new WheelEvent("wheel", {
+        deltaY: -48,
+        bubbles: true,
+        cancelable: true,
+      });
+      summary.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(wheel()).toBe(true);
+    const body = container.querySelector<HTMLElement>(".session-progress-card__body")!;
+    const chosenHeight = body.style.height;
+    view.setPresented(false);
+    expect(wheel()).toBe(false);
+    view.setPresented(true);
+    expect(body.style.height).toBe(chosenHeight);
+    expect(wheel()).toBe(true);
   });
 
   it.each([
@@ -130,7 +162,7 @@ describe("elastic progress disclosure controller", () => {
         [5, false, false],
       ] as const) {
         if (remount) {
-          render(nothing, container);
+          render(null, container);
           remounted = true;
         }
         show(cardLifetime, revision, final);
@@ -140,7 +172,7 @@ describe("elastic progress disclosure controller", () => {
       show(replacement, 1);
       expectChoice(initialOpen);
       expect(body().style.minHeight).toBe("");
-      render(nothing, container);
+      render(null, container);
       show(replacement, 1);
       expectChoice(initialOpen);
     },
@@ -168,6 +200,7 @@ describe("elastic progress disclosure controller", () => {
         if (choice !== "history") {
           transcript.thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
           vi.advanceTimersByTime(301);
+          flush();
           expect(card.open).toBe(true);
           if (choice === "keyboard replacement") {
             transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
@@ -189,17 +222,21 @@ describe("elastic progress disclosure controller", () => {
           transcript.scroll(200);
           if (choice !== "delayed history") {
             vi.advanceTimersByTime(301);
+            flush();
             expect(card.open).toBe(true);
             transcript.wheel(200);
             vi.advanceTimersByTime(301);
+            flush();
             expect(card.open).toBe(true);
           }
         } else {
           transcript.wheel(200);
         }
         vi.advanceTimersByTime(201);
+        flush();
         transcript.wheel(200);
         vi.advanceTimersByTime(301);
+        flush();
       } else {
         summary.dispatchEvent(new WheelEvent("wheel", { deltaY: 400, cancelable: true }));
       }
@@ -210,7 +247,7 @@ describe("elastic progress disclosure controller", () => {
       expect(card.open).toBe(false);
       renderTranscriptCard(container, context, revised, "done");
       expect(card.open).toBe(false);
-      render(nothing, container);
+      render(null, container);
       renderTranscriptCard(container, context, revised, "done");
       card = container.querySelector("details")!;
       expect(card.open).toBe(false);
@@ -269,7 +306,7 @@ describe("elastic progress disclosure controller", () => {
     stale.querySelector("summary")!.click();
     stale.querySelector("summary")!.click();
     expect(stale.querySelector("details")!.open).toBe(true);
-    render(nothing, current);
+    render(null, current);
     renderTranscriptCard(current, replacement, { ...progressCard, revision: 1 });
     expect(current.querySelector("details")!.open).toBe(false);
   });
@@ -288,6 +325,7 @@ describe("elastic progress disclosure controller", () => {
       const body = card.querySelector<HTMLElement>(".session-progress-card__body")!;
       transcript.wheel(200);
       vi.advanceTimersByTime(201);
+      flush();
       transcript.wheel(200);
 
       if (takeover === "hidden") {
@@ -299,13 +337,16 @@ describe("elastic progress disclosure controller", () => {
           .dispatchEvent(new WheelEvent("wheel", { deltaY: -48, bubbles: true, cancelable: true }));
       }
       vi.advanceTimersByTime(1000);
+      flush();
       expect(card.open).toBe(true);
       expect(body.style.height).toBe(takeover === "header" ? "48px" : "");
       if (takeover === "hidden") {
         transcript.wheel(200);
         vi.advanceTimersByTime(301);
+        flush();
         transcript.wheel(200);
         vi.advanceTimersByTime(301);
+        flush();
         expect(card.open).toBe(true);
         show(true);
         await Promise.resolve();
@@ -313,9 +354,11 @@ describe("elastic progress disclosure controller", () => {
       }
       transcript.wheel(200);
       vi.advanceTimersByTime(301);
+      flush();
       expect(card.open).toBe(true);
       transcript.wheel(200);
       vi.advanceTimersByTime(301);
+      flush();
       expect(card.open).toBe(false);
       expect(body.style.height).toBe("");
     },
@@ -333,10 +376,12 @@ describe("elastic progress disclosure controller", () => {
     expect(second.querySelector("details")!.open).toBe(true);
     transcript.wheel(200);
     vi.advanceTimersByTime(201);
+    flush();
     transcript.wheel(200);
     vi.advanceTimersByTime(300);
+    flush();
     expect(first.querySelector("details")!.open).toBe(false);
-    render(nothing, second);
+    render(null, second);
     renderTranscriptCard(second, context);
     expect(second.querySelector("details")!.open).toBe(true);
   });
@@ -355,19 +400,15 @@ describe("elastic progress disclosure controller", () => {
       const otherGatewayLifetime = {};
       const renderCard = (gatewayScope: object, sessionKey = session) =>
         render(
-          renderSessionProgressCard(
-            {
+          {
+            card: {
               ...progressCard,
               sessionKey: sessionKey === "global" ? "agent:main:global" : sessionKey,
             },
-            "composer",
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            true,
-            false,
-            {
+            placement: "composer",
+            hasActiveRun: true,
+            collapseComposerByDefault: false,
+            composerDisclosureContext: {
               gatewayScope,
               sessionIdentity: JSON.stringify(["main", sessionKey]),
               cardLifetime:
@@ -377,7 +418,7 @@ describe("elastic progress disclosure controller", () => {
                     ? firstLifetime
                     : nextLifetime,
             },
-          ),
+          },
           container,
         );
       renderCard(gatewayA);
@@ -395,7 +436,7 @@ describe("elastic progress disclosure controller", () => {
       expect(container.querySelector("details")!.open).toBe(true);
       renderCard(gatewayA);
       expect(container.querySelector("details")!.open).toBe(false);
-      render(nothing, container);
+      render(null, container);
       renderCard(gatewayA);
       expect(container.querySelector("details")!.open).toBe(false);
     },

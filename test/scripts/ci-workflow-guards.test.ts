@@ -1426,6 +1426,9 @@ AFTER_CD
       ["src/old.ts", "src/new.ts", "false", "false"],
       ["test/fixtures/old.md", "docs/new.md", "true", "false"],
       ["docs/removed.md", null, "true", "true"],
+      ["VISION.md", "AGENTS.md", "true", "true"],
+      ["docs/old.md", "VISION.md", "true", "true"],
+      ["src/old.ts", "VISION.md", "true", "false"],
     ] as const) {
       const root = tempDirs.make("openclaw-docs-diff-");
       const origin = path.join(root, "origin");
@@ -1477,9 +1480,35 @@ AFTER_CD
       expect(readWorkflowOutputs(output), `${source} -> ${destination}`).toEqual({
         docs_changed: docsChanged,
         docs_only: docsOnly,
+        root_prose_only: source === "VISION.md" && destination === "AGENTS.md" ? "true" : "false",
       });
       expect(readFileSync(trace, "utf8")).not.toContain('"fetch"');
       expect(localObjects()).not.toContain(sourceBlob);
+    }
+  });
+
+  it("keeps empty and unavailable root prose detection conservative", () => {
+    const root = tempDirs.make("openclaw-root-prose-empty-");
+    runGit(root, ["init", "--quiet"]);
+    runGit(root, ["config", "user.name", "CI Fixture"]);
+    runGit(root, ["config", "user.email", "ci-fixture@example.invalid"]);
+    runGit(root, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(path.join(root, "VISION.md"), "vision\n");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "--quiet", "-m", "base"]);
+    const run = readWorkflow(".github/actions/detect-docs-changes/action.yml").runs.steps[0].run;
+    for (const base of ["HEAD", "missing-base"]) {
+      const output = path.join(root, base + ".out");
+      const result = runWorkflowShellScript(run, {
+        cwd: root,
+        env: { ...process.env, BASE_SHA: base, GITHUB_OUTPUT: output },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readWorkflowOutputs(output)).toEqual({
+        docs_only: "false",
+        docs_changed: "false",
+        root_prose_only: "false",
+      });
     }
   });
 
@@ -1495,6 +1524,50 @@ AFTER_CD
     expect(job.if).toBe("needs.preflight.outputs.run_check_docs == 'true'");
     expect(configDocsCheck?.run).toBe("pnpm config:docs:check");
     expect(pluginInventoryCheck?.run).toBe("pnpm plugins:inventory:check");
+    const contentSteps = [
+      "Check config docs baseline",
+      "Check plugin inventory",
+      "Checkout ClawHub docs source",
+      "Record external documentation dependency",
+      "Check docs",
+    ];
+    for (const name of contentSteps) {
+      const step = job.steps.find((candidate: WorkflowStep) => candidate.name === name);
+      for (const enabled of ["true", "false"]) {
+        expect(
+          evaluateWorkflowCondition(step.if, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { run_docs_content: enabled },
+            steps: {
+              node_setup: { outcome: "success", outputs: {} },
+              clawhub_docs: { outcome: "success", outputs: {} },
+            },
+          }),
+          name,
+        ).toBe(enabled === "true");
+      }
+    }
+    const format = job.steps.find((step: WorkflowStep) => step.name === "Check formatting");
+    expect(format.if).not.toContain("run_docs_content");
+    expect(
+      evaluateWorkflowCondition(format.if, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: { run_docs_content: "false", run_format_check: "true" },
+        steps: { node_setup: { outcome: "success", outputs: {} } },
+      }),
+    ).toBe(true);
+    const preflight = readCiWorkflow().jobs.preflight;
+    expect(preflight.outputs.run_docs_content).toBe(
+      "${{ steps.manifest.outputs.run_docs_content }}",
+    );
+    expect(
+      preflight.steps.find((step: WorkflowStep) => step.id === "manifest").env
+        .OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY,
+    ).toBe("${{ steps.docs_scope.outputs.root_prose_only }}");
   });
 
   it("bounds matrix fan-out for runner-registration pressure", () => {
@@ -2576,6 +2649,38 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ).toBe(expected);
     }
   });
+
+  it.each(["hybrid", "runson"] as const)(
+    "gives %s UI offloads their hosted timeout budgets",
+    (runnerBackend) => {
+      const workflow = readCiWorkflow();
+      for (const offload of [false, true]) {
+        const context = {
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          matrix: { task: "build-play" },
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend,
+          preflightOutputs: { hybrid_hosted_offload: String(offload) },
+        } as const;
+        expect(evaluateWorkflowExpression(workflow.jobs["checks-ui"]["runs-on"], context)).toBe(
+          offload ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+        );
+        for (const [jobName, timeout] of [
+          ["build-artifacts", 20],
+          ["android", 20],
+          ["checks-ui-e2e-real-gateway", 20],
+          ["checks-ui", offload ? 35 : 20],
+        ] as const) {
+          expect(
+            evaluateWorkflowExpression(workflow.jobs[jobName]["timeout-minutes"], context),
+            `${jobName}: hosted offload ${offload}`,
+          ).toBe(timeout);
+        }
+      }
+    },
+  );
 
   it("resolves the pull request base and changed files from the shallow security checkout", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];

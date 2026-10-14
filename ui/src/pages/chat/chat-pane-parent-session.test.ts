@@ -145,8 +145,13 @@ describe("mounted pane parent session", () => {
       const pane = mount(child.key);
       await refreshPane(pane);
       await parentRequested.promise;
+      await vi.dynamicImportSettled();
       if (recovering) {
         oldParent.reject(new Error("Temporary descriptor outage"));
+        await vi.dynamicImportSettled();
+        expect(parentBreadcrumb(pane)).toBeNull();
+        expect(parentReads).toBe(1);
+        sessions.reconcile({ ...child, updatedAt: 2, displayName: "Updated child" });
         await vi.dynamicImportSettled();
         expect(parentBreadcrumb(pane)).toBeNull();
         expect(parentReads).toBe(1);

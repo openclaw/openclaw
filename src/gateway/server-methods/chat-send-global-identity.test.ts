@@ -16,6 +16,7 @@ import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { readSessionPendingInputByKey } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -194,6 +195,7 @@ it.each<{
   },
 ])("binds chat.send to its stored global identity: $name", async (scenario) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
     const storePath = state.path(
       scenario.shared
         ? "shared.sqlite"

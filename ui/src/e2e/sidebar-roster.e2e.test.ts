@@ -311,15 +311,8 @@ suite.define(() => {
         await page.mouse.move(1100, 700);
         await expect.poll(() => workspaceMenu.count()).toBe(0);
         await workspace.focus();
-        await Promise.all([
-          sidebar.evaluate(
-            (element) =>
-              new Promise<void>((resolve) => {
-                element.addEventListener("overlay-after-show", () => resolve(), { once: true });
-              }),
-          ),
-          workspace.hover(),
-        ]);
+        await workspace.hover();
+        await expect.poll(() => workspaceMenu.getAttribute("data-phase")).toBe("open");
         expect(await workspace.evaluate((element) => element === document.activeElement)).toBe(
           true,
         );

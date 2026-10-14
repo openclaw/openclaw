@@ -31,13 +31,6 @@ import {
   testGoogleMeetSpeech,
   type GoogleMeetRuntimeProbeContext,
 } from "./runtime-probes.js";
-import {
-  isBrowserTransport,
-  noteSession,
-  resolveMode,
-  resolveTransport,
-  withSessionAgentConfig,
-} from "./runtime-session.js";
 import { getGoogleMeetRuntimeSetupStatus } from "./runtime-setup.js";
 import {
   launchChromeMeet,
@@ -69,6 +62,20 @@ type GoogleMeetJoinContext = MeetingSessionRuntimeJoinContext<
 >;
 
 const nowIso = () => new Date().toISOString();
+
+function isBrowserTransport(transport: GoogleMeetTransport): boolean {
+  return transport === "chrome" || transport === "chrome-node";
+}
+
+function noteSession(session: GoogleMeetSession, note: string): void {
+  session.notes = [...session.notes.filter((item) => item !== note), note];
+}
+
+function withSessionAgentConfig(config: GoogleMeetConfig, agentId: string): GoogleMeetConfig {
+  return config.realtime.agentId === agentId
+    ? config
+    : { ...config, realtime: { ...config.realtime, agentId } };
+}
 
 export class GoogleMeetRuntime extends MeetingSessionRuntime<
   GoogleMeetSession,
@@ -153,8 +160,8 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       },
       resolveJoin: (request) => ({
         url: adapter.urls.validateAndNormalize(request.url),
-        transport: resolveTransport(request.transport, params.config),
-        mode: resolveMode(request.mode, params.config),
+        transport: request.transport ?? params.config.defaultTransport,
+        mode: request.mode === "realtime" ? "agent" : (request.mode ?? params.config.defaultMode),
         agentId: this.#resolveAgentId(request.agentId),
       }),
       createSession: ({ resolved, createdAt }): GoogleMeetSession =>
@@ -239,7 +246,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
   }
 
   async recoverCurrentTab(request: { url?: string; transport?: GoogleMeetTransport } = {}) {
-    const transport = resolveTransport(request.transport, this.params.config);
+    const transport = request.transport ?? this.params.config.defaultTransport;
     if (transport === "twilio") {
       throw new Error("recover_current_tab only supports chrome or chrome-node transports");
     }
@@ -514,10 +521,8 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
   async #refreshStatus(session: GoogleMeetSession): Promise<void> {
     if (isBrowserTransport(session.transport)) {
       await this.refreshBrowserHealth(session, { force: true, readOnly: true });
-    } else if (session.transport === "twilio") {
-      await this.#refreshTwilioVoiceCallStatus(session);
     } else {
-      this.refreshSpeechReadiness(session);
+      await this.#refreshTwilioVoiceCallStatus(session);
     }
   }
 

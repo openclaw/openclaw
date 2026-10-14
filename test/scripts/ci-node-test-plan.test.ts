@@ -19,6 +19,7 @@ import {
   createUiTestShardGroups,
   createVitestCacheWarmGroups,
   hasCompleteStartupCorpusCoverage,
+  packCompactNodeTestJobsToCapacity,
   resolveCanonicalNodeTestConfig,
   resolveStartupCorpusTestFiles,
 } from "../../scripts/lib/ci-node-test-plan.mts";
@@ -207,7 +208,7 @@ describe("Control UI release-only inventories", () => {
     expectRealGatewayCoverage(
       createUiTestShardGroups({
         includeReleaseOnlyTests: false,
-        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.ts"],
+        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
       }).e2e,
       uiE2eRealGatewayTestFiles.filter(
         (file) => !releaseOnlyRealGateway.has(file) || file === automationManagement,
@@ -339,6 +340,88 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
     expect(jobs.length).toBeLessThanOrEqual(78);
   });
+
+  function smallCapacityJobs(count: number): CompactNodeTestShard[] {
+    return Array.from({ length: count }, (_, index) => ({
+      checkName: `checks-capacity-${index}`,
+      shardName: `capacity-${index}`,
+      requiresDist: false,
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      planConcurrency: 1,
+      predictedSeconds: 10,
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      groups: [
+        {
+          shard_name: `capacity-${index}`,
+          requiresDist: false,
+          runner: "blacksmith-8vcpu-ubuntu-2404",
+          configs: ["test/vitest/vitest.hooks.config.ts"],
+          includePatterns: [`src/hooks/capacity-${index}.test.ts`],
+        },
+      ],
+    }));
+  }
+
+  const capacityOptions = {
+    compactJobCap: 78,
+    runnerBackend: "hybrid",
+    estimateGroupSeconds: () => 10,
+  };
+
+  it("fits 83 small compatible bundles under the capacity ceiling without losing or duplicating files", () => {
+    const before = smallCapacityJobs(83);
+    const after = packCompactNodeTestJobsToCapacity(before, capacityOptions);
+    expect(after).toHaveLength(78);
+    expect(
+      after.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
+    ).toEqual(
+      Array.from({ length: 83 }, (_, index) => `src/hooks/capacity-${index}.test.ts`).toSorted(),
+    );
+    expect(after.filter((job) => job.groups.length > 1)).toHaveLength(5);
+    for (const job of after) {
+      expect(job.predictedSeconds).toBeLessThanOrEqual(210);
+      expect(job.groups.length).toBeLessThanOrEqual(10);
+      for (const group of job.groups) {
+        expect(before.flatMap((entry) => entry.groups)).toContain(group);
+      }
+    }
+    expect(
+      packCompactNodeTestJobsToCapacity(before, { ...capacityOptions, compactJobCap: 83 }),
+    ).toBe(before);
+  });
+
+  it.each(["runner", "build", "workers", "environment", "time budget", "group budget"] as const)(
+    "refuses over-cap bundles that cannot merge within the existing %s policy",
+    (policy) => {
+      const jobs = smallCapacityJobs(79);
+      for (const [index, job] of jobs.entries()) {
+        if (policy === "runner") {
+          job.runner = `different-runner-${index}`;
+        }
+        if (policy === "build") {
+          job.pretestBuildMode = "runtime";
+        }
+        if (policy === "workers") {
+          job.groups[0]!.env = { OPENCLAW_VITEST_MAX_WORKERS: "4" };
+        }
+        if (policy === "environment") {
+          job.env!.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS = "60000";
+        }
+        if (policy === "time budget") {
+          job.predictedSeconds = 110;
+        }
+        if (policy === "group budget") {
+          job.groups = Array.from({ length: 10 }, (_, group) => ({
+            ...job.groups[0]!,
+            shard_name: `capacity-${index}-${group}`,
+          }));
+        }
+      }
+      expect(() => packCompactNodeTestJobsToCapacity(jobs, capacityOptions)).toThrow(
+        "no compatible bundles fit the existing limits",
+      );
+    },
+  );
 
   it("retries hybrid Gateway-first packing only when the completed plan exceeds its cap", () => {
     const entries = [

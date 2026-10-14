@@ -267,6 +267,14 @@ Shared-state integrity, schema, version, and ownership checks remain in place.
 
 Schema compatibility preflight can read agent schema headers without a full integrity scan. For ordinary rollback-mode agent databases and complete WAL families, a read-only child reads the schema version and optional writer build in one fresh SQLite transaction, including committed WAL changes, without copying unrelated database contents. Its native connection and physical identity remain owned through close; cancellation and timeout wait for child closure. Parent-side diagnostics do not open or close the live agent file, preserving the parent's SQLite locks. As with the previous online-backup reader, native SQLite may update SHM read marks or rebuild existing SHM after a quiescent family reopens; the database and WAL contents remain unchanged. The Gateway carries successful header facts from admission to its later compatibility preflight only while the database, WAL, and rollback-journal files are unchanged. Changed or uncertain files are inspected again. Full readiness and writable admission retain their existing validation and fresh authority checks.
 
+Shared-state schema preflight uses the same isolated reader when its caller
+explicitly selects online inspection (`preserveSourceArtifacts: false`).
+Version, schema shape, agent registry, and deletion-journal facts share one read
+transaction without copying unrelated payloads. This permits SQLite SHM read
+marks; it does not grant migration or repair authority. Default and explicit
+artifact-preserving inspections retain their private snapshots, and an inherited
+snapshot or startup/Doctor admission keeps its existing owner.
+
 Private snapshots remain necessary for artifact-preserving inspection without a reusable seal, incomplete WAL families whose inspection would create source sidecars, and rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. A matching clean-close seal permits startup to read the unchanged, checkpointed source directly. Other live files use native SQLite reads; immutable reads require a sealed source or a verified private or explicit consolidated copy. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file.
 
 Concurrent asynchronous requests for the same physical live database share one
@@ -410,7 +418,9 @@ The shared cache targets 64 handles, but live borrows, synchronous transactions,
 
 Concurrent runs normally share the cached writer for an agent database on the main thread. Workers and diagnostics can open additional connections to the same file; the connection count is operation-dependent. Canonical agent connections set SQLite's busy timeout before use. A timeout cannot resolve a worker holding a write transaction while waiting for a blocked main thread: synchronous transcript appends do not join the asynchronous session write queue. Transaction callbacks must finish synchronously, and a competing writer must not depend on the main event loop to release its lock.
 
-Periodic agent maintenance uses passive WAL checkpoints and bounded incremental vacuum. Checkpoints do not run inline on commits: a writer whose maintenance is delegated to a worker (the Gateway's agent and shared-state handles) disables SQLite's automatic checkpoint, and skips the 10-second checkpoint-only ticks; other connections to the same store, such as its worker connections, run those ticks inline beside the existing 30-minute periodic pass (passive checkpoint plus bounded incremental vacuum), which keeps the shared WAL backfilled without a main-thread round trip. Every other connection keeps an inline threshold at the 64 MiB recycling limit, which only bounds a writer nobody else checkpoints. Session reclamation keeps deletion on a separate worker write connection and uses a passive checkpoint and bounded vacuum after commit; long deletion transactions can still contend with other writers. Full compaction belongs to offline Doctor maintenance. Run errors naming the Gateway state database retain a safe SQLite diagnosis; see [storage failure troubleshooting](/gateway/troubleshooting#agent-run-failed-with-a-storage-error).
+Session-scoped writes update their existing shared receipt counters without synchronously refreshing the host's scope registry when another session registers. A writer missing an affected scope, or holding a retired scope, conservatively invalidates database-wide receipt caches at settlement. Initial scope registration still uses the admission owner; live write-authority checks remain separate.
+
+Periodic agent maintenance uses passive WAL checkpoints and bounded incremental vacuum. Checkpoints do not run inline on commits: a writer whose maintenance is delegated to a worker (the Gateway's agent and shared-state handles) disables SQLite's automatic checkpoint, and skips the 10-second checkpoint-only ticks; other connections to the same store, such as its worker connections, run those ticks inline beside the existing 30-minute periodic pass (passive checkpoint plus bounded incremental vacuum), which keeps the shared WAL backfilled without a main-thread round trip. Agent connections, including the native execution worker, disable automatic checkpoints and rely on these maintenance ticks so foreground commits do not inherit accumulated WAL checkpoint work. Other stores retain their configured inline threshold at the 64 MiB recycling limit when maintenance is not delegated. Session reclamation keeps deletion on a separate worker write connection and uses a passive checkpoint and bounded vacuum after commit; long deletion transactions can still contend with other writers. Full compaction belongs to offline Doctor maintenance. Run errors naming the Gateway state database retain a safe SQLite diagnosis; see [storage failure troubleshooting](/gateway/troubleshooting#agent-run-failed-with-a-storage-error).
 
 After an admitted periodic PASSIVE checkpoint completes, the WAL owner makes one
 zero-lock-wait TRUNCATE attempt if the observed WAL still exceeds its existing
@@ -609,7 +619,20 @@ free space of at least twice the uncompressed store directory size. It takes
 verified WAL-aware SQLite backups, streams copies into a fresh NOCOW sibling,
 preserves ownership, modes, and access/default ACLs, checks copy size and
 `PRAGMA quick_check`, then atomically exchanges directories.
-It also re-records the relocated identity of any recorded migration recovery
+Before inventory or copying, Doctor checks `fuser` against a known open file and
+tries a scratch directory exchange in the store's parent, once per filesystem.
+The kernel and filesystem must support `RENAME_EXCHANGE`; unsupported hosts
+leave stores in place with a warning. Doctor checks for open store files again
+immediately before the real exchange.
+
+The official Debian bookworm Docker image cannot perform this optional repair:
+its coreutils 9.1 `mv` lacks `--exchange`/`--no-copy`, and it does not include
+`fuser` (the `psmisc` package) or `getfacl`/`setfacl` (the `acl` package).
+A derived image needs those tools and an exchange-capable GNU `mv`, as well as
+kernel/filesystem support on the mounted state volume. Updates still proceed
+with the existing stores.
+
+After publication, Doctor re-records the relocated identity of any recorded migration recovery
 original and destination database it rewrites, so `update cleanup` eligibility
 survives the rewrite; a copy that no longer matches the recorded content keeps
 its original record and stays protected.

@@ -2,12 +2,6 @@ import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-c
 import type { CodexThreadItem } from "./app-server/protocol.js";
 import { projectCodexUserItemText } from "./app-server/transcript-history-projection.js";
 
-const CODEX_MESSAGE_TYPES = new Map<string, SessionCatalogTranscriptItem["type"]>([
-  ["userMessage", "userMessage"],
-  ["agentMessage", "agentMessage"],
-  ["reasoning", "reasoning"],
-]);
-
 const CODEX_TOOL_TYPES = new Set([
   "commandExecution",
   "fileChange",
@@ -20,12 +14,12 @@ const CODEX_TOOL_TYPES = new Set([
 ]);
 
 export function toGenericTranscriptItem(item: CodexThreadItem): SessionCatalogTranscriptItem {
-  let type = CODEX_MESSAGE_TYPES.get(item.type);
-  if (!type && CODEX_TOOL_TYPES.has(item.type)) {
-    const hasResult = item.result !== undefined || Boolean(item.aggregatedOutput);
-    type = hasResult ? "toolResult" : "toolCall";
+  let type: SessionCatalogTranscriptItem["type"] = "other";
+  if (item.type === "userMessage" || item.type === "agentMessage" || item.type === "reasoning") {
+    type = item.type;
+  } else if (CODEX_TOOL_TYPES.has(item.type)) {
+    type = item.result !== undefined || item.aggregatedOutput ? "toolResult" : "toolCall";
   }
-  type ??= "other";
   const fallback = item.title ?? item.name ?? item.tool ?? item.command ?? item.query ?? undefined;
   const resultText =
     item.aggregatedOutput ||

@@ -654,3 +654,52 @@ Complete skill bundles are product artifacts under `<state-dir>/skill-library/<s
 Removing a skill excludes it from future selections; existing sessions retain their selected revisions. Published history and complete orphan revisions are retained conservatively. Expired upload records are pruned when another upload begins; clearly abandoned staging directories are cleaned during later publication. Back up both the state databases and the skill-library directory, not just the current revision pointers.
 
 Older same-schema readers ignore the new tables but cannot provide managed-library selection or authoring. Keep the tables and bundle directory intact when changing builds; do not lower schema markers or delete revisions to disable the feature. The accepted storage and ownership decision is recorded in [the profile-owned skills design issue](https://github.com/openclaw/openclaw/issues/133602).
+
+## Declared migration backup scopes
+
+Startup migrations default to a verified full-file backup. A migration owner may
+register the tables it rewrites in `src/state/schema-migration-backup-tables.ts`,
+keyed by database kind and destination schema version. Every pending version must
+have a declaration; one missing declaration keeps the whole pending set on full
+backups. Same-version repairs and plugin Doctor repairs also keep full backups.
+The backup owner adds `schema_meta`, the SQLite user version, and, for shared
+state, `config_machine_state` for deferred schema publication.
+
+A declaration covers the complete migration entry point, including finalizers,
+index repairs, triggers, and SQLite metadata affected by dropping tables or
+indexes. Each declared migration must run on a representative fixture through
+`assertSqliteMigrationScopePreserved` from
+`src/state/sqlite-migration-scope.test-support.ts`. The helper compares the exact
+schema and a typed content hash of every undeclared table before and after the
+migration. Include populated optimizer statistics and relevant sibling tables;
+a helper-only test does not prove the owning migration's scope. Declare
+`sqlite_stat1` and `sqlite_stat4` together when rebuilding analyzed tables or
+indexes. No existing migration is implicitly declared by its read set.
+
+For a fully declared migration, Doctor can write a sibling
+`<database>.pre-startup-migration-<id>.scoped.bak` containing the selected schema
+SQL, rows, and version metadata. Only this smaller archive gets the backup
+integrity scan. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
+or sources outside the active state directory fall back to full backups.
+The shared database accompanying agent
+migrations retains its full backup for registry and receipt recovery.
+
+Scoped archives are not complete databases and must never replace a source file.
+Stop the Gateway and other writers, retain the matching backup group, and use the
+candidate CLI to restore each scoped member before activating the older build:
+
+```bash
+openclaw database restore-migration-backup <backup.scoped.bak> <original.sqlite>
+```
+
+The command requires offline ownership of the active state directory and the
+original database path. It restores only declared tables and version metadata in
+one transaction; an error rolls back the entire restore. Undeclared tables stay
+in place. This does not undo external effects or reconcile new writes made after
+the migration; retain a full backup for general disaster recovery.
+
+Package updater rollback continues to use full-file snapshots. Candidate Doctor
+recognizes the update-phase markers shipped drivers already set and keeps full
+startup backups in those phases. A scoped archive is never supplied to an older
+updater or to the generic session-file restore command. Both archive formats use
+the existing completion and later-successful-update cleanup rules.

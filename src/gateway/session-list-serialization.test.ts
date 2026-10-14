@@ -2,7 +2,6 @@ import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   expandSessionRowFacts,
-  shareSessionRowFacts,
   SESSION_ROW_DETAIL_FIELDS,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -41,6 +40,7 @@ import * as listFilters from "./session-list-filters.js";
 import { withCurrentSessionListRows } from "./session-list-read-result.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
@@ -69,7 +69,14 @@ it("packs equal fields by their recipient rows without changing the input or wir
     { key: "three", kind: "direct" as const, updatedAt: 3, label: "Other", pinned: false },
   ];
   const original = structuredClone(rows);
-  const packed = shareSessionRowFacts(rows);
+  const { rowsRevision, ...packed } = shareSidebarSessionRows(rows);
+  expect(rowsRevision).toEqual(expect.any(String));
+  expect(shareSidebarSessionRows(rows).sessions).toBe(packed.sessions);
+  expect(shareSidebarSessionRows(rows, rowsRevision)).toEqual({
+    sessions: [],
+    rowsRevision,
+    rowsUnchanged: true,
+  });
   expect(packed).toEqual({
     sessions: [
       {
@@ -92,6 +99,17 @@ it("packs equal fields by their recipient rows without changing the input or wir
   });
   expect(rows).toEqual(original);
   expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(original);
+  // A changed page must not reuse the previous page's recipient groups or fact indexes.
+  const changed = { ...rows[1]!, pinned: true, label: "Changed" };
+  for (const page of [[rows[0]!, changed, rows[2]!], [rows[2]!, rows[0]!], rows]) {
+    const next = shareSidebarSessionRows(page);
+    expect(expandSessionRowFacts(next.sessions, next.sharedFacts)).toEqual(page);
+  }
+  expect(packed.sessions[0]!.sharedFacts).toEqual([0, 1]);
+  expect(packed.sharedFacts).toEqual([
+    { label: "Shared", origin: { provider: "fixture" } },
+    { pinned: false },
+  ]);
 });
 
 it("keeps sidebar display facts while bounding the wire payload", async () => {

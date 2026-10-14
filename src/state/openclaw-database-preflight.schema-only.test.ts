@@ -61,6 +61,56 @@ it("keeps readiness on the admitted shared-state snapshot and observes changes i
   }
 });
 
+it.each(["DELETE", "WAL"])(
+  "checks committed shared-state metadata without snapshot space (%s)",
+  async (journalMode) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("state-schema-only-") };
+    const pathname = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
+    writer.exec(`PRAGMA journal_mode=${journalMode}; PRAGMA wal_autocheckpoint=0;`);
+    const prepare = snapshots.prepareSqliteReadOnlyLocation;
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((source, options) => {
+      if (path.resolve(source) === pathname) {
+        throw new Error("No space for a shared-state snapshot");
+      }
+      return prepare(source, options);
+    });
+    const inspect = () =>
+      preflightOpenClawDatabaseSchemas({
+        env,
+        scope: "state",
+        preserveSourceArtifacts: false,
+        verifyCurrentSchemaShape: true,
+      });
+    try {
+      expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+      writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=999;");
+      try {
+        expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+        expect(writer.isTransaction).toBe(true);
+        expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 999 });
+      } finally {
+        writer.exec("ROLLBACK;");
+      }
+      writer.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+      expect(await inspect()).toMatchObject({
+        incompatible: [
+          { kind: "state", path: pathname, foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1 },
+        ],
+        indeterminate: [],
+      });
+      writer.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}; DROP TABLE schema_meta;`);
+      expect(await inspect()).toMatchObject({
+        incompatible: [],
+        indeterminate: [{ kind: "state", path: pathname }],
+      });
+    } finally {
+      writer.close();
+    }
+  },
+);
+
 describe("schema-only agent preflight", () => {
   it("checks fresh metadata without space for an agent snapshot", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-only-preflight-") };

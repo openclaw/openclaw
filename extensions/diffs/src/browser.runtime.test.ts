@@ -150,11 +150,13 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(candidates.every((candidate) => path.win32.isAbsolute(candidate))).toBe(true);
   });
 
-  it("reuses the same browser across renders and closes it after the idle window", async () => {
+  it("shares a browser across parallel renders and closes it after the idle window", async () => {
     const { pages, browser, screenshotter } = await createScreenshotterHarness();
 
-    await screenshotter.screenshotHtml(screenshotParams());
-    await screenshotter.screenshotHtml(screenshotParams());
+    await Promise.all([
+      screenshotter.screenshotHtml(screenshotParams()),
+      screenshotter.screenshotHtml(screenshotParams()),
+    ]);
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(browser.newPage).toHaveBeenCalledTimes(2);

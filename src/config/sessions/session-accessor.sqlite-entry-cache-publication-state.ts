@@ -5,7 +5,6 @@ import {
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   assertSessionEntryCreationCurrent,
@@ -149,24 +148,20 @@ function prepareSessionEntryReplacementChanges(
   return {
     source: replacement.source,
     entries: new Map(
-      [...replacement.current]
-        .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
-        .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
+      [...replacement.current].filter(
+        ([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key),
+      ),
     ),
     fullEntries:
       replacement.fullEntries &&
       new Map(
-        [...replacement.fullEntries]
-          .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
-          .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
+        [...replacement.fullEntries].filter(
+          ([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key),
+        ),
       ),
     actorPostimages:
       replacement.actorPostimages &&
-      new Map(
-        [...replacement.actorPostimages]
-          .filter(([key]) => current(key))
-          .map(([key, state]) => [key, freezeJsonSnapshot(state)]),
-      ),
+      new Map([...replacement.actorPostimages].filter(([key]) => current(key))),
     sharing: new Map(
       [...replacement.current]
         .filter(([key]) => current(key))
@@ -175,11 +170,9 @@ function prepareSessionEntryReplacementChanges(
     projection:
       replacement.projection &&
       new Map(
-        [...replacement.projection]
-          .filter(
-            ([key]) => readCurrentSessionEntryProjection(owner, replacement, key) !== undefined,
-          )
-          .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
+        [...replacement.projection].filter(
+          ([key]) => readCurrentSessionEntryProjection(owner, replacement, key) !== undefined,
+        ),
       ),
   };
 }

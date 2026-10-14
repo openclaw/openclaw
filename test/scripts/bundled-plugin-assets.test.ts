@@ -253,7 +253,7 @@ describe("bundled plugin assets", () => {
     });
   });
 
-  it("keeps manifest writers early while deferring selected isolated hooks", async () => {
+  it("keeps browser manifest producers early while deferring selected isolated hooks", async () => {
     await withPluginAssetFixture(async (rootDir) => {
       fs.writeFileSync(path.join(rootDir, "package.json"), '{"name":"openclaw","version":"1.0.0"}');
       for (const id of ["isolated", "manifest-writer", "unselected", "untracked"]) {
@@ -269,7 +269,9 @@ describe("bundled plugin assets", () => {
               release: { publishToNpm: true },
               assetScripts: {
                 build: "node build.mjs",
-                ...(id === "manifest-writer" ? { buildOutputs: ["openclaw.plugin.json"] } : {}),
+                ...(id === "manifest-writer"
+                  ? { buildOutputs: ["dist/openclaw.plugin.json"] }
+                  : {}),
               },
             },
           }),

@@ -8,7 +8,6 @@ import type {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { publishRetainedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
@@ -128,7 +127,7 @@ export function createSqliteSessionActorExecutor(
           throw new Error("Session actor admission belongs to another target");
         }
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
-        const snapshot = freezeJsonSnapshot(facts.snapshot as SessionActorAuthorityFacts);
+        const snapshot = facts.snapshot as SessionActorAuthorityFacts;
         const publication = facts.publication;
         observe?.(native, publication, request.stage, snapshot);
         authority.authorize(
@@ -341,7 +340,7 @@ export function createSqliteSessionActorExecutor(
             if (result.kind === "stale-version") {
               try {
                 authority.assertCurrent();
-                authority.authorize("commit", freezeJsonSnapshot(result.postimage));
+                authority.authorize("commit", result.postimage);
                 authority.assertCurrent();
                 params.assertAccepted();
               } catch (error) {

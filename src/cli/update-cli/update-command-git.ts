@@ -399,7 +399,6 @@ export async function updateGitInstall(params: {
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const pkgOwnership = createSystemPackageOwnershipInspection(effectiveTimeout);
   await pkgOwnership.assertUnowned(updateRoot);
-  const installEnv = await createGlobalInstallEnv();
   const installTarget = params.switchToGit
     ? await resolveGlobalInstallTarget({
         manager: await resolveGlobalManager({
@@ -414,6 +413,7 @@ export async function updateGitInstall(params: {
         pkgOwnership,
       })
     : null;
+  const installEnv = await createGlobalInstallEnv(undefined, installTarget ?? {});
   const npmLifecycleGate = installTarget
     ? resolveNpmLifecyclePolicyGate(installTarget)
     : { policy: null, error: null };
