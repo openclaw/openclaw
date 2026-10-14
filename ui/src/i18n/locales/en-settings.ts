@@ -653,6 +653,7 @@ const enSettings = {
     status: {
       ok: "Signed in",
       ready: "Ready",
+      checking: "Checking models…",
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
