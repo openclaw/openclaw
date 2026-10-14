@@ -211,6 +211,14 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     return this.host.isConnected;
   }
 
+  get sessionLineageVisible(): boolean {
+    return (
+      this.host.navigationVisible &&
+      this.host.navigationView === "sessions" &&
+      !this.host.contextualSidebar
+    );
+  }
+
   get sessionsStartingUp(): boolean {
     return this.sessionsStartupPending || this.sessionCatalogLive.startupPending;
   }
@@ -292,11 +300,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
 
   private synchronizePresentedSessions(): void {
     updateSessionCatalogData(this);
-    if (
-      !this.host.navigationVisible ||
-      this.host.navigationView !== "sessions" ||
-      this.host.contextualSidebar
-    ) {
+    if (!this.sessionLineageVisible) {
       return;
     }
     // Discovery can advance without changing displayed rows; admit it before the frame gate.
