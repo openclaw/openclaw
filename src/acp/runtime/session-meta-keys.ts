@@ -37,7 +37,7 @@ const metadataReceipt: SqliteDatabaseAdmissionKey<AcpMetadataReceipt> = {
   name: "acp.metadata",
   schemaDependent: true,
   read(value) {
-    // Committed postimages come only from the paired, typed ACP writer.
+    // SAFETY: Committed postimages come only from the paired, typed ACP writer.
     return value instanceof Map ? (value as AcpMetadataReceipt) : undefined;
   },
 };
