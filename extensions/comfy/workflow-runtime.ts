@@ -598,7 +598,7 @@ function resolveComfyConfigurationReadiness(
   return undefined;
 }
 
-/** Retained for released hosts that discover providers through the synchronous hook. */
+/** The released resolveCapabilityModelCandidates SDK still calls this hook. */
 export function isComfyCapabilityConfigured(params: ComfyCapabilityConfiguredParams): boolean {
   return (
     resolveComfyConfigurationReadiness(params) ??

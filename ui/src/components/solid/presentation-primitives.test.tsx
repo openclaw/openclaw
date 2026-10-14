@@ -153,8 +153,16 @@ describe("Solid presentation primitives", () => {
 
   it("supports non-alert panel errors with no details or actions", () => {
     const view = render(() => (
-      <PanelErrorState title="Panel unavailable" subtitle="Reconnect to continue." role="status" />
+      <PanelErrorState
+        class="session-route-not-found"
+        title="Panel unavailable"
+        subtitle="Reconnect to continue."
+        role="status"
+      />
     ));
+    expect(view.getByRole("status").getAttribute("class")).toBe(
+      "lazy-view-error session-route-not-found",
+    );
     expect(view.getByRole("status").textContent).toContain("Reconnect to continue.");
     expect(view.container.querySelector("details")).toBeNull();
     expect(view.queryByRole("button")).toBeNull();

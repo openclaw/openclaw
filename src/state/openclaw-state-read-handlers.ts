@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   prepareAcpSessionMetadataRead,
   readAcpSessionCommand,
@@ -32,7 +31,11 @@ import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
 } from "../gateway/operator-approval-standing-grants.worker.js";
-import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.worker.js";
+import {
+  hasDueOperatorApprovalsInDatabase,
+  readPendingOperatorApprovalsInDatabase,
+  listTerminalOperatorApprovalsInDatabase,
+} from "../gateway/operator-approval-store.kernel.worker.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import {
@@ -51,6 +54,7 @@ import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   readInterruptedUpdateCandidate,
@@ -113,7 +117,7 @@ export {
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
 export function readOpenClawStateDatabaseCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: OpenClawStateReadRequest,
   command: Exclude<
     OpenClawStateReadRequest["command"],
@@ -311,6 +315,15 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (command.type === "operatorApprovals.placementGrant") {
     return { type: command.type, rows: readPlacementGrantRows(db, command.input) };
+  }
+  if (command.type === "operatorApprovals.pending") {
+    return {
+      type: command.type,
+      pending: readPendingOperatorApprovalsInDatabase(command.input, db),
+    };
+  }
+  if (command.type === "operatorApprovals.hasDue") {
+    return { type: command.type, hasDue: hasDueOperatorApprovalsInDatabase(command.nowMs, db) };
   }
   if (command.type === "operatorApprovals.history") {
     return {

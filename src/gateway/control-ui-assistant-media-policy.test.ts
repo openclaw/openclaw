@@ -68,6 +68,7 @@ let entry: {
   sessionRoot?: string;
   permissionMode?: "full" | "workspace";
   execNode?: string;
+  deviceFolder?: { deviceId: string; path: string };
   repositoryWorkspaceId?: string;
   incognito?: boolean;
   visibility?: "draft" | "shared";
@@ -290,6 +291,19 @@ describe("assistant image session policy", () => {
       });
     },
   );
+  it("keeps device-folder Full Access off Gateway-local image paths", async () => {
+    entry.permissionMode = "full";
+    entry.deviceFolder = { deviceId: "paired-device", path: project };
+    const source = path.join(project, "image.png");
+    await fs.writeFile(source, PNG);
+    for (const options of [{}, { allow: true }]) {
+      expect((await request(source, options)).payload).toMatchObject({
+        available: false,
+        code: "blocked-local-file",
+      });
+    }
+  });
+
   it("keeps repository Full Access and Allow from exposing the configured Gateway workspace", async () => {
     entry.permissionMode = "full";
     const source = path.join(temp, "agent", "unrelated.png");

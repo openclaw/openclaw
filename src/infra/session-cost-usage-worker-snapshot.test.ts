@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { partitionUsageCostRollup } from "./session-cost-usage-partitions.js";
@@ -25,13 +29,15 @@ import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const fixture = vi.hoisted(() => ({
   open: vi.fn(),
+  withRead: vi.fn(),
   inventory: vi.fn<() => Promise<UsageCostTranscriptFile[]>>(),
+  selectedFiles: vi.fn<() => Promise<UsageCostTranscriptFile[]>>(),
 }));
 
 // mock-isolation: Use only the borrowed native connection, without opening real agent stores.
 vi.mock("../state/openclaw-agent-db-readonly.js", () => ({
   openOpenClawAgentDatabaseReadOnly: fixture.open,
-  withOpenClawAgentDatabaseReadOnly: vi.fn(),
+  withOpenClawAgentDatabaseReadOnly: fixture.withRead,
 }));
 // mock-isolation: Pause transcript discovery without loading the worker's retained refresh state.
 vi.mock("./session-cost-usage-refresh-inputs.worker.js", () => ({
@@ -40,8 +46,117 @@ vi.mock("./session-cost-usage-refresh-inputs.worker.js", () => ({
   }),
   usageRefreshInputs: vi.fn(),
 }));
+// mock-isolation: Supply captured aliases without opening a second native store in this worker test.
+vi.mock("./session-cost-usage-collection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-cost-usage-collection.js")>()),
+  resolveUsageCostTranscriptFiles: fixture.selectedFiles,
+}));
 
 afterEach(() => vi.resetAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.for([false, true])(
+  "yields whole transcripts and retains every pending selector (selected: %s)",
+  async (selected) => {
+    const root = tempDirs.make("usage-batch-quantum-");
+    const text =
+      JSON.stringify({
+        type: "message",
+        id: "usage",
+        parentId: null,
+        timestamp: "2026-09-18T00:00:00Z",
+        message: {
+          role: "assistant",
+          usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+        },
+      }) + "\n";
+    const files: UsageCostTranscriptFile[] = ["a", "b"].map((name) => {
+      const filePath = path.join(root, `${name}.jsonl`);
+      fs.writeFileSync(filePath, text);
+      const stats = fs.statSync(filePath);
+      return {
+        kind: "jsonl",
+        filePath,
+        sourcePath: filePath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        device: stats.dev,
+        inode: stats.ino,
+      };
+    });
+    fixture.inventory.mockResolvedValue(files);
+    const requested = [
+      files[0]!,
+      { ...files[1]!, sourcePath: `${files[1]!.sourcePath}.alias` },
+      files[1]!,
+    ];
+    fixture.selectedFiles.mockResolvedValue(requested);
+    const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    db.exec(`CREATE TABLE cache_entries (
+    scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT, blob BLOB,
+    expires_at INTEGER, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key)
+  )`);
+    fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
+      found: true,
+      value: read({ db }),
+    }));
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const written: string[] = [];
+    try {
+      const result = await executeUsageCostWorker(
+        {
+          kind: "usage-cost",
+          location: { agentId: "main", databasePath: ":memory:", storePath: ":memory:", env: {} },
+          databases: [{ agentId: "main", path: ":memory:" }],
+          stores: [],
+          archiveStorePaths: [],
+          operation: {
+            kind: "refresh",
+            pricingFingerprint: "synthetic-pricing",
+            maxFiles: 50,
+            sessionFiles: selected ? requested.map((file) => file.sourcePath) : undefined,
+          },
+        },
+        {
+          consumeInput() {},
+          notify() {},
+          async request(value) {
+            let output: unknown;
+            if (
+              isRecord(value) &&
+              value.kind === "write" &&
+              isRecord(value.input) &&
+              typeof value.input.key === "string"
+            ) {
+              written.push(value.input.key);
+              now += 11_000;
+              output = true;
+            } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
+              output = value.input.map(() => undefined);
+            }
+            return { input: { ok: true, value: output }, consumed() {} };
+          },
+        },
+        { runNativeSection: async (operation) => operation(), throwIfCancelled() {} },
+        async (_database, read) => read(),
+      );
+      clock.mockRestore();
+      expect(written).toEqual([files[0]!.filePath]);
+      expect(result).toEqual({
+        kind: "refresh",
+        changed: true,
+        remainingFiles: (selected ? requested.slice(1) : files.slice(1)).map((file) => ({
+          sessionFile: file.sourcePath,
+          rollupId: file.filePath,
+        })),
+      });
+    } finally {
+      clock.mockRestore();
+      db.close();
+    }
+  },
+);
 
 it("spends the shared decoded budget on complete reports after preparing the snapshot", async () => {
   const timestamp = Date.UTC(2026, 8, 18);
@@ -216,6 +331,7 @@ it("ends the cache snapshot before projection awaits and preserves a concurrent 
     location: { agentId: "main", databasePath: ":memory:", storePath: ":memory:", env: {} },
     databases: [{ agentId: "main", path: ":memory:" }],
     archiveStorePaths: [],
+    stores: [],
     operation: {
       kind: "summary",
       pricingFingerprint,

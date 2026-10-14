@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { deriveDeliveryQueueRetentionColumns } from "./delivery-queue-retention-columns.js";
 import { pruneDeliveryQueueTombstones } from "./delivery-queue-sqlite-bound.js";
 import {
@@ -201,9 +202,11 @@ describe("delivery queue pending terminal transition", () => {
   it.each(["exact lookup", "global cleanup"] as const)(
     "groups backfilled bounded count limits by queue and producer prefix during %s",
     (mode) => {
-      const { db } = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      const db = requireNativeSqliteDatabase(
+        openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        }).db,
+      );
       const insert = db.prepare(
         `INSERT INTO delivery_queue_entries (
          queue_name, id, status, retry_count, recovery_state, entry_json,
@@ -290,9 +293,11 @@ describe("delivery queue pending terminal transition", () => {
     const now = Date.now();
     const hour = 60 * 60_000;
     const retention = { idPrefix: "health:", maxAgeMs: hour, maxEntries: 1 } as const;
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const db = requireNativeSqliteDatabase(
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }).db,
+    );
     const insertFailed = db.prepare(
       `INSERT INTO delivery_queue_entries (
          queue_name, id, status, retry_count, recovery_state, entry_json,

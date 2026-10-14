@@ -180,8 +180,10 @@ export function captureDiagnosticHeapProfile(
 ) {
   const samplingIntervalBytes = Math.max(4_096, options.samplingIntervalBytes ?? 32_768);
   const collectionOptions = {
-    includeObjectsCollectedByMajorGC: options.includeObjectsCollectedByMajorGC ?? false,
-    includeObjectsCollectedByMinorGC: options.includeObjectsCollectedByMinorGC ?? false,
+    includeObjectsCollectedByMajorGC:
+      options.includeObjectsCollectedByMajorGC ?? options.includeCollected ?? false,
+    includeObjectsCollectedByMinorGC:
+      options.includeObjectsCollectedByMinorGC ?? options.includeCollected ?? false,
   };
   const maxDurationMs =
     collectionOptions.includeObjectsCollectedByMajorGC ||

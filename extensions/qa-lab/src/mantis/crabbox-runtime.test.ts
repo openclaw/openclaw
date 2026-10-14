@@ -8,7 +8,6 @@ import {
   type CommandRunner,
   copyCrabboxArtifacts,
   defaultCommandRunner,
-  getCommandFailureDiagnostics,
   resolveCrabboxBin,
 } from "./crabbox-runtime.js";
 
@@ -63,7 +62,7 @@ describe("Mantis Crabbox binary admission", () => {
 
 describe("Crabbox command runner", () => {
   it.skipIf(process.platform === "win32")(
-    "waits for aborted child cleanup and retains its final output",
+    "waits for aborted child cleanup without exposing its final output",
     async () => {
       const fixtureDir = tempDirs.make("mantis-abort-");
       const ready = path.join(fixtureDir, "ready");
@@ -107,10 +106,6 @@ describe("Crabbox command runner", () => {
         await fs.writeFile(release, "release");
         const error = await result;
         expect(error).toMatchObject({ name: "AbortError", code: "ABORT_ERR", cause: reason });
-        expect(getCommandFailureDiagnostics(error)).toMatchObject({
-          stdout: "private stdout tail",
-          stderr: "private stderr tail",
-        });
         expect(String(error)).not.toContain("private");
         expect(JSON.stringify(error)).not.toContain("private");
       } finally {
@@ -144,54 +139,6 @@ describe("Crabbox command runner", () => {
       {},
     );
     expect(JSON.parse(result.stdout)).toBe("测".repeat(20000));
-  });
-
-  it("bounds failure snapshots without losing native acquisition markers in the middle", async () => {
-    const result = await defaultCommandRunner(
-      process.execPath,
-      [
-        "-e",
-        `
-      process.stdout.write('x'.repeat(40000));
-      process.stderr.write('x'.repeat(20000) + '\\nleased cbx_0123456789ab slug=fixture server=1 type=tiny ip=private\\nprovisioned lease=cbx_abcdef012345 server=2 type=tiny\\nleased cbx_0123456789ab slug=fixture\\n' + 'x'.repeat(20000));
-      process.exitCode = 1;
-    `,
-      ],
-      {},
-    ).catch((error: unknown) => error);
-    const diagnostics = getCommandFailureDiagnostics(result);
-    expect(diagnostics?.stdout.length).toBeLessThan(17000);
-    expect(diagnostics?.stderr.length).toBeLessThan(17000);
-    expect(diagnostics?.stderr).not.toContain("cbx_");
-    expect(diagnostics?.recoveryLeaseCandidates).toEqual(["cbx_0123456789ab", "cbx_abcdef012345"]);
-  });
-
-  it("bounds recovery candidates and ignores non-acquisition lease text", async () => {
-    const error = await defaultCommandRunner(
-      process.execPath,
-      [
-        "-e",
-        `
-      process.stderr.write('requested cbx_aaaaaaaaaaaa\\nprovisioning lease=cbx_bbbbbbbbbbbb\\n');
-      for (let index = 0; index < 10; index++) {
-        const id = 'cbx_' + index.toString(16).padStart(12, '0');
-        process.stderr.write('leased ' + id + ' slug=fixture\\nleased ' + id + ' slug=fixture\\n');
-      }
-      process.exitCode = 1;
-    `,
-      ],
-      {},
-    ).catch((failure: unknown) => failure);
-    expect(getCommandFailureDiagnostics(error)?.recoveryLeaseCandidates).toEqual([
-      "cbx_000000000002",
-      "cbx_000000000003",
-      "cbx_000000000004",
-      "cbx_000000000005",
-      "cbx_000000000006",
-      "cbx_000000000007",
-      "cbx_000000000008",
-      "cbx_000000000009",
-    ]);
   });
 
   it("preserves UTF-8 split across child-process pipe chunks", async () => {

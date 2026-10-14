@@ -1,13 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type {
   WorkerOperationContext,
   WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
 import * as deviceAuth from "./device-auth-store.kernel.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 function read<Input>(
-  operation: (db: DatabaseSync, input: Input) => deviceAuth.DeviceAuthTokenObservation,
+  operation: (db: EngineConnection, input: Input) => deviceAuth.DeviceAuthTokenObservation,
 ) {
   return (input: Input & { readOnly: boolean }, { open, stateOptions }: WorkerOperationContext) =>
     input.readOnly
@@ -18,7 +18,7 @@ function read<Input>(
       : operation(open().db, input);
 }
 
-function write<Input, Output>(operation: (db: DatabaseSync, input: Input) => Output) {
+function write<Input, Output>(operation: (db: EngineConnection, input: Input) => Output) {
   return (input: Input, { writeAdmitted }: WorkerWriteOperationContext): Output =>
     writeAdmitted(({ db }) => operation(db, input));
 }

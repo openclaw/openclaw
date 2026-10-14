@@ -1,7 +1,7 @@
 /** Public cron store load/save API backed entirely by shared SQLite state. */
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -112,7 +112,7 @@ export async function loadCronJobsStoreWithConfigJobs(
 }
 
 export function assertCronJobsStoreUnchanged(
-  db: DatabaseSync,
+  db: EngineConnection,
   storePath: string,
   expectedJobsFingerprint: string,
 ): undefined {

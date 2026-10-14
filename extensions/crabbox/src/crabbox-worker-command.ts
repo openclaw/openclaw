@@ -37,6 +37,8 @@ export type CrabboxCommandRunner = (
   argv: string[],
   options: {
     killProcessTree: boolean;
+    requireProcessTreeExtinction?: boolean;
+    killGraceMs?: number;
     env?: NodeJS.ProcessEnv;
     input?: string | Uint8Array;
     maxOutputBytes: number;

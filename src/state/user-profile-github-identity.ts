@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
@@ -6,6 +5,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
@@ -41,7 +41,7 @@ import type {
 const GITHUB_PROVIDER = "github";
 const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";
 export function selectStoredGitHubIdentities(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileIds?: readonly string[],
   accountIds?: readonly number[],
 ): Map<string, { accounts: StoredGitHubIdentity[]; primary: StoredGitHubIdentity | undefined }> {
@@ -117,7 +117,7 @@ function projectStoredGitHubIdentities(
 
 /** One statement keeps canonical ownership, role, and verified login in the same snapshot. */
 export function selectUserProfileRoleAuthority(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileId: string,
 ): UserProfileRoleAuthority | undefined {
   if (!tableExists(db, "user_profiles")) {
@@ -171,7 +171,7 @@ export function selectUserProfileRoleAuthority(
 }
 
 export function selectProfileAccessEntries(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileIds?: string[],
 ): Array<[string, ProfileDisplayRow]> {
   const rows = selectProfileDisplayEntries(db, profileIds);
@@ -196,7 +196,7 @@ export function selectProfileAccessEntries(
 }
 
 function resolveCachedGitHubIdentityInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   binding: CachedGitHubIdentityBinding,
 ): CachedGitHubIdentity | undefined {
   if (
@@ -245,7 +245,7 @@ export function githubAuthenticationSubject(login: string): string {
 }
 
 export function selectUserProfileGitHubIdentities(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileIds?: readonly string[],
 ): Map<string, UserProfileGitHubIdentity> {
   const identities = new Map<string, UserProfileGitHubIdentity>();
@@ -273,7 +273,7 @@ export async function resolveUserProfileGitHubAttribution(
 }
 
 function resolveUserProfileGitHubAttributionInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileIds: readonly string[],
 ): UserProfileGitHubAttributionRead {
   if (profileIds.length === 0 || !tableExists(db, "user_profiles")) {
@@ -356,7 +356,7 @@ export async function prepareUserProfileGitHubAttribution(
 }
 
 export function readUserProfileGitHubCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<
     OpenClawStateReadCommand,
     { type: "userProfiles.githubIdentity.cached" | "userProfiles.githubAttribution.resolve" }
@@ -379,7 +379,7 @@ export function readUserProfileGitHubCommand(
 
 /** Retain every account; the merge target owns primary choice and its coauthor consent. */
 export function prepareUserProfileGitHubMerge(
-  db: DatabaseSync,
+  db: EngineConnection,
   sourceProfileIds: readonly string[],
   targetProfileId: string,
 ): void {
@@ -413,7 +413,7 @@ type GitHubProfileAlias =
   | { kind: "email"; email: string }
   | { kind: "github-login"; subject: string };
 
-function selectGitHubProfileAlias(db: DatabaseSync, alias: GitHubProfileAlias) {
+function selectGitHubProfileAlias(db: EngineConnection, alias: GitHubProfileAlias) {
   return alias.kind === "email"
     ? selectUserProfileEmailAlias(db, alias.email)
     : executeSqliteQueryTakeFirstSync(
@@ -427,7 +427,11 @@ function selectGitHubProfileAlias(db: DatabaseSync, alias: GitHubProfileAlias) {
       );
 }
 
-function readGitHubIdentityBinding(db: DatabaseSync, alias: GitHubProfileAlias, accountId: number) {
+function readGitHubIdentityBinding(
+  db: EngineConnection,
+  alias: GitHubProfileAlias,
+  accountId: number,
+) {
   const kysely = userProfilesDb(db);
   const subject = String(accountId);
   const existing = executeSqliteQueryTakeFirstSync(
@@ -481,7 +485,7 @@ function assertCompatibleGitHubEmailBinding(
 
 /** The email owner checks the same conflicts even when optional GitHub metadata is unavailable. */
 export function assertGitHubEmailIdentityBinding(
-  db: DatabaseSync,
+  db: EngineConnection,
   email: string,
   accountId: number,
 ) {
@@ -495,7 +499,7 @@ export function assertGitHubEmailIdentityBinding(
 }
 
 export function applyVerifiedGitHubIdentity(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   alias: GitHubProfileAlias;
   identity: { accountId: number; login: string };
   preserveEmailProfile?: boolean;

@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { updateConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import type { SuccessfulTelemetryState, TelemetryState } from "./telemetry-worker-contract.js";
 
 const TELEMETRY_STATE_KEY = "telemetry.updateCheck";
@@ -15,7 +15,7 @@ export function readTelemetryStateInWorker(options: OpenClawStateDatabaseOptions
 }
 
 export function countRecentTelemetrySessionsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   sinceMs: number,
 ): number {
   const db =
@@ -32,7 +32,7 @@ export function countRecentTelemetrySessionsInDatabase(
 }
 
 export function persistTelemetrySuccessInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   state: SuccessfulTelemetryState,
   updatedAtMs: number,
 ): SuccessfulTelemetryState {

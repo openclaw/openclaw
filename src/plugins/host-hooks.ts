@@ -176,6 +176,7 @@ export type PluginAgentEventSubscriptionRegistration = {
   description?: string;
   streams?: AgentEventStream[];
   phases?: string[];
+  payload?: "full" | "metadata";
   handle: (
     event: AgentEventPayload,
     ctx: {

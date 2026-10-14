@@ -50,10 +50,16 @@ For `api.registerTool(...)` or a factory tool, put the same `outputSchema`
 property on the returned `AnyAgentTool` object.
 
 Current built-in contracts include `agents_list`, `agents_wait`, `apply_patch`,
-`automations`, `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
+`automations`, `browser`, `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
 `openclaw`, `process`, `read`, `screen`,
 `sessions_history`, `sessions_list`, `sessions_search`, `sessions_send`,
 `session_status`, `suggest_task`, `terminal`, `web_fetch`, and `web_search`.
+Browser snapshot and text observations expose a bounded `text` string in the
+structured result, including the untrusted browser-content wrapper. This makes
+page prose and snapshot references available in guest cells without a separate
+evaluate call. Preserve the wrapper when returning page content to the model;
+`query`, `selector`, and `maxChars` narrow reads before wrapping.
+
 `automations` declares scheduler status, paginated job summaries, full jobs,
 run history, and action outcomes. A successful removal can include
 `sessionCleanup: "pending"` when an active run still owns its session. The job is

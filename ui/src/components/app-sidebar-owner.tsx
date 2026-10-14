@@ -700,8 +700,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 )}
               </Show>
             </div>
-            <div class="sidebar-shell__footer">
-              <Show when={this.devGitBranch}>
+            <Show when={this.devGitBranch}>
+              <div class="sidebar-shell__footer">
                 <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
                   <div class="sidebar-footer-branch">
                     <span class="sidebar-footer-branch__icon" aria-hidden="true">
@@ -710,8 +710,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                     <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
                   </div>
                 </openclaw-tooltip>
-              </Show>
-            </div>
+              </div>
+            </Show>
           </div>
           {menus}
         </aside>

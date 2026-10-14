@@ -31,8 +31,17 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
   projectId?: string;
   visibility?: "draft";
 } & (
-    | { worktree: true; repository?: undefined }
-    | { repository: NonNullable<SessionCreateParams["repository"]>; worktree?: undefined }
+    | {
+        deviceFolder: NonNullable<SessionCreateParams["deviceFolder"]>;
+        worktree?: undefined;
+        repository?: undefined;
+      }
+    | { worktree: true; repository?: undefined; deviceFolder?: undefined }
+    | {
+        repository: NonNullable<SessionCreateParams["repository"]>;
+        worktree?: undefined;
+        deviceFolder?: undefined;
+      }
   );
 
 type SessionPlacementSubmission = {
@@ -85,6 +94,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "worktree",
   "worktreeSource",
   "repository",
+  "deviceFolder",
   "incognito",
   "visibility",
   "permissionMode",
@@ -115,15 +125,25 @@ export function parseSessionPlacementCreateParams(
         record.cwd !== undefined ||
         record.worktreeBaseRef !== undefined ||
         record.catalogId !== undefined)) ||
-    (record.repository === undefined
-      ? record.worktree !== true
-      : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
+    (record.deviceFolder !== undefined
+      ? !Value.Check(SessionsCreateParamsSchema.properties.deviceFolder, record.deviceFolder) ||
         record.worktree !== undefined ||
+        record.worktreeSource !== undefined ||
+        record.repository !== undefined ||
         record.projectId !== undefined ||
         record.cwd !== undefined ||
         record.worktreeBaseRef !== undefined ||
         record.worktreeName !== undefined ||
-        record.catalogId !== undefined) ||
+        record.catalogId !== undefined
+      : record.repository === undefined
+        ? record.worktree !== true
+        : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
+          record.worktree !== undefined ||
+          record.projectId !== undefined ||
+          record.cwd !== undefined ||
+          record.worktreeBaseRef !== undefined ||
+          record.worktreeName !== undefined ||
+          record.catalogId !== undefined) ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
     (record.fastMode !== undefined &&
@@ -210,6 +230,9 @@ function validateSessionPlacementRecovery(
     (!isNonEmptyString(value.message) && !value.attachments?.length) ||
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !target ||
+    (value.createParams?.deviceFolder !== undefined &&
+      (target.kind !== "device" ||
+        target.deviceId !== value.createParams.deviceFolder?.deviceId)) ||
     !isNonEmptyString(value.agentId) ||
     value.gatewayUrl !== gatewayUrl ||
     value.recoveryScope !== recoveryScope ||
