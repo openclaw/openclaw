@@ -87,7 +87,7 @@ describe("Models provider login", () => {
                   name: "Example best",
                   recommended,
                   available,
-                  agentRuntime: { id: "openclaw" },
+                  agentRuntime: { id: "openclaw", source: "model" },
                 },
                 {
                   provider: "example",
@@ -104,7 +104,7 @@ describe("Models provider login", () => {
       Object.assign(context, { sessions: { create, state: {} } });
       const page = appendPage(context);
       await openLogin(page);
-      await submitCredential(page, "synthetic-key");
+      await submitCredential(page);
       answer.resolve({
         done: true,
         status: "done",

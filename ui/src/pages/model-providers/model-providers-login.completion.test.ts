@@ -47,7 +47,7 @@ it("offers the named Muse starter before catalog and config reconciliation", asy
   await openPicker(page);
   await selectProvider(page, "meta");
   await startSelectedLogin(page, "meta/muse-code");
-  await submitCredential(page, "synthetic-key");
+  await submitCredential(page);
   answer.resolve({
     done: true,
     status: "done",
