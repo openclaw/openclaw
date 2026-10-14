@@ -168,7 +168,10 @@ function applyConfigExecPolicy(root: OpenClawConfig, policy: ExecPolicyResolved)
     });
     const security = policy.security ?? currentPolicy.security;
     const ask = policy.ask ?? currentPolicy.ask;
-    const mode = resolveExactExecModeFromPolicy({ security, ask });
+    const mode =
+      currentPolicy.autoReview && security === currentPolicy.security && ask === currentPolicy.ask
+        ? currentPolicy.mode
+        : resolveExactExecModeFromPolicy({ security, ask });
     if (mode) {
       root.tools.exec.mode = mode;
       delete root.tools.exec.security;
