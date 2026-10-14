@@ -337,14 +337,20 @@ function listPendingContextEngineTurnSessions(
   database: ContextEngineTurnOutboxConnection,
   filter: ContextEngineTurnOutboxFilter & { sessionId?: string; limit: number },
 ): string[] {
-  const query = pendingContextEngineTurns(database, filter, filter.sessionId || undefined)
-    .select("session_id")
-    // SQLite rowid preserves enqueue order among surviving pending rows.
-    // Use it instead of wall-clock timestamps, which can collide.
-    .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"));
+  const pending = pendingContextEngineTurns(database, filter, filter.sessionId || undefined);
+  // Apply readiness to each session's head, not its later turns: unresolved
+  // admissions must preserve FIFO without consuming other sessions' retry slots.
+  const heads = pending
+    .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"))
+    .groupBy("session_id");
   return executeSqliteQuerySync(
     database.db,
-    query.groupBy("session_id").orderBy("oldest_enqueue_sequence", "asc").limit(filter.limit),
+    pending
+      .select("session_id")
+      .where("payload_state", "=", "ready")
+      .where(outboxEnqueueSequence(), "in", heads)
+      .orderBy(outboxEnqueueSequence(), "asc")
+      .limit(filter.limit),
   ).rows.map(({ session_id }) => session_id);
 }
 
