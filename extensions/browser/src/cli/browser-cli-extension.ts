@@ -193,17 +193,21 @@ export function registerBrowserExtensionCommands(
             defaultRuntime.error(theme.warn(issue));
           }
           defaultRuntime.log(
-            status.manualSetupRequired
+            status.discoveryBlocked.length > 0 && !status.manualSetupRequired
               ? theme.warn(
-                  status.platformSupport === "manual_required"
-                    ? "Automatic native bootstrap is not supported on this platform; use Settings for manual pairing."
-                    : status.storeInstallRequests.some((entry) => entry.state === "requested")
-                      ? `Store installation requested. Enable OpenClaw in chrome://extensions and approve Chrome's prompt. If it has not appeared, restart Chrome when convenient or add it from ${FOUNDATION_CHROME_WEB_STORE_URL}. Run extension status to check setup again.`
-                      : `Setup needs attention. Add OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL} after native registration succeeds. For development, load the printed unpacked path. If the extension attempted setup before the native host existed, restart Chrome once.`,
+                  `Native bootstrap is ready, but OpenClaw cannot read Chrome profile files to confirm the extension (${status.discoveryBlocked.join(", ")}). On macOS, grant Full Disk Access to the app running OpenClaw. Check the extension popup for Connected, then rerun status.`,
                 )
-              : info(
-                  `Native host and extension identity verified for ${status.discovered.length + status.storeDiscovered.length} profile registration(s). Check the extension popup for Connected before using browser automation.`,
-                ),
+              : status.manualSetupRequired
+                ? theme.warn(
+                    status.platformSupport === "manual_required"
+                      ? "Automatic native bootstrap is not supported on this platform; use Settings for manual pairing."
+                      : status.storeInstallRequests.some((entry) => entry.state === "requested")
+                        ? `Store installation requested. Enable OpenClaw in chrome://extensions and approve Chrome's prompt. If it has not appeared, restart Chrome when convenient or add it from ${FOUNDATION_CHROME_WEB_STORE_URL}. Run extension status to check setup again.`
+                        : `Setup needs attention. Add OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL} after native registration succeeds. For development, load the printed unpacked path. If the extension attempted setup before the native host existed, restart Chrome once.`,
+                  )
+                : info(
+                    `Native host and extension identity verified for ${status.discovered.length + status.storeDiscovered.length} profile registration(s). Check the extension popup for Connected before using browser automation.`,
+                  ),
           );
         }
         if (status.manualSetupRequired) {
@@ -273,7 +277,13 @@ export function registerBrowserExtensionCommands(
             `Development:    ${status.discovered.length > 0 ? status.discovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile})`).join(", ") : "none detected"}`,
             `Load unpacked:  ${status.installedCopy.owned ? status.installedCopy.path : status.bundledPath}`,
             `Native hosts:   ${status.registrations.filter((entry) => entry.state === "owned").length} owned`,
-            `Setup:          ${status.manualSetupRequired ? "manual action required" : "automatic bootstrap ready"}`,
+            `Setup:          ${
+              status.manualSetupRequired
+                ? "manual action required"
+                : status.discoveryBlocked.length > 0
+                  ? `unknown (Chrome profile files unreadable for ${status.discoveryBlocked.join(", ")}; check the warnings above)`
+                  : "automatic bootstrap ready"
+            }`,
           ].join("\n"),
         );
       });
