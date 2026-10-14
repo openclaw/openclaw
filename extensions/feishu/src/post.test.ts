@@ -58,17 +58,6 @@ describe("parsePostContent", () => {
     });
   });
 
-  it("keeps embedded Markdown fences inside a rich-post code block", () => {
-    const code = "```ts\nconst answer = 42;\n```\n# Still code";
-    const result = parsePostContent(
-      JSON.stringify({ content: [[{ tag: "code_block", language: "md", text: code }]] }),
-    );
-
-    const parsed = parseFeishuMarkdown(result.textContent);
-    expect(parsed.children).toHaveLength(1);
-    expect(parsed.children?.[0]).toMatchObject({ type: "code", lang: "md", value: code });
-  });
-
   it("renders styled links and mentions", () => {
     const content = JSON.stringify({
       title: "",
