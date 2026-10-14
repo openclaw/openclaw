@@ -242,6 +242,11 @@ Registered callables retain their instance scope, receiver binding, and lifecycl
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
 
+`before_tool_call` inputs and approval parameters retain detached snapshots so
+plugin mutations cannot alter caller arguments or an approved request. These
+snapshots reject shared memory in the cloned graph; properties omitted by
+structured cloning do not cross this boundary.
+
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
