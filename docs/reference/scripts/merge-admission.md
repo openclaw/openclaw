@@ -17,3 +17,15 @@ title: "PR merge admission"
 
 - Before recording intent, `--auto-merge` selects immediate pinned squash for `MERGEABLE/CLEAN` or auto for `MERGEABLE/BEHIND` or `MERGEABLE/BLOCKED`, subject to all admission gates and queue policy. Accepted auto/queue requests are visible pending outcomes, not completion. The request carries `--match-head-commit`; confirmation still requires the exact attempted head. This is a submission-time head precondition, not a server-side freeze against later collaborator pushes; if GitHub merged the pushed head, use the explicit `merge-recover --merged-head <SHA>` [receipt route](/reference/scripts/merge-recovery). Existing or ambiguous requests are never automatically cancelled, re-armed, or followed by an immediate fallback; an explicitly investigated accepted auto request uses the [cancellation recovery](/reference/scripts/merge-recovery). Ordinary `gh pr merge` can enqueue when queue policy applies.
 - `--auto-merge` selects immediate squash for `MERGEABLE/UNSTABLE` only after one fresh `scripts/watch-pr-ci.mjs --completion rollup --once` pass at the exact prepared head exits GREEN; `--once` evaluates one attach and one rollup observation without waiting, and `--timeout` bounds only that pass's evidence reads. GitHub's rollup and merge projection retain runs superseded by a newer same workflow/event/job-name run on that head, such as a draft `opened` ClawSweeper Dispatch run after `ready_for_review`. The watcher's `classifyRollup` owns supersession; the pass also requires the attached `ci.yml` run to succeed. Any unsuperseded failure, hidden or paginated context, missing run identity, pending check, moved head, conflict, or watcher error refuses admission; the watcher's existing `auto-response` exclusion applies unchanged. This is a one-shot admission predicate, not a pinned snapshot fact: GitHub still enforces required checks at dispatch, the exact-head mutation pins the head, and the final stability reread pins the UNSTABLE projection. Pinning rollup contexts would extend the Octopool-allowlisted landing snapshot query and retained-outcome schema for a risk server enforcement already bounds. Accepted edge case: a new non-required failure on the same head between the pass and dispatch is not rechecked. Retained intents never rerun the predicate or redispatch; explicit recovery reruns admission.
+
+## Complete check-suite reads
+
+Required-check admission keeps the complete suite inventory bounded to 1,000
+suites, matching GitHub’s reference check-run endpoint limit. Unrepresented
+non-success suites from a required app are proved irrelevant using one complete,
+paginated latest-check-run snapshot without a name filter, grouped by suite ID,
+then a second complete suite inventory. Every selected suite must have its exact
+check count, unique check identities, matching head and app, no required context,
+and unchanged status, conclusion, update time, and count. Missing or contradictory
+pages and changed inventories refuse admission. The limit is suites, not check
+runs; many skipped or empty suites do not require per-suite API subprocesses.
