@@ -6,7 +6,6 @@ import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-pol
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   decodeQueuedOperatorRecoverySource,
-  MAX_RECOVERY_SOURCE_BYTES,
   type QueuedOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
 
@@ -44,7 +43,10 @@ export function captureQueuedOperatorRecoverySource(
   } else {
     return { kind: "unavailable" };
   }
-  return Buffer.byteLength(JSON.stringify(captured), "utf8") <= MAX_RECOVERY_SOURCE_BYTES
-    ? decodeQueuedOperatorRecoverySource(captured)
-    : { kind: "unavailable" };
+  try {
+    return decodeQueuedOperatorRecoverySource(captured);
+  } catch {
+    // Recovery limits must not reject work under its current live authority.
+    return { kind: "unavailable" };
+  }
 }
