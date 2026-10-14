@@ -130,7 +130,13 @@ export async function loadMemoryWikiVaultIdentity(
       try {
         await handle.close();
       } catch (closeError) {
-        throw new AggregateError([error, closeError], "Memory Wiki journal read and close failed.");
+        throw new AggregateError(
+          [error, closeError],
+          "Memory Wiki journal read and close failed.",
+          {
+            cause: closeError,
+          },
+        );
       }
       throw error;
     }

@@ -60,7 +60,7 @@ describe("loadMemoryWikiVaultIdentity", () => {
   });
 
   it("ignores malformed records and partial tails without splitting lone CR", async () => {
-    const { root, file } = await createJournal(journal + "not-json\n" + '{"partial":');
+    const { root, file } = await createJournal(journal + 'not-json\n{"partial":');
     assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);
     await fs.writeFile(file, generation + reservation.trimEnd() + "\r" + publication.trimEnd());
     assert.deepEqual(await loadMemoryWikiVaultIdentity(root), {
@@ -213,6 +213,8 @@ describe("loadMemoryWikiVaultIdentity", () => {
     await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => {
       assert.ok(error instanceof AggregateError);
       assert.deepEqual(error.errors, [readError, closeError]);
+      assert.equal(error.cause, closeError);
+      assert.equal(error.message, "Memory Wiki journal read and close failed.");
       return true;
     });
     assert.equal(closes, 1);
