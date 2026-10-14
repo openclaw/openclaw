@@ -145,6 +145,7 @@ describe("handleChatScroll", () => {
 
 describe("scheduleChatScroll", () => {
   beforeEach(() => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
     vi.useFakeTimers();
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
       cb(0);
@@ -155,6 +156,7 @@ describe("scheduleChatScroll", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("does not read layout until the requested render commits", () => {
@@ -381,6 +383,7 @@ describe("resetChatScroll", () => {
 
 describe("programmatic scroll ownership", () => {
   beforeEach(() => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
     vi.useFakeTimers();
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
       cb(0);
