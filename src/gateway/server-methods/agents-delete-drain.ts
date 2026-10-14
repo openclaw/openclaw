@@ -208,17 +208,28 @@ export async function drainAgentDeletionRuns(
         drain?.release();
       }
     });
-    const settled = await withTimeout(
-      Promise.allSettled([...sessions, admitted, ...embedded, terminals]),
-      SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-      `Agent ${agentId} deletion drain; wait for active work to stop, then retry agents.delete`,
-    );
-    const failures = settled.filter((result) => result.status === "rejected");
-    if (failures.length) {
-      throw new AggregateError(
-        failures.map((result) => result.reason),
-        `Agent ${agentId} deletion is still draining`,
+    try {
+      const settled = await withTimeout(
+        Promise.allSettled([...sessions, admitted, ...embedded, terminals]),
+        SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        `Agent ${agentId} deletion drain; wait for active work to stop, then retry agents.delete`,
       );
+      const failures = settled.filter((result) => result.status === "rejected");
+      if (failures.length) {
+        throw new AggregateError(
+          failures.map((result) => result.reason),
+          `Agent ${agentId} deletion is still draining`,
+        );
+      }
+    } catch (error) {
+      const stuck = [...embeddedRuns.values()].filter((run) => run.isActive());
+      if (stuck.length) {
+        throw new Error(
+          `Agent ${agentId} deletion is still draining embedded runs in sessions: ${stuck.map((run) => run.sessionId).join(", ")}. Wait for these runs to end, then retry agents.delete; agent storage has been preserved.`,
+          { cause: error },
+        );
+      }
+      throw error;
     }
     await drainAgentExecProcesses(agentId, assertCurrent);
     for (const sessionId of listAgentSessionMcpRuntimeIds(agentId)) {
@@ -244,15 +255,6 @@ export async function drainAgentDeletionRuns(
       onWarn: (message) => context.logGateway.warn(message),
     });
     assertCurrent();
-  } catch (error) {
-    const stuck = [...embeddedRuns.values()].filter((run) => run.isActive());
-    if (stuck.length) {
-      throw new Error(
-        `Agent ${agentId} deletion is still draining embedded runs in sessions: ${stuck.map((run) => run.sessionId).join(", ")}. Wait for these runs to end, then retry agents.delete; agent storage has been preserved.`,
-        { cause: error },
-      );
-    }
-    throw error;
   } finally {
     finished = true;
     for (const run of embeddedRuns.values()) {
