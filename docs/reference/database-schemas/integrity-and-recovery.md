@@ -64,8 +64,8 @@ the policy revision for migrations or schema-version changes not reflected in ca
 SQL, and for changes to validation rules or serialized admission facts.
 Same-version session columns are admission prerequisites, not optional reader
 projections. Declare them in `STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS`: the
-same declarations drive installation, pending-repair detection, and seal identity.
-Seal loading also checks the saved catalog for these columns before publishing
+same declarations drive installation, pending-repair detection, and saved-catalog
+admission. Seal loading checks the saved catalog for these columns before publishing
 any completed-validation facts. Absent feature-local tables remain absent.
 An existing table missing a required column cannot reuse its seal, even when
 the schema version is unchanged.
@@ -77,8 +77,9 @@ reader refuses pending additive repairs before preparing session queries.
 Same-schema managed activations rely on this ordering even when no version
 crossing invokes Doctor. Do not add an independent reader migration or controller
 SQL repair. Regression coverage must prove that every column installed by the
-same-version installer is represented in admission facts. Compatible builds with
-unchanged declarations retain seal reuse without validation SQL.
+same-version installer is represented in admission facts. A complete prior-build
+catalog retains seal reuse without validation SQL; adding requirements alone does
+not invalidate seals whose catalogs already satisfy them.
 
 Updating from an older seal-identity format requires one full validation;
 subsequent compatible builds reuse the new seal. Managed drain followed by an

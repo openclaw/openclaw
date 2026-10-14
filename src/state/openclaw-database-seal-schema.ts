@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { VERSION } from "../version.js";
-import { STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db-additive-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
@@ -9,7 +8,6 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 export function sqliteDatabaseSealSchemaFor(version = VERSION): string {
   return createHash("sha256")
     .update(JSON.stringify([2, version]))
-    .update(JSON.stringify(STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS))
     .update(OPENCLAW_AGENT_SCHEMA_SQL)
     .update(OPENCLAW_STATE_SCHEMA_SQL)
     .digest("hex");

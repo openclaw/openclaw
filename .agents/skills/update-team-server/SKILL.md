@@ -91,8 +91,8 @@ admission rules. Older databases use OpenClaw's supported forward migrations;
 unknown future schemas and downgrades are refused by that owner.
 
 Same-schema activation still requires the candidate's native database admission.
-Same-version additive session columns must be covered by its seal identity and
-saved catalog facts. Every affected agent stays unavailable until writable
+Same-version additive session columns must be checked against its saved catalog
+facts before admission reuses a seal. Every affected agent stays unavailable until writable
 admission installs missing columns under the existing maintenance authority,
 before session preparation or readers run. An unchanged schema version does not
 prove reader readiness. The controller delegates this ordering to OpenClaw;
