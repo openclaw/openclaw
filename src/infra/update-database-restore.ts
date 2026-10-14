@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import { createConfigIO } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { preparePostgresRestore } from "../snapshot/database-backup.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
@@ -31,7 +33,7 @@ import {
 import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
-import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
+import type { UpdateDatabaseGenerations } from "./update-database-generations.types.js";
 
 async function existingFile(file: string) {
   try {
@@ -190,14 +192,12 @@ export async function restoreUpdateDatabaseBackup(params: {
           if (!entry.exportDirectory || !entry.storeId || !entry.namespace) {
             throw new Error("PostgreSQL rollback is missing its matched capture identity.");
           }
-          const { createConfigIO } = await import("../config/io.js");
           const { config } = await createConfigIO({
             env: params.env,
             observe: false,
             pluginValidation: "core-only",
             shellEnvFallback: "defer",
           }).readConfigFileSnapshot();
-          const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
           const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}`;
           const prepared = await preparePostgresRestore({
             directory: entry.exportDirectory,

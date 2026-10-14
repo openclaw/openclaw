@@ -36,6 +36,8 @@ const ownerOptions = (root: Element) =>
 async function mountFilters(width: number, teammates = 0) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 560);
+  // Park inherited pointer input before mounting controls that can open hover surfaces.
+  await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
   // The app shell marks phone layouts; the filter panel becomes a bottom sheet there.
   document.body.classList.toggle("shell--mobile-nav", width < 560);
   onTestFinished(() => document.body.classList.remove("shell--mobile-nav"));
@@ -169,8 +171,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         }
       };
       const owners = page.getByRole("button", { name: "Owners: All owners", exact: true });
-      // Keep a previous case's pointer from opening hover surfaces during keyboard navigation.
-      await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
       (owners.element() as HTMLElement).focus();
       await userEvent.keyboard("{Enter}");
       await expect

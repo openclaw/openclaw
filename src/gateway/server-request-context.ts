@@ -93,6 +93,7 @@ type GatewayRequestContextRuntime = Pick<
   Pick<
     GatewayCoreRuntime,
     | "scheduler"
+    | "requestEntryLifetime"
     | "getSessionRowProjection"
     | "forgetConnectionAncestors"
     | "refreshGatewayHealthSnapshotWithRuntime"
@@ -240,7 +241,11 @@ export function createGatewayRequestContext(
     invalidateSessionsForDevice: invalidateDeviceTransports,
     disconnectSessionsForDevice: disconnectDeviceTransports,
   } = runtime.watchNodeHttpRuntime;
-  const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator(runtime.scheduler);
+  const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator(
+    runtime.scheduler,
+    runtime.requestEntryLifetime.signal,
+    (run) => connectionWork.track(run),
+  );
   const getClientConnIds: NonNullable<GatewayRequestContext["getClientConnIds"]> = (filter) => {
     const connIds = new Set<string>();
     for (const gatewayClient of clients) {
@@ -255,6 +260,7 @@ export function createGatewayRequestContext(
     return connIds;
   };
   const context: GatewayRequestContext = {
+    requestEntryLifetime: runtime.requestEntryLifetime,
     trackExecution: (run) => connectionWork.track(run),
     deps: runtime.deps,
     configRevisionProjector: params.configRevisionProjector,

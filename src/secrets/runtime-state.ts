@@ -32,6 +32,7 @@ import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadata,
+  matchesPublishedRuntimeConfigSnapshot,
   setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -49,7 +50,10 @@ import {
   type SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
-import { isSecretsRuntimeDisplayChange } from "./runtime-source-contract.js";
+import {
+  hasSameSecretProviderDefinition,
+  isSecretsRuntimeDisplayChange,
+} from "./runtime-source-contract.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
@@ -356,31 +360,6 @@ function mergeRollbackValue(previous: unknown, candidate: unknown, current: unkn
     }
   }
   return merged;
-}
-
-export function hasSameSecretProviderDefinition(
-  ref: SecretRef,
-  configs: OpenClawConfig[],
-): boolean {
-  const definition = configs[0]?.secrets?.providers?.[ref.provider];
-  if (
-    !configs.every((config) =>
-      isDeepStrictEqual(config.secrets?.providers?.[ref.provider], definition),
-    )
-  ) {
-    return false;
-  }
-  if (!definition || !("pluginIntegration" in definition)) {
-    return true;
-  }
-  // Plugin integration ownership is not fully normalized to one entry. Preserve a resolved value
-  // only across an unchanged plugin/channel snapshot, or rollback can pair it with rejected owner state.
-  const dependency = (config: OpenClawConfig) => ({
-    plugins: config.plugins,
-    channels: config.channels,
-  });
-  const previous = dependency(configs[0]!);
-  return configs.every((config) => isDeepStrictEqual(dependency(config), previous));
 }
 
 function preserveResolvedSecretRefValues(
@@ -817,6 +796,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
   runtimeSourceConfig?: OpenClawConfig;
   mergeLiveAuthBookkeeping?: boolean;
   preserveActivationLineage?: boolean;
+  preserveRuntimeConfigPublication?: boolean;
 }): void {
   if (!hasCurrentAuthStoreCredentialsRevision(params.snapshot)) {
     throw new Error(
@@ -848,7 +828,15 @@ export function activateSecretsRuntimeSnapshotState(params: {
   const nextRefreshContext = params.refreshContext
     ? cloneSecretsRuntimeRefreshContext(params.refreshContext)
     : null;
-  setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
+  const runtimeSourceConfig = params.runtimeSourceConfig ?? next.sourceConfig;
+  // Credential-only refreshes retain queued transport admission. In-place drift
+  // and changed values or provenance still create a new configuration publication.
+  if (
+    !params.preserveRuntimeConfigPublication ||
+    !matchesPublishedRuntimeConfigSnapshot(next.config, runtimeSourceConfig)
+  ) {
+    setRuntimeConfigSnapshot(next.config, runtimeSourceConfig);
+  }
   replaceOwnedRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   next.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();

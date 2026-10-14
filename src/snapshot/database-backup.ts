@@ -17,6 +17,7 @@ import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   readSnapshotExportEnvelope,
   verifyPostgresExportEnvelope,
@@ -308,7 +309,6 @@ type BackupReply =
 async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Promise<T> {
   assertCurrent();
   // This one-shot worker is joined before publication; it never survives a runtime swap.
-  const { WorkerTaskPool } = await import("../infra/worker-task-pool.js");
   const pool = new WorkerTaskPool<BackupTask, T>({
     workerUrl: new URL(import.meta.url),
     maxWorkers: 1,

@@ -25,7 +25,7 @@ type BackupSqliteCreateOptions = {
   json?: boolean;
 };
 
-const OPENCLAW_SNAPSHOT_READ_OPTIONS = {
+const SNAPSHOT_READ_OPTIONS = {
   allowedDatabaseRoles: ["global", "agent"],
 } as const;
 
@@ -91,7 +91,7 @@ export async function backupSqliteListCommand(
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
   const snapshots = await createLocalSqliteSnapshotProvider({
     repositoryPath,
-    ...OPENCLAW_SNAPSHOT_READ_OPTIONS,
+    ...SNAPSHOT_READ_OPTIONS,
   }).list();
   const report = {
     ok: true as const,
@@ -200,7 +200,7 @@ function resolveSnapshot(snapshot: string, scratch?: string) {
     provider: createLocalSqliteSnapshotProvider({
       repositoryPath,
       validationRootPath,
-      ...OPENCLAW_SNAPSHOT_READ_OPTIONS,
+      ...SNAPSHOT_READ_OPTIONS,
     }),
     ref: { path: snapshotPath },
   };

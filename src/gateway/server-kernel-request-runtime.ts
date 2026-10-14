@@ -148,7 +148,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     }
   });
   const ensureRequestRuntimeReady = () => (requestRuntimeReady ??= initializeRequestRuntime());
-  gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);
   pluginGatewayContext.current = gatewayRequestContext;
   gatewayRequestContext.dispatchHookAgentTurn = async (pluginId, hookParams) => {

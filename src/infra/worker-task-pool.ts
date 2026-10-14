@@ -1,4 +1,6 @@
 import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
+import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
+import { retainNativeWorkerPoolForGeneration } from "./worker-native-lifecycle.js";
 import { createWorkerTaskHost } from "./worker-task-host.js";
 import type {
   WorkerTaskInput,
@@ -11,19 +13,34 @@ import type {
 export { WorkerTaskError } from "@openclaw/worker-runtime";
 export type { WorkerTaskResponse } from "./worker-task-pool.types.js";
 
+function createWorkerTaskPoolCore<Input, Output>(
+  options: WorkerTaskPoolOptions<Output>,
+  ownerOptions?: WorkerTaskPoolOwnerOptions,
+  dispatch?: ConstructorParameters<typeof WorkerTaskPoolCore<Input, Output>>[2],
+) {
+  // Worker creation detaches the caller's scope; retain its prepared code and
+  // pool cleanup before a runtime swap can retire that source.
+  const source = captureRuntimeWorkerSource(options.workerUrl);
+  const host = createWorkerTaskHost(source, ownerOptions, options.workerClass);
+  const core = new WorkerTaskPoolCore<Input, Output>(options, host, dispatch, ownerOptions);
+  // A native owner in this generation drains domains before pool retirement.
+  // Other native lifetimes stay independent; this code generation still joins its pool.
+  const generation = source.runtimeGeneration;
+  if (generation && !retainNativeWorkerPoolForGeneration(host.nativeSource, generation, core)) {
+    generation.retain(core, () => core.close());
+  }
+  return core;
+}
+
 /** Existing SDK surface; task custody remains an internal capability. */
 export class WorkerTaskPool<Input, Output> {
   private readonly core: WorkerTaskPoolCore<Input, Output>;
 
   constructor(options: WorkerTaskPoolOptions<Output>) {
-    this.core = new WorkerTaskPoolCore<Input, Output>(
-      options,
-      createWorkerTaskHost(undefined, options.workerClass),
-      {
-        close: (error) => this.close(error),
-        getSnapshot: () => this.getSnapshot(),
-      },
-    );
+    this.core = createWorkerTaskPoolCore<Input, Output>(options, undefined, {
+      close: (error) => this.close(error),
+      getSnapshot: () => this.getSnapshot(),
+    });
   }
 
   run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
@@ -56,12 +73,7 @@ export function createOwnedWorkerTaskPool<Input, Output>(
   options: WorkerTaskPoolOptions<Output>,
   ownerOptions?: WorkerTaskPoolOwnerOptions,
 ) {
-  const core = new WorkerTaskPoolCore<Input, Output>(
-    options,
-    createWorkerTaskHost(ownerOptions, options.workerClass),
-    undefined,
-    ownerOptions,
-  );
+  const core = createWorkerTaskPoolCore<Input, Output>(options, ownerOptions);
   return {
     run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
       core.run(input, taskOptions),

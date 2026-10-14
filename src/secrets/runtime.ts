@@ -361,12 +361,17 @@ export function activateSecretsRuntimeSnapshotWithSource(
 export function activateSecretsRuntimeSnapshotIfCurrent(
   snapshot: PreparedSecretsRuntimeSnapshot,
   expectedRevision: number,
-  options?: { preserveActivationLineage?: boolean; runtimeSourceConfig?: OpenClawConfig },
+  options?: {
+    preserveActivationLineage?: boolean;
+    preserveRuntimeConfigPublication?: boolean;
+    runtimeSourceConfig?: OpenClawConfig;
+  },
 ): boolean {
   return activateSecretsRuntimeSnapshotStateIfCurrent({
     ...createSecretsRuntimeSnapshotActivation(snapshot),
     expectedRevision,
     preserveActivationLineage: options?.preserveActivationLineage,
+    preserveRuntimeConfigPublication: options?.preserveRuntimeConfigPublication,
     runtimeSourceConfig: options?.runtimeSourceConfig,
   });
 }
@@ -649,6 +654,7 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
         candidate.expectedRevision,
         {
           preserveActivationLineage: true,
+          preserveRuntimeConfigPublication: true,
           runtimeSourceConfig,
         },
       );

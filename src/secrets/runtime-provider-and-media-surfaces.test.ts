@@ -6,6 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  createConfigResolutionFacts,
+  getResolvedConfigEnvSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import {
+  getRuntimeConfigSnapshotMetadata,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -135,8 +145,7 @@ describe("secrets runtime provider and media surfaces", () => {
       });
       const { getActiveSecretsRuntimeSnapshot, refreshActiveProviderAuthRuntimeSnapshot } =
         await import("./runtime.js");
-      const { getRuntimeConfigSourceSnapshot, getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-        await import("../config/runtime-snapshot.js");
+      const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
       activateSecretsRuntimeSnapshot(initial);
       setActiveCredentialDegradedOwner({
         ownerKind: "account",
@@ -166,8 +175,16 @@ describe("secrets runtime provider and media surfaces", () => {
         runtimeSourceConfig,
       );
 
+      const publication = getRuntimeConfigSnapshotMetadata();
+      const runtimeConfig = getRuntimeConfigSnapshot();
+      await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+      expect(getRuntimeConfigSnapshot()).toBe(runtimeConfig);
+      expect(getRuntimeConfigSourceSnapshot()).toBe(runtimeSourceConfig);
+      expect(getRuntimeConfigSnapshotMetadata()).toBe(publication);
+
       await writeSecrets(undefined, "model-new");
       await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+      expect(getRuntimeConfigSnapshotMetadata()).not.toBe(publication);
 
       const active = getActiveSecretsRuntimeSnapshot();
       expect(active?.config.gateway?.auth?.token).toBe("gateway-old");
@@ -238,6 +255,63 @@ describe("secrets runtime provider and media surfaces", () => {
     );
   });
 
+  it.each([
+    "runtime values",
+    "source values",
+    "runtime facts",
+    "source facts",
+    "runtime resolved ref",
+    "source resolved ref",
+  ] as const)("publishes provider-auth config after %s drift in place", async (drift) => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: { entries: { main: {} } },
+        gateway: { port: 19_040, auth: { mode: "token", token: "synthetic-token" } },
+      }),
+      agentDirs: ["/tmp/openclaw-agent-publication-drift"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+    const refPath = "gateway.auth.token";
+    if (drift.endsWith("ref")) {
+      for (const config of [snapshot.config, snapshot.sourceConfig]) {
+        setConfigResolutionFacts(
+          config,
+          createConfigResolutionFacts(
+            [],
+            new Map(),
+            undefined,
+            new Map([[refPath, "ORIGINAL_REF"]]),
+          ),
+        );
+      }
+    }
+    activateSecretsRuntimeSnapshot(snapshot);
+    const runtime = getRuntimeConfigSnapshot();
+    const source = getRuntimeConfigSourceSnapshot();
+    const publication = getRuntimeConfigSnapshotMetadata();
+    if (!runtime || !source) {
+      throw new Error("Expected a published runtime and source");
+    }
+    const changed = drift.startsWith("runtime") ? runtime : source;
+    if (drift.endsWith("ref")) {
+      const ref = getResolvedConfigEnvSecretRef(changed, refPath);
+      if (!ref) {
+        throw new Error("Expected recorded resolved reference");
+      }
+      ref.id = "CHANGED_REF";
+    } else if (drift.endsWith("values")) {
+      changed.logging = { level: "debug" };
+    } else {
+      setConfigResolutionFacts(changed, createConfigResolutionFacts([]));
+    }
+    const { refreshActiveProviderAuthRuntimeSnapshot } = await import("./runtime.js");
+
+    await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+
+    expect(getRuntimeConfigSnapshotMetadata()).not.toBe(publication);
+    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe((publication?.revision ?? 0) + 1);
+  });
+
   it("retries provider auth publication after a queued runtime config mutation", async () => {
     const initialConfig = asConfig({
       agents: { entries: { main: {} } },
@@ -252,8 +326,7 @@ describe("secrets runtime provider and media surfaces", () => {
       await import("./runtime.js");
     const { registerProviderAuthRuntimeSnapshotActivationOwner } =
       await import("./runtime-state.js");
-    const { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-      await import("../config/runtime-snapshot.js");
+    const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
     activateSecretsRuntimeSnapshot(initial);
 
     let releaseFirstActivation!: () => void;

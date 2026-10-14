@@ -30,12 +30,12 @@ export function hashRuntimeConfigValue(value: OpenClawConfig): string {
   return fingerprint;
 }
 
-// A detached publication value proves reuse across mutable clones without trusting their identity.
+// Detached values and provenance prove reuse across mutable clones without trusting their identity.
 export function prepareRuntimeConfigValueFact(
   config: OpenClawConfig,
   previous: RuntimeConfigValueFact | null,
 ): RuntimeConfigValueFact {
-  const facts = serializeConfigResolutionFacts(config);
+  const facts = structuredClone(serializeConfigResolutionFacts(config));
   if (isPlainData(config)) {
     if (previous?.value && isDeepStrictEqual(previous.value, config)) {
       return isDeepStrictEqual(previous.facts, facts) ? previous : { ...previous, facts };
@@ -64,4 +64,28 @@ export function matchesRuntimeConfigValueFact(
   return fact.value
     ? isDeepStrictEqual(config, fact.value)
     : hashRuntimeConfigValue(config) === fact.fingerprint;
+}
+
+export function matchesRuntimeConfigPublicationFact(
+  config: OpenClawConfig,
+  fact: RuntimeConfigValueFact,
+): boolean {
+  return (
+    matchesRuntimeConfigValueFact(config, fact) &&
+    isDeepStrictEqual(serializeConfigResolutionFacts(config), fact.facts)
+  );
+}
+
+export function hashRuntimeModelConfig(
+  config: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
+): string {
+  const project = (value: OpenClawConfig) => {
+    const { ui: _ui, meta, ...rest } = value;
+    const { lastTouchedVersion: _lastTouchedVersion, ...modelMeta } = meta ?? {};
+    return { config: { ...rest, meta: modelMeta }, facts: serializeConfigResolutionFacts(value) };
+  };
+  return sha256Base64Url(
+    stableConfigStringify({ runtime: project(config), source: project(sourceConfig) }),
+  );
 }

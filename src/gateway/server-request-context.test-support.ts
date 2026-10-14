@@ -8,6 +8,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { createGatewayRequestContext } from "./server-request-context.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 
@@ -35,6 +36,7 @@ export function makeContextParams(
   return {
     runtime: {
       scheduler: createTestGatewayScheduler(),
+      requestEntryLifetime: new GatewayRequestEntryLifetime(),
       getSessionRowProjection: () => undefined,
       forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },

@@ -61,9 +61,13 @@ suite.define(() => {
           .waitFor({ state: "visible" });
         const initialHistoryLength = await page.evaluate(() => history.length);
         const resolutionMatch = { shortId: "12345678", agentId: "main" };
-        await gateway.deferNext("sessions.resolve", resolutionMatch);
+        // Title decoration can resolve before the click; bind deferral and counts to navigation.
+        const previousResolutions = await gateway.deferNext("sessions.resolve", resolutionMatch);
         await link.click();
-        await gateway.waitForRequest("sessions.resolve", { match: resolutionMatch });
+        await gateway.waitForRequest("sessions.resolve", {
+          after: previousResolutions,
+          match: resolutionMatch,
+        });
         expect(await gateway.getRequests("chat.startup", { sessionKey: destinationKey })).toEqual(
           [],
         );
@@ -101,7 +105,7 @@ suite.define(() => {
           initialHistoryLength + (navigateAway ? 2 : 1),
         );
         expect(await gateway.getRequests("sessions.resolve", resolutionMatch)).toHaveLength(
-          navigateAway ? 1 : 2,
+          previousResolutions + (navigateAway ? 1 : 2),
         );
         expect(await page.locator(".lazy-view-error").count()).toBe(0);
       });

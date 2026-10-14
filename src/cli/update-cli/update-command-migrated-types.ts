@@ -1,4 +1,4 @@
-import type { UpdateDatabaseGenerations } from "../../infra/update-database-generations.js";
+import type { UpdateDatabaseGenerations } from "../../infra/update-database-generations.types.js";
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type {
   UpdateRequester,

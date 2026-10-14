@@ -565,7 +565,7 @@ export async function handleGatewayRequest(
   await runWithGatewayObservationScope(
     req.method,
     dispatch,
-    [signal, client?.connectionSignal],
+    [context.requestEntryLifetime?.signal, signal, client?.connectionSignal],
     (error) => {
       if (!observationResponded && !client?.connectionSignal?.aborted) {
         respondCancelled(false, undefined, error);

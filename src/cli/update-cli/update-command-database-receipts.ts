@@ -1,6 +1,6 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
-import type { UpdateDatabaseWriteReceipt } from "../../infra/update-database-generations.js";
+import type { UpdateDatabaseWriteReceipt } from "../../infra/update-database-generations.types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 
 export function recordUpdateDatabaseWrites(

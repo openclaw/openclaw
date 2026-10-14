@@ -185,12 +185,19 @@ describe("createInternalAgentTurnFacade", () => {
             boundary === "deadline"
               ? `gateway request timeout for ${method === "dispatch" ? "agent" : "agent.wait"}`
               : boundary === "close"
-                ? "Gateway request entry is closed"
+                ? method === "wait"
+                  ? "agent.wait observation cancelled"
+                  : "Gateway request entry is closed"
                 : boundary === "abort"
                   ? "caller canceled"
                   : "caller retired";
           expect(outcome, `${method}/${boundary} caller`).toEqual({
-            error: expect.objectContaining({ message }),
+            error: expect.objectContaining({
+              message,
+              ...(method === "wait" && boundary === "close"
+                ? { code: "UNAVAILABLE", retryable: true }
+                : {}),
+            }),
           });
           const executionMessage =
             method === "wait" && boundary === "abort"

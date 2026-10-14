@@ -63,7 +63,7 @@ import {
   readUpdateStateDatabaseSizesInProcess,
   updateStateDatabaseExists,
 } from "./update-candidate-state.sizes.js";
-import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
+import type { UpdateDatabaseGenerations } from "./update-database-generations.types.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
 const UpdateStateSchemaVersionsSchema = z.array(

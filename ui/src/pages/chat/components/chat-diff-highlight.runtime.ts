@@ -1,7 +1,6 @@
 import { foldNodeProp } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
-import { html } from "lit";
 import { loadCodeLanguage } from "../../../components/code-language.ts";
 import type { DiffSyntaxFold } from "../../../lib/chat/session-diff-folds.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
@@ -137,27 +136,4 @@ export async function analyzeDiffSyntax(lines: readonly DiffLine[], path: string
     }),
   );
   return { highlighted, folds };
-}
-
-export async function highlightDiffTokens(
-  lines: readonly DiffLine[],
-  path: string,
-  oldPath = path,
-) {
-  return (await analyzeDiffSyntax(lines, path, oldPath)).highlighted;
-}
-
-export async function highlightDiffLines(lines: readonly DiffLine[], path: string, oldPath = path) {
-  const tokens = await highlightDiffTokens(lines, path, oldPath);
-  return new Map(
-    [...tokens].map(
-      ([line, parts]) =>
-        [
-          line,
-          parts.map(({ text, classes }) =>
-            classes ? html`<span class=${classes}>${text}</span>` : text,
-          ),
-        ] as const,
-    ),
-  );
 }

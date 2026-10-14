@@ -19,6 +19,11 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import { acquireStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -190,6 +195,9 @@ it.each(["explicit refresh", "legacy source observation"] as const)(
       includeConfigRefs: false,
     });
     activateSecretsRuntimeSnapshot(snapshot);
+    const config = getRuntimeConfigSnapshot();
+    const source = getRuntimeConfigSourceSnapshot();
+    const publication = getRuntimeConfigSnapshotMetadata();
     await loadAuthProfileStoreForRuntimeAsync(agentDir, {
       readOnly: true,
       externalCli: { mode: "none" },
@@ -253,6 +261,9 @@ it.each(["explicit refresh", "legacy source observation"] as const)(
       type: "api_key",
       key: expectedKey,
     });
+    expect(getRuntimeConfigSnapshot()).toBe(config);
+    expect(getRuntimeConfigSourceSnapshot()).toBe(source);
+    expect(getRuntimeConfigSnapshotMetadata()).toBe(publication);
     if (legacySource) {
       expect(getRuntimeAuthProfileStoreSnapshotCore(inactiveAgentDir)).toBeUndefined();
     }

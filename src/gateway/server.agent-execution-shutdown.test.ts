@@ -114,6 +114,9 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
       let abortedAfterRecoveryMark: boolean | undefined;
       let runtimeAvailableAtRecoveryMark: boolean | undefined;
       let entryFencedAtRecoveryMark: boolean | undefined;
+      let internalWait: Promise<void> | undefined;
+      let internalWaitOutcome: PromiseSettledResult<unknown> | undefined;
+      let internalWaitAtRecoveryMark: PromiseSettledResult<unknown> | undefined;
       let recoveryMarked = false;
       let emergencyReleaseUsed = false;
       let closing: Promise<void> | undefined;
@@ -246,7 +249,30 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
           }
         }
         if (mode === "restart") {
+          const waitEntered = createDeferred();
+          const jobs = await import("./agent-turn/agent-job.js");
+          const waitForAgentJob = jobs.waitForAgentJob;
+          vi.spyOn(jobs, "waitForAgentJob").mockImplementation((params) => {
+            const observation = waitForAgentJob(params);
+            if (params.runId === runId) {
+              waitEntered.resolve();
+            }
+            return observation;
+          });
+          internalWait = kernel.gatewayInstanceRuntime.recovery
+            .waitForAgent({ runId, timeoutMs: 60_000 })
+            .then(
+              (value) => {
+                internalWaitOutcome = { status: "fulfilled", value };
+              },
+              (reason: unknown) => {
+                internalWaitOutcome = { status: "rejected", reason };
+              },
+            );
+          await withinTest(waitEntered.promise, signal);
           restartMarkers.mockImplementationOnce(async (params) => {
+            await nextTurn();
+            internalWaitAtRecoveryMark = internalWaitOutcome;
             abortedAtRecoveryMark = runSignal?.aborted;
             receivedWorkAbortedAtRecoveryMark = kernel.connectionWork.signal.aborted;
             runtimeAvailableAtRecoveryMark = kernel.gatewayInstanceRuntime.isAvailable();
@@ -292,6 +318,10 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         expect(foreign.controller.signal.aborted).toBe(false);
         if (mode === "restart") {
           expect(restartMarkers).toHaveBeenCalledOnce();
+          expect(internalWaitAtRecoveryMark).toMatchObject({
+            status: "rejected",
+            reason: { code: "UNAVAILABLE", message: "agent.wait observation cancelled" },
+          });
           // The actual server.close entry point must preserve received execution
           // and its admission until the durable restart marker has committed.
           expect(receivedWorkAbortedAtRecoveryMark).toBe(false);
@@ -328,7 +358,7 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         ]);
       } finally {
         release();
-        await Promise.allSettled([request, grace]);
+        await Promise.allSettled([request, grace, internalWait]);
         if (dispatchStarted) {
           // A started command must publish its original terminal tail before fixture restoration.
           await terminalObserved.promise;

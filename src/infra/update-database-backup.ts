@@ -5,12 +5,14 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { z } from "zod";
 import type { DoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readBackupEngine, capturePostgresBackup } from "../snapshot/database-backup.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
   maintenanceOwnerMayCopySourcesInProcess,
 } from "../state/openclaw-state-maintenance-context.js";
+import { discoverBackupDatabasePaths } from "./backup-sqlite-snapshot.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   ensureDurableDirectory,
@@ -303,8 +305,6 @@ export async function createUpdateDatabaseBackupInProcess(
       return undefined;
     }
   };
-  const { readBackupEngine, capturePostgresBackup } =
-    await import("../snapshot/database-backup.js");
   const engines = new Map(inventory.present.map((file) => [file, readBackupEngine(file)]));
   if (
     [...engines.values()].some((engine) => engine.engine === "postgres") &&
@@ -418,8 +418,6 @@ export async function createUpdateDatabaseBackup({
   retryAdvice?: boolean;
 }): Promise<UpdateDatabaseBackup> {
   const controller = new AbortController();
-  const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
-  const { readBackupEngine } = await import("../snapshot/database-backup.js");
   const postgresPaths = (await discoverBackupDatabasePaths(input)).filter(
     (file) => readBackupEngine(file).engine === "postgres",
   );

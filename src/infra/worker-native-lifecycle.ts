@@ -65,6 +65,7 @@ type NativeSource = RetainedNativeWorkerSource & {
   brokerClose?: Promise<void>;
   brokerModuleUrl: URL;
   closing: boolean;
+  poolRetirements: Map<object, () => Promise<void>>;
   close(): Promise<void>;
 };
 
@@ -81,6 +82,20 @@ const lifetime = resolveGlobalSingleton(
   closeDefaultRetainedNativeWorkerSource,
 );
 
+export function retainNativeWorkerPoolForGeneration(
+  source: RetainedNativeWorkerSource | undefined,
+  generation: RuntimeWorkerGeneration,
+  pool: { close(): Promise<void> },
+): boolean {
+  const owned = lifetime.sources.get(generation);
+  if (!owned || owned !== source) {
+    return false;
+  }
+  owned.poolRetirements.set(pool, () => pool.close());
+  generation.retain(owned, () => owned.close());
+  return true;
+}
+
 /** Terminal process cleanup joins the existing unbound owner without starting another. */
 export async function closeDefaultRetainedNativeWorkerSource(): Promise<void> {
   await lifetime.defaultSource?.close();
@@ -96,8 +111,14 @@ function forgetNativeSource(source: NativeSource): void {
   }
 }
 
-function nativeCleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
-  return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+async function joinNativeCleanup(closures: Iterable<() => Promise<void>>): Promise<void> {
+  const results = await Promise.allSettled(
+    [...closures].map((close) => Promise.resolve().then(close)),
+  );
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length) {
+    throw new AggregateError(errors, "Native worker execution owner cleanup failed");
+  }
 }
 
 function nativeRuntime(source: NativeSource): NativeRuntime {
@@ -283,6 +304,7 @@ export function captureRetainedNativeWorkerSource(options?: {
       ? captured.runtimeGeneration.resolve(resolveRuntimeProcessEntrypointUrl("spawnBroker"))
       : resolveRuntimeProcessEntrypointUrl("spawnBroker"),
     closing: false,
+    poolRetirements: new Map(),
     get hasActiveWorkers() {
       return Boolean(source.runtime?.handles.size);
     },
@@ -299,17 +321,17 @@ export function captureRetainedNativeWorkerSource(options?: {
     },
     close() {
       return (closingOwners ??= Promise.resolve().then(async () => {
-        const results = await Promise.allSettled([...owners.values()].map((close) => close()));
-        const errors = nativeCleanupFailures(results);
-        if (errors.length) {
-          throw new AggregateError(errors, "Native worker execution owner cleanup failed");
-        }
+        // Domain drains may admit queued pools. Collect their retirement only
+        // after those owners join, before retiring the shared supervisor/broker.
+        await joinNativeCleanup(owners.values());
+        await joinNativeCleanup(source.poolRetirements.values());
         source.closing = true;
         await source.runtime?.close();
         await source.brokerClose;
         await source.broker?.close();
         forgetNativeSource(source);
         owners.clear();
+        source.poolRetirements.clear();
       }));
     },
     create(filename, workerOptions, resource, taskPorts) {

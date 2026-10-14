@@ -17,7 +17,7 @@ import {
 import type {
   UpdateDatabaseGenerations,
   UpdateDatabaseWriteReceipt,
-} from "./update-database-generations.js";
+} from "./update-database-generations.types.js";
 import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,

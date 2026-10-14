@@ -41,7 +41,7 @@ function SplitSide(props: {
   );
 }
 
-export function SessionSplitDiff(props: {
+function SessionSplitDiff(props: {
   lines: readonly DiffLine[];
   renderSkip: (line: DiffLine) => JSX.Element;
   file: DiffFilePaths;

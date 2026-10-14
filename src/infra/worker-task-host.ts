@@ -4,6 +4,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
+import type { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import {
@@ -20,6 +21,7 @@ import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
+  type RetainedNativeWorkerSource,
 } from "./worker-native-lifecycle.js";
 import { resolveWorkerPoolSize, type WorkerPoolClass } from "./worker-pool-sizing.js";
 import { classifyWorkerRequest, trackWorkerRequest } from "./worker-request-diagnostics.js";
@@ -44,18 +46,22 @@ const admissions = resolveGlobalSingleton(
 );
 
 export function createWorkerTaskHost(
+  workerSource: ReturnType<typeof captureRuntimeWorkerSource>,
   owner: WorkerTaskPoolOwnerOptions = {},
   workerClass?: WorkerPoolClass,
-): WorkerTaskHost {
+): WorkerTaskHost & { nativeSource?: RetainedNativeWorkerSource } {
   const boundedHeap = workerClass && workerClass !== "writer" && workerClass !== "singleton";
   const source = owner.retainedTransport
-    ? (owner.nativeSource ?? captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }))
+    ? (owner.nativeSource ??
+      captureRetainedNativeWorkerSource({ runtimeGeneration: workerSource.runtimeGeneration }))
     : undefined;
   return {
+    nativeSource: source,
     maxWorkers: workerClass ? resolveWorkerPoolSize(workerClass) : undefined,
     requiresReady: owner.retainedTransport,
     createWorker(url, options) {
-      const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
+      const workerUrl = workerSource.runtimeGeneration ? workerSource.moduleUrl : url;
+      const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl), ...options };
       if (boundedHeap) {
         const limits = workerOptions.resourceLimits;
         workerOptions.resourceLimits = {
@@ -68,7 +74,7 @@ export function createWorkerTaskHost(
       if (owner.retainedTransport) {
         const { port1, port2 } = new MessageChannel();
         const native = createRetainedNativeWorker(
-          url,
+          workerUrl,
           workerOptions,
           source,
           owner.nativeResource,
@@ -76,7 +82,7 @@ export function createWorkerTaskHost(
         );
         return { worker: native, native };
       }
-      return { worker: createCpuTrackedWorker(url, workerOptions) };
+      return { worker: createCpuTrackedWorker(workerUrl, workerOptions) };
     },
     serviceNativeWorkers(workers) {
       // The shared native source can advance sibling pools while this caller cannot run events.
